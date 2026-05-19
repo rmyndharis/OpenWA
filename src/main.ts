@@ -127,6 +127,39 @@ async function bootstrap() {
   // Global prefix
   app.setGlobalPrefix('api');
 
+  const httpAdapter = app.getHttpAdapter().getInstance();
+  httpAdapter.use(
+    '/api',
+    (
+      req: { method?: string; path?: string; protocol?: string; get?: (name: string) => string | undefined },
+      res: {
+        json: (body: {
+          name: string;
+          status: string;
+          docsUrl: string;
+          healthUrl: string;
+        }) => void;
+      },
+      next: () => void,
+    ) => {
+      if (req.method === 'GET' && (req.path === '/' || req.path === '')) {
+        const host = req.get?.('host') || `localhost:${process.env.PORT || 2785}`;
+        const protocol = req.protocol || 'http';
+        const baseUrl = `${protocol}://${host}/api`;
+
+        res.json({
+          name: 'OpenWA API',
+          status: 'ok',
+          docsUrl: `${baseUrl}/docs`,
+          healthUrl: `${baseUrl}/health`,
+        });
+        return;
+      }
+
+      next();
+    },
+  );
+
   // Enhanced Validation pipe with security options
   app.useGlobalPipes(
     new ValidationPipe({

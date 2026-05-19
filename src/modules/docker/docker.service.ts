@@ -26,9 +26,20 @@ export class DockerService implements OnModuleInit {
   private isAvailable = false;
 
   async onModuleInit() {
+    if (!this.hasBuiltInServicesEnabled()) {
+      this.logger.log('[Bootstrap Orchestration] Built-in services disabled, skipping Docker initialization');
+      return;
+    }
+
     await this.initializeDocker();
     // Bootstrap orchestration: start containers based on saved config
     await this.bootstrapOrchestration();
+  }
+
+  private hasBuiltInServicesEnabled(): boolean {
+    return process.env.REDIS_BUILTIN === 'true'
+      || process.env.POSTGRES_BUILTIN === 'true'
+      || process.env.MINIO_BUILTIN === 'true';
   }
 
   /**

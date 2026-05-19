@@ -16,7 +16,7 @@
     "dashboard:install": "cd dashboard && npm install",
     "dashboard:dev": "cd dashboard && npm run dev",
     "dashboard:build": "cd dashboard && npm run build",
-    "postinstall": "[ -d dashboard ] && npm run dashboard:install || true",
+    "postinstall": "node -e \"const fs=require('fs'); const cp=require('child_process'); if (!fs.existsSync('dashboard')) process.exit(0); const npmCmd=process.platform==='win32'?'npm.cmd':'npm'; const result=cp.spawnSync(npmCmd,['run','dashboard:install'],{stdio:'inherit'}); process.exit(result.status ?? 0);\"",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
