@@ -61,6 +61,18 @@ export function Sessions() {
 
   const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentSessionName = useRef<string>('');
+  const autoQrSessionRef = useRef<Set<string>>(new Set());
+
+  // Auto-show QR modal when session becomes qr_ready
+  useEffect(() => {
+    for (const s of sessions) {
+      if (s.status === 'qr_ready' && !autoQrSessionRef.current.has(s.id)) {
+        autoQrSessionRef.current.add(s.id);
+        handleShowQR(s.id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions]);
 
   const fetchQR = useCallback(async (sessionId: string) => {
     try {
@@ -137,13 +149,12 @@ export function Sessions() {
 
     try {
       await sessionApi.start(id);
-      // Refresh sessions to get updated status
-      await fetchSessions();
-      // Don't auto-show QR - let WebSocket status updates handle the UI.
-      // QR modal will only appear if session status becomes 'qr_ready'
+      // Optimistic update - let WebSocket handle real-time status changes
+      setSessions(prev =>
+        prev.map(s => (s.id === id ? { ...s, status: 'connecting' as const } : s)),
+      );
     } catch (err) {
       console.error('Failed to start:', err);
-      await fetchSessions();
     }
   };
 
