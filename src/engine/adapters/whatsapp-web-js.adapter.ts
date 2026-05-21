@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, Location as LocationMessage } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -385,8 +385,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
     this.ensureReady();
     // Import Location class dynamically from whatsapp-web.js
-    const { Location } = await import('whatsapp-web.js');
-    const loc = new Location(location.latitude, location.longitude, {
+    const loc = new LocationMessage(location.latitude, location.longitude, {
       name: location.description || '',
       address: location.address || '',
     });
