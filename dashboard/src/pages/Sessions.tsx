@@ -63,11 +63,20 @@ export function Sessions() {
   const currentSessionName = useRef<string>('');
   const autoQrSessionRef = useRef<Set<string>>(new Set());
 
-  // Auto-show QR modal when session becomes qr_ready
+  // Restore shown QR state from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem('openwa_shown_qr');
+      if (stored) autoQrSessionRef.current = new Set(JSON.parse(stored));
+    } catch { /* ignore */ }
+  }, []);
+
+  // Auto-show QR modal when session becomes qr_ready (first time only, survives refresh)
   useEffect(() => {
     for (const s of sessions) {
       if (s.status === 'qr_ready' && !autoQrSessionRef.current.has(s.id)) {
         autoQrSessionRef.current.add(s.id);
+        sessionStorage.setItem('openwa_shown_qr', JSON.stringify([...autoQrSessionRef.current]));
         handleShowQR(s.id);
       }
     }
