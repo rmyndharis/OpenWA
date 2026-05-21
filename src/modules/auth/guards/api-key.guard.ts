@@ -1,16 +1,33 @@
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, Logger, OnModuleInit } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
 
 @Injectable()
-export class ApiKeyGuard implements CanActivate {
+export class ApiKeyGuard implements CanActivate, OnModuleInit {
+  private readonly logger = new Logger(ApiKeyGuard.name);
+  private trustedProxies: string[] = [];
+
   constructor(
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
-  ) {}
+    private readonly configService: ConfigService,
+  ) { }
+
+  onModuleInit(): void {
+    const raw = this.configService.get<string>('TRUSTED_PROXIES', '').trim();
+    this.trustedProxies = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+
+    if (this.trustedProxies.length === 0) {
+      this.logger.warn(
+        'TRUSTED_PROXIES is not set – X-Forwarded-For will be ignored. ' +
+        'Set TRUSTED_PROXIES to your load-balancer IP(s) if running behind a reverse proxy.',
+      );
+    }
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Check if route is marked as public
@@ -64,11 +81,65 @@ export class ApiKeyGuard implements CanActivate {
   }
 
   private getClientIp(request: Request): string {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (forwarded) {
-      const ips = (forwarded as string).split(',');
-      return ips[0].trim();
+    const remoteAddress = request.socket?.remoteAddress ?? '';
+
+    // No trusted proxies configured → always use the direct connection IP.
+    // This prevents X-Forwarded-For spoofing when not running behind a proxy.
+    if (this.trustedProxies.length === 0) {
+      return remoteAddress;
     }
-    return request.ip || request.socket.remoteAddress || '';
+
+    // Only read X-Forwarded-For when the direct peer is a known trusted proxy.
+    // If the caller is not a trusted proxy, the header could be forged.
+    if (!this.isAddressTrusted(remoteAddress)) {
+      return remoteAddress;
+    }
+
+    const forwarded = request.headers['x-forwarded-for'];
+    if (!forwarded) {
+      return remoteAddress;
+    }
+
+    // Walk right-to-left: rightmost entries are appended by infrastructure we
+    // control; leftmost entries are client-supplied and must not be trusted.
+    const ips = (forwarded as string).split(',').map((s) => s.trim()).filter(Boolean);
+    for (let i = ips.length - 1; i >= 0; i--) {
+      if (!this.isAddressTrusted(ips[i])) {
+        return ips[i];
+      }
+    }
+
+    return remoteAddress;
+  }
+
+  private isAddressTrusted(ip: string): boolean {
+    return this.trustedProxies.some((entry) =>
+      entry.includes('/') ? this.ipMatchesCidr(ip, entry) : ip === entry,
+    );
+  }
+
+  private ipMatchesCidr(ip: string, cidr: string): boolean {
+    try {
+      const slashIndex = cidr.lastIndexOf('/');
+      const range = cidr.slice(0, slashIndex);
+      const bits = parseInt(cidr.slice(slashIndex + 1), 10);
+
+      if (isNaN(bits) || bits < 0 || bits > 32) return false;
+
+      const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+      const ipNum = this.ipv4ToInt(ip);
+      const rangeNum = this.ipv4ToInt(range);
+
+      return (ipNum & mask) === (rangeNum & mask);
+    } catch {
+      this.logger.warn(`Malformed CIDR entry in TRUSTED_PROXIES: "${cidr}"`);
+      return false;
+    }
+  }
+
+  private ipv4ToInt(ip: string): number {
+    const octets = ip.split('.');
+    if (octets.length !== 4) return 0;
+    return octets.reduce((acc, octet) => ((acc << 8) | (parseInt(octet, 10) & 0xff)) >>> 0, 0) >>> 0;
   }
 }
