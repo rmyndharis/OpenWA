@@ -1,4 +1,4 @@
-import { Module, DynamicModule, Type } from '@nestjs/common';
+import { Module, DynamicModule, Type, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -24,6 +24,7 @@ import { StatsModule } from './modules/stats/stats.module';
 import { StatusModule } from './modules/status/status.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { HooksModule } from './core/hooks';
+import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
 
@@ -38,6 +39,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
 }
 
 @Module({
+  providers: [BullBoardAuthMiddleware],
   imports: [
     // Configuration
     ConfigModule.forRoot({
@@ -161,4 +163,8 @@ if (process.env.QUEUE_ENABLED === 'true') {
     PluginsApiModule, // Phase 5: Plugins API
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(BullBoardAuthMiddleware).forRoutes('/admin/queues');
+  }
+}

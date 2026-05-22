@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     xdg-utils \
     dumb-init \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chrome executable path for Puppeteer
@@ -73,9 +74,9 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p ./data/sessions ./data/media && \
     chown -R openwa:openwa /app
 
-# Note: Running as root to allow Docker socket access for orchestration
-# For production with stricter security, consider using a Docker socket proxy
-# USER openwa
+# Copy entrypoint script (runs as root to fix volume permissions, then drops to openwa)
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 2785
@@ -84,6 +85,6 @@ EXPOSE 2785
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD node -e "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
 
-# Start with dumb-init to handle signals properly
-ENTRYPOINT ["dumb-init", "--"]
+# Entrypoint: fixes volume permissions as root, then drops to openwa user via gosu
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/main"]

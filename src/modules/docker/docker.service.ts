@@ -71,13 +71,23 @@ export class DockerService implements OnModuleInit {
 
   private async initializeDocker(): Promise<void> {
     try {
-      this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+      const dockerHost = process.env.DOCKER_HOST;
+      if (dockerHost?.startsWith('tcp://')) {
+        const url = new URL(dockerHost);
+        this.docker = new Docker({
+          host: url.hostname,
+          port: parseInt(url.port, 10) || 2375,
+          protocol: 'http' as const,
+        });
+      } else {
+        this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+      }
       await this.docker.ping();
       this.isAvailable = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
       this.logger.warn(
-        'Docker socket not available. Container orchestration disabled.',
+        'Docker not available. Container orchestration disabled.',
         error instanceof Error ? error.message : error,
       );
       this.isAvailable = false;
