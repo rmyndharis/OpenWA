@@ -104,8 +104,13 @@ Access:
 OpenWA seeds a default API key on first run and writes it to:
 
 - `data/.api-key` (development)
+- `/app/data/.api-key` inside the API container when using Docker
 
-You can also create new keys via the API (see [API Specification](./06-api-specification.md)).
+The startup logs also print the initial key. Local development uses
+`dev-admin-key` when no keys exist; production creates a random `owa_k1_...`
+admin key. Use an admin key to create additional keys with
+`POST /api/auth/api-keys` (see
+[API Specification](./06-api-specification.md#api-key-management)).
 
 ## API Example
 
