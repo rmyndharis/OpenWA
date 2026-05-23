@@ -40,6 +40,8 @@ describe('AuthService', () => {
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
+      increment: jest.fn().mockResolvedValue({ affected: 1 }),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -188,6 +190,10 @@ describe('AuthService', () => {
       expect(result.id).toBe(key.id);
       expect(result.usageCount).toBe(1);
       expect(result.lastUsedAt).toBeDefined();
+      // Usage is tracked with an atomic increment (no read-modify-write race),
+      // never a full save of the validated entity.
+      expect(repository.increment).toHaveBeenCalledWith({ id: key.id }, 'usageCount', 1);
+      expect(repository.save).not.toHaveBeenCalled();
     });
 
     it('should throw UnauthorizedException for invalid key', async () => {

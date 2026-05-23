@@ -104,20 +104,27 @@ async function bootstrap() {
   );
 
   // CORS Configuration (Phase 3 Security Audit)
-  const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || ['*'];
-  app.enableCors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow requests with no origin (mobile apps, Postman, server-to-server)
-      if (!origin) return callback(null, true);
+  // Auth is header-based (X-API-Key), and the dashboard reaches the API same-origin
+  // via a reverse proxy, so cookie credentials are not required for normal use.
+  const configuredOrigins = process.env.CORS_ORIGINS?.split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+  const allowAllOrigins = !configuredOrigins || configuredOrigins.length === 0 || configuredOrigins.includes('*');
 
-      // Check if wildcard or origin matches
-      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    credentials: true,
+  app.enableCors({
+    // When allowing all origins, emit a literal `*` (never reflect the caller's
+    // origin) and keep credentials disabled — `*` + credentials is invalid and
+    // would let any site read credentialed responses. Only an explicit allowlist
+    // reflects matching origins and enables credentials.
+    origin: allowAllOrigins
+      ? '*'
+      : (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+          // Allow non-browser clients with no Origin header (server-to-server, curl, mobile)
+          if (!origin) return callback(null, true);
+          if (configuredOrigins.includes(origin)) return callback(null, true);
+          callback(new Error('Not allowed by CORS'));
+        },
+    credentials: !allowAllOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
     exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],

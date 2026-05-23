@@ -191,12 +191,39 @@ export class AuthService implements OnModuleInit {
       }
     }
 
-    // Update usage stats
-    apiKey.lastUsedAt = new Date();
-    apiKey.usageCount += 1;
-    await this.apiKeyRepository.save(apiKey);
+    // Record usage without blocking auth and without a read-modify-write race.
+    this.recordUsage(apiKey);
 
     return apiKey;
+  }
+
+  // Only refresh lastUsedAt at most once per window to avoid a write on every request.
+  private static readonly LAST_USED_THROTTLE_MS = 60_000;
+
+  /**
+   * Track API key usage. Uses an atomic SQL increment (no lost-update race) and
+   * runs fire-and-forget so a stats write can never add latency to — or fail —
+   * authentication. lastUsedAt is throttled to cut write amplification.
+   */
+  private recordUsage(apiKey: ApiKey): void {
+    const now = Date.now();
+    const lastUsedMs = apiKey.lastUsedAt ? apiKey.lastUsedAt.getTime() : 0;
+    const refreshLastUsed = now - lastUsedMs >= AuthService.LAST_USED_THROTTLE_MS;
+
+    void (async () => {
+      try {
+        await this.apiKeyRepository.increment({ id: apiKey.id }, 'usageCount', 1);
+        if (refreshLastUsed) {
+          await this.apiKeyRepository.update({ id: apiKey.id }, { lastUsedAt: new Date(now) });
+        }
+      } catch (err) {
+        this.logger.warn('Failed to record API key usage', { keyId: apiKey.id, error: String(err) });
+      }
+    })();
+
+    // Keep the in-memory copy consistent for the current caller.
+    apiKey.usageCount += 1;
+    if (refreshLastUsed) apiKey.lastUsedAt = new Date(now);
   }
 
   private hashKey(rawKey: string): string {

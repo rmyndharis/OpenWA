@@ -51,7 +51,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        type: 'sqlite' as const,
+        type: 'better-sqlite3' as const,
         database: configService.get<string>('database.database', './data/main.sqlite'),
         entities: [__dirname + '/modules/auth/**/*.entity{.ts,.js}', __dirname + '/modules/audit/**/*.entity{.ts,.js}'],
         synchronize: true,
@@ -101,7 +101,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
         // Users can opt out with DATABASE_SYNCHRONIZE=false to use migrations instead.
         return {
           ...baseConfig,
-          type: 'sqlite' as const,
+          type: 'better-sqlite3' as const,
           database: configService.get<string>('dataDatabase.database', './data/openwa.sqlite'),
           synchronize: configService.get<boolean>('dataDatabase.synchronize', true),
           migrationsRun: !configService.get<boolean>('dataDatabase.synchronize', true),

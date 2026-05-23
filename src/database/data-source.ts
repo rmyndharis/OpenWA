@@ -6,9 +6,9 @@ config();
 
 const dbType = process.env.DATABASE_TYPE || 'sqlite';
 
-// SQLite configuration
+// SQLite configuration (better-sqlite3 driver; node-sqlite3 driver removed in typeorm 1.0)
 const sqliteDataSource = new DataSource({
-  type: 'sqlite',
+  type: 'better-sqlite3',
   database: process.env.DATABASE_NAME || './data/openwa.sqlite',
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/migrations/*{.ts,.js}'],
