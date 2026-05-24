@@ -16,6 +16,15 @@ export interface WhatsAppWebJsConfig {
 export class WhatsAppWebJsPlugin implements IEnginePlugin {
   type = PluginType.ENGINE as const;
   private context?: PluginContext;
+  private readonly defaultPuppeteerArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-gpu',
+  ];
 
   onLoad(context: PluginContext): Promise<void> {
     this.context = context;
@@ -33,14 +42,59 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
     return Promise.resolve();
   }
 
+  private parseBoolean(value: unknown, fallback: boolean): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return fallback;
+  }
+
+  private parseArgs(input: unknown): string[] {
+    if (Array.isArray(input)) {
+      return input
+        .map(arg => String(arg).trim())
+        .filter(Boolean);
+    }
+
+    if (typeof input === 'string') {
+      const trimmed = input.trim();
+      if (!trimmed) return [];
+      if (trimmed.includes(',')) {
+        return trimmed
+          .split(',')
+          .map(arg => arg.trim())
+          .filter(Boolean);
+      }
+      return trimmed
+        .split(/\s+/)
+        .map(arg => arg.trim())
+        .filter(Boolean);
+    }
+
+    return [];
+  }
+
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
-    const sessionDataPath = (this.context?.config.sessionDataPath as string) ?? './data/sessions';
-    const headless = (this.context?.config.headless as boolean) ?? true;
-    const puppeteerArgs = (this.context?.config.puppeteerArgs as string[]) ?? [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    ];
+    const sessionDataPath =
+      (this.context?.config.sessionDataPath as string) ||
+      process.env.SESSION_DATA_PATH ||
+      process.env.ENGINE_SESSION_PATH ||
+      './data/sessions';
+
+    const headless = this.parseBoolean(
+      this.context?.config.headless ?? process.env.PUPPETEER_HEADLESS ?? process.env.ENGINE_HEADLESS,
+      true,
+    );
+
+    const contextArgsPrimary = this.parseArgs(this.context?.config.puppeteerArgs);
+    const contextArgsFallback = this.parseArgs(this.context?.config.browserArgs);
+    const contextArgs = contextArgsPrimary.length > 0 ? contextArgsPrimary : contextArgsFallback;
+    const envArgs = this.parseArgs(process.env.PUPPETEER_ARGS || process.env.ENGINE_BROWSER_ARGS || '');
+    const puppeteerArgs = contextArgs.length > 0 ? contextArgs : envArgs.length > 0 ? envArgs : this.defaultPuppeteerArgs;
 
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;

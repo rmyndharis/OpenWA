@@ -17,7 +17,9 @@ export function Login({ onLogin }: LoginProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKey.trim()) {
+    const normalizedKey = apiKey.trim();
+
+    if (!normalizedKey) {
       setError(t('login.apiKeyRequired'));
       return;
     }
@@ -29,12 +31,17 @@ export function Login({ onLogin }: LoginProps) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': apiKey,
+          'X-API-Key': normalizedKey,
         },
       });
 
       if (response.ok) {
-        onLogin(apiKey);
+        const payload = (await response.json().catch(() => ({}))) as { valid?: boolean };
+        if (payload.valid) {
+          onLogin(normalizedKey);
+        } else {
+          setError(t('login.invalidKey'));
+        }
       } else {
         const errorData = await response.json().catch(() => ({}));
         setError(errorData.message || t('login.invalidKey'));

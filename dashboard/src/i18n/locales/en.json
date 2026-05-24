@@ -110,9 +110,11 @@
     "idle": "Idle",
     "initializing": "Starting...",
     "connecting": "Connecting...",
+    "authenticating": "Authenticating...",
     "qr_ready": "Scan QR",
     "ready": "Connected",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "failed": "Failed"
   },
   "sessions": {
     "title": "Sessions",
@@ -157,10 +159,11 @@
       "step1": "<strong>1.</strong> Open WhatsApp on your phone",
       "step2": "<strong>2.</strong> Tap <strong>Menu</strong> → <strong>Linked Devices</strong>",
       "step3": "<strong>3.</strong> Tap <strong>Link a Device</strong> and scan this QR",
-      "autoRefresh": "QR updates automatically every 5 seconds",
+      "autoRefresh": "QR updates automatically every 2.5 seconds",
       "generating": "Generating QR code...",
       "unavailable": "QR code not available yet. Try again in a moment.",
       "preparing": "Preparing QR code...",
+      "authenticating": "Authenticating with WhatsApp. This can take a few seconds...",
       "showQr": "Show QR",
       "loading": "Loading...",
       "scanToConnect": "Scan QR code to connect"

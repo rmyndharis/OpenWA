@@ -192,6 +192,83 @@ describe('WebhookService', () => {
     });
   });
 
+  // ── test ─────────────────────────────────────────────────────────
+
+  describe('test', () => {
+    const mockFetch = jest.fn();
+
+    beforeEach(() => {
+      global.fetch = mockFetch as typeof global.fetch;
+      jest.spyOn(service as unknown as { delay: (ms: number) => Promise<void> }, 'delay').mockResolvedValue(undefined);
+    });
+
+    afterEach(() => {
+      mockFetch.mockReset();
+      jest.restoreAllMocks();
+    });
+
+    it('should return success when endpoint responds with 2xx', async () => {
+      const webhook = createMockWebhook();
+      (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: jest.fn().mockResolvedValue('ok'),
+      });
+
+      const result = await service.test('sess-1', 'wh-uuid-1');
+
+      expect(result).toEqual({ success: true, statusCode: 200 });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/webhook',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('should retry transient 404 and succeed on next attempt', async () => {
+      const webhook = createMockWebhook({ retryCount: 2 });
+      (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: jest.fn().mockResolvedValue('route not ready'),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          text: jest.fn().mockResolvedValue('ok'),
+        });
+
+      const result = await service.test('sess-1', 'wh-uuid-1');
+
+      expect(result).toEqual({ success: true, statusCode: 200 });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('should return detailed error for non-2xx response', async () => {
+      const webhook = createMockWebhook({ retryCount: 1 });
+      (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: jest.fn().mockResolvedValue('Cannot POST /webhook'),
+      });
+
+      const result = await service.test('sess-1', 'wh-uuid-1');
+
+      expect(result.success).toBe(false);
+      expect(result.statusCode).toBe(404);
+      expect(result.error).toContain('HTTP 404 Not Found');
+      expect(result.error).toContain('Cannot POST /webhook');
+    });
+  });
+
   // ── dispatch (direct mode — queue disabled) ───────────────────────
 
   describe('dispatch (direct mode)', () => {

@@ -10,7 +10,16 @@ const API_BASE_URL = '/api';
 export interface Session {
   id: string;
   name: string;
-  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected';
+  status:
+    | 'created'
+    | 'idle'
+    | 'initializing'
+    | 'connecting'
+    | 'qr_ready'
+    | 'authenticating'
+    | 'ready'
+    | 'disconnected'
+    | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;
@@ -149,7 +158,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const url = `${API_BASE_URL}${endpoint}`;
 
   // Get API key from sessionStorage for authentication
-  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const apiKey = sessionStorage.getItem('openwa_api_key')?.trim();
 
   const headers: HeadersInit = {
     'Content-Type': 'application/json',

@@ -4,6 +4,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
+import { LoggerService, LogLevel } from './common/services/logger.service';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -65,6 +66,16 @@ STORAGE_PATH=./data/media
 }
 
 async function bootstrap() {
+  const requestedLogLevel = (process.env.LOG_LEVEL || process.env.OPENWA_LOG_LEVEL || 'info').toLowerCase();
+  const allowedLevels = Object.values(LogLevel) as string[];
+  if (allowedLevels.includes(requestedLogLevel)) {
+    LoggerService.setLogLevel(requestedLogLevel as LogLevel);
+  } else {
+    console.warn(
+      `[Bootstrap] Invalid LOG_LEVEL='${requestedLogLevel}', using default '${LogLevel.INFO}'. Valid: ${allowedLevels.join(', ')}`,
+    );
+  }
+
   const app = await NestFactory.create(AppModule);
 
   // Enable shutdown hooks for graceful shutdown
@@ -106,10 +117,66 @@ async function bootstrap() {
   // CORS Configuration (Phase 3 Security Audit)
   // Auth is header-based (X-API-Key), and the dashboard reaches the API same-origin
   // via a reverse proxy, so cookie credentials are not required for normal use.
-  const configuredOrigins = process.env.CORS_ORIGINS?.split(',')
-    .map(o => o.trim())
+  const stripWrappingQuotes = (value: string): string => {
+    const trimmed = value.trim();
+    if (
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
+      return trimmed.slice(1, -1).trim();
+    }
+    return trimmed;
+  };
+
+  const normalizeOrigin = (value: string): string | null => {
+    const cleaned = stripWrappingQuotes(value).replace(/\/+$/, '');
+    if (!cleaned) return null;
+    if (cleaned === '*') return '*';
+    if (cleaned === 'null') return 'null';
+
+    // Accept either full URL (https://example.com/path) or host-only (example.com[:port])
+    if (/^https?:\/\//i.test(cleaned)) {
+      try {
+        return new URL(cleaned).origin.toLowerCase();
+      } catch {
+        return null;
+      }
+    }
+
+    const hostOnly = cleaned.replace(/^\/\//, '').split('/')[0].toLowerCase();
+    if (!hostOnly) return null;
+    return hostOnly;
+  };
+
+  const configuredOriginsSet = new Set<string>();
+  const configuredRawOrigins =
+    process.env.CORS_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean) ?? [];
+
+  // Include URL origins from related env vars so operators can set one place only.
+  const urlFallbackOrigins = [process.env.BASE_URL, process.env.DASHBOARD_URL]
+    .map(value => (value ? value.trim() : ''))
     .filter(Boolean);
-  const allowAllOrigins = !configuredOrigins || configuredOrigins.length === 0 || configuredOrigins.includes('*');
+
+  for (const rawOrigin of [...configuredRawOrigins, ...urlFallbackOrigins]) {
+    const normalized = normalizeOrigin(rawOrigin);
+    if (!normalized) continue;
+
+    if (normalized === '*' || normalized === 'null') {
+      configuredOriginsSet.add(normalized);
+      continue;
+    }
+
+    if (/^https?:\/\//i.test(normalized)) {
+      configuredOriginsSet.add(normalized);
+      continue;
+    }
+
+    // Host-only values are expanded to both schemes.
+    configuredOriginsSet.add(`http://${normalized}`);
+    configuredOriginsSet.add(`https://${normalized}`);
+  }
+
+  const allowAllOrigins = configuredOriginsSet.size === 0 || configuredOriginsSet.has('*');
 
   app.enableCors({
     // When allowing all origins, emit a literal `*` (never reflect the caller's
@@ -121,7 +188,16 @@ async function bootstrap() {
       : (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
           // Allow non-browser clients with no Origin header (server-to-server, curl, mobile)
           if (!origin) return callback(null, true);
-          if (configuredOrigins.includes(origin)) return callback(null, true);
+          const normalizedRequestOrigin = normalizeOrigin(origin);
+          if (!normalizedRequestOrigin) {
+            return callback(new Error('Not allowed by CORS'));
+          }
+          if (
+            configuredOriginsSet.has(normalizedRequestOrigin) ||
+            (normalizedRequestOrigin === 'null' && configuredOriginsSet.has('null'))
+          ) {
+            return callback(null, true);
+          }
           callback(new Error('Not allowed by CORS'));
         },
     credentials: !allowAllOrigins,

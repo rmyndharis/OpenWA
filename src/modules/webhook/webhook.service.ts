@@ -32,6 +32,13 @@ export interface WebhookJobData {
   maxRetries: number;
 }
 
+interface WebhookHttpResult {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  body: string;
+}
+
 @Injectable()
 export class WebhookService {
   private readonly logger = createLogger('WebhookService');
@@ -50,9 +57,10 @@ export class WebhookService {
   }
 
   async create(sessionId: string, dto: CreateWebhookDto): Promise<Webhook> {
+    const normalizedUrl = this.normalizeWebhookUrl(dto.url);
     const webhook = this.webhookRepository.create({
       sessionId,
-      url: dto.url,
+      url: normalizedUrl,
       events: dto.events || ['message.received'],
       secret: dto.secret || null,
       headers: dto.headers || {},
@@ -86,7 +94,7 @@ export class WebhookService {
   async update(id: string, dto: UpdateWebhookDto): Promise<Webhook> {
     const webhook = await this.findOne(id);
 
-    if (dto.url !== undefined) webhook.url = dto.url;
+    if (dto.url !== undefined) webhook.url = this.normalizeWebhookUrl(dto.url);
     if (dto.events !== undefined) webhook.events = dto.events;
     if (dto.secret !== undefined) webhook.secret = dto.secret;
     if (dto.headers !== undefined) webhook.headers = dto.headers;
@@ -103,6 +111,10 @@ export class WebhookService {
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
     const webhook = await this.findOne(webhookId);
+    const url = this.normalizeWebhookUrl(webhook.url);
+    const maxAttempts = Math.max(1, Math.min(webhook.retryCount || 1, 5));
+    const timeoutMs = this.configService.get<number>('webhook.timeout', 10000);
+    const baseDelayMs = Math.max(250, Math.min(this.configService.get<number>('webhook.retryDelay', 5000), 5000));
 
     const testPayload: WebhookPayload = {
       event: 'test',
@@ -113,7 +125,7 @@ export class WebhookService {
       data: {
         message: 'This is a test webhook from OpenWA',
         webhookId: webhook.id,
-        url: webhook.url,
+        url,
       },
     };
 
@@ -132,24 +144,52 @@ export class WebhookService {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
-    try {
-      const response = await fetch(webhook.url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: AbortSignal.timeout(10000),
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await this.sendWebhookRequest(url, body, headers, timeoutMs);
+        if (result.ok) {
+          return {
+            success: true,
+            statusCode: result.status,
+          };
+        }
 
-      return {
-        success: response.ok,
-        statusCode: response.status,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
+        const errorMessage = this.formatHttpError(
+          result.status,
+          result.statusText,
+          result.body,
+          url,
+          attempt,
+          maxAttempts,
+        );
+
+        if (attempt < maxAttempts && this.isRetryableStatus(result.status)) {
+          await this.delay(baseDelayMs * attempt);
+          continue;
+        }
+
+        return {
+          success: false,
+          statusCode: result.status,
+          error: errorMessage,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt < maxAttempts) {
+          await this.delay(baseDelayMs * attempt);
+          continue;
+        }
+        return {
+          success: false,
+          error: `Request to ${url} failed: ${message}`,
+        };
+      }
     }
+
+    return {
+      success: false,
+      error: `Request to ${url} failed after ${maxAttempts} attempts`,
+    };
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
@@ -215,7 +255,7 @@ export class WebhookService {
 
         const jobData: WebhookJobData = {
           webhookId: webhook.id,
-          url: webhook.url,
+          url: this.normalizeWebhookUrl(webhook.url),
           event,
           payload: finalPayload,
           signature,
@@ -315,7 +355,7 @@ export class WebhookService {
     }
 
     try {
-      const response = await fetch(webhook.url, {
+      const response = await fetch(this.normalizeWebhookUrl(webhook.url), {
         method: 'POST',
         headers,
         body,
@@ -357,6 +397,52 @@ export class WebhookService {
     const hmac = crypto.createHmac('sha256', secret);
     hmac.update(payload);
     return `sha256=${hmac.digest('hex')}`;
+  }
+
+  private normalizeWebhookUrl(url: string): string {
+    return url.trim();
+  }
+
+  private async sendWebhookRequest(
+    url: string,
+    body: string,
+    headers: Record<string, string>,
+    timeoutMs: number,
+  ): Promise<WebhookHttpResult> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    const responseBody = await response.text().catch(() => '');
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText || '',
+      body: responseBody,
+    };
+  }
+
+  private isRetryableStatus(status: number): boolean {
+    if (status === 404 || status === 408 || status === 425 || status === 429) return true;
+    return status >= 500;
+  }
+
+  private formatHttpError(
+    status: number,
+    statusText: string,
+    responseBody: string,
+    url: string,
+    attempt: number,
+    maxAttempts: number,
+  ): string {
+    const compactBody = responseBody.replace(/\s+/g, ' ').trim();
+    const bodySnippet = compactBody ? ` Response: ${compactBody.slice(0, 220)}` : '';
+    const label = statusText ? `${status} ${statusText}` : `${status}`;
+    const attemptSuffix = maxAttempts > 1 ? ` (attempt ${attempt}/${maxAttempts})` : '';
+    return `HTTP ${label} from ${url}${attemptSuffix}.${bodySnippet}`.trim();
   }
 
   private delay(ms: number): Promise<void> {

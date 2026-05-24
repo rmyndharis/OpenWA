@@ -50,6 +50,7 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
     "archiver": "^8.0.0",
+    "better-sqlite3": "^12.10.0",
     "bullmq": "^5.76.10",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -58,7 +59,6 @@
     "ioredis": "^5.9.3",
     "pg": "^8.21.0",
     "qrcode": "^1.5.4",
-    "better-sqlite3": "^12.10.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
@@ -80,7 +80,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^25.9.0",
     "@types/qrcode": "^1.5.5",
-    "@types/supertest": "^6.0.2",
+    "@types/supertest": "^7.2.0",
     "@types/tar-stream": "^3.1.4",
     "@types/uuid": "^10.0.0",
     "concurrently": "^9.2.1",
@@ -96,7 +96,7 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3"
   },
   "jest": {

@@ -9,6 +9,9 @@ import { useRole } from '../hooks/useRole';
 import { PageHeader } from '../components/PageHeader';
 import './Sessions.css';
 
+const CONNECTING_STATUSES: Session['status'][] = ['initializing', 'connecting', 'qr_ready', 'authenticating'];
+const ACTIVE_STATUSES: Session['status'][] = ['ready', ...CONNECTING_STATUSES];
+
 export function Sessions() {
   const { t } = useTranslation();
   useDocumentTitle(t('sessions.title'));
@@ -20,7 +23,7 @@ export function Sessions() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newSessionName, setNewSessionName] = useState('');
   const [creating, setCreating] = useState(false);
-  const [qrData, setQrData] = useState<{ sessionId: string; sessionName: string; qrCode: string } | null>(null);
+  const [qrData, setQrData] = useState<{ sessionId: string; sessionName: string; qrCode: string | null } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -62,6 +65,18 @@ export function Sessions() {
   const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentSessionName = useRef<string>('');
 
+  const getErrorMessage = (err: unknown): string => (err instanceof Error ? err.message : '');
+  const isQrPendingError = (message: string): boolean => {
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('qr code is not ready yet') ||
+      normalized.includes('not ready yet') ||
+      normalized.includes('not available yet')
+    );
+  };
+  const isAlreadyAuthenticatedError = (message: string): boolean =>
+    message.toLowerCase().includes('already authenticated');
+
   const fetchQR = useCallback(async (sessionId: string) => {
     try {
       const qr = await sessionApi.getQR(sessionId);
@@ -71,19 +86,38 @@ export function Sessions() {
         currentSessionName.current = '';
         fetchSessions();
       }
-    } catch {
+      setError(null);
+    } catch (err) {
+      const message = getErrorMessage(err);
+
+      // Expected while engine is still preparing/regenerating QR.
+      // Keep modal open in loading mode and continue polling.
+      if (isQrPendingError(message)) {
+        setQrData(prev => (prev && prev.sessionId === sessionId ? { ...prev, qrCode: null } : prev));
+        return;
+      }
+
+      // Session authenticated in another tab/device while modal was open.
+      if (isAlreadyAuthenticatedError(message)) {
+        setQrData(null);
+        currentSessionName.current = '';
+        fetchSessions();
+        return;
+      }
+
       setQrData(null);
       currentSessionName.current = '';
       fetchSessions();
+      setError(message || t('sessions.qr.unavailable'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (qrData) {
       currentSessionName.current = qrData.sessionName;
       qrRefreshInterval.current = setInterval(() => {
         fetchQR(qrData.sessionId);
-      }, 5000);
+      }, 2500);
     }
     return () => {
       if (qrRefreshInterval.current) clearInterval(qrRefreshInterval.current);
@@ -128,7 +162,7 @@ export function Sessions() {
 
   const handleStart = async (id: string) => {
     const session = sessions.find(s => s.id === id);
-    if (session && ['initializing', 'connecting', 'qr_ready'].includes(session.status)) {
+    if (session && CONNECTING_STATUSES.includes(session.status)) {
       handleShowQR(id);
       return;
     }
@@ -150,13 +184,10 @@ export function Sessions() {
   const handleShowQR = async (id: string) => {
     const session = sessions.find(s => s.id === id);
     const sessionName = session?.name || '';
-    try {
-      const qr = await sessionApi.getQR(id);
-      setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
-    } catch (err) {
-      console.error('Failed to get QR:', err);
-      setError(t('sessions.qr.unavailable'));
-    }
+    setError(null);
+    currentSessionName.current = sessionName;
+    setQrData({ sessionId: id, sessionName, qrCode: null });
+    await fetchQR(id);
   };
 
   const handleStop = async (id: string) => {
@@ -188,7 +219,7 @@ export function Sessions() {
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
       (statusFilter === 'inactive' && ['created', 'idle', 'disconnected'].includes(s.status)) ||
-      (statusFilter === 'connecting' && ['initializing', 'connecting', 'qr_ready'].includes(s.status));
+      (statusFilter === 'connecting' && CONNECTING_STATUSES.includes(s.status));
     return matchesSearch && matchesStatus;
   });
 
@@ -443,10 +474,16 @@ export function Sessions() {
                 <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
               </div>
 
-              {session.status === 'initializing' || session.status === 'connecting' || session.status === 'qr_ready' ? (
+              {CONNECTING_STATUSES.includes(session.status) ? (
                 <div className="qr-placeholder">
                   <QrCode size={80} className="qr-icon" />
-                  <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
+                  <p>
+                    {session.status === 'qr_ready'
+                      ? t('sessions.qr.scanToConnect')
+                      : session.status === 'authenticating'
+                        ? t('sessions.qr.authenticating')
+                        : t('sessions.qr.preparing')}
+                  </p>
                   <button
                     className="btn-sm"
                     onClick={() => handleShowQR(session.id)}
@@ -473,9 +510,13 @@ export function Sessions() {
               )}
 
               <div className="card-actions">
-                <button className="btn-action" onClick={() => setSelectedSession(session)}>
+                <button
+                  className="btn-action icon-only"
+                  onClick={() => setSelectedSession(session)}
+                  title={t('sessions.actions.view')}
+                  aria-label={t('sessions.actions.view')}
+                >
                   <Eye size={16} />
-                  {t('sessions.actions.view')}
                 </button>
                 {canWrite &&
                 (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
@@ -483,10 +524,14 @@ export function Sessions() {
                     <Play size={16} />
                     {t('sessions.actions.start')}
                   </button>
-                ) : canWrite && ['ready', 'initializing', 'connecting', 'qr_ready'].includes(session.status) ? (
-                  <button className="btn-action" onClick={() => handleStop(session.id)}>
+                ) : canWrite && ACTIVE_STATUSES.includes(session.status) ? (
+                  <button
+                    className="btn-action icon-only"
+                    onClick={() => handleStop(session.id)}
+                    title={t('sessions.actions.stop')}
+                    aria-label={t('sessions.actions.stop')}
+                  >
                     <Square size={16} />
-                    {t('sessions.actions.stop')}
                   </button>
                 ) : canWrite ? (
                   <button className="btn-action" onClick={() => handleStart(session.id)}>
@@ -495,9 +540,13 @@ export function Sessions() {
                   </button>
                 ) : null}
                 {canWrite && (
-                  <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>
+                  <button
+                    className="btn-action danger icon-only"
+                    onClick={() => setDeleteConfirmId(session.id)}
+                    title={t('sessions.actions.delete')}
+                    aria-label={t('sessions.actions.delete')}
+                  >
                     <Trash2 size={16} />
-                    {t('sessions.actions.delete')}
                   </button>
                 )}
               </div>

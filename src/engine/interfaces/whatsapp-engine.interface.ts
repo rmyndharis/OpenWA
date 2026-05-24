@@ -198,6 +198,7 @@ export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
   onMessage?: (message: IncomingMessage) => void;
+  onMessageSent?: (message: IncomingMessage) => void;
   onMessageAck?: (messageId: string, ack: number) => void;
   onDisconnected?: (reason: string) => void;
   onStateChanged?: (state: EngineStatus) => void;

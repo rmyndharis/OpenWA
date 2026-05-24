@@ -312,6 +312,30 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             this.eventsGateway.emitMessage(id, finalMessage as Record<string, unknown>);
           });
       },
+      onMessageSent: (message): void => {
+        this.logger.debug(`Message sent to ${message.to}`, {
+          sessionId: id,
+          messageId: message.id,
+          to: message.to,
+          action: 'message_sent',
+        });
+
+        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
+
+        const messageData = { ...message };
+        void this.webhookService.dispatch(id, 'message.sent', messageData as Record<string, unknown>);
+        this.eventsGateway.emitMessageSent(id, messageData as Record<string, unknown>);
+      },
+      onMessageAck: (messageId: string, ack: number): void => {
+        const ackData = {
+          messageId,
+          ack,
+          ackName: this.resolveAckName(ack),
+        };
+
+        void this.webhookService.dispatch(id, 'message.ack', ackData as Record<string, unknown>);
+        this.eventsGateway.emitMessageAck(id, ackData);
+      },
       onDisconnected: (reason: string): void => {
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,
@@ -414,6 +438,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       state.timer = null;
     }
     this.reconnectStates.delete(id);
+  }
+
+  private resolveAckName(ack: number): string {
+    switch (ack) {
+      case -1:
+        return 'error';
+      case 0:
+        return 'pending';
+      case 1:
+        return 'server';
+      case 2:
+        return 'device';
+      case 3:
+        return 'read';
+      case 4:
+        return 'played';
+      default:
+        return `unknown(${ack})`;
+    }
   }
 
   async stop(id: string): Promise<Session> {

@@ -50,6 +50,20 @@ export interface WhatsAppWebJsConfig {
   };
 }
 
+interface WWebMessageLike {
+  id: { _serialized: string };
+  from: string;
+  to: string;
+  body: string;
+  type: string;
+  timestamp: number;
+  fromMe: boolean;
+  hasMedia: boolean;
+  hasQuotedMsg: boolean;
+  downloadMedia: () => Promise<{ mimetype: string; filename?: string; data: string } | null>;
+  getQuotedMessage: () => Promise<{ id: { _serialized: string }; body: string }>;
+}
+
 export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private client: Client | null = null;
   private status: EngineStatus = EngineStatus.DISCONNECTED;
@@ -57,6 +71,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private phoneNumber: string | null = null;
   private pushName: string | null = null;
   private callbacks: EngineEventCallbacks = {};
+  private initStartedAtMs: number | null = null;
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -67,6 +82,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
+    this.initStartedAtMs = Date.now();
 
     try {
       // Build puppeteer args, including proxy if configured
@@ -88,11 +104,36 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
+      const parseNumberEnv = (value: string | undefined, fallback: number): number => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      };
+
+      const authTimeoutMs = parseNumberEnv(process.env.WWEBJS_AUTH_TIMEOUT_MS, 90000);
+      const takeoverOnConflict = process.env.WWEBJS_TAKEOVER_ON_CONFLICT !== 'false';
+      const takeoverTimeoutMs = parseNumberEnv(process.env.WWEBJS_TAKEOVER_TIMEOUT_MS, 0);
+      const qrMaxRetries = parseNumberEnv(process.env.WWEBJS_QR_MAX_RETRIES, 0);
+
+      this.logger.log('Initializing WhatsApp client', {
+        action: 'client_initialize',
+        sessionId: this.config.sessionId,
+        headless: this.config.puppeteer?.headless ?? true,
+        puppeteerArgsCount: puppeteerArgs.length,
+        authTimeoutMs,
+        takeoverOnConflict,
+        takeoverTimeoutMs,
+        qrMaxRetries,
+      });
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
           dataPath: path.resolve(this.config.sessionDataPath),
         }),
+        authTimeoutMs,
+        takeoverOnConflict,
+        takeoverTimeoutMs,
+        qrMaxRetries,
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
@@ -114,6 +155,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('qr', async (qr: string) => {
       try {
         this.qrCode = await qrcode.toDataURL(qr);
+        const elapsedMs = this.initStartedAtMs ? Date.now() - this.initStartedAtMs : undefined;
+        this.logger.log('QR event received', {
+          action: 'qr_event',
+          sessionId: this.config.sessionId,
+          elapsedMs,
+        });
         this.setStatus(EngineStatus.QR_READY);
         this.callbacks.onQRCode?.(this.qrCode);
       } catch (error) {
@@ -122,6 +169,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('authenticated', () => {
+      const elapsedMs = this.initStartedAtMs ? Date.now() - this.initStartedAtMs : undefined;
+      this.logger.log('Session authenticated, waiting ready', {
+        action: 'authenticated',
+        sessionId: this.config.sessionId,
+        elapsedMs,
+      });
       this.setStatus(EngineStatus.AUTHENTICATING);
       this.qrCode = null;
     });
@@ -131,6 +184,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         const info = this.client?.info;
         this.phoneNumber = info?.wid?.user || null;
         this.pushName = info?.pushname || null;
+        const elapsedMs = this.initStartedAtMs ? Date.now() - this.initStartedAtMs : undefined;
+        this.logger.log('Session ready event', {
+          action: 'ready_event',
+          sessionId: this.config.sessionId,
+          elapsedMs,
+        });
         this.setStatus(EngineStatus.READY);
         this.callbacks.onReady?.(this.phoneNumber || '', this.pushName || '');
       } catch (error) {
@@ -141,52 +200,26 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    this.client.on('message', async msg => {
+    this.client.on('message', async rawMsg => {
       try {
-        const incomingMessage: IncomingMessage = {
-          id: msg.id._serialized,
-          from: msg.from,
-          to: msg.to,
-          chatId: msg.from,
-          body: msg.body,
-          type: msg.type,
-          timestamp: msg.timestamp,
-          fromMe: msg.fromMe,
-          isGroup: msg.from.endsWith('@g.us'),
-        };
-
-        // Handle media
-        if (msg.hasMedia) {
-          try {
-            const media = await msg.downloadMedia();
-            if (media) {
-              incomingMessage.media = {
-                mimetype: media.mimetype,
-                filename: media.filename || undefined,
-                data: media.data,
-              };
-            }
-          } catch (error) {
-            this.logger.error('Error downloading media', String(error));
-          }
-        }
-
-        // Handle quoted message
-        if (msg.hasQuotedMsg) {
-          try {
-            const quoted = await msg.getQuotedMessage();
-            incomingMessage.quotedMessage = {
-              id: quoted.id._serialized,
-              body: quoted.body,
-            };
-          } catch (error) {
-            this.logger.error('Error getting quoted message', String(error));
-          }
-        }
-
+        const msg = rawMsg as unknown as WWebMessageLike;
+        const incomingMessage = await this.buildIncomingMessage(msg);
         this.callbacks.onMessage?.(incomingMessage);
       } catch (error) {
         this.logger.error('Error processing incoming message', String(error));
+      }
+    });
+
+    // Fired for all message creations; we only need outgoing ones for message.sent webhooks.
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.client.on('message_create', async rawMsg => {
+      try {
+        const msg = rawMsg as unknown as WWebMessageLike;
+        if (!msg.fromMe) return;
+        const outgoingMessage = await this.buildIncomingMessage(msg);
+        this.callbacks.onMessageSent?.(outgoingMessage);
+      } catch (error) {
+        this.logger.error('Error processing outgoing message', String(error));
       }
     });
 
@@ -195,6 +228,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('disconnected', reason => {
+      const elapsedMs = this.initStartedAtMs ? Date.now() - this.initStartedAtMs : undefined;
+      this.logger.warn('Client disconnected event', {
+        action: 'disconnected_event',
+        sessionId: this.config.sessionId,
+        reason,
+        elapsedMs,
+      });
       this.setStatus(EngineStatus.DISCONNECTED);
       this.callbacks.onDisconnected?.(reason);
     });
@@ -209,6 +249,49 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.status = status;
     this.callbacks.onStateChanged?.(status);
     this.emit('stateChanged', status);
+  }
+
+  private async buildIncomingMessage(msg: WWebMessageLike): Promise<IncomingMessage> {
+    const incomingMessage: IncomingMessage = {
+      id: msg.id._serialized,
+      from: msg.from,
+      to: msg.to,
+      chatId: msg.fromMe ? msg.to : msg.from,
+      body: msg.body,
+      type: msg.type,
+      timestamp: msg.timestamp,
+      fromMe: msg.fromMe,
+      isGroup: (msg.fromMe ? msg.to : msg.from).endsWith('@g.us'),
+    };
+
+    if (msg.hasMedia) {
+      try {
+        const media = await msg.downloadMedia();
+        if (media) {
+          incomingMessage.media = {
+            mimetype: media.mimetype,
+            filename: media.filename || undefined,
+            data: media.data,
+          };
+        }
+      } catch (error) {
+        this.logger.error('Error downloading media', String(error));
+      }
+    }
+
+    if (msg.hasQuotedMsg) {
+      try {
+        const quoted = await msg.getQuotedMessage();
+        incomingMessage.quotedMessage = {
+          id: quoted.id._serialized,
+          body: quoted.body,
+        };
+      } catch (error) {
+        this.logger.error('Error getting quoted message', String(error));
+      }
+    }
+
+    return incomingMessage;
   }
 
   async disconnect(): Promise<void> {

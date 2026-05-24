@@ -110,9 +110,11 @@
     "idle": "בהמתנה",
     "initializing": "מאתחל...",
     "connecting": "מתחבר...",
+    "authenticating": "מאמת...",
     "qr_ready": "סריקת QR",
     "ready": "מחובר",
-    "disconnected": "מנותק"
+    "disconnected": "מנותק",
+    "failed": "נכשל"
   },
   "sessions": {
     "title": "Sessions",
@@ -157,10 +159,11 @@
       "step1": "<strong>1.</strong> יש לפתוח את WhatsApp במכשיר",
       "step2": "<strong>2.</strong> יש להקיש על <strong>תפריט</strong> ← <strong>מכשירים מקושרים</strong>",
       "step3": "<strong>3.</strong> יש להקיש על <strong>קישור מכשיר</strong> ולסרוק את ה-QR",
-      "autoRefresh": "ה-QR מתעדכן אוטומטית כל 5 שניות",
+      "autoRefresh": "ה-QR מתעדכן אוטומטית כל 2.5 שניות",
       "generating": "יוצר קוד QR...",
       "unavailable": "קוד ה-QR אינו זמין כעת. יש לנסות שוב בעוד רגע.",
       "preparing": "מכין קוד QR...",
+      "authenticating": "מאמת מול WhatsApp. הפעולה עשויה להימשך מספר שניות...",
       "showQr": "הצגת QR",
       "loading": "טוען...",
       "scanToConnect": "יש לסרוק את ה-QR כדי להתחבר"
