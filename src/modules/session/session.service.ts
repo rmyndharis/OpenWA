@@ -5,9 +5,10 @@ import {
   BadRequestException,
   OnModuleDestroy,
   OnModuleInit,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, DataSource } from 'typeorm';
+import { Repository, In, Not, IsNull, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -25,7 +26,7 @@ interface ReconnectState {
 }
 
 @Injectable()
-export class SessionService implements OnModuleDestroy, OnModuleInit {
+export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicationBootstrap {
   private readonly logger = createLogger('SessionService');
 
   // In-memory map of active engine instances
@@ -67,6 +68,38 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         action: 'startup_reset',
         affected: result.affected,
       });
+    }
+  }
+
+  async onApplicationBootstrap(): Promise<void> {
+    if (process.env.AUTO_START_SESSIONS !== 'true') return;
+
+    const sessions = await this.sessionRepository.find({
+      where: { phone: Not(IsNull()), status: SessionStatus.DISCONNECTED },
+    });
+
+    if (sessions.length === 0) return;
+
+    this.logger.log(`Auto-starting ${sessions.length} previously authenticated session(s)`, {
+      action: 'auto_start',
+      count: sessions.length,
+    });
+
+    for (const session of sessions) {
+      try {
+        await this.start(session.id);
+        this.logger.log(`Auto-started session: ${session.name}`, {
+          sessionId: session.id,
+          action: 'auto_start_success',
+        });
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.logger.error(`Auto-start failed for session: ${session.name}`, errorMessage, {
+          sessionId: session.id,
+          action: 'auto_start_failed',
+        });
+      }
+      await this.delay(2000);
     }
   }
 
@@ -536,5 +569,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
    */
   isActive(id: string): boolean {
     return this.engines.has(id);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
