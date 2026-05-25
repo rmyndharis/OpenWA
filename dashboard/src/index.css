@@ -352,9 +352,6 @@ code {
   text-align: left;
 }
 
-[dir="rtl"] .page-header__title-group {
-  flex-direction: row-reverse;
-}
 
 /* Toast container — slide in from the opposite side */
 [dir="rtl"] .toast-container {
