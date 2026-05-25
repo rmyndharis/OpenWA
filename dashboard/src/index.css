@@ -352,10 +352,6 @@ code {
   text-align: left;
 }
 
-[dir="rtl"] .page-header__top {
-  flex-direction: row-reverse;
-}
-
 [dir="rtl"] .page-header__title-group {
   flex-direction: row-reverse;
 }
