@@ -5,26 +5,44 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
-    groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
-
-  - package-ecosystem: npm
-    directory: /dashboard
-    schedule:
-      interval: weekly
-      day: monday
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
         update-types:
           - minor
           - patch
+      major:
+        update-types:
+          - major
+    labels:
+      - dependencies
+    ignore:
+      # Ignore major bumps for packages that need manual migration
+      # Uncomment specific packages below if you want to skip them entirely
+      # - dependency-name: "typescript"
+      #   update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major:
+        update-types:
+          - major
+    labels:
+      - dependencies
+      - dashboard
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    labels:
+      - ci

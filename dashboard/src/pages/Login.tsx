@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Github } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
+import { GithubIcon } from '../components/GithubIcon';
 import './Login.css';
 
 interface LoginProps {
@@ -100,8 +101,9 @@ export function Login({ onLogin }: LoginProps) {
           target="_blank"
           rel="noopener noreferrer"
           className="github-link"
+          aria-label="GitHub"
         >
-          <Github size={18} />
+          <GithubIcon size={18} />
         </a>
       </footer>
     </div>
