@@ -6,9 +6,12 @@
   font-weight: 400;
 }
 
-html[lang="he"],
-html[dir="rtl"] {
+html[lang="he"] {
   font-family: 'Heebo', 'Rubik', 'Noto Sans Hebrew', 'Segoe UI', Arial, sans-serif;
+}
+
+html[lang="ar"] {
+  font-family: 'Noto Sans Arabic', 'Cairo', 'Tajawal', 'Segoe UI', Arial, sans-serif;
 }
 
 :root {
@@ -350,6 +353,10 @@ code {
 }
 
 [dir="rtl"] .page-header__top {
+  flex-direction: row-reverse;
+}
+
+[dir="rtl"] .page-header__title-group {
   flex-direction: row-reverse;
 }
 
