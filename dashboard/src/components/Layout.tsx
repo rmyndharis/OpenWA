@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -19,10 +19,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Languages,
+  Check,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
-import { supportedLanguages, type SupportedLanguage } from '../i18n';
+import { languageOptions, type SupportedLanguage } from '../i18n';
 import './Layout.css';
 
 interface LayoutProps {
@@ -80,13 +81,28 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const toggleMobile = () => setIsMobileOpen(!isMobileOpen);
 
   const currentLang = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0] as SupportedLanguage;
-  const cycleLanguage = () => {
-    const idx = supportedLanguages.indexOf(currentLang);
-    const next = supportedLanguages[(idx + 1) % supportedLanguages.length];
-    void i18n.changeLanguage(next);
+  const isRtl = currentLang === 'he' || currentLang === 'ar';
+
+  const [isLangOpen, setIsLangOpen] = useState(false);
+  const langRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (langRef.current && !langRef.current.contains(e.target as Node)) {
+        setIsLangOpen(false);
+      }
+    };
+    if (isLangOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isLangOpen]);
+
+  const selectLanguage = (code: SupportedLanguage) => {
+    void i18n.changeLanguage(code);
+    setIsLangOpen(false);
   };
-  const languageLabel = currentLang === 'he' ? 'עברית' : 'EN';
-  const isRtl = currentLang === 'he';
+
+  const currentLangEntry = languageOptions.find(l => l.code === currentLang) ?? languageOptions[0];
+  const languageLabel = isCollapsed ? currentLangEntry.short : currentLangEntry.label;
 
   return (
     <div className="layout">
@@ -151,15 +167,33 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         </nav>
 
         <div className="sidebar-footer">
-          <button
-            className="theme-toggle-btn"
-            onClick={cycleLanguage}
-            title={t('common.language')}
-            aria-label={t('common.language')}
-          >
-            <Languages size={18} />
-            {!isCollapsed && <span>{languageLabel}</span>}
-          </button>
+          <div className="lang-picker-wrap" ref={langRef}>
+            <button
+              className="theme-toggle-btn lang-trigger-btn"
+              onClick={() => setIsLangOpen(v => !v)}
+              title={t('common.language')}
+              aria-label={t('common.language')}
+              aria-expanded={isLangOpen}
+            >
+              <Languages size={18} />
+              {!isCollapsed && <span>{languageLabel}</span>}
+            </button>
+
+            <div className={`lang-popup ${isLangOpen ? 'lang-popup--open' : ''}`} role="listbox">
+              {languageOptions.map(lang => (
+                <button
+                  key={lang.code}
+                  className={`lang-option ${currentLang === lang.code ? 'lang-option--active' : ''}`}
+                  role="option"
+                  aria-selected={currentLang === lang.code}
+                  onClick={() => selectLanguage(lang.code)}
+                >
+                  <span className="lang-option-label">{lang.label}</span>
+                  {currentLang === lang.code && <Check size={14} className="lang-check" />}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             className="theme-toggle-btn"
             onClick={toggleTheme}
