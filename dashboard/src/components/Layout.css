@@ -184,6 +184,41 @@
   overflow: hidden;
 }
 
+.language-selector {
+  position: relative;
+}
+
+.language-menu {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  inset-inline-start: 0;
+  min-width: 12rem;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  z-index: 110;
+  overflow: hidden;
+}
+
+.language-menu-item {
+  width: 100%;
+  display: block;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.language-menu-item:hover,
+.language-menu-item.active {
+  background: var(--bg-light);
+}
+
 .sidebar.collapsed .theme-toggle-btn,
 .sidebar.collapsed .logout-btn {
   justify-content: center;

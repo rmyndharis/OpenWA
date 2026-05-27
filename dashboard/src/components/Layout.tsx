@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -54,6 +54,8 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
+  const languageMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -63,6 +65,17 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (languageMenuRef.current && !languageMenuRef.current.contains(event.target as Node)) {
+        setIsLanguageMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const handleNavClick = () => {
@@ -80,12 +93,23 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const toggleMobile = () => setIsMobileOpen(!isMobileOpen);
 
   const currentLang = (i18n.resolvedLanguage || i18n.language || 'en').split('-')[0] as SupportedLanguage;
-  const cycleLanguage = () => {
-    const idx = supportedLanguages.indexOf(currentLang);
-    const next = supportedLanguages[(idx + 1) % supportedLanguages.length];
-    void i18n.changeLanguage(next);
+  const languageLabels: Record<SupportedLanguage, string> = {
+    en: t('common.english'),
+    he: t('common.hebrew'),
+    te: t('common.telugu'),
+    fr: t('common.french'),
   };
-  const languageLabel = currentLang === 'he' ? 'עברית' : 'EN';
+  const languageOptions = supportedLanguages.map(lang => ({
+    value: lang,
+    label: languageLabels[lang],
+  }));
+
+  const selectLanguage = (lang: SupportedLanguage) => {
+    setIsLanguageMenuOpen(false);
+    void i18n.changeLanguage(lang);
+  };
+
+  const languageLabel = languageLabels[currentLang] ?? currentLang.toUpperCase();
   const isRtl = currentLang === 'he';
 
   return (
@@ -151,15 +175,36 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
         </nav>
 
         <div className="sidebar-footer">
-          <button
-            className="theme-toggle-btn"
-            onClick={cycleLanguage}
-            title={t('common.language')}
-            aria-label={t('common.language')}
-          >
-            <Languages size={18} />
-            {!isCollapsed && <span>{languageLabel}</span>}
-          </button>
+          <div className="language-selector" ref={languageMenuRef}>
+            <button
+              className="theme-toggle-btn"
+              type="button"
+              onClick={() => setIsLanguageMenuOpen(prev => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={isLanguageMenuOpen}
+              title={t('common.language')}
+            >
+              <Languages size={18} />
+              {!isCollapsed && <span>{languageLabel}</span>}
+            </button>
+
+            {isLanguageMenuOpen && (
+              <div className="language-menu" role="menu">
+                {languageOptions.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`language-menu-item ${value === currentLang ? 'active' : ''}`}
+                    onClick={() => selectLanguage(value)}
+                    role="menuitemradio"
+                    aria-checked={value === currentLang}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             className="theme-toggle-btn"
             onClick={toggleTheme}
