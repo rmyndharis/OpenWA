@@ -57,6 +57,7 @@
     "dockerode": "^5.0.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.9.3",
+    "joi": "^18.2.1",
     "pg": "^8.21.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",

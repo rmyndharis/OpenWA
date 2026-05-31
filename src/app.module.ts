@@ -1,8 +1,9 @@
-import { Module, DynamicModule, Type } from '@nestjs/common';
+import { Module, DynamicModule, Type, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import configuration from './config/configuration';
+import { envValidationSchema } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
 import { MessageModule } from './modules/message/message.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
@@ -26,6 +27,7 @@ import { CatalogModule } from './modules/catalog/catalog.module';
 import { HooksModule } from './core/hooks';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
+import { SecurityMiddleware } from './common/security/security.middleware';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -43,6 +45,12 @@ if (process.env.QUEUE_ENABLED === 'true') {
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
+      validationSchema: envValidationSchema,
+      validationOptions: {
+        // Report every bad var at once, and coerce types/defaults back into
+        // process.env so downstream `process.env` readers see validated values.
+        abortEarly: false,
+      },
     }),
 
     // Main Database (always SQLite - boot config)
@@ -84,7 +92,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
             port: configService.get<number>('dataDatabase.port'),
             username: configService.get<string>('dataDatabase.username'),
             password: configService.get<string>('dataDatabase.password'),
-            database: 'openwa',
+            database: configService.get<string>('dataDatabase.database', 'openwa'),
             // Never auto-sync Postgres in production; rely on migrations.
             synchronize: configService.get<boolean>('dataDatabase.synchronize', false),
             migrationsRun: true,
@@ -161,4 +169,8 @@ if (process.env.QUEUE_ENABLED === 'true') {
     PluginsApiModule, // Phase 5: Plugins API
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(SecurityMiddleware).forRoutes('*');
+  }
+}
