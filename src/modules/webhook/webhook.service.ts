@@ -6,6 +6,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
+import { Session } from '../session/entities/session.entity';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -40,6 +41,8 @@ export class WebhookService {
   constructor(
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
+    @InjectRepository(Session, 'data')
+    private readonly sessionRepository: Repository<Session>,
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
@@ -50,8 +53,9 @@ export class WebhookService {
   }
 
   async create(sessionId: string, dto: CreateWebhookDto): Promise<Webhook> {
+    const session = await this.resolveSession(sessionId);
     const webhook = this.webhookRepository.create({
-      sessionId,
+      sessionId: session.id,
       url: dto.url,
       events: dto.events || ['message.received'],
       secret: dto.secret || null,
@@ -63,10 +67,20 @@ export class WebhookService {
   }
 
   async findBySession(sessionId: string): Promise<Webhook[]> {
+    const session = await this.resolveSession(sessionId);
     return this.webhookRepository.find({
-      where: { sessionId },
+      where: { sessionId: session.id },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  private async resolveSession(sessionIdOrName: string): Promise<Session> {
+    const session = await this.sessionRepository.findOne({ where: { id: sessionIdOrName } })
+      ?? await this.sessionRepository.findOne({ where: { name: sessionIdOrName } });
+    if (!session) {
+      throw new NotFoundException(`Session with id or name '${sessionIdOrName}' not found`);
+    }
+    return session;
   }
 
   async findAll(): Promise<Webhook[]> {
