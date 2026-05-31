@@ -70,11 +70,22 @@ export class DockerService implements OnModuleInit {
   }
 
   private async initializeDocker(): Promise<void> {
+    // Access to the host Docker socket effectively grants root on the host.
+    // Allow operators to disable it entirely, and to relocate the socket,
+    // without code changes. Defaults preserve prior behavior.
+    if (process.env.DOCKER_ENABLED === 'false') {
+      this.logger.log('Docker integration disabled via DOCKER_ENABLED=false');
+      this.isAvailable = false;
+      return;
+    }
+
+    const socketPath = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
+
     try {
-      this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+      this.docker = new Docker({ socketPath });
       await this.docker.ping();
       this.isAvailable = true;
-      this.logger.log('Docker API connected successfully');
+      this.logger.log(`Docker API connected successfully (socket: ${socketPath})`);
     } catch (error) {
       this.logger.warn(
         'Docker socket not available. Container orchestration disabled.',

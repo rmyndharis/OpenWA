@@ -134,8 +134,8 @@ export class PluginLoaderService implements OnModuleInit {
 
       // Load the plugin instance if not already loaded
       if (!plugin.instance) {
-        const mainPath = path.join(this.pluginsDir, pluginId, plugin.manifest.main);
-        // Dynamic require for user plugins
+        const mainPath = this.resolvePluginMainPath(pluginId, plugin.manifest.main);
+        // Dynamic require for user plugins (path validated above to prevent traversal)
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const pluginModule = require(mainPath) as { default?: new () => IPlugin };
         if (pluginModule.default) {
@@ -256,6 +256,32 @@ export class PluginLoaderService implements OnModuleInit {
       pluginId,
       action: 'plugin_config_updated',
     });
+  }
+
+  /**
+   * Resolve the absolute path to a plugin's entry module, guaranteeing the
+   * resolved path stays inside that plugin's own directory.
+   *
+   * `manifest.main` comes from an on-disk, potentially attacker-controlled
+   * JSON file. Passing it unchecked to require() allows path traversal
+   * (e.g. "../../../etc/evil.js") and arbitrary code execution. We resolve
+   * against the plugin root and reject anything that escapes it.
+   */
+  private resolvePluginMainPath(pluginId: string, main: string): string {
+    const pluginRoot = path.resolve(this.pluginsDir, pluginId);
+    const resolved = path.resolve(pluginRoot, main);
+
+    // Containment check: resolved must equal pluginRoot or be a descendant.
+    // Compare with a trailing separator to avoid sibling-prefix bypass
+    // (e.g. "/plugins/foo-evil" vs root "/plugins/foo").
+    const rootWithSep = pluginRoot.endsWith(path.sep) ? pluginRoot : pluginRoot + path.sep;
+    if (resolved !== pluginRoot && !resolved.startsWith(rootWithSep)) {
+      throw new Error(
+        `Plugin ${pluginId} manifest.main "${main}" resolves outside the plugin directory; refusing to load`,
+      );
+    }
+
+    return resolved;
   }
 
   private createPluginContext(plugin: PluginInstance): PluginContext {

@@ -60,7 +60,13 @@ STORAGE_PATH=./data/media
 
 # Docker Profiles: none (minimal setup)
 `;
-  fs.writeFileSync(generatedEnvPath, minimalConfig);
+  // 0600: file holds DB/Redis/S3 credentials — restrict to owner only.
+  fs.writeFileSync(generatedEnvPath, minimalConfig, { mode: 0o600 });
+  try {
+    fs.chmodSync(generatedEnvPath, 0o600); // enforce regardless of umask
+  } catch {
+    /* best effort (e.g. unsupported FS) */
+  }
   console.log('[Bootstrap] Created default configuration at:', generatedEnvPath);
   dotenv.config({ path: generatedEnvPath, override: false });
 }
@@ -119,10 +125,7 @@ async function bootstrap() {
   // via a reverse proxy, so cookie credentials are not required for normal use.
   const stripWrappingQuotes = (value: string): string => {
     const trimmed = value.trim();
-    if (
-      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-      (trimmed.startsWith("'") && trimmed.endsWith("'"))
-    ) {
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
       return trimmed.slice(1, -1).trim();
     }
     return trimmed;
@@ -150,7 +153,9 @@ async function bootstrap() {
 
   const configuredOriginsSet = new Set<string>();
   const configuredRawOrigins =
-    process.env.CORS_ORIGINS?.split(',').map(o => o.trim()).filter(Boolean) ?? [];
+    process.env.CORS_ORIGINS?.split(',')
+      .map(o => o.trim())
+      .filter(Boolean) ?? [];
 
   // Include URL origins from related env vars so operators can set one place only.
   const urlFallbackOrigins = [process.env.BASE_URL, process.env.DASHBOARD_URL]

@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
@@ -169,12 +169,14 @@ export class InfraController {
     const redisConnected = await this.cacheService.isAvailable();
 
     const storageType = this.configService.get<'local' | 's3'>('storage.type', 'local');
-    const storagePath = this.configService.get<string>('storage.path', './uploads');
+    const storagePath = this.configService.get<string>('storage.localPath', './data/media');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
-    const engineHeadless = this.configService.get<boolean>('engine.headless', true);
+    const engineHeadless = this.configService.get<boolean>('engine.puppeteer.headless', true);
     const sessionDataPath = this.configService.get<string>('engine.sessionDataPath', './data/sessions');
-    const browserArgs = this.configService.get<string>('engine.browserArgs', '--no-sandbox --disable-gpu');
+    const browserArgs = (
+      this.configService.get<string[]>('engine.puppeteer.args') ?? ['--no-sandbox', '--disable-setuid-sandbox']
+    ).join(',');
 
     return {
       database: { connected: dbConnected, type: dbType, host: dbHost },
@@ -274,7 +276,7 @@ export class InfraController {
         envLines.push(`STORAGE_TYPE=${config.storage.type || 'local'}`);
         envLines.push(`MINIO_BUILTIN=${config.storage.builtIn ? 'true' : 'false'}`);
         if (config.storage.type === 'local') {
-          envLines.push(`STORAGE_PATH=${config.storage.localPath || './uploads'}`);
+          envLines.push(`STORAGE_LOCAL_PATH=${config.storage.localPath || './data/media'}`);
         } else if (config.storage.type === 's3') {
           if (config.storage.builtIn) {
             // Built-in MinIO - use container name as endpoint
@@ -301,9 +303,9 @@ export class InfraController {
       // Engine
       if (config.engine) {
         envLines.push('# WhatsApp Engine');
-        envLines.push(`ENGINE_HEADLESS=${config.engine.headless !== false ? 'true' : 'false'}`);
-        envLines.push(`ENGINE_SESSION_PATH=${config.engine.sessionDataPath || './data/sessions'}`);
-        envLines.push(`ENGINE_BROWSER_ARGS=${config.engine.browserArgs || '--no-sandbox --disable-gpu'}`);
+        envLines.push(`PUPPETEER_HEADLESS=${config.engine.headless !== false ? 'true' : 'false'}`);
+        envLines.push(`SESSION_DATA_PATH=${config.engine.sessionDataPath || './data/sessions'}`);
+        envLines.push(`PUPPETEER_ARGS=${config.engine.browserArgs || '--no-sandbox,--disable-setuid-sandbox'}`);
         envLines.push('');
       }
 
@@ -314,7 +316,13 @@ export class InfraController {
 
       // Write to .env file in data/ directory so it persists across container restarts
       const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
-      fs.writeFileSync(envPath, envLines.join('\n'), 'utf8');
+      // 0600: file holds DB/Redis/S3 credentials — restrict to owner only.
+      fs.writeFileSync(envPath, envLines.join('\n'), { encoding: 'utf8', mode: 0o600 });
+      try {
+        fs.chmodSync(envPath, 0o600); // enforce regardless of umask
+      } catch {
+        /* best effort */
+      }
       this.logger.log('Configuration saved', { envPath });
 
       const profileMsg = profiles.length > 0 ? ` Docker profiles required: ${profiles.join(', ')}.` : '';
@@ -717,11 +725,15 @@ export class InfraController {
   ): Promise<{ imported: boolean; count: number; storageType: string }> {
     const { filePath } = body;
 
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`File not found: ${filePath}`);
+    // Confine imports to the data/ directory to prevent path traversal /
+    // arbitrary file read (e.g. "/etc/passwd" or "../../secret").
+    const safePath = this.resolveWithinDataDir(filePath);
+
+    if (!fs.existsSync(safePath)) {
+      throw new BadRequestException(`File not found: ${filePath}`);
     }
 
-    const readStream = fs.createReadStream(filePath);
+    const readStream = fs.createReadStream(safePath);
     const count = await this.storageService.importFromStream(readStream);
 
     return {
@@ -729,5 +741,26 @@ export class InfraController {
       count,
       storageType: this.storageService.getCurrentStorageType(),
     };
+  }
+
+  /**
+   * Resolve a user-supplied path and guarantee it stays inside the data/
+   * directory. Accepts either an absolute path already under data/ or a
+   * path relative to data/. Rejects any traversal that escapes the dir.
+   */
+  private resolveWithinDataDir(input: string): string {
+    if (typeof input !== 'string' || input.trim() === '') {
+      throw new BadRequestException('filePath is required');
+    }
+
+    const dataDir = path.resolve(process.cwd(), 'data');
+    const resolved = path.resolve(dataDir, input);
+    const rootWithSep = dataDir.endsWith(path.sep) ? dataDir : dataDir + path.sep;
+
+    if (resolved !== dataDir && !resolved.startsWith(rootWithSep)) {
+      throw new BadRequestException('filePath must resolve inside the data/ directory');
+    }
+
+    return resolved;
   }
 }
