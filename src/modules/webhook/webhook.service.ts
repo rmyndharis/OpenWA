@@ -193,9 +193,25 @@ export class WebhookService {
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+    // Cap the number of webhooks fetched per dispatch. Each inbound/outbound
+    // message triggers this; an unbounded find() means O(N) work per message
+    // and a misconfigured session with thousands of webhooks can stall the loop.
+    const maxPerDispatch = Math.max(1, this.configService.get<number>('webhook.maxPerDispatch', 100));
+
     const webhooks = await this.webhookRepository.find({
       where: { sessionId, active: true },
+      order: { createdAt: 'ASC' },
+      take: maxPerDispatch,
     });
+
+    if (webhooks.length === maxPerDispatch) {
+      this.logger.warn(`Webhook dispatch capped at ${maxPerDispatch} for session ${sessionId}`, {
+        sessionId,
+        event,
+        cap: maxPerDispatch,
+        action: 'webhook_dispatch_capped',
+      });
+    }
 
     const matchingWebhooks = webhooks.filter(w => w.events.includes(event) || w.events.includes('*'));
 
@@ -385,8 +401,12 @@ export class WebhookService {
       });
 
       if (attempt < webhook.retryCount) {
-        const delay = this.configService.get<number>('webhook.retryDelay', 5000);
-        await this.delay(delay * attempt);
+        const base = this.configService.get<number>('webhook.retryDelay', 5000);
+        // Exponential backoff with full jitter: spread synchronized retries so a
+        // shared-endpoint outage doesn't cause a thundering-herd retry storm.
+        const backoff = base * attempt;
+        const delay = backoff + Math.floor(Math.random() * base);
+        await this.delay(delay);
         return this.deliverWebhook(webhook, payload, headers, attempt + 1);
       }
       throw error;

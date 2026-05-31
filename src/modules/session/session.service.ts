@@ -46,6 +46,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
   ) {}
 
   /**
+   * Run an async side-effect (webhook dispatch, hook chain, DB touch) without
+   * blocking the engine callback, but log rejections instead of swallowing
+   * them. Replaces bare `void promise` so failed deliveries are observable.
+   */
+  private safeDispatch(promise: Promise<unknown>, action: string, sessionId: string): void {
+    void promise.catch(error => {
+      this.logger.error(`Background task '${action}' failed`, error instanceof Error ? error.message : String(error), {
+        sessionId,
+        action,
+      });
+    });
+  }
+
+  /** Synchronous variant for emit-style side-effects that may throw. */
+  private safeEmit(fn: () => void, action: string, sessionId: string): void {
+    try {
+      fn();
+    } catch (error) {
+      this.logger.error(`Emit '${action}' failed`, error instanceof Error ? error.message : String(error), {
+        sessionId,
+        action,
+      });
+    }
+  }
+
+  /**
    * On backend startup, reset all active session statuses to disconnected
    * because the engines are not running yet after restart
    */
@@ -290,27 +316,35 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           action: 'message_received',
         });
         // Update last active timestamp
-        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
+        this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
         // Convert IncomingMessage to plain object for dispatch
         const messageData = { ...message };
 
         // Execute hook for message received - plugins can modify or stop processing
-        void this.hookManager
-          .execute('message:received', messageData, {
-            sessionId: id,
-            source: 'Engine',
-          })
-          .then(({ continue: shouldContinue, data: finalMessage }) => {
-            if (!shouldContinue) {
-              // Plugin stopped processing (e.g., auto-reply handled it)
-              return;
-            }
+        this.safeDispatch(
+          this.hookManager
+            .execute('message:received', messageData, {
+              sessionId: id,
+              source: 'Engine',
+            })
+            .then(({ continue: shouldContinue, data: finalMessage }) => {
+              if (!shouldContinue) {
+                // Plugin stopped processing (e.g., auto-reply handled it)
+                return;
+              }
 
-            // Dispatch to webhooks with potentially modified message
-            void this.webhookService.dispatch(id, 'message.received', finalMessage as Record<string, unknown>);
-            // Emit real-time event to WebSocket clients
-            this.eventsGateway.emitMessage(id, finalMessage as Record<string, unknown>);
-          });
+              // Dispatch to webhooks with potentially modified message
+              this.safeDispatch(
+                this.webhookService.dispatch(id, 'message.received', finalMessage),
+                'webhook:message.received',
+                id,
+              );
+              // Emit real-time event to WebSocket clients
+              this.safeEmit(() => this.eventsGateway.emitMessage(id, finalMessage), 'emit:message.received', id);
+            }),
+          'hook:message:received',
+          id,
+        );
       },
       onMessageSent: (message): void => {
         this.logger.debug(`Message sent to ${message.to}`, {
@@ -320,11 +354,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           action: 'message_sent',
         });
 
-        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
+        this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
 
         const messageData = { ...message };
-        void this.webhookService.dispatch(id, 'message.sent', messageData as Record<string, unknown>);
-        this.eventsGateway.emitMessageSent(id, messageData as Record<string, unknown>);
+        this.safeDispatch(this.webhookService.dispatch(id, 'message.sent', messageData), 'webhook:message.sent', id);
+        this.safeEmit(() => this.eventsGateway.emitMessageSent(id, messageData), 'emit:message.sent', id);
       },
       onMessageAck: (messageId: string, ack: number): void => {
         const ackData = {
@@ -333,8 +367,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
           ackName: this.resolveAckName(ack),
         };
 
-        void this.webhookService.dispatch(id, 'message.ack', ackData as Record<string, unknown>);
-        this.eventsGateway.emitMessageAck(id, ackData);
+        this.safeDispatch(this.webhookService.dispatch(id, 'message.ack', ackData), 'webhook:message.ack', id);
+        this.safeEmit(() => this.eventsGateway.emitMessageAck(id, ackData), 'emit:message.ack', id);
       },
       onDisconnected: (reason: string): void => {
         this.logger.warn(`Session disconnected: ${reason}`, {

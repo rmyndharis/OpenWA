@@ -6,12 +6,15 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Session } from '../../session/entities/session.entity';
 import { DateTransformer } from '../../../common/transformers/date.transformer';
 import { jsonColumnType, dateColumnType } from '../../../common/utils/column-types';
 
 @Entity('webhooks')
+// dispatch() queries by (sessionId, active) on every inbound/outbound event.
+@Index(['sessionId', 'active'])
 export class Webhook {
   @PrimaryGeneratedColumn('uuid')
   id: string;

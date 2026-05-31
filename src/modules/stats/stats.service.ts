@@ -243,6 +243,34 @@ export class StatsService {
     };
   }
 
+  /** Underlying DB driver for the `data` datasource ('postgres' | 'better-sqlite3' | ...). */
+  private get dbType(): string {
+    return this.messageRepo.manager.connection.options.type;
+  }
+
+  /**
+   * DB-portable expression that buckets `createdAt` into an hour or day string.
+   * SQLite (`strftime`) and PostgreSQL (`to_char`) use different functions, and
+   * Postgres requires the camelCase column to be quoted. Both yield the same
+   * 'YYYY-MM-DD[ HH:00:00]' shape so downstream parsing is identical.
+   */
+  private timeBucketExpr(interval: 'hour' | 'day'): string {
+    if (this.dbType === 'postgres') {
+      const fmt = interval === 'hour' ? 'YYYY-MM-DD HH24:00:00' : 'YYYY-MM-DD';
+      return `to_char(m."createdAt", '${fmt}')`;
+    }
+    const fmt = interval === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d';
+    return `strftime('${fmt}', m.createdAt)`;
+  }
+
+  /** DB-portable expression returning the hour-of-day (0-23) as an integer. */
+  private hourOfDayExpr(): string {
+    if (this.dbType === 'postgres') {
+      return `CAST(EXTRACT(HOUR FROM m."createdAt") AS INTEGER)`;
+    }
+    return `CAST(strftime('%H', m.createdAt) AS INTEGER)`;
+  }
+
   private getPeriodStart(period: '24h' | '7d' | '30d'): Date {
     const now = new Date();
     switch (period) {
@@ -256,12 +284,9 @@ export class StatsService {
   }
 
   private async getTimeSeries(since: Date, interval: 'hour' | 'day'): Promise<TimeSeriesPoint[]> {
-    // SQLite-compatible time series query
-    const formatStr = interval === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d';
-
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(`strftime('${formatStr}', m.createdAt)`, 'timestamp')
+      .select(this.timeBucketExpr(interval), 'timestamp')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.createdAt >= :since', { since })
@@ -281,7 +306,7 @@ export class StatsService {
 
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(`CAST(strftime('%H', m.createdAt) AS INTEGER)`, 'hour')
+      .select(this.hourOfDayExpr(), 'hour')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.sessionId = :sessionId', { sessionId })
