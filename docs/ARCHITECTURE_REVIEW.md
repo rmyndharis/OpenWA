@@ -153,12 +153,12 @@ POST /sessions/:id/start
 6. **C9 / C10** — Add `@Index` on `messages.status/type/direction` + `webhooks(sessionId, active)`; replace `strftime` with DB-portable grouping.
 7. **C7** — Cap / paginate webhook fetch; add jitter to retry backoff (avoid thundering herd).
 
-### Tier 3 — Maintainability (pure refactor, identical behavior)
+### Tier 3 — Maintainability (pure refactor, identical behavior) ✅ done
 
-8. **Extract `MessageService` send pipeline** — collapse 10 methods into one `dispatchSend()`. Biggest LOC win, zero API change. *(worked example below)*
-9. Split `WhatsAppWebJsAdapter` into concern-scoped sub-adapters.
-10. Move `initializeEngine` callbacks into named handler methods.
-11. Single config source of truth; add zod/joi env validation at bootstrap.
+8. ✅ **Extract `MessageService` send pipeline** — collapsed 10 methods into one `dispatchSend()` (commit `493c1dc`). *(worked example below)*
+9. ✅ Split `WhatsAppWebJsAdapter` into concern-scoped sub-adapters under `adapters/whatsapp-web-js/`; added delegation smoke test (commit `6320647`).
+10. ✅ Moved `initializeEngine` callbacks into named handler methods (commit `8cb57a2`).
+11. ✅ Env validation at bootstrap via joi schema in `ConfigModule` (commit `fcecda6`). Note: full ConfigService consolidation of remaining direct `process.env` readers deferred — joi now coerces validated values back into `process.env`, so the schema is the single validation gate.
 
 ### Tier 4 — True horizontal scale (design changes; schedule separately)
 
