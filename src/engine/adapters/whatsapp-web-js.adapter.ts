@@ -57,6 +57,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private phoneNumber: string | null = null;
   private pushName: string | null = null;
   private callbacks: EngineEventCallbacks = {};
+  private readonly recentlyHandledMessageIds = new Set<string>();
+  private readonly browserSeenMessageIds = new Set<string>();
+  private incomingPollTimer: NodeJS.Timeout | null = null;
+  private browserPollSeeded = false;
+  private browserPollStartedAt = 0;
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -132,27 +137,72 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.phoneNumber = info?.wid?.user || null;
         this.pushName = info?.pushname || null;
         this.setStatus(EngineStatus.READY);
+        void this.startIncomingMessagePoll();
         this.callbacks.onReady?.(this.phoneNumber || '', this.pushName || '');
       } catch (error) {
         this.logger.error('Error getting client info', String(error));
         this.setStatus(EngineStatus.READY);
+        void this.startIncomingMessagePoll();
         this.callbacks.onReady?.('', '');
       }
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    this.client.on('message', async msg => {
+    const handleIncomingMessage = async (msg: any, source: 'message' | 'message_create'): Promise<void> => {
       try {
+        if (msg.fromMe) {
+          return;
+        }
+
+        const messageId = msg.id?._serialized;
+        if (!messageId) {
+          this.logger.warn(`Ignoring ${source} event without message id`);
+          return;
+        }
+
+        if (this.recentlyHandledMessageIds.has(messageId)) {
+          return;
+        }
+
+        this.recentlyHandledMessageIds.add(messageId);
+        setTimeout(() => this.recentlyHandledMessageIds.delete(messageId), 5 * 60 * 1000).unref?.();
+
+        const serializeWid = (wid: any): string | undefined => {
+          if (!wid) return undefined;
+          if (typeof wid === 'string') return wid;
+          if (typeof wid._serialized === 'string') return wid._serialized;
+          if (typeof wid.user === 'string' && typeof wid.server === 'string') {
+            return `${wid.user}@${wid.server}`;
+          }
+          return undefined;
+        };
+
+        const rawFrom = serializeWid(msg.from);
+        const senderPhone = serializeWid(msg?.senderObj?.phoneNumber)
+          ?? serializeWid(msg?.senderObj?.__x_phoneNumber)
+          ?? serializeWid(msg?._data?.senderObj?.phoneNumber)
+          ?? serializeWid(msg?._data?.senderObj?.__x_phoneNumber);
+        const from = rawFrom?.endsWith('@lid') && senderPhone ? senderPhone : rawFrom;
+        const to = serializeWid(msg.to);
+        if (rawFrom?.endsWith('@lid') && !senderPhone) {
+          this.recentlyHandledMessageIds.delete(messageId);
+          this.logger.warn(`Ignoring ${source} event with unresolved WhatsApp LID sender`, {
+            messageId,
+            from: rawFrom,
+            type: msg.type,
+          });
+          return;
+        }
+
         const incomingMessage: IncomingMessage = {
-          id: msg.id._serialized,
-          from: msg.from,
-          to: msg.to,
-          chatId: msg.from,
+          id: messageId,
+          from: from ?? msg.from,
+          to: to ?? msg.to,
+          chatId: from ?? msg.from,
           body: msg.body,
           type: msg.type,
           timestamp: msg.timestamp,
           fromMe: msg.fromMe,
-          isGroup: msg.from.endsWith('@g.us'),
+          isGroup: Boolean(from?.endsWith('@g.us') ?? msg.from.endsWith('@g.us')),
         };
 
         // Handle media
@@ -184,25 +234,221 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           }
         }
 
+        this.logger.log(`Incoming WhatsApp message received via ${source}`, {
+          messageId,
+          from: incomingMessage.from,
+          type: msg.type,
+        });
         this.callbacks.onMessage?.(incomingMessage);
       } catch (error) {
-        this.logger.error('Error processing incoming message', String(error));
+        this.logger.error(`Error processing ${source} event`, String(error));
       }
-    });
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.client.on('message', msg => handleIncomingMessage(msg, 'message'));
+
+    // whatsapp-web.js emits message_create for every new message and message only
+    // for inbound messages. Listening to both protects us against upstream Web
+    // event regressions while the message id dedupe keeps webhook delivery once.
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
+    this.client.on('message_create', msg => handleIncomingMessage(msg, 'message_create'));
 
     this.client.on('message_ack', (msg, ack) => {
       this.callbacks.onMessageAck?.(msg.id._serialized, ack);
     });
 
     this.client.on('disconnected', reason => {
+      this.stopIncomingMessagePoll();
       this.setStatus(EngineStatus.DISCONNECTED);
       this.callbacks.onDisconnected?.(reason);
     });
 
     this.client.on('auth_failure', () => {
+      this.stopIncomingMessagePoll();
       this.setStatus(EngineStatus.FAILED);
       this.callbacks.onDisconnected?.('Authentication failed');
     });
+  }
+
+  private async startIncomingMessagePoll(): Promise<void> {
+    if (this.incomingPollTimer) return;
+
+    this.browserPollStartedAt = Math.floor(Date.now() / 1000);
+    await this.seedBrowserSeenMessages();
+    this.incomingPollTimer = setInterval(() => {
+      void this.pollIncomingMessages();
+    }, 2000);
+    this.incomingPollTimer.unref?.();
+  }
+
+  private stopIncomingMessagePoll(): void {
+    if (this.incomingPollTimer) {
+      clearInterval(this.incomingPollTimer);
+      this.incomingPollTimer = null;
+    }
+    this.browserSeenMessageIds.clear();
+    this.browserPollSeeded = false;
+    this.browserPollStartedAt = 0;
+  }
+
+  private async seedBrowserSeenMessages(): Promise<void> {
+    try {
+      const messages = await this.readIncomingMessagesFromPage(200);
+      if (messages.length === 0) {
+        this.logger.log('WhatsApp browser message store is empty; delaying browser poll seed');
+        return;
+      }
+
+      for (const message of messages) {
+        if (message.id) {
+          this.browserSeenMessageIds.add(message.id);
+        }
+      }
+      this.browserPollSeeded = true;
+      this.logger.log(`Seeded ${this.browserSeenMessageIds.size} WhatsApp browser message ids`);
+    } catch (error) {
+      this.logger.warn('Unable to seed WhatsApp browser message ids', String(error));
+    }
+  }
+
+  private async pollIncomingMessages(): Promise<void> {
+    try {
+      const messages = await this.readIncomingMessagesFromPage(50);
+      if (!this.browserPollSeeded) {
+        if (messages.length > 0) {
+          for (const message of messages) {
+            if (message.id) {
+              this.browserSeenMessageIds.add(message.id);
+            }
+          }
+          this.browserPollSeeded = true;
+          this.logger.log(`Seeded ${this.browserSeenMessageIds.size} WhatsApp browser message ids after store became available`);
+        }
+        return;
+      }
+
+      for (const message of messages) {
+        if (!message.id || this.browserSeenMessageIds.has(message.id)) {
+          continue;
+        }
+
+        this.browserSeenMessageIds.add(message.id);
+        if (message.timestamp && this.browserPollStartedAt > 0 && message.timestamp < this.browserPollStartedAt - 30) {
+          continue;
+        }
+
+        if (this.recentlyHandledMessageIds.has(message.id)) {
+          continue;
+        }
+
+        this.recentlyHandledMessageIds.add(message.id);
+        setTimeout(() => this.recentlyHandledMessageIds.delete(message.id), 5 * 60 * 1000).unref?.();
+        if (this.browserSeenMessageIds.size > 1000) {
+          const first = this.browserSeenMessageIds.values().next().value;
+          if (first) this.browserSeenMessageIds.delete(first);
+        }
+
+        this.logger.log('Incoming WhatsApp message received via browser poll', {
+          messageId: message.id,
+          from: message.from,
+          type: message.type,
+        });
+        await this.enrichBrowserPolledMedia(message);
+        this.callbacks.onMessage?.(message);
+      }
+    } catch (error) {
+      this.logger.warn('WhatsApp browser message poll failed', String(error));
+    }
+  }
+
+  private async enrichBrowserPolledMedia(message: IncomingMessage): Promise<void> {
+    if (!(message as any).hasMedia || !this.client) {
+      return;
+    }
+
+    try {
+      const fullMessage = await (this.client as any).getMessageById(message.id);
+      if (!fullMessage?.hasMedia) {
+        return;
+      }
+
+      const media = await fullMessage.downloadMedia();
+      if (!media) {
+        this.logger.warn('Browser-polled WhatsApp media was not downloadable', {
+          messageId: message.id,
+          type: message.type,
+        });
+        return;
+      }
+
+      message.media = {
+        mimetype: media.mimetype,
+        filename: media.filename || undefined,
+        data: media.data,
+      };
+      message.body = fullMessage.body || message.body || '';
+    } catch (error) {
+      this.logger.warn('Unable to download browser-polled WhatsApp media', String(error));
+    }
+  }
+
+  private async readIncomingMessagesFromPage(limit: number): Promise<IncomingMessage[]> {
+    const page = (this.client as any)?.pupPage;
+    if (!page) return [];
+
+    return await page.evaluate((take: number) => {
+      const collections = window.require?.('WAWebCollections');
+      const msgCollection = collections?.Msg;
+      const models = msgCollection?.models ?? msgCollection?._models ?? [];
+      const recent = models.slice(-take);
+
+      return recent
+        .map((msg: any) => {
+          const wwebjs = (window as any).WWebJS;
+          const model = wwebjs?.getMessageModel ? wwebjs.getMessageModel(msg) : msg;
+          const serializeWid = (wid: any): string | undefined => {
+            if (!wid) return undefined;
+            if (typeof wid === 'string') return wid;
+            if (typeof wid._serialized === 'string') return wid._serialized;
+            if (typeof wid.user === 'string' && typeof wid.server === 'string') {
+              return `${wid.user}@${wid.server}`;
+            }
+            return undefined;
+          };
+
+          const id = model?.id?._serialized ?? model?.id?.id ?? model?.id;
+          const modelFrom = serializeWid(model?.from);
+          const senderPhone = serializeWid(msg?.senderObj?.phoneNumber)
+            ?? serializeWid(msg?.senderObj?.__x_phoneNumber)
+            ?? serializeWid(msg?.__x_senderObj?.phoneNumber)
+            ?? serializeWid(msg?.__x_senderObj?.__x_phoneNumber);
+          if (modelFrom?.endsWith('@lid') && !senderPhone) {
+            return null;
+          }
+
+          const from = modelFrom?.endsWith('@lid') && senderPhone ? senderPhone : modelFrom;
+          const to = serializeWid(model?.to);
+          const timestamp = Number(model?.timestamp ?? model?.t ?? msg?.timestamp ?? msg?.t ?? msg?.__x_t);
+          if (!Number.isFinite(timestamp) || timestamp <= 0) {
+            return null;
+          }
+
+          return {
+            id,
+            from,
+            to,
+            chatId: from,
+            body: model?.hasMedia ? (model?.caption ?? '') : (model?.body ?? ''),
+            type: model?.type ?? 'chat',
+            timestamp,
+            fromMe: Boolean(model?.fromMe ?? model?.id?.fromMe),
+            isGroup: typeof from === 'string' && from.endsWith('@g.us'),
+            hasMedia: Boolean(model?.hasMedia),
+          };
+        })
+        .filter((message: any) => message?.id && !message.fromMe && message.from);
+    }, limit);
   }
 
   private setStatus(status: EngineStatus): void {
@@ -214,6 +460,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async disconnect(): Promise<void> {
     if (this.client) {
       try {
+        this.stopIncomingMessagePoll();
         // Use destroy instead of logout to preserve session data
         // This allows reconnecting without needing to scan QR again
         await this.client.destroy();
@@ -229,6 +476,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async logout(): Promise<void> {
     if (this.client) {
       try {
+        this.stopIncomingMessagePoll();
         // Logout clears session data - user will need to scan QR again
         await this.client.logout();
       } catch (error) {
@@ -247,6 +495,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async destroy(): Promise<void> {
     if (this.client) {
+      this.stopIncomingMessagePoll();
       await this.client.destroy();
       this.client = null;
       this.setStatus(EngineStatus.DISCONNECTED);
