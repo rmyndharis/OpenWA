@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -12,7 +12,6 @@ import {
   Contact,
   Group,
   GroupInfo,
-  GroupParticipant,
   LocationInput,
   ContactCard,
   MessageReaction,
@@ -28,13 +27,14 @@ import {
   PaginatedProducts,
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
-import {
-  GroupChat,
-  MessageWithReactions,
-  BusinessClient,
-  WwjsChannelData,
-  GroupCreateResult,
-} from '../types/whatsapp-web-js.types';
+import { AdapterContext } from './whatsapp-web-js/context';
+import { MessagingAdapter } from './whatsapp-web-js/messaging.adapter';
+import { ContactAdapter } from './whatsapp-web-js/contact.adapter';
+import { GroupAdapter } from './whatsapp-web-js/group.adapter';
+import { LabelAdapter } from './whatsapp-web-js/label.adapter';
+import { ChannelAdapter } from './whatsapp-web-js/channel.adapter';
+import { StatusAdapter } from './whatsapp-web-js/status.adapter';
+import { CatalogAdapter } from './whatsapp-web-js/catalog.adapter';
 
 export interface WhatsAppWebJsConfig {
   sessionId: string;
@@ -64,6 +64,15 @@ interface WWebMessageLike {
   getQuotedMessage: () => Promise<{ id: { _serialized: string }; body: string }>;
 }
 
+/**
+ * whatsapp-web.js engine adapter.
+ *
+ * Owns the client lifecycle (initialize/connect/disconnect, event wiring,
+ * status, QR, incoming-message building) and delegates every domain operation
+ * to a concern-scoped sub-adapter (messaging, contacts, groups, labels,
+ * channels, statuses, catalog) sharing one AdapterContext. The public surface
+ * implements IWhatsAppEngine unchanged — this is a structural split only.
+ */
 export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private client: Client | null = null;
   private status: EngineStatus = EngineStatus.DISCONNECTED;
@@ -78,6 +87,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
+
+  // Shared context + concern-scoped sub-adapters (Tier 3 #9). The main adapter
+  // owns lifecycle/client; sub-adapters reach the live client via ctx.requireClient().
+  private readonly ctx: AdapterContext = {
+    requireClient: () => this.requireClient(),
+    logger: this.logger,
+  };
+  private readonly messaging = new MessagingAdapter(this.ctx);
+  private readonly contacts = new ContactAdapter(this.ctx);
+  private readonly groups = new GroupAdapter(this.ctx);
+  private readonly labels = new LabelAdapter(this.ctx);
+  private readonly channels = new ChannelAdapter(this.ctx);
+  private readonly statuses = new StatusAdapter(this.ctx);
+  private readonly catalog = new CatalogAdapter(this.ctx);
 
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
@@ -352,651 +375,233 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
+  // ============= Messaging (delegated) =============
+
   async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
-    this.ensureReady();
-    const msg = await this.client!.sendMessage(chatId, text);
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.messaging.sendTextMessage(chatId, text);
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.messaging.sendImageMessage(chatId, media);
   }
 
   async sendVideoMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.messaging.sendVideoMessage(chatId, media);
   }
 
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.messaging.sendAudioMessage(chatId, media);
   }
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.messaging.sendDocumentMessage(chatId, media);
   }
-
-  private async sendMediaMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    this.ensureReady();
-
-    let messageMedia: MessageMedia;
-
-    if (typeof media.data === 'string') {
-      if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
-        // URL
-        messageMedia = await MessageMedia.fromUrl(media.data);
-      } else {
-        // Base64
-        messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
-      }
-    } else {
-      // Buffer
-      messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
-    }
-
-    const msg = await this.client!.sendMessage(chatId, messageMedia, {
-      caption: media.caption,
-    });
-
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
-  }
-
-  async getContacts(): Promise<Contact[]> {
-    this.ensureReady();
-    const contacts = await this.client!.getContacts();
-
-    return contacts.map(c => ({
-      id: c.id._serialized,
-      name: c.name || undefined,
-      pushName: c.pushname || undefined,
-      number: c.number,
-      isMyContact: c.isMyContact,
-      isBlocked: c.isBlocked,
-    }));
-  }
-
-  async getContactById(contactId: string): Promise<Contact | null> {
-    this.ensureReady();
-    try {
-      const contact = await this.client!.getContactById(contactId);
-      return {
-        id: contact.id._serialized,
-        name: contact.name || undefined,
-        pushName: contact.pushname || undefined,
-        number: contact.number,
-        isMyContact: contact.isMyContact,
-        isBlocked: contact.isBlocked,
-      };
-    } catch (error) {
-      this.logger.warn(`Failed to get contact: ${contactId}`, String(error));
-      return null;
-    }
-  }
-
-  async checkNumberExists(number: string): Promise<boolean> {
-    this.ensureReady();
-    const numberId = await this.client!.getNumberId(number);
-    return numberId !== null;
-  }
-
-  async getGroups(): Promise<Group[]> {
-    this.ensureReady();
-    const chats = await this.client!.getChats();
-
-    // Filter only group chats
-    const groups = chats.filter(chat => chat.isGroup);
-
-    return groups.map(g => {
-      const groupChat = g as unknown as GroupChat;
-      return {
-        id: g.id._serialized,
-        name: g.name,
-        participantsCount: groupChat.participants?.length,
-        isAdmin: groupChat.participants?.some(
-          p => p.isAdmin && p.id._serialized === this.client?.info?.wid?._serialized,
-        ),
-      };
-    });
-  }
-
-  // ============= Phase 3: Extended Messaging =============
 
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
-    this.ensureReady();
-    // Import Location class dynamically from whatsapp-web.js
-    const { Location } = await import('whatsapp-web.js');
-    const loc = new Location(location.latitude, location.longitude, {
-      name: location.description || '',
-      address: location.address || '',
-    });
-    const msg = await this.client!.sendMessage(chatId, loc);
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.messaging.sendLocationMessage(chatId, location);
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
-    this.ensureReady();
-    // Create vCard format
-    const vcard = [
-      'BEGIN:VCARD',
-      'VERSION:3.0',
-      `FN:${contact.name}`,
-      `TEL;type=CELL;type=VOICE;waid=${contact.number}:+${contact.number}`,
-      'END:VCARD',
-    ].join('\n');
-
-    const msg = await this.client!.sendMessage(chatId, vcard, {
-      parseVCards: true,
-    });
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.messaging.sendContactMessage(chatId, contact);
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    this.ensureReady();
-    let messageMedia: MessageMedia;
-
-    if (typeof media.data === 'string') {
-      if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
-        messageMedia = await MessageMedia.fromUrl(media.data);
-      } else {
-        messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
-      }
-    } else {
-      messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
-    }
-
-    const msg = await this.client!.sendMessage(chatId, messageMedia, {
-      sendMediaAsSticker: true,
-    });
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.messaging.sendStickerMessage(chatId, media);
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult> {
-    this.ensureReady();
-    // Find the message to quote
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
-
-    if (!quotedMsg) {
-      throw new Error(`Message ${quotedMsgId} not found`);
-    }
-
-    const msg = await quotedMsg.reply(text);
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.messaging.replyToMessage(chatId, quotedMsgId, text);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(fromChatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const msgToForward = messages.find(m => m.id._serialized === messageId);
-
-    if (!msgToForward) {
-      throw new Error(`Message ${messageId} not found`);
-    }
-
-    await msgToForward.forward(toChatId);
-    // forward() returns void, so we generate a result based on original message
-    return {
-      id: `fwd_${messageId}`,
-      timestamp: Date.now(),
-    };
+    return this.messaging.forwardMessage(fromChatId, toChatId, messageId);
   }
 
-  // ============= Phase 3: Group Management =============
-
-  async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
-    this.ensureReady();
-    try {
-      const chat = await this.client!.getChatById(groupId);
-      if (!chat.isGroup) {
-        return null;
-      }
-      const groupChat = chat as unknown as GroupChat;
-      const participants: GroupParticipant[] = (groupChat.participants || []).map(p => ({
-        id: String(p.id._serialized),
-        number: String(p.id.user),
-        name: p.name ? String(p.name) : undefined,
-        isAdmin: Boolean(p.isAdmin),
-        isSuperAdmin: Boolean(p.isSuperAdmin),
-      }));
-
-      return {
-        id: chat.id._serialized,
-        name: chat.name,
-        description: groupChat.description ? String(groupChat.description) : undefined,
-        owner: groupChat.owner?._serialized ? String(groupChat.owner._serialized) : undefined,
-        createdAt: groupChat.createdAt,
-        participants,
-        isReadOnly: Boolean(groupChat.isReadOnly),
-        isAnnounce: Boolean(groupChat.isAnnounce),
-      };
-    } catch (error) {
-      this.logger.warn(`Failed to get group: ${groupId}`, String(error));
-      return null;
-    }
-  }
-
-  async createGroup(name: string, participants: string[]): Promise<Group> {
-    this.ensureReady();
-    // Ensure participant IDs are in correct format
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    const result = await this.client!.createGroup(name, participantIds);
-
-    const groupId = String((result as unknown as GroupCreateResult).gid._serialized);
-    return {
-      id: groupId,
-      name: name,
-      participantsCount: participants.length,
-    };
-  }
-
-  async addParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).addParticipants(participantIds);
-  }
-
-  async removeParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).removeParticipants(participantIds);
-  }
-
-  async promoteParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).promoteParticipants(participantIds);
-  }
-
-  async demoteParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).demoteParticipants(participantIds);
-  }
-
-  async leaveGroup(groupId: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    await (chat as unknown as GroupChat).leave();
-  }
-
-  async setGroupSubject(groupId: string, subject: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    await (chat as unknown as GroupChat).setSubject(subject);
-  }
-
-  async setGroupDescription(groupId: string, description: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    await (chat as unknown as GroupChat).setDescription(description);
-  }
-
-  // Reactions (Phase 3)
   async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const message = messages.find(m => m.id._serialized === messageId);
-    if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
-    }
-    await (message as MessageWithReactions).react(emoji);
-    this.logger.log(`Reacted to message ${messageId} with ${emoji || '(removed)'}`);
+    return this.messaging.reactToMessage(chatId, messageId, emoji);
   }
 
   async getMessageReactions(chatId: string, messageId: string): Promise<MessageReaction[]> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const message = messages.find(m => m.id._serialized === messageId);
-    if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
-    }
-    const msgWithReactions = message as MessageWithReactions;
-    if (!msgWithReactions.hasReaction) {
-      return [];
-    }
-    const reactions = await msgWithReactions.getReactions();
-    if (!reactions) {
-      return [];
-    }
-    // Map reactions to our interface format
-    const result: MessageReaction[] = [];
-
-    for (const r of reactions) {
-      result.push({
-        emoji: String(r.id),
-        senders: (r.senders || []).map(s => ({
-          senderId: String(s.senderId),
-          emoji: String(s.reaction),
-          timestamp: Number(s.timestamp),
-        })),
-      });
-    }
-    return result;
+    return this.messaging.getMessageReactions(chatId, messageId);
   }
 
-  // Labels (Phase 3) - WhatsApp Business only
-  async getLabels(): Promise<Label[]> {
-    this.ensureReady();
-    const labels = await (this.client as unknown as BusinessClient).getLabels();
-    if (!labels) {
-      return [];
-    }
+  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
+    return this.messaging.deleteMessage(chatId, messageId, forEveryone);
+  }
 
-    return labels.map(label => ({
-      id: String(label.id),
-      name: String(label.name),
-      hexColor: String(label.hexColor),
-    }));
+  // ============= Contacts (delegated) =============
+
+  async getContacts(): Promise<Contact[]> {
+    return this.contacts.getContacts();
+  }
+
+  async getContactById(contactId: string): Promise<Contact | null> {
+    return this.contacts.getContactById(contactId);
+  }
+
+  async checkNumberExists(number: string): Promise<boolean> {
+    return this.contacts.checkNumberExists(number);
+  }
+
+  async getProfilePicture(contactId: string): Promise<string | null> {
+    return this.contacts.getProfilePicture(contactId);
+  }
+
+  async blockContact(contactId: string): Promise<void> {
+    return this.contacts.blockContact(contactId);
+  }
+
+  async unblockContact(contactId: string): Promise<void> {
+    return this.contacts.unblockContact(contactId);
+  }
+
+  // ============= Groups (delegated) =============
+
+  async getGroups(): Promise<Group[]> {
+    return this.groups.getGroups();
+  }
+
+  async getGroupInfo(groupId: string): Promise<GroupInfo | null> {
+    return this.groups.getGroupInfo(groupId);
+  }
+
+  async createGroup(name: string, participants: string[]): Promise<Group> {
+    return this.groups.createGroup(name, participants);
+  }
+
+  async addParticipants(groupId: string, participants: string[]): Promise<void> {
+    return this.groups.addParticipants(groupId, participants);
+  }
+
+  async removeParticipants(groupId: string, participants: string[]): Promise<void> {
+    return this.groups.removeParticipants(groupId, participants);
+  }
+
+  async promoteParticipants(groupId: string, participants: string[]): Promise<void> {
+    return this.groups.promoteParticipants(groupId, participants);
+  }
+
+  async demoteParticipants(groupId: string, participants: string[]): Promise<void> {
+    return this.groups.demoteParticipants(groupId, participants);
+  }
+
+  async leaveGroup(groupId: string): Promise<void> {
+    return this.groups.leaveGroup(groupId);
+  }
+
+  async setGroupSubject(groupId: string, subject: string): Promise<void> {
+    return this.groups.setGroupSubject(groupId, subject);
+  }
+
+  async setGroupDescription(groupId: string, description: string): Promise<void> {
+    return this.groups.setGroupDescription(groupId, description);
+  }
+
+  async getGroupInviteCode(groupId: string): Promise<string> {
+    return this.groups.getGroupInviteCode(groupId);
+  }
+
+  async revokeGroupInviteCode(groupId: string): Promise<string> {
+    return this.groups.revokeGroupInviteCode(groupId);
+  }
+
+  // ============= Labels (delegated) =============
+
+  async getLabels(): Promise<Label[]> {
+    return this.labels.getLabels();
   }
 
   async getLabelById(labelId: string): Promise<Label | null> {
-    this.ensureReady();
-    const label = await (this.client as unknown as BusinessClient).getLabelById(labelId);
-    if (!label) {
-      return null;
-    }
-    return {
-      id: String(label.id),
-      name: String(label.name),
-      hexColor: String(label.hexColor),
-    };
+    return this.labels.getLabelById(labelId);
   }
 
   async getChatLabels(chatId: string): Promise<Label[]> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    const labels = await (chat as unknown as GroupChat).getLabels();
-    if (!labels) {
-      return [];
-    }
-
-    return labels.map(label => ({
-      id: String(label.id),
-      name: String(label.name),
-      hexColor: String(label.hexColor),
-    }));
+    return this.labels.getChatLabels(chatId);
   }
 
   async addLabelToChat(chatId: string, labelId: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    await (chat as unknown as GroupChat).addLabel(labelId);
-    this.logger.log(`Added label ${labelId} to chat ${chatId}`);
+    return this.labels.addLabelToChat(chatId, labelId);
   }
 
   async removeLabelFromChat(chatId: string, labelId: string): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    await (chat as unknown as GroupChat).removeLabel(labelId);
-    this.logger.log(`Removed label ${labelId} from chat ${chatId}`);
+    return this.labels.removeLabelFromChat(chatId, labelId);
   }
 
-  // Channels/Newsletter (Phase 3)
+  // ============= Channels (delegated) =============
+
   async getSubscribedChannels(): Promise<Channel[]> {
-    this.ensureReady();
-    const channels = await (this.client as unknown as BusinessClient).getChannels();
-    if (!channels) {
-      return [];
-    }
-    return channels.map((ch: WwjsChannelData) => ({
-      id: String(typeof ch.id === 'object' ? ch.id._serialized : ch.id),
-      name: String(ch.name || ''),
-      description: ch.description ? String(ch.description) : undefined,
-      inviteCode: ch.inviteCode ? String(ch.inviteCode) : undefined,
-      subscriberCount: ch.subscriberCount ? Number(ch.subscriberCount) : undefined,
-      verified: ch.verified ? Boolean(ch.verified) : undefined,
-    }));
+    return this.channels.getSubscribedChannels();
   }
 
   async getChannelById(channelId: string): Promise<Channel | null> {
-    this.ensureReady();
-    try {
-      const ch = await (this.client as unknown as BusinessClient).getChannelById(channelId);
-      if (!ch) {
-        return null;
-      }
-      return {
-        id: String(typeof ch.id === 'object' ? ch.id._serialized : ch.id),
-        name: String(ch.name || ''),
-        description: ch.description ? String(ch.description) : undefined,
-        inviteCode: ch.inviteCode ? String(ch.inviteCode) : undefined,
-        subscriberCount: ch.subscriberCount ? Number(ch.subscriberCount) : undefined,
-        verified: ch.verified ? Boolean(ch.verified) : undefined,
-      };
-    } catch (error) {
-      this.logger.warn(`Failed to get channel: ${channelId}`, String(error));
-      return null;
-    }
+    return this.channels.getChannelById(channelId);
   }
 
   async subscribeToChannel(inviteCode: string): Promise<Channel> {
-    this.ensureReady();
-    const ch = await (this.client as unknown as BusinessClient).subscribeToChannel(inviteCode);
-    this.logger.log(`Subscribed to channel with invite code: ${inviteCode}`);
-    return {
-      id: String(typeof ch.id === 'object' ? ch.id._serialized : ch.id),
-      name: String(ch.name || ''),
-      description: ch.description ? String(ch.description) : undefined,
-    };
+    return this.channels.subscribeToChannel(inviteCode);
   }
 
   async unsubscribeFromChannel(channelId: string): Promise<void> {
-    this.ensureReady();
-    await (this.client as unknown as BusinessClient).unsubscribeFromChannel(channelId);
-    this.logger.log(`Unsubscribed from channel: ${channelId}`);
+    return this.channels.unsubscribeFromChannel(channelId);
   }
 
   async getChannelMessages(channelId: string, limit: number = 50): Promise<ChannelMessage[]> {
-    this.ensureReady();
-    try {
-      const ch = await (this.client as unknown as BusinessClient).getChannelById(channelId);
-      if (!ch) {
-        throw new Error(`Channel ${channelId} not found`);
-      }
-      const messages = await ch.fetchMessages({ limit });
-      if (!messages) {
-        return [];
-      }
-      return messages.map(msg => ({
-        id: String(typeof msg.id === 'object' ? msg.id._serialized : msg.id),
-        body: String(msg.body || ''),
-        timestamp: Number(msg.timestamp),
-        hasMedia: Boolean(msg.hasMedia),
-        mediaUrl: msg.mediaUrl ? String(msg.mediaUrl) : undefined,
-      }));
-    } catch (error) {
-      this.logger.error(`Failed to get channel messages: ${String(error)}`);
-      return [];
-    }
+    return this.channels.getChannelMessages(channelId, limit);
   }
 
-  // ========== Gap Quick Wins Implementation ==========
-
-  // Delete Message
-  async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const message = messages.find(m => m.id._serialized === messageId || m.id.id === messageId);
-    if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
-    }
-    await message.delete(forEveryone);
-    this.logger.log(`Deleted message ${messageId} from chat ${chatId} (forEveryone: ${forEveryone})`);
-  }
-
-  // Get Profile Picture
-  async getProfilePicture(contactId: string): Promise<string | null> {
-    this.ensureReady();
-    try {
-      const url = await this.client!.getProfilePicUrl(contactId);
-      return url || null;
-    } catch (error) {
-      this.logger.warn(`Failed to get profile picture for ${contactId}: ${String(error)}`);
-      return null;
-    }
-  }
-
-  // Block Contact
-  async blockContact(contactId: string): Promise<void> {
-    this.ensureReady();
-    const contact = await this.client!.getContactById(contactId);
-    await contact.block();
-    this.logger.log(`Blocked contact ${contactId}`);
-  }
-
-  // Unblock Contact
-  async unblockContact(contactId: string): Promise<void> {
-    this.ensureReady();
-    const contact = await this.client!.getContactById(contactId);
-    await contact.unblock();
-    this.logger.log(`Unblocked contact ${contactId}`);
-  }
-
-  // Get Group Invite Code
-  async getGroupInviteCode(groupId: string): Promise<string> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error(`${groupId} is not a group`);
-    }
-    const inviteCode = await (chat as unknown as GroupChat).getInviteCode();
-    this.logger.log(`Got invite code for group ${groupId}`);
-    return String(inviteCode);
-  }
-
-  // Revoke Group Invite Code
-  async revokeGroupInviteCode(groupId: string): Promise<string> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error(`${groupId} is not a group`);
-    }
-    const newCode = await (chat as unknown as GroupChat).revokeInvite();
-    this.logger.log(`Revoked invite code for group ${groupId}, new code generated`);
-    return String(newCode);
-  }
-
-  // ========== Status/Stories (Phase 3) ==========
-  // Note: These are stub implementations - whatsapp-web.js has limited Status API support
-  /* eslint-disable @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
+  // ============= Status/Stories (delegated stubs) =============
 
   async getContactStatuses(): Promise<Status[]> {
-    this.ensureReady();
-    // whatsapp-web.js has limited Status API support
-    // This is a stub that can be enhanced when the library adds support
-    this.logger.warn('getContactStatuses not fully implemented in whatsapp-web.js');
-    return [];
+    return this.statuses.getContactStatuses();
   }
 
-  async getContactStatus(_contactId: string): Promise<Status[]> {
-    this.ensureReady();
-    this.logger.warn('getContactStatus not fully implemented in whatsapp-web.js');
-    return [];
+  async getContactStatus(contactId: string): Promise<Status[]> {
+    return this.statuses.getContactStatus(contactId);
   }
 
-  async postTextStatus(_text: string, _options?: TextStatusOptions): Promise<StatusResult> {
-    this.ensureReady();
-    // whatsapp-web.js doesn't have native status posting
-    // This would require using the underlying WhatsApp Web API directly
-    throw new Error('postTextStatus not yet implemented in whatsapp-web.js adapter');
+  async postTextStatus(text: string, options?: TextStatusOptions): Promise<StatusResult> {
+    return this.statuses.postTextStatus(text, options);
   }
 
-  async postImageStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    this.ensureReady();
-    throw new Error('postImageStatus not yet implemented in whatsapp-web.js adapter');
+  async postImageStatus(media: MediaInput, caption?: string): Promise<StatusResult> {
+    return this.statuses.postImageStatus(media, caption);
   }
 
-  async postVideoStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    this.ensureReady();
-    throw new Error('postVideoStatus not yet implemented in whatsapp-web.js adapter');
+  async postVideoStatus(media: MediaInput, caption?: string): Promise<StatusResult> {
+    return this.statuses.postVideoStatus(media, caption);
   }
 
-  async deleteStatus(_statusId: string): Promise<void> {
-    this.ensureReady();
-    throw new Error('deleteStatus not yet implemented in whatsapp-web.js adapter');
+  async deleteStatus(statusId: string): Promise<void> {
+    return this.statuses.deleteStatus(statusId);
   }
 
-  // ========== Catalog (Phase 3) ==========
+  // ============= Catalog (delegated stubs) =============
 
   async getCatalog(): Promise<Catalog | null> {
-    this.ensureReady();
-    // whatsapp-web.js doesn't have native Catalog API support
-    this.logger.warn('getCatalog not implemented in whatsapp-web.js adapter');
-    return null;
+    return this.catalog.getCatalog();
   }
 
-  async getProducts(_options?: ProductQueryOptions): Promise<PaginatedProducts> {
-    this.ensureReady();
-    this.logger.warn('getProducts not implemented in whatsapp-web.js adapter');
-    return {
-      products: [],
-      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
-    };
+  async getProducts(options?: ProductQueryOptions): Promise<PaginatedProducts> {
+    return this.catalog.getProducts(options);
   }
 
-  async getProduct(_productId: string): Promise<Product | null> {
-    this.ensureReady();
-    this.logger.warn('getProduct not implemented in whatsapp-web.js adapter');
-    return null;
+  async getProduct(productId: string): Promise<Product | null> {
+    return this.catalog.getProduct(productId);
   }
 
-  async sendProduct(_chatId: string, _productId: string, _body?: string): Promise<MessageResult> {
-    this.ensureReady();
-    throw new Error('sendProduct not yet implemented in whatsapp-web.js adapter');
+  async sendProduct(chatId: string, productId: string, body?: string): Promise<MessageResult> {
+    return this.catalog.sendProduct(chatId, productId, body);
   }
 
-  async sendCatalog(_chatId: string, _body?: string): Promise<MessageResult> {
-    this.ensureReady();
-    throw new Error('sendCatalog not yet implemented in whatsapp-web.js adapter');
+  async sendCatalog(chatId: string, body?: string): Promise<MessageResult> {
+    return this.catalog.sendCatalog(chatId, body);
   }
 
-  /* eslint-enable @typescript-eslint/require-await, @typescript-eslint/no-unused-vars */
+  /** Returns the active client or throws when not READY (shared via AdapterContext). */
+  private requireClient(): Client {
+    this.ensureReady();
+    return this.client!;
+  }
 
   private ensureReady(): void {
     if (this.status !== EngineStatus.READY || !this.client) {
