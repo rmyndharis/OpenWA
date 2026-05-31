@@ -11,7 +11,7 @@ import { Repository, In, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
-import { IWhatsAppEngine, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IWhatsAppEngine, EngineStatus, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -258,157 +258,175 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     this.engines.set(id, engine);
 
     await engine.initialize({
-      onQRCode: (): void => {
-        this.logger.log('QR code generated', {
-          sessionId: id,
-          action: 'qr_generated',
-        });
-
-        // Execute hook for QR event
-        void this.hookManager.execute(
-          'session:qr',
-          { sessionId: id },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        void this.updateStatus(id, SessionStatus.QR_READY);
-      },
-      onReady: (phone: string, pushName: string): void => {
-        this.logger.log(`Session ready: ${phone}`, {
-          sessionId: id,
-          phone,
-          pushName,
-          action: 'ready',
-        });
-
-        // Execute hook for ready event
-        void this.hookManager.execute(
-          'session:ready',
-          { phone, pushName },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        // Reset reconnect attempts on successful connection
-        const reconnectState = this.reconnectStates.get(id);
-        if (reconnectState) {
-          reconnectState.attempts = 0;
-        }
-
-        void this.sessionRepository.update(id, {
-          status: SessionStatus.READY,
-          phone,
-          pushName,
-          connectedAt: new Date(),
-          lastActiveAt: new Date(),
-        });
-      },
-      onMessage: (message): void => {
-        this.logger.debug(`Message received from ${message.from}`, {
-          sessionId: id,
-          messageId: message.id,
-          from: message.from,
-          action: 'message_received',
-        });
-        // Update last active timestamp
-        this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
-        // Convert IncomingMessage to plain object for dispatch
-        const messageData = { ...message };
-
-        // Execute hook for message received - plugins can modify or stop processing
-        this.safeDispatch(
-          this.hookManager
-            .execute('message:received', messageData, {
-              sessionId: id,
-              source: 'Engine',
-            })
-            .then(({ continue: shouldContinue, data: finalMessage }) => {
-              if (!shouldContinue) {
-                // Plugin stopped processing (e.g., auto-reply handled it)
-                return;
-              }
-
-              // Dispatch to webhooks with potentially modified message
-              this.safeDispatch(
-                this.webhookService.dispatch(id, 'message.received', finalMessage),
-                'webhook:message.received',
-                id,
-              );
-              // Emit real-time event to WebSocket clients
-              this.safeEmit(() => this.eventsGateway.emitMessage(id, finalMessage), 'emit:message.received', id);
-            }),
-          'hook:message:received',
-          id,
-        );
-      },
-      onMessageSent: (message): void => {
-        this.logger.debug(`Message sent to ${message.to}`, {
-          sessionId: id,
-          messageId: message.id,
-          to: message.to,
-          action: 'message_sent',
-        });
-
-        this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
-
-        const messageData = { ...message };
-        this.safeDispatch(this.webhookService.dispatch(id, 'message.sent', messageData), 'webhook:message.sent', id);
-        this.safeEmit(() => this.eventsGateway.emitMessageSent(id, messageData), 'emit:message.sent', id);
-      },
-      onMessageAck: (messageId: string, ack: number): void => {
-        const ackData = {
-          messageId,
-          ack,
-          ackName: this.resolveAckName(ack),
-        };
-
-        this.safeDispatch(this.webhookService.dispatch(id, 'message.ack', ackData), 'webhook:message.ack', id);
-        this.safeEmit(() => this.eventsGateway.emitMessageAck(id, ackData), 'emit:message.ack', id);
-      },
-      onDisconnected: (reason: string): void => {
-        this.logger.warn(`Session disconnected: ${reason}`, {
-          sessionId: id,
-          reason,
-          action: 'disconnected',
-        });
-
-        // Execute hook for disconnected event
-        void this.hookManager.execute(
-          'session:disconnected',
-          { reason },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        void this.updateStatus(id, SessionStatus.DISCONNECTED);
-
-        // Attempt to reconnect
-        this.scheduleReconnect(id, session);
-      },
-      onStateChanged: (engineState: EngineStatus): void => {
-        const statusMap: Record<EngineStatus, SessionStatus> = {
-          [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
-          [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
-          [EngineStatus.QR_READY]: SessionStatus.QR_READY,
-          [EngineStatus.AUTHENTICATING]: SessionStatus.AUTHENTICATING,
-          [EngineStatus.READY]: SessionStatus.READY,
-          [EngineStatus.FAILED]: SessionStatus.FAILED,
-        };
-        const newStatus = statusMap[engineState];
-        if (newStatus) {
-          void this.updateStatus(id, newStatus);
-        }
-      },
+      onQRCode: (): void => this.handleQRCode(id),
+      onReady: (phone: string, pushName: string): void => this.handleReady(id, phone, pushName),
+      onMessage: (message: IncomingMessage): void => this.handleMessage(id, message),
+      onMessageSent: (message: IncomingMessage): void => this.handleMessageSent(id, message),
+      onMessageAck: (messageId: string, ack: number): void => this.handleMessageAck(id, messageId, ack),
+      onDisconnected: (reason: string): void => this.handleDisconnected(id, session, reason),
+      onStateChanged: (engineState: EngineStatus): void => this.handleStateChanged(id, engineState),
     });
 
     await this.updateStatus(id, SessionStatus.INITIALIZING);
+  }
+
+  // ========== Engine event handlers ==========
+  // Named so each callback is independently readable/testable; behavior is
+  // identical to the previously-inlined closures in initializeEngine.
+
+  private handleQRCode(id: string): void {
+    this.logger.log('QR code generated', {
+      sessionId: id,
+      action: 'qr_generated',
+    });
+
+    // Execute hook for QR event
+    void this.hookManager.execute(
+      'session:qr',
+      { sessionId: id },
+      {
+        sessionId: id,
+        source: 'Engine',
+      },
+    );
+
+    void this.updateStatus(id, SessionStatus.QR_READY);
+  }
+
+  private handleReady(id: string, phone: string, pushName: string): void {
+    this.logger.log(`Session ready: ${phone}`, {
+      sessionId: id,
+      phone,
+      pushName,
+      action: 'ready',
+    });
+
+    // Execute hook for ready event
+    void this.hookManager.execute(
+      'session:ready',
+      { phone, pushName },
+      {
+        sessionId: id,
+        source: 'Engine',
+      },
+    );
+
+    // Reset reconnect attempts on successful connection
+    const reconnectState = this.reconnectStates.get(id);
+    if (reconnectState) {
+      reconnectState.attempts = 0;
+    }
+
+    void this.sessionRepository.update(id, {
+      status: SessionStatus.READY,
+      phone,
+      pushName,
+      connectedAt: new Date(),
+      lastActiveAt: new Date(),
+    });
+  }
+
+  private handleMessage(id: string, message: IncomingMessage): void {
+    this.logger.debug(`Message received from ${message.from}`, {
+      sessionId: id,
+      messageId: message.id,
+      from: message.from,
+      action: 'message_received',
+    });
+    // Update last active timestamp
+    this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
+    // Convert IncomingMessage to plain object for dispatch
+    const messageData = { ...message };
+
+    // Execute hook for message received - plugins can modify or stop processing
+    this.safeDispatch(
+      this.hookManager
+        .execute('message:received', messageData, {
+          sessionId: id,
+          source: 'Engine',
+        })
+        .then(({ continue: shouldContinue, data: finalMessage }) => {
+          if (!shouldContinue) {
+            // Plugin stopped processing (e.g., auto-reply handled it)
+            return;
+          }
+
+          // Dispatch to webhooks with potentially modified message
+          this.safeDispatch(
+            this.webhookService.dispatch(id, 'message.received', finalMessage),
+            'webhook:message.received',
+            id,
+          );
+          // Emit real-time event to WebSocket clients
+          this.safeEmit(() => this.eventsGateway.emitMessage(id, finalMessage), 'emit:message.received', id);
+        }),
+      'hook:message:received',
+      id,
+    );
+  }
+
+  private handleMessageSent(id: string, message: IncomingMessage): void {
+    this.logger.debug(`Message sent to ${message.to}`, {
+      sessionId: id,
+      messageId: message.id,
+      to: message.to,
+      action: 'message_sent',
+    });
+
+    this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
+
+    const messageData = { ...message };
+    this.safeDispatch(this.webhookService.dispatch(id, 'message.sent', messageData), 'webhook:message.sent', id);
+    this.safeEmit(() => this.eventsGateway.emitMessageSent(id, messageData), 'emit:message.sent', id);
+  }
+
+  private handleMessageAck(id: string, messageId: string, ack: number): void {
+    const ackData = {
+      messageId,
+      ack,
+      ackName: this.resolveAckName(ack),
+    };
+
+    this.safeDispatch(this.webhookService.dispatch(id, 'message.ack', ackData), 'webhook:message.ack', id);
+    this.safeEmit(() => this.eventsGateway.emitMessageAck(id, ackData), 'emit:message.ack', id);
+  }
+
+  private handleDisconnected(id: string, session: Session, reason: string): void {
+    this.logger.warn(`Session disconnected: ${reason}`, {
+      sessionId: id,
+      reason,
+      action: 'disconnected',
+    });
+
+    // Execute hook for disconnected event
+    void this.hookManager.execute(
+      'session:disconnected',
+      { reason },
+      {
+        sessionId: id,
+        source: 'Engine',
+      },
+    );
+
+    void this.updateStatus(id, SessionStatus.DISCONNECTED);
+
+    // Attempt to reconnect
+    this.scheduleReconnect(id, session);
+  }
+
+  private handleStateChanged(id: string, engineState: EngineStatus): void {
+    const statusMap: Record<EngineStatus, SessionStatus> = {
+      [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
+      [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
+      [EngineStatus.QR_READY]: SessionStatus.QR_READY,
+      [EngineStatus.AUTHENTICATING]: SessionStatus.AUTHENTICATING,
+      [EngineStatus.READY]: SessionStatus.READY,
+      [EngineStatus.FAILED]: SessionStatus.FAILED,
+    };
+    const newStatus = statusMap[engineState];
+    if (newStatus) {
+      void this.updateStatus(id, newStatus);
+    }
   }
 
   private scheduleReconnect(id: string, session: Session): void {
