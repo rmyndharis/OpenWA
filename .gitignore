@@ -73,3 +73,6 @@ docs/plans/
 CLAUDE.md
 _docs/
 .aider*
+
+# TypeScript incremental build info
+*.tsbuildinfo

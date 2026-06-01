@@ -1,5 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsUrl, IsArray, IsOptional, IsBoolean, IsInt, Min, Max, ArrayMinSize } from 'class-validator';
+import {
+  IsString,
+  IsUrl,
+  IsArray,
+  IsOptional,
+  IsBoolean,
+  IsInt,
+  Min,
+  Max,
+  ArrayMinSize,
+  IsIn,
+  IsObject,
+  MaxLength,
+} from 'class-validator';
 
 export const WEBHOOK_EVENTS = [
   'message.received',
@@ -33,6 +46,7 @@ export class CreateWebhookDto {
   @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
+  @IsIn(WEBHOOK_EVENTS, { each: true })
   events?: string[];
 
   @ApiPropertyOptional({
@@ -41,6 +55,7 @@ export class CreateWebhookDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   secret?: string;
 
   @ApiPropertyOptional({
@@ -48,6 +63,7 @@ export class CreateWebhookDto {
     example: { 'X-Custom-Header': 'value' },
   })
   @IsOptional()
+  @IsObject()
   headers?: Record<string, string>;
 
   @ApiPropertyOptional({
@@ -72,15 +88,19 @@ export class UpdateWebhookDto {
   @ApiPropertyOptional({ description: 'Event types to subscribe to' })
   @IsOptional()
   @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(WEBHOOK_EVENTS, { each: true })
   events?: string[];
 
   @ApiPropertyOptional({ description: 'Secret key for HMAC signature' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   secret?: string;
 
   @ApiPropertyOptional({ description: 'Custom headers' })
   @IsOptional()
+  @IsObject()
   headers?: Record<string, string>;
 
   @ApiPropertyOptional({ description: 'Enable/disable webhook' })

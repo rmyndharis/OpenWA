@@ -2,7 +2,17 @@ import { Controller, Post, Get, Param, Body, Query, HttpCode, HttpStatus } from 
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
-import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
+import {
+  SendTextMessageDto,
+  SendMediaMessageDto,
+  MessageResponseDto,
+  SendLocationMessageDto,
+  SendContactMessageDto,
+  ReplyMessageDto,
+  ForwardMessageDto,
+  ReactMessageDto,
+  DeleteMessageDto,
+} from './dto';
 import { SendBulkMessageDto, BulkMessageResponseDto } from './dto/bulk-message.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -149,7 +159,7 @@ export class MessageController {
   })
   async sendLocation(
     @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; latitude: number; longitude: number; description?: string; address?: string },
+    @Body() dto: SendLocationMessageDto,
   ): Promise<MessageResponseDto> {
     return this.messageService.sendLocation(sessionId, dto);
   }
@@ -165,7 +175,7 @@ export class MessageController {
   })
   async sendContact(
     @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; contactName: string; contactNumber: string },
+    @Body() dto: SendContactMessageDto,
   ): Promise<MessageResponseDto> {
     return this.messageService.sendContact(sessionId, dto);
   }
@@ -195,10 +205,7 @@ export class MessageController {
     description: 'Reply sent',
     type: MessageResponseDto,
   })
-  async reply(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; quotedMessageId: string; text: string },
-  ): Promise<MessageResponseDto> {
+  async reply(@Param('sessionId') sessionId: string, @Body() dto: ReplyMessageDto): Promise<MessageResponseDto> {
     return this.messageService.reply(sessionId, dto);
   }
 
@@ -211,10 +218,7 @@ export class MessageController {
     description: 'Message forwarded',
     type: MessageResponseDto,
   })
-  async forward(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { fromChatId: string; toChatId: string; messageId: string },
-  ): Promise<MessageResponseDto> {
+  async forward(@Param('sessionId') sessionId: string, @Body() dto: ForwardMessageDto): Promise<MessageResponseDto> {
     return this.messageService.forward(sessionId, dto);
   }
 
@@ -232,10 +236,7 @@ export class MessageController {
     status: 400,
     description: 'Session not active or message not found',
   })
-  async react(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; messageId: string; emoji: string },
-  ): Promise<{ success: boolean }> {
+  async react(@Param('sessionId') sessionId: string, @Body() dto: ReactMessageDto): Promise<{ success: boolean }> {
     await this.messageService.reactToMessage(sessionId, dto);
     return { success: true };
   }
@@ -273,7 +274,7 @@ export class MessageController {
   })
   async deleteMessage(
     @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; messageId: string; forEveryone?: boolean },
+    @Body() dto: DeleteMessageDto,
   ): Promise<{ success: boolean }> {
     await this.messageService.deleteMessage(sessionId, dto);
     return { success: true };
