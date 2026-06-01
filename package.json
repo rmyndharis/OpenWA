@@ -49,6 +49,7 @@
     "@nestjs/swagger": "^11.4.3",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
+    "@socket.io/redis-adapter": "^8.3.0",
     "archiver": "^8.0.0",
     "better-sqlite3": "^12.10.0",
     "bullmq": "^5.76.10",

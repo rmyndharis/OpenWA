@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { RedisIoAdapter } from './modules/events/redis-io.adapter';
 import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel } from './common/services/logger.service';
 import * as dotenv from 'dotenv';
@@ -246,6 +248,17 @@ async function bootstrap() {
 
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
+
+  // Cluster mode (Tier 4): relay Socket.io broadcasts through Redis so events
+  // emitted on any node reach clients connected to every node. No-op when
+  // CLUSTER_ENABLED is off — the default in-memory adapter stays in place.
+  const configService = app.get(ConfigService);
+  if (configService.get<boolean>('cluster.enabled')) {
+    const redisIoAdapter = new RedisIoAdapter(app);
+    await redisIoAdapter.connectToRedis(configService);
+    app.useWebSocketAdapter(redisIoAdapter);
+    console.log('🔗 Cluster mode: Socket.io Redis adapter enabled');
+  }
 
   const port = process.env.PORT || 2785;
   await app.listen(port);
