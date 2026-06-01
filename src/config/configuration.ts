@@ -1,5 +1,15 @@
+import { hostname } from 'os';
+
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
+
+  // Cluster / horizontal scale (Tier 4). Off by default — single-instance
+  // deployments behave exactly as before.
+  cluster: {
+    enabled: process.env.CLUSTER_ENABLED === 'true',
+    instanceId: process.env.INSTANCE_ID || hostname(),
+    ownershipTtl: parseInt(process.env.CLUSTER_OWNERSHIP_TTL || '30', 10),
+  },
 
   // Redis configuration
   redis: {

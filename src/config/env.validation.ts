@@ -21,8 +21,28 @@ export const envValidationSchema = Joi.object({
   QUEUE_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
   CACHE_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
 
-  // Data storage database (pluggable driver)
-  DATABASE_TYPE: Joi.string().valid('sqlite', 'postgres', 'mysql').default('sqlite'),
+  // Cluster / horizontal scale (Tier 4). Master gate for Redis-backed
+  // Socket.io fan-out and the session-ownership registry.
+  CLUSTER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  // Stable identity for this node in the ownership registry. Defaults to the
+  // hostname at bootstrap (resolved in configuration.ts) when left unset.
+  INSTANCE_ID: Joi.string().optional(),
+  // Seconds before an ownership claim expires if the owner stops heart-beating.
+  CLUSTER_OWNERSHIP_TTL: Joi.number().integer().min(5).default(30),
+
+  // Data storage database (pluggable driver). SQLite is single-writer and
+  // file-local, so it is rejected when CLUSTER_ENABLED is on (C5): a shared,
+  // network-reachable store (postgres/mysql) is mandatory for multi-instance.
+  DATABASE_TYPE: Joi.string()
+    .valid('sqlite', 'postgres', 'mysql')
+    .default('sqlite')
+    .when('CLUSTER_ENABLED', {
+      is: true,
+      then: Joi.invalid('sqlite').messages({
+        'any.invalid':
+          'DATABASE_TYPE must be postgres or mysql when CLUSTER_ENABLED is true (SQLite cannot be shared across instances)',
+      }),
+    }),
   DATABASE_NAME: Joi.string().default('./data/openwa.sqlite'),
   DATABASE_HOST: Joi.string().default('localhost'),
   DATABASE_PORT: Joi.number().port().default(5432),
@@ -32,11 +52,13 @@ export const envValidationSchema = Joi.object({
     then: Joi.required(),
     otherwise: Joi.optional(),
   }),
-  DATABASE_PASSWORD: Joi.string().allow('').when('DATABASE_TYPE', {
-    is: Joi.valid('postgres', 'mysql'),
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
+  DATABASE_PASSWORD: Joi.string()
+    .allow('')
+    .when('DATABASE_TYPE', {
+      is: Joi.valid('postgres', 'mysql'),
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
   DATABASE_SYNCHRONIZE: Joi.boolean().truthy('true').falsy('false').default(false),
   DATABASE_LOGGING: Joi.boolean().truthy('true').falsy('false').default(false),
   DATABASE_POOL_SIZE: Joi.number().integer().min(1).default(10),
