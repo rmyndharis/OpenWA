@@ -1,0 +1,11 @@
+{$OPENWA_SITE_ADDRESS} {
+	encode gzip zstd
+
+	@api path /api/*
+	reverse_proxy @api openwa-api:2785
+
+	@socket path /socket.io/*
+	reverse_proxy @socket openwa-api:2785
+
+	reverse_proxy dashboard:80
+}

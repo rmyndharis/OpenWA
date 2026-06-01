@@ -1,0 +1,134 @@
+# OpenWA - VPS production bundle
+#
+# Default mode:
+#   - API + Dashboard + Caddy reverse proxy
+#   - PostgreSQL database in the postgres-data Docker volume
+#   - WhatsApp sessions in ./data/sessions
+#   - Media/files in ./data/media
+#
+# Public entrypoint:
+#   - http://SERVER_IP when OPENWA_SITE_ADDRESS=:80
+#   - https://your-domain.com when OPENWA_SITE_ADDRESS=your-domain.com
+
+services:
+  openwa-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openwa-api:local
+    container_name: openwa-api
+    restart: unless-stopped
+    shm_size: '1gb'
+    expose:
+      - '2785'
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 2785
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      BASE_URL: ${BASE_URL:-}
+      DASHBOARD_URL: ${DASHBOARD_URL:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+
+      DATABASE_TYPE: ${DATABASE_TYPE:-postgres}
+      DATABASE_NAME: ${DATABASE_NAME:-openwa}
+      DATABASE_HOST: ${DATABASE_HOST:-postgres}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_USERNAME: ${DATABASE_USERNAME:-openwa}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-change-this-postgres-password}
+      DATABASE_SYNCHRONIZE: ${DATABASE_SYNCHRONIZE:-false}
+      DATABASE_LOGGING: ${DATABASE_LOGGING:-false}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+
+      ENGINE_TYPE: ${ENGINE_TYPE:-whatsapp-web.js}
+      SESSION_DATA_PATH: /app/data/sessions
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      PUPPETEER_HEADLESS: ${PUPPETEER_HEADLESS:-true}
+      PUPPETEER_ARGS: ${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--no-first-run,--no-zygote}
+
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      STORAGE_LOCAL_PATH: /app/data/media
+
+      REDIS_ENABLED: ${REDIS_ENABLED:-false}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+
+      QUEUE_ENABLED: ${QUEUE_ENABLED:-false}
+      WEBHOOK_TIMEOUT: ${WEBHOOK_TIMEOUT:-10000}
+      WEBHOOK_MAX_RETRIES: ${WEBHOOK_MAX_RETRIES:-3}
+      WEBHOOK_RETRY_DELAY: ${WEBHOOK_RETRY_DELAY:-5000}
+
+      PLUGINS_ENABLED: ${PLUGINS_ENABLED:-true}
+      PLUGINS_DIR: /app/data/plugins
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: openwa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-openwa}
+      POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-change-this-postgres-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.traefik
+    image: openwa-dashboard:local
+    container_name: openwa-dashboard
+    restart: unless-stopped
+    expose:
+      - '80'
+    depends_on:
+      openwa-api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: openwa-caddy
+    restart: unless-stopped
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+    environment:
+      OPENWA_SITE_ADDRESS: ${OPENWA_SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      dashboard:
+        condition: service_started
+      openwa-api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

@@ -3,6 +3,8 @@ node_modules/
 
 # Build output
 dist/
+dashboard/dist/
+*.tsbuildinfo
 
 # Test coverage
 coverage/
@@ -14,6 +16,9 @@ coverage/
 
 # Data files (sessions, media, database)
 data/
+
+# Local notes/artifacts
+*.rtf
 
 # IDE
 .idea/

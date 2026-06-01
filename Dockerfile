@@ -30,9 +30,12 @@ FROM node:22-slim AS production
 
 # Install Chrome/Chromium and required dependencies
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
     chromium \
+    dumb-init \
     fonts-liberation \
-    libappindicator3-1 \
+    fonts-noto \
+    fonts-noto-color-emoji \
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -47,8 +50,10 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
+    make \
+    g++ \
+    python3 \
     xdg-utils \
-    dumb-init \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chrome executable path for Puppeteer
@@ -64,7 +69,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev \
+    && npm cache clean --force \
+    && apt-get purge -y --auto-remove make g++ python3
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
