@@ -42,6 +42,17 @@ export class PluginLoaderService implements OnModuleInit {
       action: 'plugins_loaded',
       count: this.plugins.size,
     });
+
+    // Hook handlers live in-process and cannot be shared via Redis. In a
+    // cluster, hooks only behave consistently if every node loads the same
+    // plugin set — i.e. PLUGINS_DIR must be backed by shared storage.
+    if (this.configService.get<boolean>('cluster.enabled') && this.plugins.size > 0) {
+      this.logger.warn(
+        `Cluster mode: ${this.plugins.size} plugins loaded from '${this.pluginsDir}'. ` +
+          'Ensure PLUGINS_DIR is shared storage so every node loads identical hooks.',
+        { action: 'cluster_plugins_warning' },
+      );
+    }
   }
 
   private loadBuiltInPlugins(): void {

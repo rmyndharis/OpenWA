@@ -160,9 +160,17 @@ POST /sessions/:id/start
 10. ✅ Moved `initializeEngine` callbacks into named handler methods (commit `8cb57a2`).
 11. ✅ Env validation at bootstrap via joi schema in `ConfigModule` (commit `fcecda6`). Note: full ConfigService consolidation of remaining direct `process.env` readers deferred — joi now coerces validated values back into `process.env`, so the schema is the single validation gate.
 
-### Tier 4 — True horizontal scale (design changes; schedule separately)
+### Tier 4 — True horizontal scale (design changes) ✅ done
 
-12. Socket.io Redis adapter + shared session-ownership registry + Redis-backed hook registry. **C3 / C5 are architectural** — flag and plan, do not rush.
+12. Horizontal scale, gated behind `CLUSTER_ENABLED` (default off → single-instance behavior unchanged). Delivered in four commits:
+
+    - **C5 — SQLite rejected in cluster mode.** When `CLUSTER_ENABLED=true` the joi schema rejects `DATABASE_TYPE=sqlite` at bootstrap; a shared postgres/mysql store is mandatory. Adds the `cluster.{enabled,instanceId,ownershipTtl}` config block (`instanceId` defaults to hostname). *(env validation + config)*
+    - **Socket.io Redis adapter.** `RedisIoAdapter` (ioredis pub/sub + `@socket.io/redis-adapter`), wired in bootstrap only when clustered, pings Redis to fail fast. Replaces the in-memory adapter so a broadcast on node A reaches clients on node B.
+    - **C3 — session-ownership registry.** `SessionRegistry` records `session:owner:<id> = instanceId` in Redis with a half-TTL heartbeat (timer `unref`'d). `SessionService` claims on engine init, releases on stop/delete. `resolveEngine()` returns the local engine or throws `SessionOwnedElsewhereException` (409 naming the owner) instead of a misleading "not active". `MessageService` adopts it; other controllers can migrate the `getEngine` + generic-throw pattern incrementally.
+
+    **Hard constraint (by design, not a gap):** a WhatsApp engine is a live Puppeteer/browser session bound to the process that started it — it **cannot** migrate. So this is *ownership routing* (stateless API nodes + sticky session ownership), not arbitrary request routing. Put a sticky-by-`sessionId` rule at the load balancer, or have clients honor the 409 owner hint.
+
+    **Hooks stay in-process — intentionally.** Hook handlers are JS functions and cannot be serialized into a shared registry. Cross-node consistency comes from every node loading the **same** plugin set: `PLUGINS_DIR` must point at shared storage (network volume / shared mount) when clustered. The plugin loader logs a warning if `CLUSTER_ENABLED` is on, as a deployment reminder.
 
 ---
 
