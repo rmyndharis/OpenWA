@@ -188,7 +188,7 @@ export class MessageService {
     send: (engine: IWhatsAppEngine) => Promise<EngineSendResult>,
     hooks?: DispatchHooks,
   ): Promise<MessageResponseDto> {
-    const engine = this.getEngine(sessionId);
+    const engine = await this.getEngine(sessionId);
 
     // Save message as pending BEFORE sending
     const message = await this.saveOutgoingMessage(sessionId, meta);
@@ -268,12 +268,12 @@ export class MessageService {
   // ========== Phase 3: Reactions ==========
 
   async reactToMessage(sessionId: string, dto: { chatId: string; messageId: string; emoji: string }): Promise<void> {
-    const engine = this.getEngine(sessionId);
+    const engine = await this.getEngine(sessionId);
     await engine.reactToMessage(dto.chatId, dto.messageId, dto.emoji);
   }
 
   async getMessageReactions(sessionId: string, chatId: string, messageId: string) {
-    const engine = this.getEngine(sessionId);
+    const engine = await this.getEngine(sessionId);
     return engine.getMessageReactions(chatId, messageId);
   }
 
@@ -283,16 +283,14 @@ export class MessageService {
     sessionId: string,
     dto: { chatId: string; messageId: string; forEveryone?: boolean },
   ): Promise<void> {
-    const engine = this.getEngine(sessionId);
+    const engine = await this.getEngine(sessionId);
     await engine.deleteMessage(dto.chatId, dto.messageId, dto.forEveryone ?? true);
   }
 
-  private getEngine(sessionId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException(`Session '${sessionId}' is not active. Start the session first.`);
-    }
-    return engine;
+  private getEngine(sessionId: string): Promise<IWhatsAppEngine> {
+    // Owner-aware (Tier 4): in cluster mode this surfaces a 409 naming the node
+    // that owns the session instead of a generic "not active".
+    return this.sessionService.resolveEngine(sessionId);
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {

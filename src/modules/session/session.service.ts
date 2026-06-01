@@ -16,6 +16,8 @@ import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
+import { SessionRegistry } from './session-registry.service';
+import { SessionOwnedElsewhereException } from './exceptions/session-owned-elsewhere.exception';
 
 interface ReconnectState {
   attempts: number;
@@ -43,6 +45,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    private readonly sessionRegistry: SessionRegistry,
   ) {}
 
   /**
@@ -185,6 +188,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       await engine.destroy();
       this.engines.delete(id);
     }
+    await this.sessionRegistry.release(id);
 
     // Execute hook BEFORE delete so plugins can access session data
     await this.hookManager.execute(
@@ -256,6 +260,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       proxyType: session.proxyType || undefined,
     });
     this.engines.set(id, engine);
+
+    // Claim cluster ownership of this session (no-op when CLUSTER_ENABLED off).
+    await this.sessionRegistry.claim(id);
 
     await engine.initialize({
       onQRCode: (): void => this.handleQRCode(id),
@@ -523,6 +530,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       await engine.disconnect();
       this.engines.delete(id);
     }
+    await this.sessionRegistry.release(id);
 
     this.logger.log(`Session stopped: ${session.name}`, {
       sessionId: id,
@@ -557,6 +565,27 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
   getEngine(id: string): IWhatsAppEngine | undefined {
     return this.engines.get(id);
+  }
+
+  /**
+   * Resolve the live engine for a session or throw a meaningful error. When the
+   * engine is not held locally and cluster mode is on, consult the ownership
+   * registry: if another node owns it, surface a 409 naming that node instead
+   * of a misleading "not active". Owner-aware replacement for callers that
+   * currently do `getEngine` + generic throw.
+   */
+  async resolveEngine(id: string): Promise<IWhatsAppEngine> {
+    const engine = this.engines.get(id);
+    if (engine) {
+      return engine;
+    }
+    if (this.sessionRegistry.isEnabled) {
+      const owner = await this.sessionRegistry.getOwner(id);
+      if (owner && owner !== this.sessionRegistry.instanceId) {
+        throw new SessionOwnedElsewhereException(id, owner);
+      }
+    }
+    throw new BadRequestException(`Session '${id}' is not active. Start the session first.`);
   }
 
   async getGroups(id: string): Promise<{ id: string; name: string }[]> {

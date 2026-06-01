@@ -45,6 +45,7 @@ describe('MessageService', () => {
 
     sessionService = {
       getEngine: jest.fn().mockReturnValue(mockEngine),
+      resolveEngine: jest.fn().mockResolvedValue(mockEngine),
       findOne: jest.fn().mockResolvedValue({ id: 'sess-1', phone: '628123456789' }),
     };
 
@@ -128,7 +129,9 @@ describe('MessageService', () => {
     });
 
     it('should throw BadRequestException if session is not active', async () => {
-      (sessionService.getEngine as jest.Mock).mockReturnValue(undefined);
+      (sessionService.resolveEngine as jest.Mock).mockRejectedValue(
+        new BadRequestException(`Session 'inactive' is not active. Start the session first.`),
+      );
 
       await expect(service.sendText('inactive', { chatId: 'test@c.us', text: 'hello' })).rejects.toThrow(
         BadRequestException,
