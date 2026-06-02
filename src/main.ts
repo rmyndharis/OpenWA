@@ -146,6 +146,7 @@ async function bootstrap() {
     .setDescription('Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API')
     .setVersion('0.1.6')
     .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, 'X-API-Key')
+    .addSecurityRequirements('X-API-Key')
     .addTag('sessions', 'WhatsApp session management')
     .addTag('messages', 'Send and manage messages')
     .addTag('webhooks', 'Webhook configuration')
