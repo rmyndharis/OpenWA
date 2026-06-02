@@ -1,22 +1,17 @@
-volumes:
-      - openwa-data:/app/data
-Y además repetiste healthcheck, dashboard y volumes.
-Borra TODO y deja solo esto:
-Switch agent/agents      
-Compact session/compact     services:
-Connect provider/connect       openwa:
-Copy session transcript/copy            build:
-Open editor/editor            context: .
-Exit the app/exit              dockerfile: Dockerfile
-Export session transcript/export          restart: unless-stopped
-Fork session/fork            expose:
-Help/help              - "2785"
-guided AGENTS.md setup/init            ports:
-Toggle MCPs/mcps              - "2785:2785"
-Switch model/models          command: >
+services:
+  openwa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "2785"
+    ports:
+      - "2785:2785"
+    command: >
       sh -c 'npx @open-wa/wa-automate@4.76.0
-      --port 2785Build·GPT-5.5
-      --api-key "$API_MASTER_KEY"
+      --port 2785
+      --api-key "$$API_MASTER_KEY"
       --webhook "https://citaapp.es/webhooks/openwa"
       --session-id fisiodemo
       --use-chrome
@@ -30,6 +25,7 @@ Switch model/models          command: >
     volumes:
       - openwa-data:/app/data
     shm_size: "1gb"
+
   dashboard:
     build:
       context: ./dashboard
@@ -39,5 +35,6 @@ Switch model/models          command: >
       - "80"
     depends_on:
       - openwa
+
 volumes:
   openwa-data:
