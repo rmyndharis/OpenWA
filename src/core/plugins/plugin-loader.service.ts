@@ -304,7 +304,11 @@ export class PluginLoaderService implements OnModuleInit {
     return resolved;
   }
 
-  /** Run a plugin lifecycle method under a timeout, feeding the breaker. */
+  /**
+   * Run a plugin lifecycle method under a timeout, feeding the breaker.
+   * Lifecycle and hook failures share one per-plugin failure budget by design:
+   * a plugin misbehaving in either path counts toward the same trip threshold.
+   */
   private async runLifecycle(pluginId: string, label: string, fn: () => Promise<void>): Promise<void> {
     if (this.breaker.isTripped(pluginId)) {
       throw new Error(`Plugin ${pluginId} is disabled by the circuit breaker`);
@@ -348,22 +352,34 @@ export class PluginLoaderService implements OnModuleInit {
       .map(([key]) => plugin.config[key])
       .filter((v): v is string => typeof v === 'string' && v.length > 0);
     const redact = (msg: string): string => secretValues.reduce((acc, secret) => acc.split(secret).join('***'), msg);
+    const redactMeta = (meta?: Record<string, unknown>): Record<string, unknown> | undefined => {
+      if (!meta || secretValues.length === 0) return meta;
+      const walk = (val: unknown): unknown => {
+        if (typeof val === 'string') return redact(val);
+        if (Array.isArray(val)) return val.map(walk);
+        if (val && typeof val === 'object') {
+          return Object.fromEntries(Object.entries(val as Record<string, unknown>).map(([k, v]) => [k, walk(v)]));
+        }
+        return val;
+      };
+      return walk(meta) as Record<string, unknown>;
+    };
 
     const pluginLogger: PluginLogger = {
-      log: (message, meta) => this.logger.log(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
-      debug: (message, meta) => this.logger.debug(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
-      warn: (message, meta) => this.logger.warn(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
+      log: (message, meta) => this.logger.log(`[${pluginId}] ${redact(message)}`, { ...redactMeta(meta), pluginId }),
+      debug: (message, meta) =>
+        this.logger.debug(`[${pluginId}] ${redact(message)}`, { ...redactMeta(meta), pluginId }),
+      warn: (message, meta) => this.logger.warn(`[${pluginId}] ${redact(message)}`, { ...redactMeta(meta), pluginId }),
       error: (message, error, meta) =>
         this.logger.error(`[${pluginId}] ${redact(message)}`, error instanceof Error ? error.message : String(error), {
-          ...meta,
+          ...redactMeta(meta),
           pluginId,
         }),
     };
 
     // Storage gated by 'storage' permission.
-    const realStorage = this.pluginStorage.createPluginStorage(pluginId);
     const storage = has('storage')
-      ? realStorage
+      ? this.pluginStorage.createPluginStorage(pluginId)
       : {
           get: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
           set: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
@@ -388,7 +404,7 @@ export class PluginLoaderService implements OnModuleInit {
           });
           return undefined;
         }
-        return undefined; // service exposure still intentionally limited
+        // Service registry not yet implemented — returns undefined even when granted.
       },
     };
 

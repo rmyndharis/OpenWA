@@ -45,9 +45,7 @@ function instance(permissions?: string[], secretKeys: string[] = []): PluginInst
       configSchema: secretKeys.length
         ? {
             type: 'object',
-            properties: Object.fromEntries(
-              secretKeys.map((k) => [k, { type: 'string', secret: true }]),
-            ),
+            properties: Object.fromEntries(secretKeys.map(k => [k, { type: 'string', secret: true }])),
           }
         : undefined,
     },
@@ -87,6 +85,22 @@ describe('PluginLoaderService capabilities', () => {
     const loader = makeLoader();
     const ctx = (loader as any).createPluginContext(instance(['storage']));
     expect(Object.isFrozen(ctx)).toBe(true);
+  });
+
+  it('redacts secret values that appear in log meta', () => {
+    const loader = makeLoader();
+    const logs: Array<{ msg: string; meta: unknown }> = [];
+    (loader as any).logger = {
+      log: (msg: string, meta: unknown) => logs.push({ msg, meta }),
+      debug: () => {},
+      warn: () => {},
+      error: () => {},
+    };
+    const ctx = (loader as any).createPluginContext(instance(['storage'], ['token']));
+    ctx.logger.log('ok', { value: 'super-secret', nested: { k: 'super-secret' } });
+    const serialized = JSON.stringify(logs);
+    expect(serialized).not.toContain('super-secret');
+    expect(serialized).toContain('***');
   });
 
   it('redacts secret config values in the plugin logger', () => {
