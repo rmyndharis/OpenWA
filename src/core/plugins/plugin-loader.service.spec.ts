@@ -117,4 +117,47 @@ describe('PluginLoaderService capabilities', () => {
     expect(logs.join('\n')).not.toContain('super-secret');
     expect(logs.join('\n')).toContain('***');
   });
+
+  it('denies registerHook when hooks permission is not granted', () => {
+    const loader = makeLoader();
+    const hm = (loader as any).hookManager;
+    const spy = jest.spyOn(hm, 'register');
+    const ctx = (loader as any).createPluginContext(instance([])); // no 'hooks'
+    ctx.registerHook('message:received', async () => ({ continue: true }));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('allows registerHook when hooks permission is granted', () => {
+    const loader = makeLoader();
+    const hm = (loader as any).hookManager;
+    const spy = jest.spyOn(hm, 'register');
+    const ctx = (loader as any).createPluginContext(instance(['hooks']));
+    ctx.registerHook('message:received', async () => ({ continue: true }));
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('gives the plugin a frozen copy of config, not the live host object', () => {
+    const loader = makeLoader();
+    const inst = instance(['storage']);
+    const ctx = (loader as any).createPluginContext(inst);
+    expect(ctx.config).not.toBe(inst.config); // different object
+    expect(Object.isFrozen(ctx.config)).toBe(true);
+  });
+
+  it('redacts secret values that appear in an error message', () => {
+    const loader = makeLoader();
+    const errs: string[] = [];
+    (loader as any).logger = {
+      log: () => {},
+      debug: () => {},
+      warn: () => {},
+      error: (msg: string, errStr: string) => errs.push(`${msg} ${errStr}`),
+    };
+    const ctx = (loader as any).createPluginContext(instance(['storage'], ['token']));
+    ctx.logger.error('failed', new Error('leaked super-secret value'));
+    expect(errs.join('\n')).not.toContain('super-secret');
+    expect(errs.join('\n')).toContain('***');
+  });
 });

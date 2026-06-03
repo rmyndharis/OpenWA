@@ -209,7 +209,7 @@ export class PluginLoaderService implements OnModuleInit {
       const context = this.createPluginContext(plugin);
 
       if (plugin.instance?.onDisable) {
-        await plugin.instance.onDisable(context);
+        await this.runLifecycle(pluginId, 'onDisable', () => plugin.instance!.onDisable!(context));
       }
 
       // Unregister all hooks for this plugin
@@ -244,7 +244,7 @@ export class PluginLoaderService implements OnModuleInit {
     // Call onUnload
     if (plugin.instance?.onUnload) {
       const context = this.createPluginContext(plugin);
-      await plugin.instance.onUnload(context);
+      await this.runLifecycle(pluginId, 'onUnload', () => plugin.instance!.onUnload!(context));
     }
 
     this.plugins.delete(pluginId);
@@ -269,7 +269,15 @@ export class PluginLoaderService implements OnModuleInit {
     // Notify plugin of config change (async, fire and forget)
     if (plugin.instance?.onConfigChange && plugin.status === PluginStatus.ENABLED) {
       const context = this.createPluginContext(plugin);
-      void plugin.instance.onConfigChange(context, plugin.config);
+      void this.runLifecycle(pluginId, 'onConfigChange', () =>
+        plugin.instance!.onConfigChange!(context, plugin.config),
+      ).catch(error => {
+        this.logger.error(
+          `Plugin ${pluginId} onConfigChange failed`,
+          error instanceof Error ? error.message : String(error),
+          { pluginId, action: 'plugin_config_change_failed' },
+        );
+      });
     }
 
     this.logger.debug(`Plugin config updated: ${pluginId}`, {
@@ -371,10 +379,11 @@ export class PluginLoaderService implements OnModuleInit {
         this.logger.debug(`[${pluginId}] ${redact(message)}`, { ...redactMeta(meta), pluginId }),
       warn: (message, meta) => this.logger.warn(`[${pluginId}] ${redact(message)}`, { ...redactMeta(meta), pluginId }),
       error: (message, error, meta) =>
-        this.logger.error(`[${pluginId}] ${redact(message)}`, error instanceof Error ? error.message : String(error), {
-          ...redactMeta(meta),
-          pluginId,
-        }),
+        this.logger.error(
+          `[${pluginId}] ${redact(message)}`,
+          redact(error instanceof Error ? error.message : String(error)),
+          { ...redactMeta(meta), pluginId },
+        ),
     };
 
     // Storage gated by 'storage' permission.
@@ -390,10 +399,17 @@ export class PluginLoaderService implements OnModuleInit {
     const context: PluginContext = {
       pluginId,
       manifest: plugin.manifest,
-      config: plugin.config,
+      config: Object.freeze({ ...plugin.config }),
       logger: pluginLogger,
       storage,
       registerHook: (event, handler, priority) => {
+        if (!has('hooks')) {
+          this.logger.warn(`Plugin ${pluginId} called registerHook without 'hooks' permission`, {
+            pluginId,
+            action: 'plugin_hook_denied',
+          });
+          return;
+        }
         this.hookManager.register(pluginId, event, handler, priority);
       },
       getService: <T>(): T | undefined => {
