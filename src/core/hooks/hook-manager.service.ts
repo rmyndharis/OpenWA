@@ -123,18 +123,22 @@ export class HookManager {
           this.hookTimeoutMs,
           `${registration.pluginId}:${event}`,
         );
-        this.breaker.recordSuccess(registration.pluginId);
 
         if (result.data !== undefined) {
           currentData = result.data as T;
         }
         if (!result.continue) {
+          // A halt is a successful, intentional outcome — credit the plugin.
+          this.breaker.recordSuccess(registration.pluginId);
           this.logger.debug(`Hook chain stopped by ${registration.pluginId} at event ${event}`);
           return { continue: false, data: currentData };
         }
         if (result.error) {
+          // Handler explicitly signalled an error — treat as a failure, not a success.
           throw result.error;
         }
+        // Only a clean run (no thrown/returned error) counts as success.
+        this.breaker.recordSuccess(registration.pluginId);
       } catch (error) {
         this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${error}`);
         const justTripped = this.breaker.recordFailure(registration.pluginId);
