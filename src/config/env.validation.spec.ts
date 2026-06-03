@@ -51,3 +51,18 @@ describe('envValidationSchema — cluster mode', () => {
     expect(value.CLUSTER_OWNERSHIP_TTL).toBe(30);
   });
 });
+
+describe('plugin isolation env', () => {
+  it('defaults plugin timeouts and breaker threshold', () => {
+    const { value, error } = envValidationSchema.validate({});
+    expect(error).toBeUndefined();
+    expect(value.PLUGIN_HOOK_TIMEOUT_MS).toBe(5000);
+    expect(value.PLUGIN_LIFECYCLE_TIMEOUT_MS).toBe(10000);
+    expect(value.PLUGIN_CIRCUIT_BREAKER_THRESHOLD).toBe(5);
+  });
+
+  it('rejects a circuit breaker threshold below 1', () => {
+    const { error } = envValidationSchema.validate({ PLUGIN_CIRCUIT_BREAKER_THRESHOLD: '0' });
+    expect(error).toBeDefined();
+  });
+});

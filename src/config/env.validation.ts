@@ -105,4 +105,10 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.optional(),
   }),
   S3_ENDPOINT: Joi.string().optional(),
+
+  // Plugin isolation (blast-radius containment). Timeouts wrap plugin
+  // entrypoints; the breaker disables a plugin after N consecutive failures.
+  PLUGIN_HOOK_TIMEOUT_MS: Joi.number().integer().min(1).default(5000),
+  PLUGIN_LIFECYCLE_TIMEOUT_MS: Joi.number().integer().min(1).default(10000),
+  PLUGIN_CIRCUIT_BREAKER_THRESHOLD: Joi.number().integer().min(1).default(5),
 }).unknown(true);

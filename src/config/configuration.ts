@@ -99,4 +99,12 @@ export default () => ({
       endpoint: process.env.S3_ENDPOINT,
     },
   },
+
+  // Plugin isolation (Tier 1 C1 follow-up).
+  plugins: {
+    dir: process.env.PLUGINS_DIR || './plugins',
+    hookTimeoutMs: parseInt(process.env.PLUGIN_HOOK_TIMEOUT_MS || '5000', 10),
+    lifecycleTimeoutMs: parseInt(process.env.PLUGIN_LIFECYCLE_TIMEOUT_MS || '10000', 10),
+    circuitBreakerThreshold: parseInt(process.env.PLUGIN_CIRCUIT_BREAKER_THRESHOLD || '5', 10),
+  },
 });
