@@ -142,7 +142,8 @@ POST /sessions/:id/start
 
 ### Tier 1 — Security (do first; no public API change)
 
-1. **C1** — Resolve `manifest.main`, assert it stays inside the plugin dir (`path.resolve` + prefix check); reject traversal. (Later: `worker_threads` / `vm` isolation.)
+1. **C1** — Resolve `manifest.main`, assert it stays inside the plugin dir (`path.resolve` + prefix check); reject traversal.
+   - **Plugin isolation follow-up (2026-06-03).** Trusted-author model: per-plugin timeouts + circuit breaker (blast radius) and a manifest `permissions` capability model (least privilege). `net`/`fs` permissions are audit-only — true sandboxing (`worker_threads`/`isolated-vm`) remains out of scope as it would break engine plugins (live Puppeteer sessions) and the synchronous in-process hook pipeline. See `docs/superpowers/specs/2026-06-03-plugin-sandbox-isolation-design.md`.
 2. **C2** — Inject socket path via config; default disabled; document read-only mount.
 3. **C8** — Normalize + whitelist import path under `./data/`.
 4. **C6** — `chmod 0600` on `.env.generated` write; document vault option.
