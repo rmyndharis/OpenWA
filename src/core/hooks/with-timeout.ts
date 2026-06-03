@@ -18,7 +18,9 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
   promise.catch(() => undefined);
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new PluginTimeoutError(label, ms)), ms);
+    // The deadline timer must not, by itself, keep the process alive.
+    timer.unref?.();
   });
   // Promise.race of Promise<T> and Promise<never> resolves to Promise<T>.
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

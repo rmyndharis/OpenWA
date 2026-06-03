@@ -6,12 +6,12 @@ describe('withTimeout', () => {
   });
 
   it('rejects with PluginTimeoutError when the promise exceeds the deadline', async () => {
-    const slow = new Promise(resolve => setTimeout(() => resolve('late'), 1000));
+    const slow = new Promise(resolve => setTimeout(() => resolve('late'), 1000).unref?.());
     await expect(withTimeout(slow, 20, 'slow-op')).rejects.toBeInstanceOf(PluginTimeoutError);
   });
 
   it('includes the label in the error message', async () => {
-    const slow = new Promise(resolve => setTimeout(resolve, 1000));
+    const slow = new Promise(resolve => setTimeout(resolve, 1000).unref?.());
     await expect(withTimeout(slow, 10, 'my-hook')).rejects.toThrow('my-hook');
   });
 

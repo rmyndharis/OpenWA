@@ -140,7 +140,7 @@ export class HookManager {
         // Only a clean run (no thrown/returned error) counts as success.
         this.breaker.recordSuccess(registration.pluginId);
       } catch (error) {
-        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${error}`);
+        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${String(error)}`);
         const justTripped = this.breaker.recordFailure(registration.pluginId);
         if (justTripped) {
           this.logger.warn(`Plugin ${registration.pluginId} tripped the circuit breaker; removing its hooks`);
@@ -181,7 +181,7 @@ export class HookManager {
       }));
     }
 
-    return result as Record<HookEvent, { pluginId: string; priority: number }[]>;
+    return result;
   }
 
   /**
