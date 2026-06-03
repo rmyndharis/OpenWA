@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../hooks';
+import { PluginCircuitBreaker } from '../hooks/plugin-circuit-breaker.service';
+import { withTimeout } from '../hooks/with-timeout';
 import {
   PluginManifest,
   PluginInstance,
@@ -12,21 +14,28 @@ import {
   IPlugin,
   PluginType,
   PluginLogger,
+  PluginPermission,
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
+import { PluginPermissionDeniedError } from './exceptions/plugin-permission-denied.error';
 
 @Injectable()
 export class PluginLoaderService implements OnModuleInit {
   private readonly logger = createLogger('PluginLoaderService');
   private readonly plugins = new Map<string, PluginInstance>();
   private readonly pluginsDir: string;
+  private readonly lifecycleTimeoutMs: number;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     private readonly pluginStorage: PluginStorageService,
+    private readonly breaker: PluginCircuitBreaker,
   ) {
     this.pluginsDir = this.configService.get<string>('plugins.dir') ?? './plugins';
+    this.lifecycleTimeoutMs = this.configService.get<number>('plugins.lifecycleTimeoutMs') ?? 10000;
+    this.breaker.configure(this.configService.get<number>('plugins.circuitBreakerThreshold') ?? 5);
+    this.hookManager.configure(this.configService.get<number>('plugins.hookTimeoutMs') ?? 5000);
   }
 
   onModuleInit(): void {
@@ -158,11 +167,11 @@ export class PluginLoaderService implements OnModuleInit {
 
       // Call lifecycle hooks
       if (plugin.instance.onLoad) {
-        await plugin.instance.onLoad(context);
+        await this.runLifecycle(pluginId, 'onLoad', () => plugin.instance!.onLoad!(context));
       }
 
       if (plugin.instance.onEnable) {
-        await plugin.instance.onEnable(context);
+        await this.runLifecycle(pluginId, 'onEnable', () => plugin.instance!.onEnable!(context));
       }
 
       plugin.status = PluginStatus.ENABLED;
@@ -295,37 +304,95 @@ export class PluginLoaderService implements OnModuleInit {
     return resolved;
   }
 
+  /** Run a plugin lifecycle method under a timeout, feeding the breaker. */
+  private async runLifecycle(pluginId: string, label: string, fn: () => Promise<void>): Promise<void> {
+    if (this.breaker.isTripped(pluginId)) {
+      throw new Error(`Plugin ${pluginId} is disabled by the circuit breaker`);
+    }
+    try {
+      await withTimeout(fn(), this.lifecycleTimeoutMs, `${pluginId}:${label}`);
+      this.breaker.recordSuccess(pluginId);
+    } catch (error) {
+      const justTripped = this.breaker.recordFailure(pluginId);
+      if (justTripped) {
+        this.logger.warn(`Plugin ${pluginId} tripped the circuit breaker; removing its hooks`);
+        this.hookManager.unregisterPlugin(pluginId);
+      }
+      throw error;
+    }
+  }
+
   private createPluginContext(plugin: PluginInstance): PluginContext {
+    const pluginId = plugin.manifest.id;
+    const declared = plugin.manifest.permissions;
+    // Absent permissions => permissive (all granted) + warning. Present => strict.
+    const has = (p: PluginPermission): boolean => declared === undefined || declared.includes(p);
+    if (declared === undefined) {
+      this.logger.warn(`Plugin ${pluginId} declares no permissions; granting all (declare 'permissions' in manifest)`, {
+        pluginId,
+        action: 'plugin_permissions_absent',
+      });
+    }
+    // Audit-only capabilities (not runtime-enforced).
+    const auditOnly = (['net', 'fs:read', 'fs:write'] as PluginPermission[]).filter(p => declared?.includes(p));
+    if (auditOnly.length) {
+      this.logger.log(`Plugin ${pluginId} declares audit-only capabilities: ${auditOnly.join(', ')}`, {
+        pluginId,
+        action: 'plugin_permissions_audit',
+      });
+    }
+
+    // Secret redaction: collect config values for keys marked secret.
+    const secretValues = Object.entries(plugin.manifest.configSchema?.properties ?? {})
+      .filter(([, schema]) => schema.secret)
+      .map(([key]) => plugin.config[key])
+      .filter((v): v is string => typeof v === 'string' && v.length > 0);
+    const redact = (msg: string): string => secretValues.reduce((acc, secret) => acc.split(secret).join('***'), msg);
+
     const pluginLogger: PluginLogger = {
-      log: (message, meta) =>
-        this.logger.log(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
-      debug: (message, meta) =>
-        this.logger.debug(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
-      warn: (message, meta) =>
-        this.logger.warn(`[${plugin.manifest.id}] ${message}`, { ...meta, pluginId: plugin.manifest.id }),
+      log: (message, meta) => this.logger.log(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
+      debug: (message, meta) => this.logger.debug(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
+      warn: (message, meta) => this.logger.warn(`[${pluginId}] ${redact(message)}`, { ...meta, pluginId }),
       error: (message, error, meta) =>
-        this.logger.error(
-          `[${plugin.manifest.id}] ${message}`,
-          error instanceof Error ? error.message : String(error),
-          { ...meta, pluginId: plugin.manifest.id },
-        ),
+        this.logger.error(`[${pluginId}] ${redact(message)}`, error instanceof Error ? error.message : String(error), {
+          ...meta,
+          pluginId,
+        }),
     };
 
-    return {
-      pluginId: plugin.manifest.id,
+    // Storage gated by 'storage' permission.
+    const realStorage = this.pluginStorage.createPluginStorage(pluginId);
+    const storage = has('storage')
+      ? realStorage
+      : {
+          get: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
+          set: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
+          delete: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
+          list: () => Promise.reject(new PluginPermissionDeniedError(pluginId, 'storage')),
+        };
+
+    const context: PluginContext = {
+      pluginId,
       manifest: plugin.manifest,
       config: plugin.config,
       logger: pluginLogger,
-      storage: this.pluginStorage.createPluginStorage(plugin.manifest.id),
+      storage,
       registerHook: (event, handler, priority) => {
-        this.hookManager.register(plugin.manifest.id, event, handler, priority);
+        this.hookManager.register(pluginId, event, handler, priority);
       },
       getService: <T>(): T | undefined => {
-        // Limited service access for sandboxing
-        // Only expose safe services
-        return undefined;
+        if (!has('services')) {
+          this.logger.warn(`Plugin ${pluginId} requested a service without 'services' permission`, {
+            pluginId,
+            action: 'plugin_service_denied',
+          });
+          return undefined;
+        }
+        return undefined; // service exposure still intentionally limited
       },
     };
+
+    return Object.freeze(context);
   }
 
   // ============================================================================
