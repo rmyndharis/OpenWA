@@ -1,11 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.interfaces';
+import { withTimeout } from './with-timeout';
+import { PluginCircuitBreaker } from './plugin-circuit-breaker.service';
 
 @Injectable()
 export class HookManager {
   private readonly logger = new Logger(HookManager.name);
   private readonly hooks = new Map<HookEvent, HookRegistration[]>();
   private readonly pluginHooks = new Map<string, Set<string>>(); // pluginId -> hookIds
+  private hookTimeoutMs = 5000;
+
+  constructor(private readonly breaker: PluginCircuitBreaker) {}
+
+  /** Set the per-handler timeout (from config at bootstrap). */
+  configure(hookTimeoutMs: number): void {
+    this.hookTimeoutMs = hookTimeoutMs;
+  }
 
   /**
    * Register a hook handler
@@ -102,28 +112,37 @@ export class HookManager {
     };
 
     for (const registration of registrations) {
+      // Skip plugins the breaker has already tripped.
+      if (this.breaker.isTripped(registration.pluginId)) {
+        continue;
+      }
       try {
         ctx.data = currentData;
-        const result = await registration.handler(ctx);
+        const result = await withTimeout(
+          registration.handler(ctx),
+          this.hookTimeoutMs,
+          `${registration.pluginId}:${event}`,
+        );
+        this.breaker.recordSuccess(registration.pluginId);
 
-        // Update data if modified
         if (result.data !== undefined) {
           currentData = result.data as T;
         }
-
-        // Stop chain if continue is false
         if (!result.continue) {
           this.logger.debug(`Hook chain stopped by ${registration.pluginId} at event ${event}`);
           return { continue: false, data: currentData };
         }
-
-        // Propagate error
         if (result.error) {
           throw result.error;
         }
       } catch (error) {
         this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${error}`);
-        // Continue to next handler, don't break the chain on error
+        const justTripped = this.breaker.recordFailure(registration.pluginId);
+        if (justTripped) {
+          this.logger.warn(`Plugin ${registration.pluginId} tripped the circuit breaker; removing its hooks`);
+          this.unregisterPlugin(registration.pluginId);
+        }
+        // Continue to next handler; do not break the chain on a single failure.
       }
     }
 
