@@ -315,7 +315,6 @@ export class PluginLoaderService implements OnModuleInit {
       pluginId: plugin.manifest.id,
       manifest: plugin.manifest,
       config: plugin.config,
-      hookManager: this.hookManager,
       logger: pluginLogger,
       storage: this.pluginStorage.createPluginStorage(plugin.manifest.id),
       registerHook: (event, handler, priority) => {

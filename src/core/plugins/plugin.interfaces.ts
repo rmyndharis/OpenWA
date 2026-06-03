@@ -3,7 +3,7 @@
  * Defines the contract for OpenWA plugins
  */
 
-import { HookManager, HookEvent, HookHandler } from '../hooks';
+import { HookEvent, HookHandler } from '../hooks';
 
 // ============================================================================
 // Plugin Types
@@ -23,6 +23,8 @@ export enum PluginStatus {
   DISABLED = 'disabled',
   ERROR = 'error',
 }
+
+export type PluginPermission = 'storage' | 'services' | 'hooks' | 'net' | 'fs:read' | 'fs:write';
 
 // ============================================================================
 // Plugin Manifest
@@ -51,6 +53,11 @@ export interface PluginManifest {
 
   // Hooks this plugin listens to
   hooks?: HookEvent[];
+
+  // Capabilities this plugin needs. Absent = permissive (all granted) with a
+  // load-time warning. Present = honored strictly. 'net' and 'fs:*' are
+  // audit-only (not runtime-enforced under the trusted-author model).
+  permissions?: PluginPermission[];
 
   // Features provided by this plugin
   provides?: string[];
@@ -86,9 +93,6 @@ export interface PluginContext {
 
   // Configuration
   config: Record<string, unknown>;
-
-  // Hook system
-  hookManager: HookManager;
 
   // Logger instance for this plugin
   logger: PluginLogger;
