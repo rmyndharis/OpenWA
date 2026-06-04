@@ -21,7 +21,6 @@ export default defineConfig({
         target: 'http://localhost:2785',
         changeOrigin: true,
         secure: false,
-        logLevel: 'debug',
       },
     },
     open: true, // Automatically open browser on dev start
