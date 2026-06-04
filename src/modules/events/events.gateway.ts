@@ -192,13 +192,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       timestamp: new Date().toISOString(),
     };
 
-    // Emit to specific session + event room
-    this.server.to(buildRoomName(sessionId, event)).emit('message', eventMessage);
-
-    // Emit to wildcard rooms
-    this.server.to(buildRoomName(sessionId, '*')).emit('message', eventMessage);
-    this.server.to(buildRoomName('*', event)).emit('message', eventMessage);
-    this.server.to(buildRoomName('*', '*')).emit('message', eventMessage);
+    // Chain all target rooms into a SINGLE emit. Socket.io delivers once to a
+    // socket that belongs to several of these rooms; four separate .emit() calls
+    // would deliver duplicates to clients subscribed to both exact and wildcard
+    // rooms.
+    this.server
+      .to(buildRoomName(sessionId, event))
+      .to(buildRoomName(sessionId, '*'))
+      .to(buildRoomName('*', event))
+      .to(buildRoomName('*', '*'))
+      .emit('message', eventMessage);
   }
 
   /**

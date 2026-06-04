@@ -446,6 +446,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         attempts: state.attempts,
         action: 'reconnect_failed',
       });
+      // Terminal failure: drop the reconnect state so it doesn't leak. A fresh
+      // entry is re-created by initializeEngine() on the next manual start.
+      this.cancelReconnect(id);
       return;
     }
 

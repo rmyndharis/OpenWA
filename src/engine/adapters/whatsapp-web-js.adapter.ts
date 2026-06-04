@@ -291,11 +291,29 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       try {
         const media = await msg.downloadMedia();
         if (media) {
-          incomingMessage.media = {
-            mimetype: media.mimetype,
-            filename: media.filename || undefined,
-            data: media.data,
-          };
+          // Cap embedded media size: base64 decodes to ~3/4 of its length.
+          // A burst of large media would otherwise spike memory (whole payload
+          // held in the message object). Oversized media keeps its metadata but
+          // drops the inline data; callers can fetch it on demand if needed.
+          const parsedMax = Number(process.env.MEDIA_MAX_BYTES);
+          const maxBytes = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 64 * 1024 * 1024;
+          const approxBytes = Math.floor((media.data?.length ?? 0) * 0.75);
+          if (approxBytes > maxBytes) {
+            this.logger.warn(
+              `Media for ${msg.id._serialized} (~${approxBytes} bytes) exceeds MEDIA_MAX_BYTES (${maxBytes}); dropping inline data`,
+            );
+            incomingMessage.media = {
+              mimetype: media.mimetype,
+              filename: media.filename || undefined,
+              data: '',
+            };
+          } else {
+            incomingMessage.media = {
+              mimetype: media.mimetype,
+              filename: media.filename || undefined,
+              data: media.data,
+            };
+          }
         }
       } catch (error) {
         this.logger.error('Error downloading media', String(error));

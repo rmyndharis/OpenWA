@@ -112,4 +112,16 @@ export const envValidationSchema = Joi.object({
   PLUGIN_HOOK_TIMEOUT_MS: Joi.number().integer().min(1).default(5000),
   PLUGIN_LIFECYCLE_TIMEOUT_MS: Joi.number().integer().min(1).default(10000),
   PLUGIN_CIRCUIT_BREAKER_THRESHOLD: Joi.number().integer().min(1).default(5),
+
+  // Media handling
+  MEDIA_MAX_BYTES: Joi.number().integer().min(1).default(67108864),
+
+  // Audit-log retention/cleanup
+  AUDIT_CLEANUP_ENABLED: Joi.boolean().default(true),
+  AUDIT_RETENTION_DAYS: Joi.number().integer().min(1).default(30),
+  AUDIT_CLEANUP_INTERVAL_HOURS: Joi.number().integer().min(1).default(24),
+
+  // Docker integration
+  DOCKER_ENABLED: Joi.boolean().default(true),
+  DOCKER_SOCKET_PATH: Joi.string().optional(),
 }).unknown(true);

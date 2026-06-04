@@ -119,13 +119,13 @@ POST /sessions/:id/start
 
 ### Other smells
 
-- **Hook chain** (`hook-manager.service.ts:104`) — no per-handler timeout, exceptions swallowed (chain continues silently), strictly sequential. One hung plugin stalls every handler for that event.
-- **WebSocket fan-out** (`events.gateway.ts:196`) — each event emitted to 4 overlapping wildcard rooms; clients subscribed to both exact and wildcard rooms receive duplicates.
-- **Bulk send** (`bulk-message.service.ts`) — `results[]` accumulates unbounded; full-array JSON saved to DB every 10 messages. A 100k-message batch is pathological (huge payloads, many writes).
-- **Media** (`adapter:267`) — `downloadMedia()` decodes full base64 into the message object, no size cap. Burst of large media = memory spike.
-- **Reconnect state leak** (`session.service.ts:384`) — on max attempts the handler `return`s without `delete`-ing the Map entry. Dead state accumulates.
-- **Config triplication** — DB config defined in `data-source.ts`, `configuration.ts`, and the `app.module.ts` async factory. Risk of drift. ~88 raw `process.env` reads, no boot-time schema validation.
-- **Audit log growth** — stored in `main` SQLite forever; cleanup method exists (`audit.service.ts`) but is never scheduled.
+- ✅ **Hook chain** (`hook-manager.service.ts`) — **resolved** by the plugin-isolation work: each handler runs under `withTimeout` (`PLUGIN_HOOK_TIMEOUT_MS`), errors are logged (not swallowed), and a circuit breaker disables a repeatedly-failing plugin. Kept strictly sequential **by design** — the hook pipeline is synchronous and can mutate the payload in order.
+- ✅ **WebSocket fan-out** (`events.gateway.ts:188`) — **fixed.** `emitToRooms()` now chains all four target rooms into a **single** `.emit()` so Socket.io delivers once; previously four separate emits duplicated to clients in both exact and wildcard rooms.
+- ✅ **Bulk send** (`bulk-message.service.ts`) — **bounded.** `SendBulkMessageDto` enforces `@ArrayMaxSize(100)` per request, so `results[]` and the persisted row are capped at 100 entries; the pathological 100k-message batch cannot occur. (Periodic whole-row save is negligible at ≤100 messages.)
+- ✅ **Media** (`whatsapp-web-js.adapter.ts:290`) — **capped.** Inline media over `MEDIA_MAX_BYTES` (default 64 MiB) keeps its metadata but drops the base64 payload, with a warning — prevents memory spikes on large-media bursts.
+- ✅ **Reconnect state leak** (`session.service.ts:443`) — **fixed.** On max attempts `scheduleReconnect()` now calls `cancelReconnect(id)` to drop the Map entry; a fresh entry is re-created on the next manual start.
+- ⏳ **Config triplication** — DB config still defined in `data-source.ts`, `configuration.ts`, and the `app.module.ts` async factory. **Partly mitigated:** boot-time joi schema (`env.validation.ts`) is now the single validation gate (Tier 3 #11). Full consolidation of the three definitions is deferred as a functionality-preserving refactor.
+- ✅ **Audit log growth** (`audit.service.ts`) — **scheduled.** `AuditService` now runs `cleanup()` on a dependency-free unref'd interval (`AUDIT_CLEANUP_ENABLED` / `AUDIT_RETENTION_DAYS` / `AUDIT_CLEANUP_INTERVAL_HOURS`, defaults on / 30d / 24h).
 
 ### What's already good — do not touch
 
