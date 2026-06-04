@@ -1,4 +1,5 @@
 import { hostname } from 'os';
+import { readDataDbConfig, readMainDbConfig } from './database.config';
 
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
@@ -28,32 +29,12 @@ export default () => ({
     enabled: process.env.CACHE_ENABLED === 'true',
   },
 
-  // Main Database configuration (always SQLite for boot config)
-  database: {
-    type: 'sqlite' as const,
-    database: './data/main.sqlite',
-    synchronize: true,
-    logging: process.env.DATABASE_LOGGING === 'true',
-  },
-
-  // Data Storage Database configuration (pluggable: SQLite, PostgreSQL, etc.)
-  dataDatabase: {
-    type: process.env.DATABASE_TYPE || 'sqlite',
-    // SQLite path (used when type is sqlite)
-    database: process.env.DATABASE_NAME || './data/openwa.sqlite',
-    // PostgreSQL/MySQL connection (used when type is postgres/mysql)
-    host: process.env.DATABASE_HOST || 'localhost',
-    port: parseInt(process.env.DATABASE_PORT || '5432', 10),
-    username: process.env.DATABASE_USERNAME,
-    password: process.env.DATABASE_PASSWORD,
-    synchronize: process.env.DATABASE_SYNCHRONIZE === 'true',
-    logging: process.env.DATABASE_LOGGING === 'true',
-    // Connection pooling (PostgreSQL)
-    poolSize: parseInt(process.env.DATABASE_POOL_SIZE || '10', 10),
-    // SSL configuration
-    ssl: process.env.DATABASE_SSL === 'true',
-    sslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false',
-  },
+  // Database configuration — single source of truth in ./database.config.ts,
+  // shared with the migration CLI DataSource (database/data-source.ts).
+  // Main: internal auth/audit (always embedded SQLite). dataDatabase: pluggable
+  // user data (SQLite or PostgreSQL).
+  database: readMainDbConfig(),
+  dataDatabase: readDataDbConfig(),
 
   // WhatsApp engine configuration
   engine: {
