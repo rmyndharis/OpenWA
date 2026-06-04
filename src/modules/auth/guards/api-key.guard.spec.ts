@@ -56,7 +56,7 @@ describe('ApiKeyGuard', () => {
 
     reflector = {
       getAllAndOverride: jest.fn(),
-    } as unknown as jest.Mocked<Reflector>;
+    };
 
     guard = new ApiKeyGuard(authService as AuthService, reflector);
   });

@@ -261,8 +261,7 @@ describe('SessionService', () => {
   // ── engine callbacks ───────────────────────────────────────────────
 
   describe('engine callbacks', () => {
-    const getCallbacks = (): EngineEventCallbacks =>
-      (mockEngine.initialize as jest.Mock).mock.calls[0][0] as EngineEventCallbacks;
+    const getCallbacks = (): EngineEventCallbacks => mockEngine.initialize.mock.calls[0][0] as EngineEventCallbacks;
 
     it('should emit a message.sent domain event for outgoing messages', async () => {
       const session = createMockSession();

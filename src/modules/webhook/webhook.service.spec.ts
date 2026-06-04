@@ -199,7 +199,7 @@ describe('WebhookService', () => {
 
     beforeEach(() => {
       global.fetch = mockFetch as typeof global.fetch;
-      jest.spyOn(service as unknown as { delay: (ms: number) => Promise<void> }, 'delay').mockResolvedValue(undefined);
+      jest.spyOn(service, 'delay').mockResolvedValue(undefined);
     });
 
     afterEach(() => {
@@ -475,7 +475,7 @@ describe('WebhookService', () => {
         }),
         expect.objectContaining({
           attempts: 3,
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+
           backoff: expect.objectContaining({ type: 'exponential' }),
         }),
       );

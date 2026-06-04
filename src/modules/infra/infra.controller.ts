@@ -378,7 +378,7 @@ export class InfraController {
               removalResult.errors.push(`Failed to remove ${profile}`);
             }
           } catch (err) {
-            removalResult.errors.push(`Error removing ${profile}: ${err}`);
+            removalResult.errors.push(`Error removing ${profile}: ${String(err)}`);
           }
         }
         this.logger.log('Removal result', { removalResult });
@@ -557,7 +557,7 @@ export class InfraController {
             );
             sessionsCount++;
           } catch (err) {
-            warnings.push(`Failed to import session ${session.id}: ${err}`);
+            warnings.push(`Failed to import session ${session.id}: ${String(err)}`);
           }
         }
       }
@@ -586,7 +586,7 @@ export class InfraController {
             );
             webhooksCount++;
           } catch (err) {
-            warnings.push(`Failed to import webhook ${webhook.id}: ${err}`);
+            warnings.push(`Failed to import webhook ${webhook.id}: ${String(err)}`);
           }
         }
       }
@@ -615,7 +615,7 @@ export class InfraController {
             );
             messagesCount++;
           } catch (err) {
-            warnings.push(`Failed to import message ${msg.id}: ${err}`);
+            warnings.push(`Failed to import message ${msg.id}: ${String(err)}`);
           }
         }
       }
@@ -646,7 +646,7 @@ export class InfraController {
             );
             messageBatchesCount++;
           } catch (err) {
-            warnings.push(`Failed to import message batch ${batch.id}: ${err}`);
+            warnings.push(`Failed to import message batch ${batch.id}: ${String(err)}`);
           }
         }
       }

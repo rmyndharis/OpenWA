@@ -54,9 +54,7 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
 
   private parseArgs(input: unknown): string[] {
     if (Array.isArray(input)) {
-      return input
-        .map(arg => String(arg).trim())
-        .filter(Boolean);
+      return input.map(arg => String(arg).trim()).filter(Boolean);
     }
 
     if (typeof input === 'string') {
@@ -94,7 +92,8 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
     const contextArgsFallback = this.parseArgs(this.context?.config.browserArgs);
     const contextArgs = contextArgsPrimary.length > 0 ? contextArgsPrimary : contextArgsFallback;
     const envArgs = this.parseArgs(process.env.PUPPETEER_ARGS || process.env.ENGINE_BROWSER_ARGS || '');
-    const puppeteerArgs = contextArgs.length > 0 ? contextArgs : envArgs.length > 0 ? envArgs : this.defaultPuppeteerArgs;
+    const puppeteerArgs =
+      contextArgs.length > 0 ? contextArgs : envArgs.length > 0 ? envArgs : this.defaultPuppeteerArgs;
 
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;

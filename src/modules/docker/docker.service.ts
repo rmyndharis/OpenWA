@@ -313,13 +313,10 @@ export class DockerService implements OnModuleInit {
           NetworkMode: 'openwa-network',
           RestartPolicy: { Name: 'unless-stopped' },
           Binds: spec.volumes?.map(v => `${v.name}:${v.path}`),
-          PortBindings: spec.ports?.reduce(
-            (acc, p) => {
-              acc[`${p.container}/tcp`] = [{ HostIp: '127.0.0.1', HostPort: p.host.toString() }];
-              return acc;
-            },
-            {} as Record<string, { HostIp: string; HostPort: string }[]>,
-          ),
+          PortBindings: spec.ports?.reduce<Record<string, { HostIp: string; HostPort: string }[]>>((acc, p) => {
+            acc[`${p.container}/tcp`] = [{ HostIp: '127.0.0.1', HostPort: p.host.toString() }];
+            return acc;
+          }, {}),
         },
         Healthcheck: spec.healthcheck
           ? {
@@ -343,7 +340,9 @@ export class DockerService implements OnModuleInit {
       this.logger.log(`Created and started container: ${spec.name}`);
       return true;
     } catch (error) {
-      this.logger.error(`Failed to create service ${profile}: ${error instanceof Error ? error.message : error}`);
+      this.logger.error(
+        `Failed to create service ${profile}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return false;
     }
   }
@@ -415,7 +414,7 @@ export class DockerService implements OnModuleInit {
         this.logger.log(`Removed container: ${profile}`);
         return true;
       } catch (error) {
-        this.logger.error(`Failed to remove container: ${error instanceof Error ? error.message : error}`);
+        this.logger.error(`Failed to remove container: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
     }

@@ -16,7 +16,23 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer()).get('/').expect(200).expect('Hello World!');
+  afterEach(async () => {
+    // TypeOrm's shutdown hook resolves the *default* DataSource, but this app
+    // only registers named ones ('main'/'data'), so close() throws a harmless
+    // "could not find DataSource element". Swallow it — boot already succeeded.
+    await app.close().catch(() => undefined);
+  });
+
+  // Boot smoke test: the whole AppModule must wire up (DI, event-bus listeners,
+  // TypeORM datasources) and serve the public health endpoint.
+  it('/health (GET) returns ok', () => {
+    return request(app.getHttpServer())
+      .get('/health')
+      .expect(200)
+      .expect(res => {
+        if (res.body.status !== 'ok') {
+          throw new Error(`expected status "ok", got ${JSON.stringify(res.body)}`);
+        }
+      });
   });
 });
