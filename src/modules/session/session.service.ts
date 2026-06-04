@@ -300,10 +300,33 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             sessionId: id,
             source: 'Engine',
           })
-          .then(({ continue: shouldContinue, data: finalMessage }) => {
+          .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
               // Plugin stopped processing (e.g., auto-reply handled it)
               return;
+            }
+
+            // Enrich message with phone number from contact (for legacy ID resolution)
+            // This converts '162878178984075@lid' to actual phone number
+            if (!message.fromMe) {
+              try {
+                const engine = this.engines.get(id);
+                if (engine) {
+                  const contact = await engine.getContactById(message.from);
+                  if (contact && contact.number) {
+                    (finalMessage as Record<string, unknown>).phoneNumber = contact.number;
+                    this.logger.debug(`Enriched message with phone: ${contact.number}`, {
+                      sessionId: id,
+                      from: message.from,
+                    });
+                  }
+                }
+              } catch (error) {
+                this.logger.warn(`Failed to enrich message with phone number: ${error}`, {
+                  sessionId: id,
+                  from: message.from,
+                });
+              }
             }
 
             // Dispatch to webhooks with potentially modified message
