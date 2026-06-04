@@ -1,0 +1,8 @@
+[build]
+  command = "cd dashboard && npm install --include=dev && npm run build"
+  publish = "dashboard/dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
