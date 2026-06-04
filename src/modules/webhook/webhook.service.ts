@@ -3,8 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
+import { OnEvent } from '@nestjs/event-emitter';
 import { Queue } from 'bullmq';
 import * as crypto from 'crypto';
+import { SessionEvents } from '../session/session.events';
+import type { SessionMessageEvent, SessionAckEvent } from '../session/session.events';
 import { Webhook } from './entities/webhook.entity';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
@@ -348,6 +351,38 @@ export class WebhookService {
           });
         }
       }
+    }
+  }
+
+  // ========== Session event-bus listeners ==========
+  // Subscribe to SessionService domain events rather than being called directly.
+  // dispatch() handles per-webhook errors internally; this guard catches a
+  // failure before the per-webhook loop (e.g. the repository lookup) so the
+  // listener never leaks an unhandled rejection.
+
+  @OnEvent(SessionEvents.MESSAGE_RECEIVED)
+  async onSessionMessageReceived(e: SessionMessageEvent): Promise<void> {
+    await this.safeDispatch(e.sessionId, 'message.received', e.message);
+  }
+
+  @OnEvent(SessionEvents.MESSAGE_SENT)
+  async onSessionMessageSent(e: SessionMessageEvent): Promise<void> {
+    await this.safeDispatch(e.sessionId, 'message.sent', e.message);
+  }
+
+  @OnEvent(SessionEvents.MESSAGE_ACK)
+  async onSessionMessageAck(e: SessionAckEvent): Promise<void> {
+    await this.safeDispatch(e.sessionId, 'message.ack', e.ack);
+  }
+
+  private async safeDispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+    try {
+      await this.dispatch(sessionId, event, data);
+    } catch (error) {
+      this.logger.error(`Webhook dispatch for '${event}' failed`, String(error), {
+        sessionId,
+        action: 'webhook_dispatch_failed',
+      });
     }
   }
 

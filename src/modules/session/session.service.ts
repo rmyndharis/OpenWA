@@ -7,17 +7,17 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Repository, In, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { IWhatsAppEngine, EngineStatus, IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
-import { EventsGateway } from '../events/events.gateway';
-import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { SessionRegistry } from './session-registry.service';
 import { SessionOwnedElsewhereException } from './exceptions/session-owned-elsewhere.exception';
+import { SessionEvents, SessionStatusEvent, SessionMessageEvent, SessionAckEvent } from './session.events';
 
 interface ReconnectState {
   attempts: number;
@@ -42,8 +42,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
     private readonly engineFactory: EngineFactory,
-    private readonly eventsGateway: EventsGateway,
-    private readonly webhookService: WebhookService,
+    private readonly eventEmitter: EventEmitter2,
     private readonly hookManager: HookManager,
     private readonly sessionRegistry: SessionRegistry,
   ) {}
@@ -60,18 +59,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
         action,
       });
     });
-  }
-
-  /** Synchronous variant for emit-style side-effects that may throw. */
-  private safeEmit(fn: () => void, action: string, sessionId: string): void {
-    try {
-      fn();
-    } catch (error) {
-      this.logger.error(`Emit '${action}' failed`, error instanceof Error ? error.message : String(error), {
-        sessionId,
-        action,
-      });
-    }
   }
 
   /**
@@ -345,7 +332,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     // Convert IncomingMessage to plain object for dispatch
     const messageData = { ...message };
 
-    // Execute hook for message received - plugins can modify or stop processing
+    // Execute hook for message received - plugins can modify or stop processing.
+    // The hook pipeline stays here (it can mutate/halt the payload); only on
+    // "continue" do we fan out by emitting a domain event for the WS + webhook
+    // listeners to consume.
     this.safeDispatch(
       this.hookManager
         .execute('message:received', messageData, {
@@ -357,15 +347,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             // Plugin stopped processing (e.g., auto-reply handled it)
             return;
           }
-
-          // Dispatch to webhooks with potentially modified message
-          this.safeDispatch(
-            this.webhookService.dispatch(id, 'message.received', finalMessage),
-            'webhook:message.received',
-            id,
-          );
-          // Emit real-time event to WebSocket clients
-          this.safeEmit(() => this.eventsGateway.emitMessage(id, finalMessage), 'emit:message.received', id);
+          this.eventEmitter.emit(SessionEvents.MESSAGE_RECEIVED, {
+            sessionId: id,
+            message: finalMessage as Record<string, unknown>,
+          } satisfies SessionMessageEvent);
         }),
       'hook:message:received',
       id,
@@ -383,8 +368,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     this.safeDispatch(this.sessionRepository.update(id, { lastActiveAt: new Date() }), 'touch:lastActiveAt', id);
 
     const messageData = { ...message };
-    this.safeDispatch(this.webhookService.dispatch(id, 'message.sent', messageData), 'webhook:message.sent', id);
-    this.safeEmit(() => this.eventsGateway.emitMessageSent(id, messageData), 'emit:message.sent', id);
+    this.eventEmitter.emit(SessionEvents.MESSAGE_SENT, {
+      sessionId: id,
+      message: messageData as unknown as Record<string, unknown>,
+    } satisfies SessionMessageEvent);
   }
 
   private handleMessageAck(id: string, messageId: string, ack: number): void {
@@ -394,8 +381,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       ackName: this.resolveAckName(ack),
     };
 
-    this.safeDispatch(this.webhookService.dispatch(id, 'message.ack', ackData), 'webhook:message.ack', id);
-    this.safeEmit(() => this.eventsGateway.emitMessageAck(id, ackData), 'emit:message.ack', id);
+    this.eventEmitter.emit(SessionEvents.MESSAGE_ACK, {
+      sessionId: id,
+      ack: ackData,
+    } satisfies SessionAckEvent);
   }
 
   private handleDisconnected(id: string, session: Session, reason: string): void {
@@ -613,8 +602,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       status,
       action: 'status_update',
     });
-    // Emit real-time event to connected WebSocket clients
-    this.eventsGateway.emitSessionStatus(id, status);
+    // Fan out to WebSocket clients via the session event bus.
+    this.eventEmitter.emit(SessionEvents.STATUS, { sessionId: id, status } satisfies SessionStatusEvent);
   }
 
   /**

@@ -10,7 +10,10 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import { AuthService } from '../auth/auth.service';
+import { SessionEvents } from '../session/session.events';
+import type { SessionStatusEvent, SessionMessageEvent, SessionAckEvent } from '../session/session.events';
 import type {
   WSClientMessage,
   WSSubscribeRequest,
@@ -237,6 +240,43 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   emitMessageAck(sessionId: string, data: { messageId: string; ack: number; ackName: string }) {
     this.emitToRooms(sessionId, 'message.ack', data);
+  }
+
+  // ========== Session event-bus listeners ==========
+  // Subscribe to SessionService domain events instead of being called directly,
+  // decoupling the session lifecycle from the WebSocket transport. Each listener
+  // guards its emit so a transport error never escapes as an unhandled rejection.
+
+  @OnEvent(SessionEvents.STATUS)
+  onSessionStatus(e: SessionStatusEvent): void {
+    this.safeHandle('session.status', e.sessionId, () => this.emitSessionStatus(e.sessionId, e.status));
+  }
+
+  @OnEvent(SessionEvents.MESSAGE_RECEIVED)
+  onSessionMessageReceived(e: SessionMessageEvent): void {
+    this.safeHandle('message.received', e.sessionId, () => this.emitMessage(e.sessionId, e.message));
+  }
+
+  @OnEvent(SessionEvents.MESSAGE_SENT)
+  onSessionMessageSent(e: SessionMessageEvent): void {
+    this.safeHandle('message.sent', e.sessionId, () => this.emitMessageSent(e.sessionId, e.message));
+  }
+
+  @OnEvent(SessionEvents.MESSAGE_ACK)
+  onSessionMessageAck(e: SessionAckEvent): void {
+    this.safeHandle('message.ack', e.sessionId, () => this.emitMessageAck(e.sessionId, e.ack));
+  }
+
+  private safeHandle(event: string, sessionId: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      this.logger.error(
+        `WS emit for '${event}' failed: ${error instanceof Error ? error.message : String(error)}`,
+        undefined,
+        { sessionId, action: 'ws_emit_failed' },
+      );
+    }
   }
 
   /**

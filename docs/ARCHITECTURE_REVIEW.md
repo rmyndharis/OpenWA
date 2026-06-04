@@ -115,7 +115,7 @@ POST /sessions/:id/start
 
 ### Coupling
 
-- `SessionService` wires DB + hooks + webhooks + WebSocket directly inside its engine callbacks. No event-bus indirection — every consumer is hard-referenced.
+- ✅ **`SessionService` fan-out coupling** — **resolved** via an internal event bus (`@nestjs/event-emitter`). The engine callbacks no longer reference `WebhookService` or `EventsGateway`; SessionService emits domain events (`session.events.ts`: `session.status`, `session.message.received/sent/ack`) and the consumers subscribe with `@OnEvent` (`EventsGateway`, `WebhookService`). The `message:received` hook pipeline stays in SessionService and gates the emit (it can mutate/halt the payload before fan-out), so ordering is preserved. DB persistence stays in SessionService by design. The former `forwardRef(WebhookModule)` coupling in `SessionModule` is gone. *(Hooks remain a direct dependency — they are an ordered, payload-mutating pipeline, not a fire-and-forget listener.)*
 
 ### Other smells
 

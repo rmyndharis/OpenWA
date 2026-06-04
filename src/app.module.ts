@@ -2,6 +2,7 @@ import { Module, DynamicModule, Type, MiddlewareConsumer, NestModule } from '@ne
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
@@ -41,6 +42,9 @@ if (process.env.QUEUE_ENABLED === 'true') {
 
 @Module({
   imports: [
+    // Internal event bus (decouples SessionService from its fan-out consumers).
+    EventEmitterModule.forRoot(),
+
     // Configuration
     ConfigModule.forRoot({
       isGlobal: true,

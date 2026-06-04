@@ -2,12 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SessionService } from './session.service';
 import { SessionRegistry } from './session-registry.service';
 import { Session, SessionStatus } from './entities/session.entity';
+import { SessionEvents } from './session.events';
 import { EngineFactory } from '../../engine/engine.factory';
-import { EventsGateway } from '../events/events.gateway';
-import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { EngineEventCallbacks } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -34,8 +34,7 @@ describe('SessionService', () => {
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
-  let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
-  let webhookService: jest.Mocked<Partial<WebhookService>>;
+  let eventEmitter: jest.Mocked<Partial<EventEmitter2>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let mockEngine: Record<string, jest.Mock>;
 
@@ -72,15 +71,8 @@ describe('SessionService', () => {
       create: jest.fn().mockReturnValue(mockEngine),
     };
 
-    eventsGateway = {
-      emitSessionStatus: jest.fn(),
-      emitMessage: jest.fn(),
-      emitMessageSent: jest.fn(),
-      emitMessageAck: jest.fn(),
-    };
-
-    webhookService = {
-      dispatch: jest.fn().mockResolvedValue(undefined),
+    eventEmitter = {
+      emit: jest.fn().mockReturnValue(true),
     };
 
     hookManager = {
@@ -99,8 +91,7 @@ describe('SessionService', () => {
           useValue: dataSource,
         },
         { provide: EngineFactory, useValue: engineFactory },
-        { provide: EventsGateway, useValue: eventsGateway },
-        { provide: WebhookService, useValue: webhookService },
+        { provide: EventEmitter2, useValue: eventEmitter },
         { provide: HookManager, useValue: hookManager },
         {
           provide: SessionRegistry,
@@ -273,7 +264,7 @@ describe('SessionService', () => {
     const getCallbacks = (): EngineEventCallbacks =>
       (mockEngine.initialize as jest.Mock).mock.calls[0][0] as EngineEventCallbacks;
 
-    it('should dispatch outgoing messages to message.sent webhook event', async () => {
+    it('should emit a message.sent domain event for outgoing messages', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
@@ -293,22 +284,16 @@ describe('SessionService', () => {
         isGroup: false,
       });
 
-      expect(webhookService.dispatch).toHaveBeenCalledWith(
-        'sess-uuid-1',
-        'message.sent',
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        SessionEvents.MESSAGE_SENT,
         expect.objectContaining({
-          id: 'wamid.out-1',
-          chatId: '34600111222@c.us',
-          fromMe: true,
+          sessionId: 'sess-uuid-1',
+          message: expect.objectContaining({ id: 'wamid.out-1', chatId: '34600111222@c.us', fromMe: true }),
         }),
-      );
-      expect(eventsGateway.emitMessageSent).toHaveBeenCalledWith(
-        'sess-uuid-1',
-        expect.objectContaining({ id: 'wamid.out-1' }),
       );
     });
 
-    it('should dispatch message acknowledgements to message.ack webhook event', async () => {
+    it('should emit a message.ack domain event for acknowledgements', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
@@ -318,19 +303,9 @@ describe('SessionService', () => {
 
       callbacks.onMessageAck?.('wamid.out-2', 3);
 
-      expect(webhookService.dispatch).toHaveBeenCalledWith(
-        'sess-uuid-1',
-        'message.ack',
-        expect.objectContaining({
-          messageId: 'wamid.out-2',
-          ack: 3,
-          ackName: 'read',
-        }),
-      );
-      expect(eventsGateway.emitMessageAck).toHaveBeenCalledWith('sess-uuid-1', {
-        messageId: 'wamid.out-2',
-        ack: 3,
-        ackName: 'read',
+      expect(eventEmitter.emit).toHaveBeenCalledWith(SessionEvents.MESSAGE_ACK, {
+        sessionId: 'sess-uuid-1',
+        ack: { messageId: 'wamid.out-2', ack: 3, ackName: 'read' },
       });
     });
   });
