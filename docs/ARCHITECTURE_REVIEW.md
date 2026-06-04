@@ -150,11 +150,13 @@ All four hardened in commit `48ebf25` (plugin loading, docker socket, import pat
 3. ✅ **C8** — `resolveWithinDataDir()` normalizes the import path and asserts it stays under `./data/` (prefix check), rejecting traversal (`infra.controller.ts:751`).
 4. ✅ **C6** — `.env.generated` written with `mode: 0o600` + `fs.chmodSync` to enforce regardless of umask (`infra.controller.ts:318`); external-vault option documented in `.env.example`.
 
-### Tier 2 — Correctness / scale
+### Tier 2 — Correctness / scale ✅ done
 
-5. **C4** — Wrap fire-and-forget dispatches in a `safeDispatch` helper that `.catch`-logs (stops silent loss; stays async).
-6. **C9 / C10** — Add `@Index` on `messages.status/type/direction` + `webhooks(sessionId, active)`; replace `strftime` with DB-portable grouping.
-7. **C7** — Cap / paginate webhook fetch; add jitter to retry backoff (avoid thundering herd).
+Delivered in commit `95f8f06` (correctness + scalability hardening).
+
+5. ✅ **C4** — `safeDispatch()` / `safeEmit()` helpers wrap the fire-and-forget incoming-message side effects with `.catch`-logging (`session.service.ts:56`); the bare `void` webhook dispatches now report failures instead of swallowing them.
+6. ✅ **C9 / C10** — `@Index` on `messages.status/type/direction` (`message.entity.ts:20`) and `@Index(['sessionId','active'])` on `webhooks` (`webhook.entity.ts:17`); stats grouping now DB-portable via `timeBucketExpr()` / `hourOfDayExpr()` — `to_char`/`EXTRACT` on Postgres, `strftime` on SQLite (`stats.service.ts:257`).
+7. ✅ **C7** — `dispatch()` caps the fetch with `take: webhook.maxPerDispatch` (default 100, `WEBHOOK_MAX_PER_DISPATCH`) and warns when capped (`webhook.service.ts:199`); direct-delivery retries use exponential backoff **with full jitter** (`webhook.service.ts:407`).
 
 ### Tier 3 — Maintainability (pure refactor, identical behavior) ✅ done
 

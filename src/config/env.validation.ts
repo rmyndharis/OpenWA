@@ -75,6 +75,7 @@ export const envValidationSchema = Joi.object({
   WEBHOOK_TIMEOUT: Joi.number().integer().min(0).default(10000),
   WEBHOOK_MAX_RETRIES: Joi.number().integer().min(0).default(3),
   WEBHOOK_RETRY_DELAY: Joi.number().integer().min(0).default(5000),
+  WEBHOOK_MAX_PER_DISPATCH: Joi.number().integer().min(1).default(100),
 
   // API rate limiting
   RATE_LIMIT_SHORT_TTL: Joi.number().integer().min(0).default(1000),

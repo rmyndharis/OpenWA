@@ -70,6 +70,8 @@ export default () => ({
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),
     maxRetries: parseInt(process.env.WEBHOOK_MAX_RETRIES || '3', 10),
     retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY || '5000', 10),
+    // Cap webhooks fetched per dispatch (bounds per-message fan-out work).
+    maxPerDispatch: parseInt(process.env.WEBHOOK_MAX_PER_DISPATCH || '100', 10),
   },
 
   // API configuration
