@@ -76,3 +76,7 @@ _docs/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# graphify knowledge graph (generated, AST-only)
+graphify-out/
+.opencode/
