@@ -385,7 +385,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
     this.ensureReady();
     // Import Location class dynamically from whatsapp-web.js
-    const { Location } = await import('whatsapp-web.js');
+    const module = await import('whatsapp-web.js');
+    const Location = module.default.Location;
+
     const loc = new Location(location.latitude, location.longitude, {
       name: location.description || '',
       address: location.address || '',
