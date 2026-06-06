@@ -497,7 +497,7 @@ POST /api/sessions/:sessionId/logout
 
 ```mermaid
 flowchart LR
-    A[Client] -->|POST| B[/messages/send-text]
+    A[Client] -->|POST| B["/messages/send-text"]
     B --> C{Validate}
     C -->|OK| D[Queue]
     D --> E[Send]
