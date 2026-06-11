@@ -58,6 +58,8 @@ export interface Group {
   name: string;
   participantsCount?: number;
   isAdmin?: boolean;
+  /** JID of the parent community this group is linked to, or null if standalone. */
+  linkedParentJID?: string | null;
 }
 
 export interface GroupParticipant {
@@ -77,6 +79,8 @@ export interface GroupInfo {
   participants: GroupParticipant[];
   isReadOnly?: boolean;
   isAnnounce?: boolean;
+  /** JID of the parent community this group is linked to, or null if standalone. */
+  linkedParentJID?: string | null;
 }
 
 export interface ContactCard {

@@ -5,6 +5,25 @@
 import { Chat, Client, Message } from 'whatsapp-web.js';
 
 /**
+ * A WhatsApp ID (Wid) as serialized by whatsapp-web.js, e.g. `{ _serialized: '120363xxx@g.us' }`.
+ */
+export interface SerializedWid {
+  _serialized?: string;
+}
+
+/**
+ * Raw group metadata as returned by `chat.groupMetadata.serialize()`.
+ * The field that links a community sub-group to its parent community has
+ * varied across whatsapp-web.js/WA Web versions, so multiple known
+ * candidates are declared here defensively.
+ */
+export interface GroupMetadataRaw {
+  parentGroup?: SerializedWid | string | null;
+  linkedParentGroup?: SerializedWid | string | null;
+  linkedParent?: SerializedWid | string | null;
+}
+
+/**
  * WhatsApp Group Chat with group-specific properties and methods.
  */
 export interface GroupChat extends Omit<Chat, 'isReadOnly' | 'getLabels'> {
@@ -19,6 +38,7 @@ export interface GroupChat extends Omit<Chat, 'isReadOnly' | 'getLabels'> {
   createdAt?: number;
   isReadOnly?: boolean;
   isAnnounce?: boolean;
+  groupMetadata?: GroupMetadataRaw;
   addParticipants(ids: string[]): Promise<void>;
   removeParticipants(ids: string[]): Promise<void>;
   promoteParticipants(ids: string[]): Promise<void>;
