@@ -103,6 +103,17 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.createError('INVALID_SESSION', 'sessionId is required', requestId);
     }
 
+    // Enforce the key's session scope. A key restricted via `allowedSessions`
+    // must not receive events for other sessions, and must not use the `*`
+    // wildcard (which would join all sessions' rooms).
+    const apiKey = (client.data as { apiKey?: { allowedSessions?: string[] | null } }).apiKey;
+    const allowedSessions = apiKey?.allowedSessions;
+    if (allowedSessions && allowedSessions.length > 0) {
+      if (sessionId === '*' || !allowedSessions.includes(sessionId)) {
+        return this.createError('FORBIDDEN_SESSION', 'API key is not authorized for this session', requestId);
+      }
+    }
+
     // Validate events
     if (!events || !Array.isArray(events) || events.length === 0) {
       return this.createError('INVALID_EVENTS', 'events array is required', requestId);

@@ -7,6 +7,7 @@ import { QUEUE_NAMES } from '../queue-names';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
+import { assertSafeWebhookUrl } from '../../../common/security/ssrf-guard';
 
 export interface WebhookJobResult {
   statusCode: number;
@@ -48,6 +49,7 @@ export class WebhookProcessor extends WorkerHost {
     };
 
     try {
+      await assertSafeWebhookUrl(url);
       const response = await fetch(url, {
         method: 'POST',
         headers: requestHeaders,

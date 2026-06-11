@@ -105,19 +105,23 @@ async function bootstrap() {
 
   // CORS Configuration (Phase 3 Security Audit)
   const allowedOrigins = process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || ['*'];
+  const wildcardCors = allowedOrigins.includes('*');
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       // Allow requests with no origin (mobile apps, Postman, server-to-server)
       if (!origin) return callback(null, true);
 
       // Check if wildcard or origin matches
-      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      if (wildcardCors || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
       }
     },
-    credentials: true,
+    // Reflecting an arbitrary origin together with credentials is unsafe. When a
+    // wildcard origin is configured, disable credentials (the only spec-safe
+    // wildcard form). Credentials are only allowed with an explicit allowlist.
+    credentials: !wildcardCors,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
     exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
@@ -156,14 +160,24 @@ async function bootstrap() {
     .addTag('health', 'Health check endpoints')
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  // Swagger exposes the full API surface; honor the documented ENABLE_SWAGGER
+  // toggle so it can be turned off on exposed/production deployments.
+  const swaggerEnabled = process.env.ENABLE_SWAGGER !== 'false';
+  if (swaggerEnabled) {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+  }
 
   const port = process.env.PORT || 2785;
-  await app.listen(port);
+  // Bind host is configurable; default 0.0.0.0 to preserve Docker behavior.
+  // Operators running locally can set HOST=127.0.0.1 to avoid LAN exposure.
+  const host = process.env.HOST || '0.0.0.0';
+  await app.listen(port, host);
 
   console.log(`🚀 OpenWA is running on: http://localhost:${port}`);
-  console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  }
 }
 
 void bootstrap();

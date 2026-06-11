@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { Public } from '../auth/decorators/auth.decorators';
+import { Public, RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { DockerService } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
@@ -133,6 +134,10 @@ interface MigrationTables {
 
 @ApiTags('infrastructure')
 @Controller('infra')
+// Infra is a privileged control plane (Docker orchestration, DB import/export,
+// env/config writes, storage migration). Require ADMIN for the whole controller.
+// The @Public() health route below overrides this for liveness probes.
+@RequireRole(ApiKeyRole.ADMIN)
 export class InfraController {
   private readonly logger = createLogger('InfraController');
 

@@ -98,6 +98,24 @@ export class StorageService {
     return this.storageType;
   }
 
+  /**
+   * Resolve a caller/archive-supplied relative path strictly within the local
+   * storage root. Rejects absolute paths and `..` traversal (tar-slip / zip-slip).
+   * Returns the safe absolute path, or null if the entry escapes the root.
+   */
+  private resolveWithin(name: string): string | null {
+    if (!name || typeof name !== 'string') return null;
+    // Normalize separators and strip leading slashes / drive letters.
+    const cleaned = name.replace(/\\/g, '/').replace(/^([a-zA-Z]:)?\/+/, '');
+    const root = path.resolve(this.localPath);
+    const candidate = path.resolve(root, cleaned);
+    // Must be the root itself or a descendant of it.
+    if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+      return null;
+    }
+    return candidate;
+  }
+
   isS3Available(): boolean {
     return this.s3Available;
   }
@@ -190,6 +208,12 @@ export class StorageService {
 
         stream.on('data', (chunk: Buffer) => chunks.push(chunk));
         stream.on('end', () => {
+          // Reject path-traversal / absolute entries (tar-slip) before writing.
+          if (this.storageType !== 's3' && this.resolveWithin(header.name) === null) {
+            this.logger.warn(`Skipped unsafe archive entry: ${header.name}`, { action: 'tar_slip_blocked' });
+            next();
+            return;
+          }
           const data = Buffer.concat(chunks);
           this.putFile(header.name, data)
             .then(() => {
@@ -247,12 +271,18 @@ export class StorageService {
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {
-    const fullPath = path.join(this.localPath, filePath);
+    const fullPath = this.resolveWithin(filePath);
+    if (fullPath === null) {
+      return Promise.reject(new Error(`Refusing to read path outside storage root: ${filePath}`));
+    }
     return Promise.resolve(fs.readFileSync(fullPath));
   }
 
   private putLocalFile(filePath: string, data: Buffer): Promise<void> {
-    const fullPath = path.join(this.localPath, filePath);
+    const fullPath = this.resolveWithin(filePath);
+    if (fullPath === null) {
+      return Promise.reject(new Error(`Refusing to write path outside storage root: ${filePath}`));
+    }
     const dir = path.dirname(fullPath);
 
     if (!fs.existsSync(dir)) {

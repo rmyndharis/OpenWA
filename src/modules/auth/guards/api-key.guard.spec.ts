@@ -144,7 +144,28 @@ describe('ApiKeyGuard', () => {
     expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-123');
   });
 
-  it('should extract client IP from X-Forwarded-For header', async () => {
+  it('should IGNORE X-Forwarded-For by default (anti-spoofing) and use the socket IP', async () => {
+    const prev = process.env.TRUST_PROXY;
+    delete process.env.TRUST_PROXY;
+    reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+
+    const apiKey = createMockApiKey();
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+    const context = createMockContext({
+      'x-api-key': 'key',
+      'x-forwarded-for': '203.0.113.50, 70.41.3.18',
+    });
+    await guard.canActivate(context);
+
+    // Must NOT trust the spoofable header; falls back to the real peer.
+    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
+    if (prev !== undefined) process.env.TRUST_PROXY = prev;
+  });
+
+  it('should honor X-Forwarded-For only when TRUST_PROXY=true', async () => {
+    const prev = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = 'true';
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
@@ -157,5 +178,7 @@ describe('ApiKeyGuard', () => {
     await guard.canActivate(context);
 
     expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
+    if (prev === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prev;
   });
 });

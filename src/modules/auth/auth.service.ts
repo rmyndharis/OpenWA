@@ -26,9 +26,14 @@ export class AuthService implements OnModuleInit {
     let isNewKey = false;
 
     if (count === 0) {
-      // Use predictable key in development, random key in production
-      displayKey =
-        process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key';
+      // Always seed a cryptographically random ADMIN key — never a hard-coded
+      // constant. A shared/guessable default (previously `dev-admin-key` in
+      // non-production) is a globally-known admin credential on every install.
+      // Operators that need a deterministic key can supply one explicitly via
+      // API_MASTER_KEY; otherwise a unique random key is generated, printed in
+      // the startup banner, and written to data/.api-key.
+      const explicitKey = process.env.API_MASTER_KEY?.trim();
+      displayKey = explicitKey && explicitKey.length > 0 ? explicitKey : `owa_k1_${randomBytes(32).toString('hex')}`;
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;

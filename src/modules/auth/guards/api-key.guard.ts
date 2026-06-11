@@ -64,10 +64,16 @@ export class ApiKeyGuard implements CanActivate {
   }
 
   private getClientIp(request: Request): string {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (forwarded) {
-      const ips = (forwarded as string).split(',');
-      return ips[0].trim();
+    // `X-Forwarded-For` is client-supplied and trivially spoofable. Only honor
+    // it when the operator explicitly declares a trusted reverse proxy
+    // (TRUST_PROXY=true); otherwise an attacker could forge an allowlisted IP
+    // and bypass a key's `allowedIps` restriction. Default to the real peer.
+    if (process.env.TRUST_PROXY === 'true') {
+      const forwarded = request.headers['x-forwarded-for'];
+      if (forwarded) {
+        const ips = (forwarded as string).split(',');
+        return ips[0].trim();
+      }
     }
     return request.ip || request.socket.remoteAddress || '';
   }

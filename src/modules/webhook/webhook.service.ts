@@ -11,6 +11,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import { HookManager } from '../../core/hooks';
+import { assertSafeWebhookUrl } from '../../common/security/ssrf-guard';
 
 export interface WebhookPayload {
   event: string;
@@ -133,6 +134,7 @@ export class WebhookService {
     }
 
     try {
+      await assertSafeWebhookUrl(webhook.url);
       const response = await fetch(webhook.url, {
         method: 'POST',
         headers,
@@ -315,6 +317,7 @@ export class WebhookService {
     }
 
     try {
+      await assertSafeWebhookUrl(webhook.url);
       const response = await fetch(webhook.url, {
         method: 'POST',
         headers,
