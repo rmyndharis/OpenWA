@@ -388,18 +388,44 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // Filter only group chats
     const groups = chats.filter(chat => chat.isGroup);
 
-    return groups.map(g => {
-      const groupChat = g as unknown as GroupChat;
-      return {
-        id: g.id._serialized,
-        name: g.name,
-        participantsCount: groupChat.participants?.length,
-        isAdmin: groupChat.participants?.some(
-          p => p.isAdmin && p.id._serialized === this.client?.info?.wid?._serialized,
-        ),
-        linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
-      };
-    });
+    return Promise.all(
+      groups.map(async g => {
+        const groupChat = g as unknown as GroupChat;
+        return {
+          id: g.id._serialized,
+          name: g.name,
+          participantsCount: groupChat.participants?.length,
+          isAdmin: groupChat.participants?.some(
+            p => p.isAdmin && p.id._serialized === this.client?.info?.wid?._serialized,
+          ),
+          linkedParentJID: await this.resolveLinkedParentJID(g.id._serialized, groupChat.groupMetadata),
+        };
+      }),
+    );
+  }
+
+  /**
+   * `client.getChats()` does not always populate `groupMetadata` for groups
+   * that haven't been loaded into the WhatsApp Web store yet, so the
+   * `linkedParentJID` would always come back null for them. When that happens,
+   * fall back to `getChatById`, which reliably loads the full group metadata.
+   */
+  private async resolveLinkedParentJID(
+    groupId: string,
+    groupMetadata?: GroupMetadataRaw,
+  ): Promise<string | null> {
+    const linkedParentJID = extractLinkedParentJID(groupMetadata);
+    if (linkedParentJID !== null) {
+      return linkedParentJID;
+    }
+
+    try {
+      const chat = await this.client!.getChatById(groupId);
+      return extractLinkedParentJID((chat as unknown as GroupChat).groupMetadata);
+    } catch (error) {
+      this.logger.warn(`Failed to resolve linkedParentJID for group: ${groupId}`, String(error));
+      return null;
+    }
   }
 
   // ============= Phase 3: Extended Messaging =============
