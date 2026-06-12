@@ -63,7 +63,7 @@
     "socket.io": "^4.8.3",
     "sqlite3": "^5.1.7",
     "tar-stream": "^3.2.0",
-    "typeorm": "^0.3.29",
+    "typeorm": "^0.3.30",
     "uuid": "^14.0.0",
     "whatsapp-web.js": "^1.26.1-alpha.3"
   },
@@ -82,7 +82,7 @@
     "@types/supertest": "^6.0.2",
     "@types/tar-stream": "^3.1.4",
     "@types/uuid": "^10.0.0",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.3",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
