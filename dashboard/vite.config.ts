@@ -17,6 +17,15 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // Proxy the Socket.IO endpoint to the backend so real-time events
+      // (live QR codes, session status, messages) work in `npm run dev`,
+      // matching the nginx behavior used in the Docker/production image.
+      '/socket.io': {
+        target: 'http://localhost:2785',
+        changeOrigin: true,
+        secure: false,
+        ws: true,
+      },
     },
   },
 });

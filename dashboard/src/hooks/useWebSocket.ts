@@ -25,6 +25,13 @@ interface WebSocketEvents {
   onMessage?: (event: MessageEvent) => void;
 }
 
+// Envelope the gateway emits on the 'message' channel for all domain events.
+interface ServerMessage {
+  type: string;
+  payload?: { event: string; sessionId: string; data: unknown };
+  timestamp: string;
+}
+
 // Use current origin for WebSocket (goes through nginx proxy in Docker)
 // Falls back to env var or localhost for development
 const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
@@ -32,6 +39,13 @@ const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+
+  // Keep the latest callbacks in a ref so the single 'message' listener
+  // (registered once on connect) always dispatches to the current handlers.
+  const eventsRef = useRef<WebSocketEvents>(events);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
@@ -44,7 +58,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       return;
     }
 
-    socketRef.current = io(`${SOCKET_URL}/events`, {
+    const socket = io(`${SOCKET_URL}/events`, {
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: 5,
@@ -59,19 +73,52 @@ export function useWebSocket(events: WebSocketEvents = {}) {
         apiKey,
       },
     });
+    socketRef.current = socket;
 
-    socketRef.current.on('connect', () => {
+    socket.on('connect', () => {
       console.log('[WebSocket] Connected');
       setIsConnected(true);
+      // The gateway only emits to rooms a client has explicitly joined, so we
+      // must subscribe after connecting. Subscribe to all sessions/events.
+      socket.emit('message', {
+        type: 'subscribe',
+        sessionId: '*',
+        events: ['*'],
+        requestId: 'dashboard',
+      });
     });
 
-    socketRef.current.on('disconnect', () => {
+    socket.on('disconnect', () => {
       console.log('[WebSocket] Disconnected');
       setIsConnected(false);
     });
 
-    socketRef.current.on('connect_error', error => {
+    socket.on('connect_error', error => {
       console.warn('[WebSocket] Connection error:', error.message);
+    });
+
+    // The gateway delivers all domain events on the 'message' channel using a
+    // { type:'event', payload:{ event, sessionId, data }, timestamp } envelope.
+    // Translate that into the typed callbacks the dashboard expects.
+    socket.on('message', (msg: ServerMessage) => {
+      if (!msg || msg.type !== 'event' || !msg.payload) return;
+      const { event, sessionId, data } = msg.payload;
+      const ts = msg.timestamp;
+      const cb = eventsRef.current;
+
+      switch (event) {
+        case 'session.status':
+          cb.onSessionStatus?.({ sessionId, status: (data as { status: string })?.status, timestamp: ts });
+          break;
+        case 'session.qr':
+          cb.onQRCode?.({ sessionId, qrCode: (data as { qrCode: string })?.qrCode, timestamp: ts });
+          break;
+        case 'message.received':
+          cb.onMessage?.({ sessionId, message: data as Record<string, unknown>, timestamp: ts });
+          break;
+        default:
+          break;
+      }
     });
   }, []);
 
@@ -85,31 +132,6 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       }
     };
   }, [connect]);
-
-  // Register event handlers
-  useEffect(() => {
-    if (!socketRef.current) return;
-
-    const socket = socketRef.current;
-
-    if (events.onSessionStatus) {
-      socket.on('session:status', events.onSessionStatus);
-    }
-
-    if (events.onQRCode) {
-      socket.on('session:qr', events.onQRCode);
-    }
-
-    if (events.onMessage) {
-      socket.on('session:message', events.onMessage);
-    }
-
-    return () => {
-      socket.off('session:status');
-      socket.off('session:qr');
-      socket.off('session:message');
-    };
-  }, [events.onSessionStatus, events.onQRCode, events.onMessage]);
 
   return { isConnected };
 }

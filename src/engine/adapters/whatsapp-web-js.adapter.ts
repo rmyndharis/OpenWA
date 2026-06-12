@@ -88,6 +88,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
+      // Chrome cold-start can exceed Puppeteer's default 30s "wait for WS
+      // endpoint" on slower or loaded machines, surfacing as an opaque 500 /
+      // status=failed. Use a more forgiving, env-tunable launch timeout, and
+      // allow pointing at a system Chrome via PUPPETEER_EXECUTABLE_PATH.
+      const launchTimeout = parseInt(process.env.PUPPETEER_LAUNCH_TIMEOUT || '60000', 10);
+      const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
@@ -96,6 +103,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
+          timeout: Number.isFinite(launchTimeout) ? launchTimeout : 60000,
+          ...(executablePath ? { executablePath } : {}),
         },
       });
 
