@@ -85,6 +85,18 @@ if (process.env.QUEUE_ENABLED === 'true') {
             username: configService.get<string>('dataDatabase.username'),
             password: configService.get<string>('dataDatabase.password'),
             database: 'openwa',
+
+            ssl:
+              configService.get<boolean>('dataDatabase.ssl', false)
+                ? {
+                    rejectUnauthorized:
+                      configService.get<boolean>(
+                        'dataDatabase.sslRejectUnauthorized',
+                        false,
+                      ),
+                  }
+                : false,
+
             // Never auto-sync Postgres in production; rely on migrations.
             synchronize: configService.get<boolean>('dataDatabase.synchronize', false),
             migrationsRun: true,
