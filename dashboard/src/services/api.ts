@@ -10,7 +10,7 @@ const API_BASE_URL = '/api';
 export interface Session {
   id: string;
   name: string;
-  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected';
+  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected' | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;

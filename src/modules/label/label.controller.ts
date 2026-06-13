@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Body, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { SessionService } from '../session/session.service';
 
@@ -10,7 +10,7 @@ export class LabelController {
   private getEngine(sessionId: string) {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {
-      throw new Error('Session is not started');
+      throw new BadRequestException('Session is not started');
     }
     return engine;
   }
@@ -42,7 +42,7 @@ export class LabelController {
     const engine = this.getEngine(sessionId);
     const label = await engine.getLabelById(labelId);
     if (!label) {
-      throw new Error(`Label ${labelId} not found`);
+      throw new NotFoundException(`Label ${labelId} not found`);
     }
     return label;
   }
