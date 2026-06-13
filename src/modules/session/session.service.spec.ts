@@ -393,4 +393,67 @@ describe('SessionService', () => {
       expect(service.getActiveCount()).toBe(0);
     });
   });
+
+  // ── onApplicationBootstrap (auto-start) ───────────────────────────
+  describe('onApplicationBootstrap', () => {
+    const originalFlag = process.env.AUTO_START_SESSIONS;
+
+    afterEach(() => {
+      if (originalFlag === undefined) delete process.env.AUTO_START_SESSIONS;
+      else process.env.AUTO_START_SESSIONS = originalFlag;
+    });
+
+    it('does nothing when AUTO_START_SESSIONS is not enabled', async () => {
+      delete process.env.AUTO_START_SESSIONS;
+      const startSpy = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onApplicationBootstrap();
+
+      expect(repository.find).not.toHaveBeenCalled();
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it('starts no engine when there are no previously-authenticated sessions', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([]);
+      const startSpy = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onApplicationBootstrap();
+
+      expect(startSpy).not.toHaveBeenCalled();
+    });
+
+    it('auto-starts every previously-authenticated session', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ]);
+      jest.spyOn(service as unknown as { delay: () => Promise<void> }, 'delay').mockResolvedValue(undefined);
+      const startSpy = jest.spyOn(service, 'start').mockResolvedValue(undefined as never);
+
+      await service.onApplicationBootstrap();
+
+      expect(startSpy).toHaveBeenCalledTimes(2);
+      expect(startSpy).toHaveBeenCalledWith('a');
+      expect(startSpy).toHaveBeenCalledWith('b');
+    });
+
+    it('keeps starting the remaining sessions when one fails', async () => {
+      process.env.AUTO_START_SESSIONS = 'true';
+      (repository.find as jest.Mock).mockResolvedValue([
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' },
+      ]);
+      jest.spyOn(service as unknown as { delay: () => Promise<void> }, 'delay').mockResolvedValue(undefined);
+      const startSpy = jest
+        .spyOn(service, 'start')
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValueOnce(undefined as never);
+
+      await service.onApplicationBootstrap();
+
+      expect(startSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 });

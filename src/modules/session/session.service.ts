@@ -85,7 +85,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       count: sessions.length,
     });
 
-    for (const session of sessions) {
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i];
       try {
         await this.start(session.id);
         this.logger.log(`Auto-started session: ${session.name}`, {
@@ -99,7 +100,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'auto_start_failed',
         });
       }
-      await this.delay(2000);
+      // Throttle between sequential Chromium launches; no need to wait after the last one.
+      if (i < sessions.length - 1) {
+        await this.delay(2000);
+      }
     }
   }
 
