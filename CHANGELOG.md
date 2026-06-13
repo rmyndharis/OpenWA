@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-06-13
+
+A security- and stability-focused patch release. Hardens the API surface,
+clears a critical dependency advisory, and resolves a batch of self-hosting
+bugs. Backward compatible except for the two upgrade notes below.
+
+### Security
+
+- **Path traversal in storage import**: `StorageService` extracted tar archive
+  entries (and read/wrote files) using unvalidated paths, allowing writes
+  outside the storage root. Added a path-containment check on local read/write.
+  Fixes #151. (#207)
+- **Broken access control on infrastructure endpoints**: every `/api/infra/*`
+  mutating and data-exfiltration endpoint (config, restart, export-data,
+  import-data, storage/export, storage/import) required only any valid API key.
+  They now require the **ADMIN** role. (#207)
+- **X-Forwarded-For IP spoofing**: `ApiKeyGuard` trusted the client-controllable
+  `X-Forwarded-For` header for the per-key `allowedIps` whitelist. It now ignores
+  it by default and only honours it for configured `TRUSTED_PROXIES`. (#211)
+- **Fail-closed IP whitelist**: a key with an `allowedIps` whitelist but an
+  undetermined client IP previously skipped the check (failed open); it now
+  rejects. The QR endpoint (`GET /sessions/:id/qr`) now requires `OPERATOR`. (#213)
+- **Bull Board queue UI** (`/api/admin/queues`) was reachable unauthenticated;
+  it now requires an ADMIN API key. (#214)
+- **Critical dependency advisory**: bumped `concurrently` to v10 to clear the
+  critical `shell-quote` advisories. (#208)
+
+### Fixed
+
+- **Swagger UI** now sends the `X-API-Key` header (global security scheme). Fixes #173. (#109)
+- **Dashboard Docker build** failed on the Vite 8 / `@vitejs/plugin-react` v5 peer
+  conflict; upgraded the plugin to v6. Fixes #103, #123, #197. (#136)
+- **Bulk send** (`/messages/send-bulk`) returned 400 for text-only messages
+  (missing `@IsOptional()` on media fields). Fixes #192. (#193)
+- **Group participant endpoints** returned 400 because their DTOs lacked
+  `class-validator` decorators. Fixes #190. (#210)
+- **Cross-platform `postinstall`**: replaced POSIX-only shell syntax that broke
+  `npm install` on Windows. Fixes #181. (#209)
+- Controllers now throw proper NestJS HTTP exceptions instead of generic `Error`
+  (correct 400/404 instead of 500). (#102)
+- Dashboard QR modal shows a loading state and keeps polling until ready. (#97)
+- Traefik dashboard image now proxies `/api` and `/socket.io`. Fixes #116. (#131)
+- Wired the documented `API_MASTER_KEY` env var into the initial key seed. Fixes #153. (#133)
+- Fixed the `Location` constructor ESM/CJS interop in the whatsapp-web.js adapter. (#186)
+- Incoming webhook messages now include location data for location messages. (#202)
+
+### Changed
+
+- **Lint is now enforced**: `lint` runs ESLint in check mode (fails on
+  violations) with a new `lint:fix` for local auto-fixing; fixed the latent
+  lint issues this surfaced across the codebase. (#208)
+- **CI** publishes multi-arch Docker images (`linux/amd64` + `linux/arm64`).
+  Closes #164. (#166)
+
+### Added
+
+- Documented the API key management endpoints. Closes #110. (#130)
+- Indonesian Docker deployment guide and an API-spec diagram fix. (#188, #189)
+
+### Dependencies
+
+- Dependabot minor/patch group (NestJS, BullMQ, Bull Board, helmet, ioredis,
+  etc.) and `@types/uuid` v11. (#194, #143)
+
+### Upgrade notes
+
+- **Infrastructure endpoints are now ADMIN-only.** Integrations calling
+  `/api/infra/config|restart|export-data|import-data|storage/*` with a
+  non-admin key will now receive an auth error; use an ADMIN key.
+- **Reverse-proxy + per-key `allowedIps`**: if you run behind Traefik/nginx and
+  restrict keys by IP, set `TRUSTED_PROXIES` (e.g. `TRUSTED_PROXIES=172.18.0.0/16`)
+  so the real client IP is resolved; otherwise `X-Forwarded-For` is ignored.
+
 ## [0.1.6] - 2026-05-17
 
 ### Fixed
