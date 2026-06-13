@@ -158,7 +158,7 @@ export class HookManager {
       }));
     }
 
-    return result as Record<HookEvent, { pluginId: string; priority: number }[]>;
+    return result;
   }
 
   /**

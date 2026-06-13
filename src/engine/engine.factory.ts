@@ -85,7 +85,7 @@ export class EngineFactory implements OnModuleInit {
       typeof instance === 'object' &&
       instance !== null &&
       'type' in instance &&
-      (instance as { type: unknown }).type === PluginType.ENGINE &&
+      instance.type === PluginType.ENGINE &&
       'createEngine' in instance &&
       typeof (instance as { createEngine: unknown }).createEngine === 'function'
     );

@@ -25,6 +25,84 @@ X-API-Key: your-api-key
 X-Request-ID: optional-tracking-id (recommended)
 ```
 
+### API Key Management
+
+OpenWA creates an initial admin API key on first run. The key is printed in the
+startup logs and written to:
+
+- `data/.api-key` for local development
+- `/app/data/.api-key` inside the API container for Docker deployments
+
+Local development uses `dev-admin-key` when no keys exist; production creates a
+random `owa_k1_...` admin key. Use that admin key to create scoped keys for
+integrations. The full generated key is returned only once in the `apiKey`
+field of the create response.
+
+#### Create API Key
+
+```http
+POST /api/auth/api-keys
+```
+
+**Required role:** `admin`
+
+**Request Body:**
+```json
+{
+  "name": "Production Bot",
+  "role": "operator",
+  "allowedIps": ["192.168.1.10", "10.0.0.0/8"],
+  "allowedSessions": ["session-uuid-1"],
+  "expiresAt": "2027-12-31T23:59:59Z"
+}
+```
+
+Only `name` is required. `role` defaults to `operator`; valid roles are
+`admin`, `operator`, and `viewer`.
+
+**Example:**
+```bash
+curl -X POST http://localhost:2785/api/auth/api-keys \
+  -H "X-API-Key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "n8n Integration",
+    "role": "operator"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "2a8f41e3-3b9a-4a1d-b6d0-b9910df8f0be",
+    "name": "n8n Integration",
+    "keyPrefix": "owa_k1_abcd",
+    "role": "operator",
+    "isActive": true,
+    "usageCount": 0,
+    "createdAt": "2026-02-02T10:30:00.000Z",
+    "apiKey": "owa_k1_abcd1234..."
+  },
+  "meta": {
+    "timestamp": "2026-02-02T10:30:00.000Z"
+  }
+}
+```
+
+#### API Key Endpoints
+
+| Method | Endpoint | Description | Required role |
+|--------|----------|-------------|---------------|
+| `GET` | `/api/auth/api-keys` | List API keys | `admin` |
+| `POST` | `/api/auth/api-keys` | Create an API key | `admin` |
+| `GET` | `/api/auth/api-keys/:id` | Get API key details | `admin` |
+| `PUT` | `/api/auth/api-keys/:id` | Update API key metadata, role, IPs, sessions, or expiry | `admin` |
+| `DELETE` | `/api/auth/api-keys/:id` | Delete an API key | `admin` |
+| `POST` | `/api/auth/api-keys/:id/revoke` | Revoke an API key by setting it inactive | `admin` |
+| `POST` | `/api/auth/validate` | Validate the key in `X-API-Key` | Any key |
+
 ## 6.2 Response Format
 
 ### Success Response
@@ -497,7 +575,7 @@ POST /api/sessions/:sessionId/logout
 
 ```mermaid
 flowchart LR
-    A[Client] -->|POST| B[/messages/send-text]
+    A[Client] -->|POST| B["/messages/send-text"]
     B --> C{Validate}
     C -->|OK| D[Queue]
     D --> E[Send]
