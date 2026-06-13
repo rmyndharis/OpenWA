@@ -133,6 +133,7 @@ export class SessionController {
   }
 
   @Get(':id/qr')
+  @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get QR code for session authentication' })
   @ApiParam({ name: 'id', description: 'Session ID' })
   @ApiResponse({

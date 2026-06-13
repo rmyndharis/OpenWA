@@ -27,10 +27,9 @@ export class AuthService implements OnModuleInit {
 
     if (count === 0) {
       // Use env var if set, otherwise auto-generate predictable key in development, random key in production
-      displayKey = process.env.API_MASTER_KEY
-        || (process.env.NODE_ENV === 'production' 
-          ? `owa_k1_${randomBytes(32).toString('hex')}` 
-          : 'dev-admin-key');
+      displayKey =
+        process.env.API_MASTER_KEY ||
+        (process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key');
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
@@ -175,8 +174,12 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('API key has expired');
     }
 
-    // Check IP whitelist
-    if (apiKey.allowedIps && apiKey.allowedIps.length > 0 && clientIp) {
+    // Check IP whitelist (fail closed: if a whitelist is configured but the client
+    // IP could not be determined, reject rather than silently skipping the check)
+    if (apiKey.allowedIps && apiKey.allowedIps.length > 0) {
+      if (!clientIp) {
+        throw new UnauthorizedException('Client IP could not be determined');
+      }
       if (!this.isIpAllowed(clientIp, apiKey.allowedIps)) {
         this.logger.warn(`IP not allowed: ${clientIp}`, {
           keyId: apiKey.id,
