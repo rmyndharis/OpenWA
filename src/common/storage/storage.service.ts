@@ -15,6 +15,7 @@ import {
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
+import { isPathWithin } from '../utils/path-safety';
 
 interface S3Config {
   endpoint?: string;
@@ -247,11 +248,17 @@ export class StorageService {
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {
+    if (!isPathWithin(this.localPath, filePath)) {
+      throw new Error(`Refusing to read outside storage root: ${filePath}`);
+    }
     const fullPath = path.join(this.localPath, filePath);
     return Promise.resolve(fs.readFileSync(fullPath));
   }
 
   private putLocalFile(filePath: string, data: Buffer): Promise<void> {
+    if (!isPathWithin(this.localPath, filePath)) {
+      throw new Error(`Refusing to write outside storage root: ${filePath}`);
+    }
     const fullPath = path.join(this.localPath, filePath);
     const dir = path.dirname(fullPath);
 
