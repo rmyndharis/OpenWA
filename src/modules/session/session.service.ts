@@ -9,6 +9,7 @@ import {
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
+import { Message, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { IWhatsAppEngine, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -37,6 +38,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepository: Repository<Session>,
+    @InjectRepository(Message, 'data')
+    private readonly messageRepository: Repository<Message>,
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
     private readonly engineFactory: EngineFactory,
@@ -312,6 +315,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
             this.eventsGateway.emitMessage(id, finalMessage);
           });
       },
+      onMessageAck: (waMessageId: string, ack: number): void => {
+        // Persist WhatsApp delivery/read receipts so message status reflects reality
+        void this.handleMessageAck(id, waMessageId, ack);
+      },
       onDisconnected: (reason: string): void => {
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,
@@ -351,6 +358,63 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     });
 
     await this.updateStatus(id, SessionStatus.INITIALIZING);
+  }
+
+  /**
+   * Map a whatsapp-web.js message ACK level to our MessageStatus.
+   * Ack levels: -1 error, 0 pending, 1 server (sent), 2 device (delivered), 3 read, 4 played.
+   */
+  private static readonly ACK_STATUS: Record<number, MessageStatus> = {
+    [-1]: MessageStatus.FAILED,
+    0: MessageStatus.PENDING,
+    1: MessageStatus.SENT,
+    2: MessageStatus.DELIVERED,
+    3: MessageStatus.READ,
+    4: MessageStatus.READ,
+  };
+
+  private static statusRank(status: MessageStatus): number {
+    switch (status) {
+      case MessageStatus.PENDING:
+        return 0;
+      case MessageStatus.SENT:
+        return 1;
+      case MessageStatus.DELIVERED:
+        return 2;
+      case MessageStatus.READ:
+        return 3;
+      default:
+        return -1; // FAILED or unknown
+    }
+  }
+
+  /**
+   * Persist a WhatsApp delivery/read receipt for an outgoing message.
+   * Updates the stored message status, never downgrading (except an explicit failure).
+   */
+  private async handleMessageAck(sessionId: string, waMessageId: string, ack: number): Promise<void> {
+    const newStatus = SessionService.ACK_STATUS[ack];
+    if (!newStatus) return;
+    try {
+      const message = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
+      if (!message) return; // ack for a message we didn't record (e.g. incoming) - ignore
+      if (
+        newStatus !== MessageStatus.FAILED &&
+        SessionService.statusRank(newStatus) <= SessionService.statusRank(message.status)
+      ) {
+        return; // don't downgrade (e.g. a late 'delivered' arriving after 'read')
+      }
+      message.status = newStatus;
+      await this.messageRepository.save(message);
+      this.logger.debug(`Message ack ${waMessageId} -> ${newStatus}`, {
+        sessionId,
+        action: 'message_ack',
+        ack,
+        status: newStatus,
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to update message ack for ${waMessageId}: ${String(error)}`);
+    }
   }
 
   private scheduleReconnect(id: string, session: Session): void {
