@@ -1,15 +1,18 @@
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
+import { ipMatches, normalizeIp } from '../../../common/utils/ip';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
   constructor(
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
+    private readonly configService: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -63,12 +66,47 @@ export class ApiKeyGuard implements CanActivate {
     return undefined;
   }
 
+  /**
+   * Resolve the real client IP used for the API key's allowedIps whitelist.
+   *
+   * X-Forwarded-For is client-controllable, so it is only honored when the
+   * request actually arrives from a configured trusted proxy (TRUSTED_PROXIES).
+   * With no trusted proxies configured, the header is ignored entirely and the
+   * direct socket address is used — preventing IP-whitelist spoofing.
+   */
   private getClientIp(request: Request): string {
-    const forwarded = request.headers['x-forwarded-for'];
-    if (forwarded) {
-      const ips = (forwarded as string).split(',');
-      return ips[0].trim();
+    const socketIp = normalizeIp(request.socket?.remoteAddress || request.ip || '');
+    const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
+
+    if (trustedProxies.length === 0) {
+      return socketIp;
     }
-    return request.ip || request.socket.remoteAddress || '';
+
+    const isTrusted = (ip: string): boolean => trustedProxies.some(proxy => ipMatches(ip, proxy));
+
+    // Only trust the forwarded chain if the immediate peer is a trusted proxy.
+    if (!isTrusted(socketIp)) {
+      return socketIp;
+    }
+
+    const forwarded = request.headers['x-forwarded-for'];
+    if (!forwarded) {
+      return socketIp;
+    }
+
+    const hops = (Array.isArray(forwarded) ? forwarded.join(',') : forwarded)
+      .split(',')
+      .map(hop => normalizeIp(hop.trim()))
+      .filter(Boolean);
+
+    // Walk right-to-left and return the first hop that is not a trusted proxy:
+    // the closest address the trusted infrastructure actually observed.
+    for (let i = hops.length - 1; i >= 0; i--) {
+      if (!isTrusted(hops[i])) {
+        return hops[i];
+      }
+    }
+
+    return socketIp;
   }
 }
