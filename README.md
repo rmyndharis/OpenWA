@@ -157,6 +157,10 @@ docker compose --profile full up -d
 >
 > - Development (`docker-compose.dev.yml`): SQLite, local storage, both API & Dashboard included
 > - Production (`docker-compose.yml`): Configurable database, profiles for optional services
+>
+> Official GHCR images are published as multi-arch manifests for:
+> - `linux/amd64`
+> - `linux/arm64`
 
 ## 🔌 Ports
 

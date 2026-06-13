@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Delete, Param, Body, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Param,
+  Body,
+  Query,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { SessionService } from '../session/session.service';
 
@@ -10,7 +20,7 @@ export class ChannelController {
   private getEngine(sessionId: string) {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {
-      throw new Error('Session is not started');
+      throw new BadRequestException('Session is not started');
     }
     return engine;
   }
@@ -41,7 +51,7 @@ export class ChannelController {
     const engine = this.getEngine(sessionId);
     const channel = await engine.getChannelById(channelId);
     if (!channel) {
-      throw new Error(`Channel ${channelId} not found`);
+      throw new NotFoundException(`Channel ${channelId} not found`);
     }
     return channel;
   }

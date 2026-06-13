@@ -42,6 +42,7 @@
 | 08  | [Development Guidelines](./08-development-guidelines.md)         | Coding standards and workflow                     |
 | 09  | [Testing Strategy](./09-testing-strategy.md)                     | Test types and tooling                            |
 | 10  | [DevOps & Infrastructure](./10-devops-infrastructure.md)         | Docker, deployment, and environment configuration |
+| 10-ID| [Panduan Docker (ID)](./DOCKER_ID.md)                            | Panduan deployment Docker dalam Bahasa Indonesia  |
 | 11  | [Operational Runbooks](./11-operational-runbooks.md)             | Incident, maintenance, and backup runbooks        |
 | 12  | [Troubleshooting FAQ](./12-troubleshooting-faq.md)               | Common issues and fixes                           |
 | 13  | [Horizontal Scaling](./13-horizontal-scaling.md)                 | Multi-node deployment guidance                    |
@@ -104,8 +105,13 @@ Access:
 OpenWA seeds a default API key on first run and writes it to:
 
 - `data/.api-key` (development)
+- `/app/data/.api-key` inside the API container when using Docker
 
-You can also create new keys via the API (see [API Specification](./06-api-specification.md)).
+The startup logs also print the initial key. Local development uses
+`dev-admin-key` when no keys exist; production creates a random `owa_k1_...`
+admin key. Use an admin key to create additional keys with
+`POST /api/auth/api-keys` (see
+[API Specification](./06-api-specification.md#api-key-management)).
 
 ## API Example
 
