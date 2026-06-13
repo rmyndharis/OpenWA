@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { Reflector } from '@nestjs/core';
 import { BadRequestException } from '@nestjs/common';
 
@@ -5,6 +6,13 @@ import { BadRequestException } from '@nestjs/common';
 // v8, which is ESM-only and cannot be parsed by ts-jest. The controller logic
 // under test never touches archiver, so a lightweight stub is sufficient.
 jest.mock('archiver', () => ({ default: jest.fn() }));
+
+// saveConfig writes the generated env via fs.writeFileSync; mock only that call so
+// the tests can assert the produced content without touching the filesystem.
+jest.mock('fs', () => {
+  const actual = jest.requireActual<typeof import('fs')>('fs');
+  return { ...actual, writeFileSync: jest.fn() };
+});
 
 import { InfraController } from './infra.controller';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
@@ -61,5 +69,41 @@ describe('InfraController.importStorage filePath validation (Vuln 3)', () => {
       BadRequestException,
     );
     expect(storage.importFromStream).not.toHaveBeenCalled();
+  });
+});
+
+describe('InfraController.saveConfig SSL reject-unauthorized', () => {
+  function writtenEnv(config: unknown): string {
+    const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+    const controller = new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    controller.saveConfig(config as never);
+    const content = spy.mock.calls[0][1] as string;
+    spy.mockRestore();
+    return content;
+  }
+
+  it('writes DATABASE_SSL_REJECT_UNAUTHORIZED=false for self-signed managed Postgres', () => {
+    const env = writtenEnv({ database: { type: 'postgres', sslEnabled: true, sslRejectUnauthorized: false } });
+    expect(env).toContain('DATABASE_SSL=true');
+    expect(env).toContain('DATABASE_SSL_REJECT_UNAUTHORIZED=false');
+  });
+
+  it('defaults DATABASE_SSL_REJECT_UNAUTHORIZED=true when SSL is enabled without an explicit flag', () => {
+    const env = writtenEnv({ database: { type: 'postgres', sslEnabled: true } });
+    expect(env).toContain('DATABASE_SSL_REJECT_UNAUTHORIZED=true');
+  });
+
+  it('omits DATABASE_SSL_REJECT_UNAUTHORIZED when SSL is disabled', () => {
+    const env = writtenEnv({ database: { type: 'postgres', sslEnabled: false } });
+    expect(env).not.toContain('DATABASE_SSL_REJECT_UNAUTHORIZED');
   });
 });

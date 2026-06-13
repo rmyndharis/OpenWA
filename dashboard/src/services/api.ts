@@ -107,6 +107,7 @@ export interface SaveConfigPayload {
     database?: string;
     poolSize?: number;
     sslEnabled?: boolean;
+    sslRejectUnauthorized?: boolean;
   };
   redis?: {
     enabled?: boolean;

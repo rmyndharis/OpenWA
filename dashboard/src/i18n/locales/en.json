@@ -401,6 +401,8 @@
       "poolSize": "Pool Size",
       "ssl": "SSL Connection",
       "sslDesc": "Enable TLS/SSL for secure database connections",
+      "sslRejectUnauthorized": "Verify SSL Certificate",
+      "sslRejectUnauthorizedDesc": "Reject self-signed or invalid certificates. Turn off for managed Postgres with self-signed certs (Supabase, Heroku, Render, Railway).",
       "migrationsTitle": "Database Migrations",
       "migrationsStatus": "Schema is auto-synchronized with TypeORM",
       "migrationsHint": "Migrations are managed automatically. Use CLI for manual migrations."

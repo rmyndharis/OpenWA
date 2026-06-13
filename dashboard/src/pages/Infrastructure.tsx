@@ -35,6 +35,7 @@ interface DatabaseConfig {
   database: string;
   poolSize: number;
   sslEnabled: boolean;
+  sslRejectUnauthorized: boolean;
 }
 
 interface RedisConfig {
@@ -103,6 +104,7 @@ export function Infrastructure() {
     database: 'openwa',
     poolSize: 10,
     sslEnabled: false,
+    sslRejectUnauthorized: true,
   });
 
   const [redisConfig, setRedisConfig] = useState<RedisConfig>({
@@ -565,6 +567,22 @@ export function Infrastructure() {
                       <span className="toggle-slider"></span>
                     </label>
                   </div>
+                  {dbConfig.sslEnabled && (
+                    <div className="toggle-row">
+                      <div className="toggle-info">
+                        <span>{t('infrastructure.database.sslRejectUnauthorized')}</span>
+                        <small>{t('infrastructure.database.sslRejectUnauthorizedDesc')}</small>
+                      </div>
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={dbConfig.sslRejectUnauthorized}
+                          onChange={e => updateDbConfig('sslRejectUnauthorized', e.target.checked)}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               )}
             </>

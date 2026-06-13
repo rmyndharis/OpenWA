@@ -401,6 +401,8 @@
       "poolSize": "גודל Pool",
       "ssl": "חיבור SSL",
       "sslDesc": "הפעלת TLS/SSL לחיבור מאובטח למסד הנתונים",
+      "sslRejectUnauthorized": "אימות תעודת SSL",
+      "sslRejectUnauthorizedDesc": "דחיית תעודות בחתימה עצמית או לא תקפות. כבה עבור Postgres מנוהל עם תעודות בחתימה עצמית (Supabase, Heroku, Render, Railway).",
       "migrationsTitle": "Migrations של מסד הנתונים",
       "migrationsStatus": "הסכמה מסונכרנת אוטומטית עם TypeORM",
       "migrationsHint": "ה-Migrations מנוהלים אוטומטית. ניתן להשתמש ב-CLI ל-Migrations ידניים."

@@ -38,6 +38,7 @@ interface SaveConfigDto {
     database?: string;
     poolSize?: number;
     sslEnabled?: boolean;
+    sslRejectUnauthorized?: boolean;
   };
   redis?: {
     enabled?: boolean;
@@ -245,6 +246,13 @@ export class InfraController {
           }
           envLines.push(`DATABASE_POOL_SIZE=${config.database.poolSize || 10}`);
           envLines.push(`DATABASE_SSL=${config.database.sslEnabled ? 'true' : 'false'}`);
+          if (config.database.sslEnabled) {
+            // Default to certificate verification; only relax it when the operator opts out
+            // (managed Postgres with self-signed certs: Supabase, Heroku, Render, Railway).
+            envLines.push(
+              `DATABASE_SSL_REJECT_UNAUTHORIZED=${config.database.sslRejectUnauthorized === false ? 'false' : 'true'}`,
+            );
+          }
         }
         envLines.push('');
       }
