@@ -1,24 +1,7 @@
 import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { SessionService } from '../session/session.service';
-
-// DTOs
-class CreateGroupDto {
-  name: string;
-  participants: string[];
-}
-
-class ParticipantsDto {
-  participants: string[];
-}
-
-class GroupSubjectDto {
-  subject: string;
-}
-
-class GroupDescriptionDto {
-  description: string;
-}
+import { CreateGroupDto, ParticipantsDto, GroupSubjectDto, GroupDescriptionDto } from './dto/group.dto';
 
 @ApiTags('groups')
 @Controller('sessions/:sessionId/groups')
