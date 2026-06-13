@@ -88,7 +88,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
 
             ssl: configService.get<boolean>('dataDatabase.ssl', false)
               ? {
-                  rejectUnauthorized: configService.get<boolean>('dataDatabase.sslRejectUnauthorized', false),
+                  rejectUnauthorized: configService.get<boolean>('dataDatabase.sslRejectUnauthorized', true),
                 }
               : false,
 
