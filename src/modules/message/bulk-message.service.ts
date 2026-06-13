@@ -161,7 +161,7 @@ export class BulkMessageService {
 
       try {
         // Apply template variables
-        const content: BulkMessageContent = this.applyVariables(msg.content as BulkMessageContent, msg.variables);
+        const content: BulkMessageContent = this.applyVariables(msg.content, msg.variables);
 
         // Send message based on type
         const messageResult = await this.sendMessage(engine, msg.chatId, msg.type, content);
