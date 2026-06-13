@@ -1,5 +1,6 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
 import { ApiKeyGuard } from './api-key.guard';
 import { AuthService } from '../auth.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
@@ -26,12 +27,13 @@ function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
 function createMockContext(
   headers: Record<string, string> = {},
   params: Record<string, string> = {},
+  socketIp = '127.0.0.1',
 ): ExecutionContext {
   const request = {
     headers,
     params,
-    ip: '127.0.0.1',
-    socket: { remoteAddress: '127.0.0.1' },
+    ip: socketIp,
+    socket: { remoteAddress: socketIp },
   };
 
   return {
@@ -47,6 +49,14 @@ describe('ApiKeyGuard', () => {
   let guard: ApiKeyGuard;
   let authService: jest.Mocked<Partial<AuthService>>;
   let reflector: jest.Mocked<Reflector>;
+  let configService: jest.Mocked<Partial<ConfigService>>;
+
+  function buildGuard(trustedProxies: string[] = []): ApiKeyGuard {
+    configService = {
+      get: jest.fn().mockReturnValue(trustedProxies),
+    };
+    return new ApiKeyGuard(authService as AuthService, reflector, configService as ConfigService);
+  }
 
   beforeEach(() => {
     authService = {
@@ -58,7 +68,7 @@ describe('ApiKeyGuard', () => {
       getAllAndOverride: jest.fn(),
     } as unknown as jest.Mocked<Reflector>;
 
-    guard = new ApiKeyGuard(authService as AuthService, reflector);
+    guard = buildGuard();
   });
 
   it('should allow access to @Public() routes without API key', async () => {
@@ -144,16 +154,62 @@ describe('ApiKeyGuard', () => {
     expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', 'sess-123');
   });
 
-  it('should extract client IP from X-Forwarded-For header', async () => {
+  it('ignores X-Forwarded-For by default (no trusted proxies) to prevent IP spoofing', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 
     const apiKey = createMockApiKey();
     (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
 
+    // Attacker forges X-Forwarded-For; the direct socket IP must win.
     const context = createMockContext({
       'x-api-key': 'key',
       'x-forwarded-for': '203.0.113.50, 70.41.3.18',
     });
+    await guard.canActivate(context);
+
+    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '127.0.0.1', undefined);
+  });
+
+  it('uses the rightmost untrusted hop when the request comes from a trusted proxy', async () => {
+    guard = buildGuard(['10.0.0.0/8']);
+    reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+
+    const apiKey = createMockApiKey();
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+    // Direct peer 10.0.0.1 is a trusted proxy; XFF = [real client, inner proxy].
+    const context = createMockContext(
+      { 'x-api-key': 'key', 'x-forwarded-for': '203.0.113.50, 10.0.0.5' },
+      {},
+      '10.0.0.1',
+    );
+    await guard.canActivate(context);
+
+    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.50', undefined);
+  });
+
+  it('ignores X-Forwarded-For when the direct peer is not a trusted proxy', async () => {
+    guard = buildGuard(['10.0.0.0/8']);
+    reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+
+    const apiKey = createMockApiKey();
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+    // Attacker connects directly (203.0.113.99) and forges a trusted-looking XFF.
+    const context = createMockContext({ 'x-api-key': 'key', 'x-forwarded-for': '10.0.0.5' }, {}, '203.0.113.99');
+    await guard.canActivate(context);
+
+    expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.99', undefined);
+  });
+
+  it('normalizes an IPv4-mapped IPv6 proxy address (e.g. ::ffff:10.0.0.1)', async () => {
+    guard = buildGuard(['10.0.0.0/8']);
+    reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+
+    const apiKey = createMockApiKey();
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+    const context = createMockContext({ 'x-api-key': 'key', 'x-forwarded-for': '203.0.113.50' }, {}, '::ffff:10.0.0.1');
     await guard.canActivate(context);
 
     expect(authService.validateApiKey).toHaveBeenCalledWith('key', '203.0.113.50', undefined);

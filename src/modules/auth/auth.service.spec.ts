@@ -234,6 +234,16 @@ describe('AuthService', () => {
       expect(result.id).toBe(key.id);
     });
 
+    it('should fail closed when an IP whitelist is set but the client IP is unknown', async () => {
+      const key = createMockApiKey({
+        allowedIps: ['10.0.0.1'],
+        keyHash: hashKey('ip-no-client'),
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      await expect(service.validateApiKey('ip-no-client')).rejects.toThrow('Client IP could not be determined');
+    });
+
     it('should throw UnauthorizedException when session not in allowedSessions', async () => {
       const key = createMockApiKey({
         allowedSessions: ['session-A'],

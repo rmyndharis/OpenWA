@@ -16,7 +16,7 @@
     "dashboard:install": "cd dashboard && npm install",
     "dashboard:dev": "cd dashboard && npm run dev",
     "dashboard:build": "cd dashboard && npm run build",
-    "postinstall": "[ -d dashboard ] && npm run dashboard:install || true",
+    "postinstall": "node -e \"if (require('fs').existsSync('dashboard')) require('child_process').spawnSync('npm', ['run', 'dashboard:install'], { stdio: 'inherit', shell: true });\"",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",

@@ -174,8 +174,12 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('API key has expired');
     }
 
-    // Check IP whitelist
-    if (apiKey.allowedIps && apiKey.allowedIps.length > 0 && clientIp) {
+    // Check IP whitelist (fail closed: if a whitelist is configured but the client
+    // IP could not be determined, reject rather than silently skipping the check)
+    if (apiKey.allowedIps && apiKey.allowedIps.length > 0) {
+      if (!clientIp) {
+        throw new UnauthorizedException('Client IP could not be determined');
+      }
       if (!this.isIpAllowed(clientIp, apiKey.allowedIps)) {
         this.logger.warn(`IP not allowed: ${clientIp}`, {
           keyId: apiKey.id,

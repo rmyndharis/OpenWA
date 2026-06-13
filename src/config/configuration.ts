@@ -77,6 +77,18 @@ export default () => ({
     },
   },
 
+  // Security configuration
+  security: {
+    // Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For header
+    // may be trusted for client-IP resolution. Empty by default: X-Forwarded-For
+    // is ignored and the direct socket address is used, preventing spoofing of
+    // the API-key allowedIps whitelist.
+    trustedProxies: (process.env.TRUSTED_PROXIES || '')
+      .split(',')
+      .map(proxy => proxy.trim())
+      .filter(Boolean),
+  },
+
   // Storage configuration
   storage: {
     type: process.env.STORAGE_TYPE || 'local',
