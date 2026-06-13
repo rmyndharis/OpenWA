@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, MessageTypes } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -156,7 +156,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         };
 
         // Handle location
-        if (msg.type === 'location' && msg.location) {
+        if (msg.type === MessageTypes.LOCATION && msg.location) {
           incomingMessage.location = {
             latitude: Number(msg.location.latitude),
             longitude: Number(msg.location.longitude),

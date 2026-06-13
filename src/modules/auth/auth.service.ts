@@ -27,10 +27,9 @@ export class AuthService implements OnModuleInit {
 
     if (count === 0) {
       // Use env var if set, otherwise auto-generate predictable key in development, random key in production
-      displayKey = process.env.API_MASTER_KEY
-        || (process.env.NODE_ENV === 'production' 
-          ? `owa_k1_${randomBytes(32).toString('hex')}` 
-          : 'dev-admin-key');
+      displayKey =
+        process.env.API_MASTER_KEY ||
+        (process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key');
 
       await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
       isNewKey = true;
