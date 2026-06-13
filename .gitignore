@@ -67,6 +67,7 @@ uploads/
 .worktrees/
 
 # AI Agents
+.remember/
 .agent/
 .claude/
 docs/plans/
