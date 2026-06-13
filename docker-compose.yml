@@ -2,6 +2,26 @@
 # Smart Orchestration with Profiles
 
 services:
+  # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: openwa-docker-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      VOLUMES: 1
+      INFO: 1
+      PING: 1
+      POST: 1
+      DELETE: 1
+      # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
+    labels:
+      - 'com.openwa.service=docker-proxy'
+      - 'com.openwa.core=true'
+
   # ===== CORE: Traefik Reverse Proxy =====
   traefik:
     image: traefik:v3.0
@@ -70,11 +90,14 @@ services:
       - PLUGINS_DIR=/app/data/plugins
       # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}
+      # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
+      - DOCKER_HOST=tcp://docker-proxy:2375
     volumes:
       - openwa-data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker-compose.yml:/app/docker-compose.yml:ro
     depends_on:
+      docker-proxy:
+        condition: service_started
       postgres:
         condition: service_healthy
         required: false
