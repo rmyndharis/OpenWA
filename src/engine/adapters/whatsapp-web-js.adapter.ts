@@ -35,6 +35,7 @@ import {
   WwjsChannelData,
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
+import { buildIncomingMessageBase } from './message-mapper';
 
 export interface WhatsAppWebJsConfig {
   sessionId: string;
@@ -143,17 +144,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('message', async msg => {
       try {
-        const incomingMessage: IncomingMessage = {
-          id: msg.id._serialized,
-          from: msg.from,
-          to: msg.to,
-          chatId: msg.from,
-          body: msg.body,
-          type: msg.type,
-          timestamp: msg.timestamp,
-          fromMe: msg.fromMe,
-          isGroup: msg.from.endsWith('@g.us'),
-        };
+        const incomingMessage: IncomingMessage = buildIncomingMessageBase(msg);
+
+        // Enrich the sender contact with the saved name (best-effort, from the WhatsApp Web cache).
+        // `author`/`from` resolve to the actual sender for group and 1:1 messages respectively.
+        try {
+          const contact = await msg.getContact();
+          if (contact?.name || contact?.pushname) {
+            incomingMessage.contact = {
+              name: contact.name || incomingMessage.contact?.name,
+              pushName: contact.pushname || incomingMessage.contact?.pushName,
+            };
+          }
+        } catch (error) {
+          this.logger.error('Error getting message contact', String(error));
+        }
 
         // Handle location
         if (msg.type === MessageTypes.LOCATION && msg.location) {

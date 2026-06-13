@@ -40,6 +40,7 @@ Built on a **pluggable architecture**, OpenWA lets you swap database engines (SQ
 | 🔹 **Multi-Session Ready**    | Run multiple WhatsApp sessions concurrently on one instance  |
 | 🐳 **Docker Native**          | Production-ready with zero configuration                     |
 | 🔗 **n8n Integration**        | Community nodes for workflow automation                      |
+| 🧩 **Community Adapters**     | Third-party integrations (e.g. ioBroker) — see [docs](./docs/23-community-integrations.md) |
 
 ---
 

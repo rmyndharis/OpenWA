@@ -55,6 +55,7 @@
 | 20  | [Community Guidelines](./20-community-guidelines.md)             | Contribution and governance                       |
 | 21  | [Glossary](./21-glossary.md)                                     | Terms and definitions                             |
 | 22  | [n8n Integration](./22-n8n-integration.md)                       | n8n community nodes for OpenWA                    |
+| 23  | [Community Integrations](./23-community-integrations.md)         | Third-party adapters built on the OpenWA API      |
 
 ## Quick Start
 

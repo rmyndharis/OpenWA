@@ -32,6 +32,13 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
+  author?: string;
+  /** Sender display info, best-effort from the WhatsApp Web contact cache. */
+  contact?: {
+    name?: string;
+    pushName?: string;
+  };
   media?: {
     mimetype: string;
     filename?: string;
