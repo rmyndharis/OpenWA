@@ -41,6 +41,13 @@ export interface IncomingMessage {
     id: string;
     body: string;
   };
+  location?: {
+    latitude: number;
+    longitude: number;
+    description?: string;
+    address?: string;
+    url?: string;
+  };
 }
 
 export interface Contact {

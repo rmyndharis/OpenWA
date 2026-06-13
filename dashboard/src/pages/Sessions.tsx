@@ -72,9 +72,16 @@ export function Sessions() {
         fetchSessions();
       }
     } catch {
-      setQrData(null);
-      currentSessionName.current = '';
-      fetchSessions();
+      // Keep qrData alive so the polling interval keeps retrying until the QR
+      // is ready. Only stop polling if the session itself has failed.
+      const currentSession = await sessionApi.get(sessionId).catch(() => null);
+      const stillInitializing = currentSession &&
+        ['initializing', 'connecting', 'qr_ready'].includes(currentSession.status);
+      if (!stillInitializing) {
+        setQrData(null);
+        currentSessionName.current = '';
+        fetchSessions();
+      }
     }
   }, []);
 
@@ -150,12 +157,17 @@ export function Sessions() {
   const handleShowQR = async (id: string) => {
     const session = sessions.find(s => s.id === id);
     const sessionName = session?.name || '';
+    // Show loading state immediately so the modal opens and polling starts
+    // even before Chromium has finished initializing.
+    setQrData({ sessionId: id, sessionName, qrCode: '' });
+    currentSessionName.current = sessionName;
     try {
       const qr = await sessionApi.getQR(id);
       setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
     } catch (err) {
       console.error('Failed to get QR:', err);
-      setError(t('sessions.qr.unavailable'));
+      // Do not clear qrData here — keep the loading modal open so the
+      // polling interval (every 5 s) retries until the QR becomes available.
     }
   };
 

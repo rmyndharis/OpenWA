@@ -19,15 +19,19 @@ class BulkMessageContentDto {
   text?: string;
 
   @ApiPropertyOptional({ description: 'Image URL or base64' })
+  @IsOptional()
   image?: { url?: string; base64?: string; mimetype?: string };
 
   @ApiPropertyOptional({ description: 'Video URL or base64' })
+  @IsOptional()
   video?: { url?: string; base64?: string; mimetype?: string };
 
   @ApiPropertyOptional({ description: 'Audio URL or base64' })
+  @IsOptional()
   audio?: { url?: string; base64?: string; mimetype?: string };
 
   @ApiPropertyOptional({ description: 'Document URL or base64' })
+  @IsOptional()
   document?: { url?: string; base64?: string; mimetype?: string; filename?: string };
 
   @ApiPropertyOptional({ description: 'Caption for media messages' })

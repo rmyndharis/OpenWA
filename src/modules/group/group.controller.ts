@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  HttpCode,
+  HttpStatus,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { SessionService } from '../session/session.service';
 
@@ -44,7 +56,7 @@ export class GroupController {
     const engine = this.getEngine(sessionId);
     const group = await engine.getGroupInfo(groupId);
     if (!group) {
-      throw new Error(`Group ${groupId} not found`);
+      throw new NotFoundException(`Group ${groupId} not found`);
     }
     return group;
   }
@@ -205,7 +217,7 @@ export class GroupController {
   private getEngine(sessionId: string) {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {
-      throw new Error('Session is not started');
+      throw new BadRequestException('Session is not started');
     }
     return engine;
   }
