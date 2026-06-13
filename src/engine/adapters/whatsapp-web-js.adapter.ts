@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, MessageTypes } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -154,6 +154,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           fromMe: msg.fromMe,
           isGroup: msg.from.endsWith('@g.us'),
         };
+
+        // Handle location
+        if (msg.type === MessageTypes.LOCATION && msg.location) {
+          incomingMessage.location = {
+            latitude: Number(msg.location.latitude),
+            longitude: Number(msg.location.longitude),
+            description: msg.location.description || undefined,
+            address: msg.location.address || undefined,
+            url: msg.location.url || undefined,
+          };
+        }
 
         // Handle media
         if (msg.hasMedia) {
@@ -385,7 +396,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult> {
     this.ensureReady();
     // Import Location class dynamically from whatsapp-web.js
-    const { Location } = await import('whatsapp-web.js');
+    const module = await import('whatsapp-web.js');
+    const Location = module.Location || module.default?.Location;
+
     const loc = new Location(location.latitude, location.longitude, {
       name: location.description || '',
       address: location.address || '',
