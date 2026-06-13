@@ -4,6 +4,9 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
+import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
+import { AuthService } from './modules/auth/auth.service';
+import { Request, Response, NextFunction } from 'express';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -158,6 +161,15 @@ async function bootstrap() {
 
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
+
+  // Protect the Bull Board queue UI (/api/admin/queues). It is mounted by
+  // @bull-board/nestjs as raw Express middleware that the global ApiKeyGuard
+  // does not cover; registering this before app.listen() ensures it runs ahead
+  // of the Bull Board router. Requires a valid ADMIN API key.
+  const bullBoardAuth = new BullBoardAuthMiddleware(app.get(AuthService));
+  app.use('/api/admin/queues', (req: Request, res: Response, next: NextFunction) => {
+    void bullBoardAuth.use(req, res, next);
+  });
 
   const port = process.env.PORT || 2785;
   await app.listen(port);
