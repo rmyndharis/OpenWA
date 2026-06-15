@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `navigator.clipboard`) that are unavailable over HTTP on a LAN IP — so creating a session
   threw `crypto.randomUUID is not a function`. Both now degrade gracefully (non-crypto id
   fallback; `execCommand('copy')` clipboard fallback). (#244)
+- The Infrastructure page's "View Bull Board" link no longer hardcodes `http://localhost:2785`;
+  it opens the configured API origin, so it works on remote/LAN deployments.
 
 ## [0.2.2] - 2026-06-15
 

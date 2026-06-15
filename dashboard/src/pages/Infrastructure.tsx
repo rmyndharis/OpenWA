@@ -13,7 +13,7 @@ import {
   Webhook,
   Gauge,
 } from 'lucide-react';
-import { infraApi } from '../services/api';
+import { infraApi, API_BASE_URL } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
@@ -814,7 +814,7 @@ export function Infrastructure() {
                     </button>
                     <button
                       className="btn-outline"
-                      onClick={() => window.open('http://localhost:2785/api/admin/queues', '_blank')}
+                      onClick={() => window.open(`${API_BASE_URL}/admin/queues`, '_blank')}
                     >
                       <ExternalLink size={16} />
                       {t('infrastructure.redis.viewBullMq')}
