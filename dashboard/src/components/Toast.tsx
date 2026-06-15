@@ -45,7 +45,10 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const addToast = useCallback(
     (toast: Omit<Toast, 'id'>) => {
-      const id = crypto.randomUUID();
+      // crypto.randomUUID() is only defined in a secure context (HTTPS / localhost). Over plain
+      // HTTP on a LAN IP it is undefined, which previously threw "crypto.randomUUID is not a
+      // function" on every toast — fall back to a non-crypto id (a toast key needs no strength).
+      const id = crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const newToast = { ...toast, id };
       setToasts(prev => [...prev, newToast]);
 
