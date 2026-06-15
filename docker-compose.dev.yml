@@ -9,7 +9,8 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     ports:
-      - '0.0.0.0:2785:2785'
+      # Bind to localhost by default; set BIND_HOST=0.0.0.0 in .env to reach it from another host.
+      - '${BIND_HOST:-127.0.0.1}:2785:2785'
     environment:
       - NODE_ENV=development
       - PORT=2785
@@ -48,7 +49,7 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-dashboard
     ports:
-      - '0.0.0.0:2886:80'
+      - '${BIND_HOST:-127.0.0.1}:2886:80'
     depends_on:
       openwa:
         condition: service_healthy
