@@ -162,6 +162,13 @@ export class StorageService {
       gzipOptions: { level: 6 },
     });
 
+    // Surface archive-level failures (gzip/finalize) on the returned stream instead of
+    // letting them become an unhandled rejection or a silently truncated download.
+    archive.on('error', (err: Error) => {
+      this.logger.error('Export archive failed', String(err));
+      output.destroy(err);
+    });
+
     archive.pipe(output);
 
     // Add files to archive
@@ -174,7 +181,9 @@ export class StorageService {
       }
     }
 
-    void archive.finalize();
+    // finalize() rejections also emit via the 'error' handler above; catch the promise so it
+    // never surfaces as an unhandled rejection.
+    archive.finalize().catch(() => undefined);
     return output;
   }
 
