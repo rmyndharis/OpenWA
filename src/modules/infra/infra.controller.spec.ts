@@ -32,6 +32,7 @@ describe('InfraController access control (Vuln 2)', () => {
   // data, read secrets, change config, restart, trigger storage import, or read
   // infrastructure status / engine / storage details (#221 tightened the reads).
   const adminOnly = [
+    'getConfig', // GET  /infra/config (returns saved config; secrets omitted but still ADMIN-only)
     'saveConfig', // PUT  /infra/config
     'requestRestart', // POST /infra/restart
     'exportData', // GET  /infra/export-data  (exposes webhook secrets)
@@ -173,6 +174,26 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
     const env = written({ database: { type: 'postgres', host: 'db', password: '' } }, 'DATABASE_PASSWORD=keepme\n');
     expect(env).toContain('DATABASE_PASSWORD=keepme');
     expect(env).toContain('DATABASE_HOST=db');
+  });
+
+  it('drops stale postgres keys when switching to sqlite', () => {
+    const existing = 'DATABASE_TYPE=postgres\nDATABASE_HOST=oldhost\nDATABASE_PASSWORD=secret\nDATABASE_PORT=5432\n';
+    const env = written({ database: { type: 'sqlite' } }, existing);
+    expect(env).toContain('DATABASE_TYPE=sqlite');
+    expect(env).not.toContain('DATABASE_HOST=');
+    expect(env).not.toContain('DATABASE_PASSWORD=');
+    expect(env).not.toContain('DATABASE_PORT=');
+  });
+
+  it('drops stale S3 keys when switching storage to local', () => {
+    const existing =
+      'STORAGE_TYPE=s3\nS3_BUCKET=old\nS3_ACCESS_KEY_ID=ak\nS3_SECRET_ACCESS_KEY=sk\nS3_ENDPOINT=http://x\n';
+    const env = written({ storage: { type: 'local', localPath: './data/media' } }, existing);
+    expect(env).toContain('STORAGE_TYPE=local');
+    expect(env).toContain('STORAGE_LOCAL_PATH=./data/media');
+    expect(env).not.toContain('S3_BUCKET=');
+    expect(env).not.toContain('S3_ACCESS_KEY_ID=');
+    expect(env).not.toContain('S3_SECRET_ACCESS_KEY=');
   });
 });
 

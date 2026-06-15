@@ -483,11 +483,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
         // Dispatch the delivery/read receipt to webhooks (#155). Outgoing `message.sent` is handled
         // solely by `onMessageCreate`, so the ack path deliberately does NOT emit `message.sent`.
-        void this.webhookService.dispatch(id, 'message.ack', { messageId, ack });
+        // `id` mirrors the field every other message.* webhook carries (and the idempotency key
+        // resolver reads); `messageId` is kept for backward compatibility.
+        void this.webhookService.dispatch(id, 'message.ack', { id: messageId, messageId, ack });
 
         // Surface delivery failures actively so consumers don't have to poll for them (#220).
         if (ack < 0) {
-          void this.webhookService.dispatch(id, 'message.failed', { messageId, ack });
+          void this.webhookService.dispatch(id, 'message.failed', { id: messageId, messageId, ack });
         }
       },
       onMessageRevoked: (message): void => {
@@ -497,16 +499,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'message_revoked',
         });
 
-        // Flag the stored message as revoked; the dashboard renders the localized
-        // "message deleted" text, so no display string is persisted here.
+        // Flag the stored message as revoked (best-effort; the message may not be in the
+        // DB). The dashboard renders the localized "message deleted" text, so no display
+        // string is persisted here.
         void this.messageRepository
           .update({ sessionId: id, waMessageId: message.id }, { body: '', type: 'revoked' })
-          .then(() => {
-            this.eventsGateway.emitMessageRevoked(id, message as unknown as Record<string, unknown>);
-          })
           .catch(err => {
             this.logger.error(`Failed to update revoked message: ${message.id}`, String(err));
           });
+
+        // Notify consumers regardless of whether the row existed: webhook (message.revoked
+        // is a declared event) + the real-time dashboard stream.
+        const revokedPayload = message as unknown as Record<string, unknown>;
+        void this.webhookService.dispatch(id, 'message.revoked', revokedPayload);
+        this.eventsGateway.emitMessageRevoked(id, revokedPayload);
       },
       onMessageReaction: (event): void => {
         this.logger.debug(`Message reaction received: ${event.messageId} -> ${event.reaction}`, {

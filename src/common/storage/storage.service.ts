@@ -42,8 +42,11 @@ export class StorageService {
     if (this.storageType === 's3') {
       const s3Config = this.configService.get<S3Config>('storage.s3') || {};
       const endpoint = process.env.S3_ENDPOINT || s3Config.endpoint;
-      const accessKeyId = process.env.S3_ACCESS_KEY || s3Config.accessKeyId;
-      const secretAccessKey = process.env.S3_SECRET_KEY || s3Config.secretAccessKey;
+      // Canonical names are S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY (what configuration.ts
+      // and the dashboard write). The legacy S3_ACCESS_KEY / S3_SECRET_KEY are still read as
+      // a fallback so existing .env files keep working.
+      const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY || s3Config.accessKeyId;
+      const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || s3Config.secretAccessKey;
       const region = process.env.S3_REGION || s3Config.region || 'us-east-1';
 
       if (endpoint && accessKeyId && secretAccessKey) {

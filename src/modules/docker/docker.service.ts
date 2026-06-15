@@ -24,6 +24,7 @@ export class DockerService implements OnModuleInit {
   private readonly logger = new Logger(DockerService.name);
   private docker: Docker | null = null;
   private isAvailable = false;
+  private reinitInFlight = false;
 
   async onModuleInit() {
     await this.initializeDocker();
@@ -97,9 +98,22 @@ export class DockerService implements OnModuleInit {
   }
 
   /**
-   * Check if Docker is available
+   * Check if Docker is available.
+   *
+   * Startup-race recovery: when the API talks to the Docker socket-proxy over TCP
+   * (DOCKER_HOST=tcp://...), the proxy container may not be accepting connections at
+   * the moment onModuleInit runs (compose `service_started` doesn't wait for readiness).
+   * If the first connect failed, retry it once in the background here so orchestration
+   * recovers without a process restart. Only for the DOCKER_HOST (proxy/tcp) case — a
+   * socket-based or docker-less deployment has no such race.
    */
   isDockerAvailable(): boolean {
+    if (!this.isAvailable && !this.reinitInFlight && process.env.DOCKER_HOST) {
+      this.reinitInFlight = true;
+      void this.initializeDocker().finally(() => {
+        this.reinitInFlight = false;
+      });
+    }
     return this.isAvailable;
   }
 

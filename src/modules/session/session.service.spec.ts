@@ -479,6 +479,25 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.received')).toHaveLength(1);
       expect(dispatchedEvents('message.sent')).toHaveLength(0);
     });
+
+    it('dispatches the message.revoked webhook and WS event on a revoke (#152)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onMessageRevoked).toBe('function');
+
+      callbacks.onMessageRevoked!({
+        id: 'wa-rev-1',
+        chatId: 'peer@c.us',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        type: 'revoked',
+        body: '',
+        timestamp: 1706868000,
+      });
+      await flush();
+
+      expect(dispatchedEvents('message.revoked')).toHaveLength(1);
+      expect(eventsGateway.emitMessageRevoked as jest.Mock).toHaveBeenCalledWith('sess-uuid-1', expect.anything());
+    });
   });
 
   // ── stop ──────────────────────────────────────────────────────────

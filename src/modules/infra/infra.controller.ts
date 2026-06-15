@@ -305,6 +305,10 @@ export class InfraController {
         ? dotenv.parse(fs.readFileSync(envPath, 'utf8'))
         : {};
       const updates: Record<string, string> = {};
+      // Keys to remove from the merged result — used to drop stale settings when the
+      // user switches mode (postgres->sqlite, s3->local) so a reload never sees the new
+      // mode alongside leftover keys from the old one.
+      const staleKeys = new Set<string>();
 
       // Secret values are never echoed back to the form, so an empty submission means
       // "unchanged" — keep whatever is already stored instead of blanking it.
@@ -341,6 +345,20 @@ export class InfraController {
             updates.DATABASE_SSL_REJECT_UNAUTHORIZED =
               config.database.sslRejectUnauthorized === false ? 'false' : 'true';
           }
+        } else {
+          // Switching to sqlite: drop stale postgres connection keys.
+          for (const k of [
+            'DATABASE_HOST',
+            'DATABASE_PORT',
+            'DATABASE_USERNAME',
+            'DATABASE_PASSWORD',
+            'DATABASE_NAME',
+            'DATABASE_POOL_SIZE',
+            'DATABASE_SSL',
+            'DATABASE_SSL_REJECT_UNAUTHORIZED',
+          ]) {
+            staleKeys.add(k);
+          }
         }
       }
 
@@ -372,7 +390,12 @@ export class InfraController {
         updates.MINIO_BUILTIN = config.storage.builtIn ? 'true' : 'false';
         if (config.storage.type === 'local') {
           updates.STORAGE_LOCAL_PATH = config.storage.localPath || './data/media';
+          // Switching to local: drop stale S3 keys.
+          for (const k of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION']) {
+            staleKeys.add(k);
+          }
         } else if (config.storage.type === 's3') {
+          staleKeys.add('STORAGE_LOCAL_PATH');
           if (config.storage.builtIn) {
             // Built-in MinIO - use container name as endpoint
             updates.S3_ENDPOINT = 'http://minio:9000';
@@ -404,6 +427,10 @@ export class InfraController {
 
       // Existing values are the base; this payload's values win (secrets handled above).
       const merged: Record<string, string> = { ...existing, ...updates };
+      // Drop keys made obsolete by a mode switch (postgres->sqlite, s3->local).
+      for (const k of staleKeys) {
+        delete merged[k];
+      }
       const body = Object.keys(merged)
         .sort()
         .map(key => `${key}=${merged[key]}`);
