@@ -78,10 +78,16 @@ dashboard/
 
 ## 🔗 API Connection
 
-The dashboard connects to the OpenWA API backend. Configure the API URL in environment variables:
+By default the dashboard calls the API on the **same origin** it is served from (the
+single-container setup), so no configuration is needed.
+
+For a **split-origin** deployment (dashboard hosted separately from the API), set the API
+**origin** at build time — the `/api` prefix is appended automatically:
 
 ```bash
 VITE_API_URL=http://localhost:2785
+# real-time events (WebSocket) origin; defaults to the page origin
+VITE_WS_URL=http://localhost:2785
 ```
 
 ## 📄 License

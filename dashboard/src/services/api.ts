@@ -1,7 +1,14 @@
 // API Service Layer for OpenWA Dashboard
 // Centralized API client with TypeScript types
 
-const API_BASE_URL = '/api';
+// Resolve the API base URL. By default this is the same-origin relative path '/api',
+// correct when the dashboard and API are served from the same origin (the default
+// single-container setup). For a split-origin deployment (dashboard hosted separately
+// from the API), set VITE_API_URL at build time to the API ORIGIN — e.g.
+// `VITE_API_URL=https://gateway.example.com` — and the '/api' prefix is appended here.
+// Previously VITE_API_URL was documented but never read, so the dashboard always called
+// same-origin '/api' and a split deployment failed with "Invalid API Key" (#91).
+const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
 
 // =============================================================================
 // Types
