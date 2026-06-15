@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-15
+
+A patch release.
+
+### Fixed
+
+- **Dashboard:** The API client now honors `VITE_API_URL` for split-origin deployments.
+  It reads `VITE_API_URL` (the API origin) and appends `/api` instead of always calling the
+  same-origin `/api`; the same-origin default is unchanged. This fixes the dashboard
+  failing with "Invalid API Key" when it is hosted on a different origin than the API.
+  Thanks @jairo315-bit (#91).
+
+### Dependencies
+
+- **Dashboard:** Bump the TypeScript dev dependency from 5.9.3 to 6.0.3 (#140).
+
 ## [0.2.0] - 2026-06-15
 
 A major feature- and security-focused release. Adds six dashboard languages and a
