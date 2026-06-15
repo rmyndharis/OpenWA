@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an idea or improvement for OpenWA
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please describe the problem first — that helps us find
+        the best solution, which isn't always the one initially imagined.
+  - type: checkboxes
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't already requested
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and what's getting in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? API shape, dashboard behavior, config, etc.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: A quick reality check on engine capabilities.
+      options:
+        - label: >-
+            I understand some features are limited by the underlying WhatsApp engine
+            (e.g. interactive Buttons/List messages are not supported on whatsapp-web.js).
