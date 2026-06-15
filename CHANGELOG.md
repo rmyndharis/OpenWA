@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.3] - 2026-06-15
+
+A patch release: the dashboard now works when served over plain HTTP on a non-`localhost`
+origin (LAN/remote), plus a configurable dev-compose bind host.
 
 ### Fixed
 
@@ -16,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback; `execCommand('copy')` clipboard fallback). (#244)
 - The Infrastructure page's "View Bull Board" link no longer hardcodes `http://localhost:2785`;
   it opens the configured API origin, so it works on remote/LAN deployments.
+
+### Changed
+
+- The dev compose (`docker-compose.dev.yml`) bind host is now configurable via `BIND_HOST`
+  (default `127.0.0.1`); set `BIND_HOST=0.0.0.0` in `.env` to reach the dev stack from another
+  host (front it with a TLS proxy for anything public). Thanks @Stanley-blik (#245).
 
 ## [0.2.2] - 2026-06-15
 
