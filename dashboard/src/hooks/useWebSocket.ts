@@ -76,6 +76,9 @@ const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  // True once Socket.IO exhausts its reconnection attempts and permanently gives up — lets the
+  // UI show a "connection lost" indicator + a manual retry instead of silently going stale.
+  const [connectionFailed, setConnectionFailed] = useState(false);
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
@@ -93,19 +96,19 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
+      // Send the key via `auth` (and a header for proxies). NOT via `query` — a key in the
+      // handshake URL leaks into access logs / Referer. The gateway reads auth first.
       auth: {
         apiKey,
       },
       extraHeaders: {
         'X-API-Key': apiKey,
       },
-      query: {
-        apiKey,
-      },
     });
 
     socketRef.current.on('connect', () => {
       setIsConnected(true);
+      setConnectionFailed(false);
     });
 
     socketRef.current.on('disconnect', () => {
@@ -115,7 +118,23 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     socketRef.current.on('connect_error', error => {
       console.warn('[WebSocket] Connection error:', error.message);
     });
+
+    // `reconnect_failed` is emitted on the Manager once all reconnectionAttempts are exhausted.
+    socketRef.current.io.on('reconnect_failed', () => {
+      console.warn('[WebSocket] Reconnection failed after max attempts');
+      setConnectionFailed(true);
+    });
   }, []);
+
+  // Manual retry after the socket permanently gave up: tear down the dead socket and reconnect.
+  const reconnect = useCallback(() => {
+    setConnectionFailed(false);
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+    connect();
+  }, [connect]);
 
   const subscribe = useCallback((sessionId: string, eventsList: string[]) => {
     if (socketRef.current?.connected) {
@@ -214,5 +233,5 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     };
   }, [events]);
 
-  return { isConnected, subscribe, unsubscribe };
+  return { isConnected, connectionFailed, reconnect, subscribe, unsubscribe };
 }

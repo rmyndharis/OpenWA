@@ -37,7 +37,6 @@
     "language": "Lingua",
     "english": "Inglese",
     "hebrew": "עברית",
-    "italian": "Italiano",
     "back": "Indietro",
     "next": "Avanti",
     "previous": "Precedente",
@@ -57,12 +56,55 @@
   "nav": {
     "dashboard": "Dashboard",
     "sessions": "Sessioni",
+    "chats": "Chat",
     "webhooks": "Webhook",
     "apiKeys": "Chiavi API",
     "messageTester": "Tester Messaggi",
     "infrastructure": "Infrastruttura",
     "plugins": "Plugin",
     "logs": "Log"
+  },
+  "chats": {
+    "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",
+    "noSessionsTitle": "Nessuna sessione connessa",
+    "noSessionsDesc": "Per utilizzare la funzione chat, connetti prima una sessione WhatsApp dal menu <1>Sessioni</1>.",
+    "sessionLabel": "Sessione WhatsApp",
+    "noPhone": "Nessun telefono",
+    "searchPlaceholder": "Cerca chat...",
+    "loadingChats": "Caricamento chat...",
+    "empty": "Nessuna chat",
+    "noMessageYet": "Ancora nessun messaggio",
+    "loadingMessages": "Caricamento messaggi...",
+    "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
+    "downloadDocument": "Scarica documento",
+    "actions": {
+      "reply": "Rispondi",
+      "react": "Reagisci",
+      "delete": "Elimina messaggio"
+    },
+    "replyingTo": "Risposta a {{name}}",
+    "you": "Tu",
+    "youPrefix": "Tu: ",
+    "yesterday": "Ieri",
+    "attachTitle": "Invia file / immagine",
+    "emojiTitle": "Scegli emoji",
+    "captionPlaceholder": "Aggiungi una didascalia...",
+    "messagePlaceholder": "Scrivi un messaggio...",
+    "noPermission": "Non hai il permesso di inviare messaggi",
+    "send": "Invia",
+    "placeholderTitle": "Inizia a messaggiare",
+    "placeholderDesc": "Seleziona una chat attiva dalla barra laterale a sinistra per iniziare a leggere e inviare messaggi WhatsApp.",
+    "deleteConfirm": "Eliminare questo messaggio per tutti?",
+    "messageDeleted": "🚫 Questo messaggio è stato eliminato",
+    "errors": {
+      "loadSessions": "Impossibile caricare le sessioni",
+      "loadChats": "Impossibile caricare le chat",
+      "loadMessages": "Impossibile caricare i messaggi",
+      "markRead": "Impossibile contrassegnare la chat come letta",
+      "send": "Impossibile inviare il messaggio",
+      "react": "Impossibile reagire al messaggio",
+      "delete": "Impossibile eliminare il messaggio"
+    }
   },
   "errorBoundary": {
     "title": "Qualcosa è andato storto",
@@ -187,12 +229,15 @@
       "readyTitle": "Sessione Pronta",
       "readyDesc": "La sessione WhatsApp è ora connessa",
       "disconnectedTitle": "Sessione Disconnessa",
-      "disconnectedDesc": "La sessione WhatsApp è stata disconnessa"
+      "disconnectedDesc": "La sessione WhatsApp è stata disconnessa",
+      "failedTitle": "Sessione Fallita",
+      "failedDesc": "Avvio della sessione WhatsApp non riuscito. Apri la sessione per vedere il motivo."
     },
     "card": {
       "phone": "Telefono",
       "sessionId": "ID Sessione",
-      "lastActive": "Ultima Attività"
+      "lastActive": "Ultima Attività",
+      "error": "Errore"
     }
   },
   "webhooks": {
@@ -476,7 +521,6 @@
     "engineCard": "Motore WhatsApp Attivo",
     "running": "In esecuzione",
     "supportedFeatures": "Funzionalità Supportate:",
-    "more": "+altri {{count}}",
     "builtIn": "Integrato",
     "noDescription": "Nessuna descrizione disponibile",
     "required": "Richiesto",

@@ -9,6 +9,54 @@ export function normalizeIp(ip: string): string {
   return match ? match[1] : ip;
 }
 
+/** Minimal request shape needed for client-IP resolution (framework-agnostic). */
+export interface RequestLike {
+  ip?: string;
+  socket?: { remoteAddress?: string };
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/**
+ * Resolve the real client IP. X-Forwarded-For is client-controllable, so it is only
+ * honored when the request actually arrives from a configured trusted proxy. With no
+ * trusted proxies, the direct socket address is used (prevents XFF spoofing). Shared by
+ * ApiKeyGuard (allowedIps whitelist) and the throttler (per-client rate-limit bucket).
+ */
+export function resolveClientIp(req: RequestLike, trustedProxies: string[]): string {
+  const socketIp = normalizeIp(req.socket?.remoteAddress || req.ip || '');
+
+  if (!trustedProxies || trustedProxies.length === 0) {
+    return socketIp;
+  }
+
+  const isTrusted = (ip: string): boolean => trustedProxies.some(proxy => ipMatches(ip, proxy));
+
+  // Only trust the forwarded chain if the immediate peer is a trusted proxy.
+  if (!isTrusted(socketIp)) {
+    return socketIp;
+  }
+
+  const forwarded = req.headers['x-forwarded-for'];
+  if (!forwarded) {
+    return socketIp;
+  }
+
+  const hops = (Array.isArray(forwarded) ? forwarded.join(',') : forwarded)
+    .split(',')
+    .map(hop => normalizeIp(hop.trim()))
+    .filter(Boolean);
+
+  // Walk right-to-left and return the first hop that is not a trusted proxy:
+  // the closest address the trusted infrastructure actually observed.
+  for (let i = hops.length - 1; i >= 0; i--) {
+    if (!isTrusted(hops[i])) {
+      return hops[i];
+    }
+  }
+
+  return socketIp;
+}
+
 function ipv4ToInt(ip: string): number | null {
   const parts = ip.split('.');
   if (parts.length !== 4) return null;

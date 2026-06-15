@@ -1,5 +1,12 @@
 # 10 - DevOps & Infrastructure
 
+> **⚠️ Conceptual reference (M9).** Some examples here predate the shipped runtime and may not
+> match it exactly. The **authoritative** sources are the repo's `Dockerfile`, `docker-compose.yml`
+> (Docker socket-proxy threat model, gosu non-root drop, loopback-bound datastores, container
+> hardening), and `.env.example` (canonical env var names). Where this doc and those disagree,
+> the files win. In particular: the API master key env is `API_MASTER_KEY`, datastores have no
+> default credentials, and production migrations use `npm run migration:run:prod`.
+
 ## 10.1 Infrastructure Overview
 
 ```mermaid
@@ -105,7 +112,9 @@ services:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://openwa:openwa@postgres:5432/openwa
       - REDIS_URL=redis://redis:6379
-      - API_KEY_MASTER=dev-master-key
+      # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
+      # strong secret. Production refuses to boot with a placeholder/default (M9/M16).
+      - API_MASTER_KEY=
     volumes:
       - ./:/app
       - /app/node_modules

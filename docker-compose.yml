@@ -7,6 +7,11 @@ services:
     image: tecnativa/docker-socket-proxy
     container_name: openwa-docker-proxy
     restart: unless-stopped
+    # Only on the isolated internal network — reachable solely by openwa-api, NOT the
+    # dashboard or any other peer (finding H6). `internal: true` also denies the proxy
+    # outbound access; it only needs the locally-mounted docker socket.
+    networks:
+      - internal-docker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
@@ -28,6 +33,8 @@ services:
     container_name: openwa-traefik
     profiles: ['with-proxy', 'full']
     restart: unless-stopped
+    networks:
+      - openwa-network
     ports:
       - '127.0.0.1:${DASHBOARD_PORT:-2886}:80'
       - '127.0.0.1:8080:8080' # Traefik dashboard
@@ -45,6 +52,34 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
+    # App network for datastores/traefik/dashboard + the isolated network to reach
+    # docker-proxy (DOCKER_HOST). createService() in docker.service.ts attaches
+    # orchestrated containers to the literal `openwa-network`, so its name is fixed.
+    networks:
+      - openwa-network
+      - internal-docker
+    # Container hardening (finding H7): Chromium runs with --no-sandbox, so the
+    # container itself is the confinement boundary. cap_drop ALL + a minimal re-add
+    # ONLY for the root entrypoint's chown + gosu privilege-drop; once gosu setuids to
+    # the openwa user the node/Chromium process keeps NO effective capabilities.
+    # read_only rootfs (Chromium's profile lives on the writable /app/data volume;
+    # HOME=/tmp + tmpfs absorb stray writes). no-new-privileges blocks setuid escalation.
+    # NOTE: requires a live single-session smoke (Chromium must launch) before merge.
+    security_opt:
+      - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN # entrypoint: chown -R openwa /app/data on the named volume
+      - DAC_OVERRIDE # entrypoint: chown across pre-existing files
+      - FOWNER
+      - SETGID # gosu: drop to the openwa group
+      - SETUID # gosu: drop to the openwa user
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 512
+    mem_limit: ${OPENWA_MEM_LIMIT:-2g} # tune up for many concurrent sessions
     ports:
       - '127.0.0.1:${API_PORT:-2785}:2785'
     expose:
@@ -52,6 +87,8 @@ services:
     environment:
       # Core
       - NODE_ENV=${NODE_ENV:-production}
+      # Writable HOME on tmpfs so Chromium's HOME-relative writes don't hit the read_only rootfs
+      - HOME=/tmp
       - PORT=2785
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Database
@@ -60,7 +97,9 @@ services:
       - DATABASE_HOST=${DATABASE_HOST:-postgres}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USERNAME=${DATABASE_USERNAME:-openwa}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-openwa}
+      # No committed default secret (M16). Empty for the default sqlite setup; the
+      # postgres service requires it (:?) when that profile is active.
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-false}
       # Engine
       - ENGINE_TYPE=${ENGINE_TYPE:-whatsapp-web.js}
@@ -71,8 +110,8 @@ services:
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - STORAGE_LOCAL_PATH=/app/data/media
       - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - S3_BUCKET=${S3_BUCKET:-openwa}
       # Redis
       - REDIS_ENABLED=${REDIS_ENABLED:-false}
@@ -110,7 +149,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+          "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
         ]
       interval: 30s
       timeout: 10s
@@ -128,6 +167,9 @@ services:
     container_name: openwa-dashboard
     profiles: ['with-dashboard', 'full']
     restart: unless-stopped
+    # App network only — the dashboard must NOT be able to reach docker-proxy:2375 (H6).
+    networks:
+      - openwa-network
     expose:
       - '80'
     depends_on:
@@ -142,9 +184,16 @@ services:
     container_name: openwa-postgres
     profiles: ['postgres']
     restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-openwa}
+      # M16: no committed default secret. Empty unless the operator sets it; the postgres
+      # image refuses to initialize with an empty password (clear fail-fast), and the app's
+      # production boot guard rejects empty/placeholder secrets before startup.
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-}
       POSTGRES_DB: ${DATABASE_NAME:-openwa}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -163,6 +212,10 @@ services:
     container_name: openwa-redis
     profiles: ['redis']
     restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -181,10 +234,16 @@ services:
     container_name: openwa-minio
     profiles: ['minio']
     restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      # M16: no committed default creds. MinIO refuses to start with empty root creds
+      # (clear fail-fast); the app's production boot guard rejects empty/placeholder secrets.
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-}
     volumes:
       - minio-data:/data
     ports:
@@ -210,5 +269,12 @@ volumes:
     driver: local
 
 networks:
-  default:
+  # Application network — datastores, traefik, dashboard, and openwa-api. Keep the
+  # name `openwa-network`: docker.service.ts attaches orchestrated containers to it by literal name.
+  openwa-network:
     name: openwa-network
+  # Isolated network for the Docker socket proxy. `internal: true` means no external
+  # connectivity; only openwa-api joins it, so nothing else can reach docker-proxy:2375.
+  internal-docker:
+    name: openwa-internal-docker
+    internal: true

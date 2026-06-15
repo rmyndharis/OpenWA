@@ -24,13 +24,16 @@ timeline
                   : Community tools
                   : Stable release
 
-    section v0.2.0 - Developer Tools
-        Q2 2026 : JavaScript/Node.js SDK
-                : Python SDK
-                : Docs Site
+    section v0.2.0 - i18n, Real-time & Hardening (Released)
+        Jun 2026 : Multi-locale dashboard (i18n)
+                 : Real-time Chats view
+                 : Webhook delivery-state & templates
+                 : Security & container hardening
 
-    section v0.3.0 - Observability
-        Q3 2026 : Prometheus Metrics
+    section v0.3.0 - SDK & Observability
+        Q3 2026 : JavaScript/Node.js & Python SDK
+                : Docs Site
+                : Prometheus Metrics
                 : Grafana Dashboard
 
     section v1.0.0 - Enterprise
@@ -40,14 +43,17 @@ timeline
 
 ### Release Summary
 
-| Version | Focus                       | Status      |
-| ------- | --------------------------- | ----------- |
-| v0.0.1  | MVP - Basic API             | ✅ Released |
-| v0.0.2  | Production Ready            | ✅ Released |
-| v0.1.0  | Initial Stable Release      | ✅ Released |
-| v0.2.0  | SDK & Developer Tools       | 📋 Planned  |
-| v0.3.0  | Performance & Observability | 📋 Planned  |
-| v1.0.0  | Enterprise Ready            | 📋 Planned  |
+| Version | Focus                                  | Status      |
+| ------- | -------------------------------------- | ----------- |
+| v0.0.1  | MVP - Basic API                        | ✅ Released |
+| v0.0.2  | Production Ready                        | ✅ Released |
+| v0.1.0  | Initial Stable Release                 | ✅ Released |
+| v0.1.7  | Maintenance & fixes                    | ✅ Released |
+| v0.1.8  | Maintenance & fixes                    | ✅ Released |
+| v0.2.0  | i18n, Real-time Chats & Hardening      | ✅ Released |
+| v0.2.1  | Dashboard split-origin fix             | ✅ Released |
+| v0.3.0  | SDK, Developer Tools & Observability   | 📋 Planned  |
+| v1.0.0  | Enterprise Ready                       | 📋 Planned  |
 
 ### Risk Buffer
 
@@ -82,7 +88,8 @@ Examples:
 0.0.2 - Production Ready (Multi-session, Dashboard)
 0.1.0 - Initial Stable Release (Full features)
 0.1.1 - Bug fix for QR timeout
-0.2.0 - SDK & Developer Tools
+0.2.0 - i18n, Real-time Chats, Webhook Delivery-state & Hardening
+0.3.0 - SDK & Developer Tools
 1.0.0 - Enterprise Ready
 2.0.0 - Breaking API changes
 ```
@@ -448,9 +455,11 @@ v0.1.0 Release Package:
     └── Release automation
 ```
 
-## 15.6 Future Roadmap (v0.2.0+)
+## 15.6 Future Roadmap (v0.3.0+)
 
 > **Note:** Version 0.1.0 is the initial stable release including all features from Phases 1-3.
+> Versions 0.1.7, 0.1.8, 0.2.0, and 0.2.1 have since shipped (see the CHANGELOG); v0.3.0
+> onward is forward-looking.
 
 ```mermaid
 flowchart LR
@@ -462,13 +471,13 @@ flowchart LR
         V002[v0.0.2 - Production Ready<br/>Multi-session & Dashboard]
     end
 
-    subgraph Current["✅ Current Release"]
+    subgraph Stable["✅ Released"]
         V010[v0.1.0 - Initial Stable Release<br/>All Core Features]
+        V020[v0.2.0 - i18n, Real-time Chats,<br/>Webhook Delivery-state & Hardening]
     end
 
     subgraph v0.x["v0.x Series - Enhancements"]
-        V020[v0.2.0 - SDK & Developer Tools]
-        V030[v0.3.0 - Performance & Observability]
+        V030[v0.3.0 - SDK, Developer Tools & Observability]
     end
 
     subgraph v1.x["v1.x Series - Enterprise"]
@@ -476,10 +485,21 @@ flowchart LR
         V11[v1.1.0 - Multi-engine Support]
     end
 
-    Phase1 --> Phase2 --> Current --> v0.x --> v1.x
+    Phase1 --> Phase2 --> Stable --> v0.x --> v1.x
 ```
 
-### v0.2.0 - SDK & Developer Tools
+### v0.2.0 - i18n, Real-time Chats, Webhook Delivery-state & Hardening (Released)
+
+| Feature                          | Priority | Status |
+| -------------------------------- | -------- | ------ |
+| Multi-locale dashboard (i18n)    | P1       | ✅     |
+| Real-time Chats view (WebSocket) | P1       | ✅     |
+| Message templates                | P1       | ✅     |
+| Webhook delivery-state tracking  | P1       | ✅     |
+| Security & API surface hardening | P0       | ✅     |
+| Container / Podman hardening     | P1       | ✅     |
+
+### v0.3.0 - SDK, Developer Tools & Observability
 
 | Feature                | Priority | Description                     |
 | ---------------------- | -------- | ------------------------------- |
@@ -490,7 +510,7 @@ flowchart LR
 | Video Tutorials        | P2       | Getting started video series    |
 | Example Projects       | P1       | Real-world integration examples |
 
-### v0.3.0 - Performance & Observability
+**Performance & Observability**
 
 | Feature                | Priority | Description                      |
 | ---------------------- | -------- | -------------------------------- |

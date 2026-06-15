@@ -1,7 +1,7 @@
 import { isIPv4, isIPv6 } from 'net';
 import { lookup } from 'dns/promises';
 
-/** Thrown when an outbound webhook URL is blocked by the SSRF guard. */
+/** Thrown when an outbound URL is blocked by the SSRF guard. */
 export class SsrfBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -9,9 +9,35 @@ export class SsrfBlockedError extends Error {
   }
 }
 
-/** Opt-in: outbound webhook SSRF protection is only active when WEBHOOK_SSRF_PROTECT=true. */
+/**
+ * Outbound webhook SSRF protection. Default ON; disable only with an explicit
+ * WEBHOOK_SSRF_PROTECT=false (e.g. a closed network that delivers to internal sidecars — prefer
+ * the SSRF_ALLOWED_HOSTS escape-hatch instead of disabling protection wholesale).
+ */
 export function isSsrfProtectionEnabled(): boolean {
-  return process.env.WEBHOOK_SSRF_PROTECT === 'true';
+  return process.env.WEBHOOK_SSRF_PROTECT !== 'false';
+}
+
+/**
+ * Escape-hatch for self-hosted topologies that intentionally fetch from / deliver to
+ * internal hosts (e.g. a localhost media store or a sidecar webhook receiver).
+ * `SSRF_ALLOWED_HOSTS` is a comma-separated list of hostnames and/or IP literals that
+ * bypass the block. Matched case-insensitively against the URL hostname.
+ */
+function getAllowedHosts(): Set<string> {
+  return new Set(
+    (process.env.SSRF_ALLOWED_HOSTS ?? '')
+      .split(',')
+      // Strip IPv6 brackets so an entry copied from a URL (e.g. "[::1]") matches the
+      // bracket-stripped url.hostname we compare against below.
+      .map(h =>
+        h
+          .trim()
+          .replace(/^\[|\]$/g, '')
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
 }
 
 function ipv4ToInt(ip: string): number {
@@ -81,37 +107,55 @@ export function isBlockedAddress(ip: string): boolean {
 }
 
 /**
- * Resolves an outbound webhook URL and throws SsrfBlockedError if its scheme is not
- * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved.
+ * Reject a response obtained with `redirect: 'manual'` that turned out to be a redirect.
+ * The pre-fetch SSRF check only validates the original URL, so a followed 3xx to an
+ * internal host would bypass it. We never follow redirects on guarded
+ * fetches; a redirect is treated as a delivery failure.
  */
-export async function assertSafeWebhookUrl(rawUrl: string): Promise<void> {
+export function assertNoRedirect(response: { status: number; type?: string }, url: string): void {
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    throw new SsrfBlockedError(`Refusing to follow redirect from ${url}`);
+  }
+}
+
+/**
+ * Resolves an outbound URL and throws SsrfBlockedError if its scheme is not
+ * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved.
+ * Guards both webhook delivery and server-side media fetches. Hosts named in
+ * `SSRF_ALLOWED_HOSTS` are allowed through (escape-hatch for trusted internal targets).
+ */
+export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
   let url: URL;
   try {
     url = new URL(rawUrl);
   } catch {
-    throw new SsrfBlockedError(`Invalid webhook URL: ${rawUrl}`);
+    throw new SsrfBlockedError(`Invalid URL: ${rawUrl}`);
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new SsrfBlockedError(`Blocked webhook URL scheme: ${url.protocol}`);
+    throw new SsrfBlockedError(`Blocked URL scheme: ${url.protocol}`);
   }
 
   const host = url.hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
 
+  if (getAllowedHosts().has(host.toLowerCase())) {
+    return; // explicitly allowlisted internal target
+  }
+
   if (isIPv4(host) || isIPv6(host)) {
     if (isBlockedAddress(host)) {
-      throw new SsrfBlockedError(`Blocked internal webhook address: ${host}`);
+      throw new SsrfBlockedError(`Blocked internal address: ${host}`);
     }
     return;
   }
 
   const resolved = await lookup(host, { all: true });
   if (resolved.length === 0) {
-    throw new SsrfBlockedError(`Could not resolve webhook host: ${host}`);
+    throw new SsrfBlockedError(`Could not resolve host: ${host}`);
   }
   for (const { address } of resolved) {
     if (isBlockedAddress(address)) {
-      throw new SsrfBlockedError(`Webhook host ${host} resolves to a blocked internal address: ${address}`);
+      throw new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${address}`);
     }
   }
 }

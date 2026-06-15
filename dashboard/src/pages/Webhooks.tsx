@@ -25,12 +25,21 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import './Webhooks.css';
 
+// Must stay aligned with the backend WEBHOOK_EVENTS: the API now rejects unknown
+// event names, so offering e.g. the never-emitted 'session.connected' would 400 on save.
 const availableEventNames = [
   'message.received',
   'message.sent',
-  'session.connected',
-  'session.disconnected',
+  'message.ack',
+  'message.failed',
+  'message.revoked',
+  'session.status',
   'session.qr',
+  'session.authenticated',
+  'session.disconnected',
+  'group.join',
+  'group.leave',
+  'group.update',
   '*',
 ] as const;
 

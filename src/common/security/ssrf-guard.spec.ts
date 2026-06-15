@@ -1,4 +1,10 @@
-import { isBlockedAddress, assertSafeWebhookUrl, SsrfBlockedError, isSsrfProtectionEnabled } from './ssrf-guard';
+import {
+  isBlockedAddress,
+  assertSafeFetchUrl,
+  assertNoRedirect,
+  SsrfBlockedError,
+  isSsrfProtectionEnabled,
+} from './ssrf-guard';
 
 describe('isBlockedAddress', () => {
   it.each([
@@ -32,29 +38,80 @@ describe('isBlockedAddress', () => {
   });
 });
 
-describe('assertSafeWebhookUrl', () => {
+describe('assertSafeFetchUrl', () => {
   it('rejects a non-http(s) scheme', async () => {
-    await expect(assertSafeWebhookUrl('ftp://example.com/hook')).rejects.toThrow(SsrfBlockedError);
+    await expect(assertSafeFetchUrl('ftp://example.com/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('rejects a literal loopback IPv4 host', async () => {
-    await expect(assertSafeWebhookUrl('http://127.0.0.1/hook')).rejects.toThrow(SsrfBlockedError);
+    await expect(assertSafeFetchUrl('http://127.0.0.1/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('rejects the cloud metadata IP', async () => {
-    await expect(assertSafeWebhookUrl('http://169.254.169.254/latest/meta-data')).rejects.toThrow(SsrfBlockedError);
+    await expect(assertSafeFetchUrl('http://169.254.169.254/latest/meta-data')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('rejects a literal IPv6 loopback host', async () => {
-    await expect(assertSafeWebhookUrl('http://[::1]:8080/hook')).rejects.toThrow(SsrfBlockedError);
+    await expect(assertSafeFetchUrl('http://[::1]:8080/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('rejects a hostname that resolves to loopback (localhost)', async () => {
-    await expect(assertSafeWebhookUrl('http://localhost:9999/hook')).rejects.toThrow(SsrfBlockedError);
+    await expect(assertSafeFetchUrl('http://localhost:9999/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('allows a public literal IP', async () => {
-    await expect(assertSafeWebhookUrl('https://8.8.8.8/hook')).resolves.toBeUndefined();
+    await expect(assertSafeFetchUrl('https://8.8.8.8/hook')).resolves.toBeUndefined();
+  });
+});
+
+describe('assertSafeFetchUrl — SSRF_ALLOWED_HOSTS escape-hatch', () => {
+  const orig = process.env.SSRF_ALLOWED_HOSTS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.SSRF_ALLOWED_HOSTS;
+    else process.env.SSRF_ALLOWED_HOSTS = orig;
+  });
+
+  it('allows an internal host that is explicitly allowlisted (case-insensitive)', async () => {
+    process.env.SSRF_ALLOWED_HOSTS = 'Localhost, minio';
+    await expect(assertSafeFetchUrl('http://localhost:9000/bucket/x.png')).resolves.toBeUndefined();
+    await expect(assertSafeFetchUrl('http://minio:9000/x.png')).resolves.toBeUndefined();
+  });
+
+  it('still blocks internal hosts that are NOT allowlisted', async () => {
+    process.env.SSRF_ALLOWED_HOSTS = 'minio';
+    await expect(assertSafeFetchUrl('http://127.0.0.1/x.png')).rejects.toThrow(SsrfBlockedError);
+  });
+
+  it('allows an allowlisted literal internal IP', async () => {
+    process.env.SSRF_ALLOWED_HOSTS = '10.0.0.5';
+    await expect(assertSafeFetchUrl('http://10.0.0.5/x.png')).resolves.toBeUndefined();
+  });
+
+  it('allows an allowlisted IPv6 literal whether or not it is bracketed', async () => {
+    // The URL hostname is compared bracket-stripped, so a bracketed allowlist entry
+    // (as copy-pasted from a URL) must still match.
+    process.env.SSRF_ALLOWED_HOSTS = '[::1]';
+    await expect(assertSafeFetchUrl('http://[::1]:8080/hook')).resolves.toBeUndefined();
+
+    process.env.SSRF_ALLOWED_HOSTS = '::1';
+    await expect(assertSafeFetchUrl('http://[::1]:8080/hook')).resolves.toBeUndefined();
+  });
+});
+
+describe('assertNoRedirect (redirect bypass)', () => {
+  it('throws on an undici opaqueredirect response', () => {
+    expect(() => assertNoRedirect({ status: 0, type: 'opaqueredirect' }, 'http://evil.example')).toThrow(
+      SsrfBlockedError,
+    );
+  });
+
+  it('throws on a 3xx status (node-fetch manual)', () => {
+    expect(() => assertNoRedirect({ status: 302 }, 'http://evil.example')).toThrow(SsrfBlockedError);
+    expect(() => assertNoRedirect({ status: 301 }, 'http://evil.example')).toThrow(SsrfBlockedError);
+  });
+
+  it('passes a normal 2xx response', () => {
+    expect(() => assertNoRedirect({ status: 200, type: 'basic' }, 'http://ok.example')).not.toThrow();
   });
 });
 
@@ -64,10 +121,12 @@ describe('isSsrfProtectionEnabled', () => {
     process.env.WEBHOOK_SSRF_PROTECT = orig;
   });
 
-  it('is off by default and on only when explicitly "true"', () => {
+  it('is ON by default and off only when explicitly "false"', () => {
     delete process.env.WEBHOOK_SSRF_PROTECT;
-    expect(isSsrfProtectionEnabled()).toBe(false);
+    expect(isSsrfProtectionEnabled()).toBe(true);
     process.env.WEBHOOK_SSRF_PROTECT = 'true';
     expect(isSsrfProtectionEnabled()).toBe(true);
+    process.env.WEBHOOK_SSRF_PROTECT = 'false';
+    expect(isSsrfProtectionEnabled()).toBe(false);
   });
 });

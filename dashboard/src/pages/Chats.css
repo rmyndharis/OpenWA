@@ -510,6 +510,23 @@
   color: #ea580c;
 }
 
+/* Real-time connection-lost banner */
+.chats-reconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: 6px;
+  background: rgba(234, 88, 12, 0.1);
+  color: #ea580c;
+  font-size: 0.875rem;
+}
+
+.chats-reconnect-banner button {
+  margin-left: auto;
+}
+
 /* =============================================================================
    ATTACHMENT PREVIEW & EMOJI PICKER
    ============================================================================= */

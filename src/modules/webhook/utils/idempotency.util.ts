@@ -35,17 +35,19 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // Dispatched payload is an IncomingMessage, which carries `id`; fall back to a legacy `messageId`.
       // Resolve the value before toStr() — toStr() returns a truthy 'unknown' fallback, so chaining with
       // `||` would short-circuit before reaching the second field.
-      return `msg_${toStr(data.id ?? data.messageId)}`;
+      // Scope by sessionId: waMessageIds are unique per account, not globally, so two
+      // sessions could otherwise collide on the same key and wrongly dedupe each other's events.
+      return `msg_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
 
     case 'message.ack':
       // Message ID + ack status together are unique
-      return `ack_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
+      return `ack_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
 
     case 'message.failed':
-      return `failed_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
+      return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
 
     case 'message.revoked':
-      return `rev_${toStr(data.id ?? data.messageId)}`;
+      return `rev_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
 
     case 'session.status':
       // Session + status combo (same status emitted once per transition)

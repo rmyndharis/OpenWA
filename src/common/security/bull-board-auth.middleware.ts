@@ -9,8 +9,10 @@ import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
  * Bull Board is mounted as raw Express middleware by @bull-board/nestjs, so the
  * global ApiKeyGuard — which only runs on Nest controller handlers — does not
  * cover it. This middleware requires a valid ADMIN-role API key, supplied via
- * the X-API-Key header, an Authorization: Bearer token, or an ?apiKey query
- * param (the latter for direct browser access).
+ * the X-API-Key header or an Authorization: Bearer token.
+ *
+ * The ?apiKey query-string fallback was removed: an ADMIN key in the
+ * URL leaks into proxy/access logs, browser history, bookmarks, and the Referer header.
  */
 @Injectable()
 export class BullBoardAuthMiddleware implements NestMiddleware {
@@ -42,9 +44,7 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
     const authHeader = req.headers['authorization'];
     if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7);
 
-    const queryKey = req.query?.apiKey;
-    if (typeof queryKey === 'string' && queryKey) return queryKey;
-
+    // No ?apiKey query fallback — an admin key in the URL leaks into logs/history.
     return undefined;
   }
 

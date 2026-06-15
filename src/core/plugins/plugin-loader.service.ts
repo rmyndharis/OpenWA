@@ -15,6 +15,20 @@ import {
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
 
+/**
+ * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
+ * <pluginsDir>/<pluginId>. `main` comes from a user-supplied manifest, so a
+ * value like '../../etc/passwd' (or an absolute path) must be rejected BEFORE require().
+ */
+export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main: string): string {
+  const base = path.resolve(pluginsDir, pluginId);
+  const mainPath = path.resolve(base, main);
+  if (mainPath !== base && !mainPath.startsWith(base + path.sep)) {
+    throw new Error(`Plugin ${pluginId} main path escapes the plugin directory`);
+  }
+  return mainPath;
+}
+
 @Injectable()
 export class PluginLoaderService implements OnModuleInit {
   private readonly logger = createLogger('PluginLoaderService');
@@ -134,7 +148,8 @@ export class PluginLoaderService implements OnModuleInit {
 
       // Load the plugin instance if not already loaded
       if (!plugin.instance) {
-        const mainPath = path.join(this.pluginsDir, pluginId, plugin.manifest.main);
+        // Containment guard: reject a manifest.main that escapes the plugin dir.
+        const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
         // Dynamic require for user plugins
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const pluginModule = require(mainPath) as { default?: new () => IPlugin };

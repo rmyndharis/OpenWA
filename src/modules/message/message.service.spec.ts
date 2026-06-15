@@ -8,6 +8,7 @@ import { SessionService } from '../session/session.service';
 import { HookManager } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
 import { Template } from '../template/entities/template.entity';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 
 const mockEngineResult = { id: 'wa-msg-1', timestamp: 1706868000 };
 
@@ -258,6 +259,59 @@ describe('MessageService', () => {
         '628123456789@c.us',
         expect.objectContaining({ data: 'iVBORw0KGgoAAAAN...', mimetype: 'image/png' }),
       );
+    });
+
+    it('maps a blocked-media-URL SSRF error to HTTP 400', async () => {
+      mockEngine.sendImageMessage.mockRejectedValueOnce(new SsrfBlockedError('Blocked internal address: 127.0.0.1'));
+
+      await expect(
+        service.sendImage('sess-1', { chatId: '628123456789@c.us', url: 'http://127.0.0.1/x.png' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  // ── getMessages pagination guard ──────────────────────────────────
+
+  describe('getMessages pagination guard', () => {
+    interface QbMock {
+      where: jest.Mock;
+      orderBy: jest.Mock;
+      skip: jest.Mock;
+      take: jest.Mock;
+      andWhere: jest.Mock;
+      getManyAndCount: jest.Mock;
+    }
+    const makeQb = (): QbMock => {
+      const qb: QbMock = {
+        where: jest.fn(),
+        orderBy: jest.fn(),
+        skip: jest.fn(),
+        take: jest.fn(),
+        andWhere: jest.fn(),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      qb.where.mockReturnValue(qb);
+      qb.orderBy.mockReturnValue(qb);
+      qb.skip.mockReturnValue(qb);
+      qb.take.mockReturnValue(qb);
+      qb.andWhere.mockReturnValue(qb);
+      return qb;
+    };
+
+    it('falls back to defaults on NaN limit/offset (never take(NaN))', async () => {
+      const qb = makeQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      await service.getMessages('sess-1', { limit: NaN, offset: NaN });
+      expect(qb.take).toHaveBeenCalledWith(50);
+      expect(qb.skip).toHaveBeenCalledWith(0);
+    });
+
+    it('clamps an oversized limit to 100 and a negative offset to 0', async () => {
+      const qb = makeQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+      await service.getMessages('sess-1', { limit: 999, offset: -5 });
+      expect(qb.take).toHaveBeenCalledWith(100);
+      expect(qb.skip).toHaveBeenCalledWith(0);
     });
   });
 

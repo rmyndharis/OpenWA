@@ -299,6 +299,40 @@ describe('SessionService', () => {
 
   // ── engine onError / lastError surfacing (#219) ───────────────────
 
+  describe('reconnect/stop race', () => {
+    interface Internals {
+      executeReconnect: (id: string, session: Session, state: unknown) => Promise<void>;
+      stoppingSessions: Set<string>;
+      engines: Map<string, unknown>;
+    }
+    const internals = (): Internals => service as unknown as Internals;
+    const reconnectState = { attempts: 1, timer: null, maxAttempts: 5, baseDelay: 5000 };
+
+    it('does not create an engine when the session was already stopped (early guard)', async () => {
+      const i = internals();
+      i.stoppingSessions.add('sess-uuid-1');
+
+      await i.executeReconnect('sess-uuid-1', createMockSession(), reconnectState);
+
+      expect(i.engines.has('sess-uuid-1')).toBe(false);
+      expect(engineFactory.create).not.toHaveBeenCalled();
+    });
+
+    it('tears down an engine created when a stop lands during init (post-init guard)', async () => {
+      const i = internals();
+      // Simulate a concurrent stop() during engine init: initialize() flips the teardown flag.
+      mockEngine.initialize.mockImplementation(() => {
+        i.stoppingSessions.add('sess-uuid-1');
+        return Promise.resolve();
+      });
+
+      await i.executeReconnect('sess-uuid-1', createMockSession(), reconnectState);
+
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(i.engines.has('sess-uuid-1')).toBe(false);
+    });
+  });
+
   describe('engine onError', () => {
     type EngineCallbacks = { onError?: (reason: string) => void; onReady?: (phone: string, name: string) => void };
 
@@ -392,6 +426,19 @@ describe('SessionService', () => {
       const sent = dispatchedEvents('message.sent');
       expect(sent).toHaveLength(1);
       expect(sent[0][0]).toBe('sess-uuid-1');
+    });
+
+    it('scopes the ack status UPDATE by sessionId, not just waMessageId', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onMessageAck).toBe('function');
+
+      callbacks.onMessageAck!('wa-msg-1', 2); // ack=2 -> DELIVERED
+      await flush();
+
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'sess-uuid-1', waMessageId: 'wa-msg-1' }),
+        expect.objectContaining({ status: MessageStatus.DELIVERED }),
+      );
     });
 
     it('does not dispatch message.sent for an incoming message_create event (fromMe=false)', async () => {

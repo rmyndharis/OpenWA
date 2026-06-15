@@ -5,7 +5,12 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
 import { createSwaggerConfig } from './config/swagger.config';
-import { resolveCorsPolicy, isSwaggerEnabled, resolveBodyLimit } from './config/bootstrap-security';
+import {
+  resolveCorsPolicy,
+  isSwaggerEnabled,
+  resolveBodyLimit,
+  assertNoDefaultSecretsInProduction,
+} from './config/bootstrap-security';
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
@@ -70,6 +75,17 @@ STORAGE_PATH=./data/media
 }
 
 async function bootstrap() {
+  // Fail fast: never start production with default/placeholder secrets.
+  assertNoDefaultSecretsInProduction({
+    nodeEnv: process.env.NODE_ENV,
+    databaseType: process.env.DATABASE_TYPE,
+    databasePassword: process.env.DATABASE_PASSWORD,
+    storageType: process.env.STORAGE_TYPE,
+    s3AccessKey: process.env.S3_ACCESS_KEY,
+    s3SecretKey: process.env.S3_SECRET_KEY,
+    apiMasterKey: process.env.API_MASTER_KEY,
+  });
+
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
@@ -88,7 +104,14 @@ async function bootstrap() {
     await app.close();
   });
 
-  // Enhanced Security Headers (Phase 3 Security Audit)
+  // On a termination signal, flip readiness to 503 immediately so the load
+  // balancer/orchestrator stops routing new traffic. This only sets a flag — NestJS's
+  // own shutdown hooks (enabled above) still perform the actual app.close()/teardown.
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => shutdownService.markShuttingDown());
+  }
+
+  // Enhanced Security Headers
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -115,7 +138,7 @@ async function bootstrap() {
     }),
   );
 
-  // CORS Configuration (Phase 3 Security Audit; #221 hardening)
+  // CORS Configuration (#221 hardening)
   const corsPolicy = resolveCorsPolicy(process.env.CORS_ORIGINS, process.env.NODE_ENV);
   if (process.env.NODE_ENV === 'production' && corsPolicy.origins.length === 0 && !corsPolicy.allowAnyOrigin) {
     console.warn(

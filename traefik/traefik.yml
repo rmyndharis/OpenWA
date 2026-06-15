@@ -1,11 +1,25 @@
 # Traefik Static Configuration
 api:
   dashboard: true
-  insecure: true
+  # M8: the dashboard is NOT served unauthenticated on :8080. Expose it, if needed, via a
+  # secured router (api@internal) behind auth + TLS — never with insecure mode in production.
+  insecure: false
 
 entryPoints:
   web:
     address: ':80'
+    # In production, redirect plain HTTP to HTTPS (enable once TLS is configured below):
+    # http:
+    #   redirections:
+    #     entryPoint:
+    #       to: websecure
+    #       scheme: https
+  websecure:
+    address: ':443'
+
+# TLS is deployment-specific (M8): configure a certificatesResolver (e.g. Let's Encrypt) or
+# mount certificates via the file provider, OR terminate TLS at an external reverse proxy and
+# keep Traefik on an internal network. Do not expose the API over plain :80 in production.
 
 providers:
   file:

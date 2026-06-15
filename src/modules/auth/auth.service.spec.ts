@@ -224,6 +224,33 @@ describe('AuthService', () => {
       expect(result.lastUsedAt).toBeDefined();
     });
 
+    it('coalesces the usage-stat write within the throttle window', async () => {
+      const rawKey = 'recent-key';
+      const key = createMockApiKey({ keyHash: hashKey(rawKey), lastUsedAt: new Date(), usageCount: 5 });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      const result = await service.validateApiKey(rawKey);
+
+      expect(repository.save).not.toHaveBeenCalled(); // throttled — no DB write this request
+      expect(result.usageCount).toBe(6); // but the count is still reflected in-memory
+      expect(result.lastUsedAt).toBeDefined();
+    });
+
+    it('flushes the usage-stat write once the throttle window has elapsed', async () => {
+      const rawKey = 'stale-key';
+      const key = createMockApiKey({
+        keyHash: hashKey(rawKey),
+        lastUsedAt: new Date(Date.now() - 5 * 60_000),
+        usageCount: 5,
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.validateApiKey(rawKey);
+
+      expect(repository.save).toHaveBeenCalled(); // persisted after the window
+    });
+
     it('should throw UnauthorizedException for invalid key', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
 

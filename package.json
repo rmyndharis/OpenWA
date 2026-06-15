@@ -1,6 +1,6 @@
 {
   "name": "openwa",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API for WhatsApp",
   "author": "Yudhi Armyndharis & OpenWA Contributors",
   "private": true,
@@ -36,22 +36,22 @@
     "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1063.0",
-    "@bull-board/api": "^7.2.1",
-    "@bull-board/express": "^7.2.1",
-    "@bull-board/nestjs": "^7.2.1",
+    "@aws-sdk/client-s3": "^3.1068.0",
+    "@bull-board/api": "^8.0.0",
+    "@bull-board/express": "^8.0.0",
+    "@bull-board/nestjs": "^8.0.0",
     "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/bullmq": "^11.0.4",
-    "@nestjs/common": "^11.1.25",
+    "@nestjs/common": "^11.1.27",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.1.25",
-    "@nestjs/platform-express": "^11.1.25",
-    "@nestjs/platform-socket.io": "^11.1.25",
+    "@nestjs/core": "^11.1.27",
+    "@nestjs/platform-express": "^11.1.27",
+    "@nestjs/platform-socket.io": "^11.1.27",
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.0",
     "archiver": "^8.0.0",
-    "bullmq": "^5.78.0",
+    "bullmq": "^5.78.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.0",
@@ -71,25 +71,25 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^11.0.22",
+    "@nestjs/cli": "^11.0.23",
     "@nestjs/schematics": "^11.0.0",
-    "@nestjs/testing": "^11.1.25",
-    "@types/archiver": "^7.0.0",
+    "@nestjs/testing": "^11.1.27",
+    "@types/archiver": "^8.0.0",
     "@types/dockerode": "^4.0.1",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.9.2",
+    "@types/node": "^25.9.3",
     "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.2",
     "@types/tar-stream": "^3.1.4",
     "@types/uuid": "^11.0.0",
     "concurrently": "^10.0.3",
-    "eslint": "^10.4.1",
+    "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.5.6",
     "globals": "^17.6.0",
     "jest": "^30.4.2",
-    "prettier": "^3.4.2",
+    "prettier": "^3.8.4",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.4.11",
@@ -97,7 +97,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.60.1"
+    "typescript-eslint": "^8.61.0"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -116,10 +116,22 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "branches": 10,
-        "functions": 12,
-        "lines": 15,
-        "statements": 15
+        "branches": 30,
+        "functions": 30,
+        "lines": 33,
+        "statements": 33
+      },
+      "./src/common/security/": {
+        "branches": 85,
+        "functions": 95,
+        "lines": 90,
+        "statements": 90
+      },
+      "./src/modules/auth/": {
+        "branches": 30,
+        "functions": 50,
+        "lines": 45,
+        "statements": 45
       }
     },
     "testEnvironment": "node"

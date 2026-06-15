@@ -37,7 +37,6 @@
     "language": "اللغة",
     "english": "English",
     "hebrew": "עברית",
-    "arabic": "العربية",
     "back": "رجوع",
     "next": "التالي",
     "previous": "السابق",
@@ -57,12 +56,55 @@
   "nav": {
     "dashboard": "لوحة التحكم",
     "sessions": "الجلسات",
+    "chats": "المحادثات",
     "webhooks": "الويب هوك",
     "apiKeys": "مفاتيح API",
     "messageTester": "اختبار الرسائل",
     "infrastructure": "البنية التحتية",
     "plugins": "الإضافات",
     "logs": "السجلات"
+  },
+  "chats": {
+    "subtitle": "أرسل ورد على رسائل واتساب في الوقت الفعلي",
+    "noSessionsTitle": "لا توجد جلسات متصلة",
+    "noSessionsDesc": "يرجى أولاً توصيل جلسة واتساب من قائمة <1>الجلسات</1> لاستخدام ميزة المحادثة.",
+    "sessionLabel": "جلسة واتساب",
+    "noPhone": "لا يوجد هاتف",
+    "searchPlaceholder": "البحث في المحادثات...",
+    "loadingChats": "جارٍ تحميل المحادثات...",
+    "empty": "لا توجد محادثات",
+    "noMessageYet": "لا توجد رسائل بعد",
+    "loadingMessages": "جارٍ تحميل الرسائل...",
+    "noMessagesInChat": "لا توجد رسائل بعد. أرسل الرسالة الأولى للبدء!",
+    "downloadDocument": "تنزيل المستند",
+    "actions": {
+      "reply": "رد",
+      "react": "تفاعل",
+      "delete": "حذف الرسالة"
+    },
+    "replyingTo": "الرد على {{name}}",
+    "you": "أنت",
+    "youPrefix": "أنت: ",
+    "yesterday": "أمس",
+    "attachTitle": "إرسال ملف / صورة",
+    "emojiTitle": "اختيار إيموجي",
+    "captionPlaceholder": "أضف تعليقاً...",
+    "messagePlaceholder": "اكتب رسالة...",
+    "noPermission": "ليس لديك إذن لإرسال الرسائل",
+    "send": "إرسال",
+    "placeholderTitle": "ابدأ المراسلة",
+    "placeholderDesc": "اختر محادثة نشطة من الشريط الجانبي الأيسر لبدء قراءة وإرسال رسائل واتساب.",
+    "deleteConfirm": "حذف هذه الرسالة للجميع؟",
+    "messageDeleted": "🚫 تم حذف هذه الرسالة",
+    "errors": {
+      "loadSessions": "فشل تحميل الجلسات",
+      "loadChats": "فشل تحميل المحادثات",
+      "loadMessages": "فشل تحميل الرسائل",
+      "markRead": "فشل تعليم المحادثة كمقروءة",
+      "send": "فشل إرسال الرسالة",
+      "react": "فشل التفاعل مع الرسالة",
+      "delete": "فشل حذف الرسالة"
+    }
   },
   "errorBoundary": {
     "title": "حدث خطأ ما",
@@ -187,12 +229,15 @@
       "readyTitle": "الجلسة جاهزة",
       "readyDesc": "جلسة واتساب متصلة الآن",
       "disconnectedTitle": "انقطع اتصال الجلسة",
-      "disconnectedDesc": "انقطع اتصال جلسة واتساب"
+      "disconnectedDesc": "انقطع اتصال جلسة واتساب",
+      "failedTitle": "فشلت الجلسة",
+      "failedDesc": "فشل بدء جلسة واتساب. افتح الجلسة لمعرفة السبب."
     },
     "card": {
       "phone": "الهاتف",
       "sessionId": "معرّف الجلسة",
-      "lastActive": "آخر نشاط"
+      "lastActive": "آخر نشاط",
+      "error": "خطأ"
     }
   },
   "webhooks": {
@@ -476,7 +521,6 @@
     "engineCard": "محرك واتساب النشط",
     "running": "يعمل",
     "supportedFeatures": "الميزات المدعومة:",
-    "more": "+{{count}} أخرى",
     "builtIn": "مدمج",
     "noDescription": "لا يوجد وصف متاح",
     "required": "مطلوب",

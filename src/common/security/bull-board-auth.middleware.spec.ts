@@ -48,14 +48,18 @@ describe('BullBoardAuthMiddleware', () => {
     expect(authService.validateApiKey).toHaveBeenCalledWith('admin', '127.0.0.1');
   });
 
-  it('accepts a Bearer token and the ?apiKey query param', async () => {
+  it('accepts a Bearer token', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);
 
     await mw.use(reqWith({ authorization: 'Bearer abc' }), res, jest.fn());
     expect(authService.validateApiKey).toHaveBeenCalledWith('abc', '127.0.0.1');
+  });
 
-    await mw.use(reqWith({}, { apiKey: 'qkey' }), res, jest.fn());
-    expect(authService.validateApiKey).toHaveBeenLastCalledWith('qkey', '127.0.0.1');
+  it('rejects an ?apiKey query param (no key in the URL)', async () => {
+    const next = jest.fn();
+    await mw.use(reqWith({}, { apiKey: 'qkey' }), res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+    expect(authService.validateApiKey).not.toHaveBeenCalled();
   });
 });

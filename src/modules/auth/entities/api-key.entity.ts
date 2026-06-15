@@ -18,7 +18,9 @@ export class ApiKey {
   @Column({ type: 'varchar', length: 64 })
   keyHash: string;
 
-  @Column({ type: 'varchar', length: 8 })
+  // 12 to fit the 12-char prefix that auth.service writes (was varchar(8); harmless on the
+  // hardcoded-SQLite `main` connection, but kept consistent with the code).
+  @Column({ type: 'varchar', length: 12 })
   keyPrefix: string;
 
   @Column({

@@ -531,8 +531,9 @@ export class InfraController {
       }
     }
 
-    // Schedule graceful shutdown after delay to allow response and container orchestration
-    void this.shutdownService.shutdown(3000);
+    // Schedule graceful shutdown after the configurable bounded grace (SHUTDOWN_DELAY_MS,
+    // default 3s) — readiness reports 503 during the window so traffic drains first.
+    void this.shutdownService.shutdown();
 
     // Calculate estimated time - base 15s + additional for each service (increased for reliability)
     let estimatedTime = 15;

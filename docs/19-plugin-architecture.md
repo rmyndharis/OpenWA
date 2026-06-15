@@ -49,9 +49,9 @@ flowchart TB
     end
 ```
 
-1. **Isolation** - Plugins cannot compromise the core system
+1. **Isolation** - _Planned, NOT enforced._ Plugins currently run in-process with full Node privileges (`require()`), guarded only by a path-containment check. **Load only trusted plugins** until sandboxed (vm2/worker) execution ships.
 2. **Extensibility** - Easy to add new features
-3. **Safety** - Permission-based access control
+3. **Safety** - Permission-based access control (planned; not yet enforced)
 4. **Performance** - Lazy loading, minimal overhead
 
 ## 19.2 Plugin Types

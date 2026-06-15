@@ -10,6 +10,7 @@ import { HookManager } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
 import { renderTemplate } from '../../common/utils/template-render';
 import { createLogger } from '../../common/services/logger.service';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 
 export interface GetMessagesOptions {
   chatId?: string;
@@ -137,7 +138,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -171,7 +172,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -204,7 +205,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -238,7 +239,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -249,7 +250,14 @@ export class MessageService {
     sessionId: string,
     options: GetMessagesOptions = {},
   ): Promise<{ messages: Message[]; total: number }> {
-    const { chatId, limit = 50, offset = 0 } = options;
+    const { chatId } = options;
+    // Sanitize pagination: a non-finite limit/offset — e.g. `?limit=abc` -> NaN —
+    // must never reach TypeORM's take()/skip(). Clamp to sane bounds; fall back to defaults.
+    const rawLimit = options.limit;
+    const rawOffset = options.offset;
+    const limit =
+      typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 50;
+    const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
 
     const query = this.messageRepository
       .createQueryBuilder('message')
@@ -302,7 +310,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -338,7 +346,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -371,7 +379,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -418,7 +426,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -451,7 +459,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toClientFacingError(error);
     }
   }
 
@@ -555,6 +563,18 @@ export class MessageService {
       throw new BadRequestException(`Session '${sessionId}' is not active. Start the session first.`);
     }
     return engine;
+  }
+
+  /**
+   * Map a blocked outbound media fetch (SSRF guard) to an HTTP 400 so a
+   * caller-supplied internal/unsafe URL returns a client error instead of a 500.
+   * All other errors pass through unchanged.
+   */
+  private toClientFacingError(error: unknown): unknown {
+    if (error instanceof SsrfBlockedError) {
+      return new BadRequestException(error.message);
+    }
+    return error;
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {

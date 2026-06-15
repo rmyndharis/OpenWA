@@ -32,6 +32,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { assertSafeFetchUrl } from '../../common/security/ssrf-guard';
 import {
   GroupChat,
   GroupMetadataRaw,
@@ -41,6 +42,36 @@ import {
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
 import { buildIncomingMessageBase } from './message-mapper';
+
+/** Default cap on a server-side media download: 50 MiB (overridable via MEDIA_DOWNLOAD_MAX_BYTES). */
+const DEFAULT_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+/** Default timeout for a server-side media download: 30s (overridable via MEDIA_DOWNLOAD_TIMEOUT_MS). */
+const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Fetch remote media for sending, with an SSRF host guard, a byte cap, and a timeout.
+ * The guard runs BEFORE any network call, so an internal/reserved URL throws `SsrfBlockedError`
+ * and no outbound socket is opened. The byte cap (node-fetch `size`) and `AbortSignal` timeout
+ * bound memory use and hang time. `unsafeMime` is left at its default (false) to preserve the
+ * existing MIME-detection behavior.
+ */
+export async function loadRemoteMedia(url: string): Promise<MessageMedia> {
+  await assertSafeFetchUrl(url);
+  return MessageMedia.fromUrl(url, {
+    reqOptions: {
+      size: positiveIntFromEnv('MEDIA_DOWNLOAD_MAX_BYTES', DEFAULT_MEDIA_MAX_BYTES),
+      signal: AbortSignal.timeout(positiveIntFromEnv('MEDIA_DOWNLOAD_TIMEOUT_MS', DEFAULT_MEDIA_TIMEOUT_MS)),
+      // Never follow redirects: the SSRF guard only validated the original host, so a
+      // followed 3xx could reach an internal target. node-fetch rejects on redirect.
+      redirect: 'error',
+    },
+  });
+}
 
 export interface WhatsAppWebJsConfig {
   sessionId: string;
@@ -402,7 +433,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (typeof media.data === 'string') {
       if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
         // URL
-        messageMedia = await MessageMedia.fromUrl(media.data);
+        messageMedia = await loadRemoteMedia(media.data);
       } else {
         // Base64
         messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
@@ -531,7 +562,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     if (typeof media.data === 'string') {
       if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
-        messageMedia = await MessageMedia.fromUrl(media.data);
+        messageMedia = await loadRemoteMedia(media.data);
       } else {
         messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
       }

@@ -56,12 +56,55 @@
   "nav": {
     "dashboard": "仪表盘",
     "sessions": "会话",
+    "chats": "聊天",
     "webhooks": "Webhooks",
     "apiKeys": "API 密钥",
     "messageTester": "消息测试器",
     "infrastructure": "基础设施",
     "plugins": "插件",
     "logs": "日志"
+  },
+  "chats": {
+    "subtitle": "实时发送和回复 WhatsApp 消息",
+    "noSessionsTitle": "没有已连接的会话",
+    "noSessionsDesc": "请先从 <1>会话</1> 菜单连接一个 WhatsApp 会话，才能使用聊天功能。",
+    "sessionLabel": "WhatsApp 会话",
+    "noPhone": "无电话",
+    "searchPlaceholder": "搜索聊天...",
+    "loadingChats": "正在加载聊天...",
+    "empty": "没有聊天",
+    "noMessageYet": "暂无消息",
+    "loadingMessages": "正在加载消息...",
+    "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
+    "downloadDocument": "下载文档",
+    "actions": {
+      "reply": "回复",
+      "react": "回应",
+      "delete": "删除消息"
+    },
+    "replyingTo": "正在回复 {{name}}",
+    "you": "你",
+    "youPrefix": "你：",
+    "yesterday": "昨天",
+    "attachTitle": "发送文件 / 图片",
+    "emojiTitle": "选择表情",
+    "captionPlaceholder": "添加说明文字...",
+    "messagePlaceholder": "输入消息...",
+    "noPermission": "你没有发送消息的权限",
+    "send": "发送",
+    "placeholderTitle": "开始聊天",
+    "placeholderDesc": "从左侧边栏选择一个活跃聊天，即可开始阅读和发送 WhatsApp 消息。",
+    "deleteConfirm": "为所有人删除此消息？",
+    "messageDeleted": "🚫 此消息已被删除",
+    "errors": {
+      "loadSessions": "加载会话失败",
+      "loadChats": "加载聊天失败",
+      "loadMessages": "加载消息失败",
+      "markRead": "将聊天标记为已读失败",
+      "send": "发送消息失败",
+      "react": "回应消息失败",
+      "delete": "删除消息失败"
+    }
   },
   "errorBoundary": {
     "title": "出了点问题",
@@ -186,12 +229,15 @@
       "readyTitle": "会话就绪",
       "readyDesc": "WhatsApp 会话现已连接",
       "disconnectedTitle": "会话已断开",
-      "disconnectedDesc": "WhatsApp 会话已断开连接"
+      "disconnectedDesc": "WhatsApp 会话已断开连接",
+      "failedTitle": "会话失败",
+      "failedDesc": "WhatsApp 会话启动失败。打开该会话以查看原因。"
     },
     "card": {
       "phone": "电话",
       "sessionId": "会话 ID",
-      "lastActive": "上次活跃"
+      "lastActive": "上次活跃",
+      "error": "错误"
     }
   },
   "webhooks": {
@@ -475,7 +521,6 @@
     "engineCard": "当前 WhatsApp 引擎",
     "running": "运行中",
     "supportedFeatures": "支持的功能：",
-    "more": "+{{count}} 更多",
     "builtIn": "内置",
     "noDescription": "没有可用描述",
     "required": "必需",

@@ -1,6 +1,22 @@
 # 13 - Horizontal Scaling Guide
 
-This guide explains how to deploy OpenWA in a horizontally scaled environment for high availability and increased capacity.
+> ## ⚠️ DESIGN REFERENCE ONLY — NOT IMPLEMENTED
+>
+> **OpenWA is currently a single-process, single-instance application.** Live WhatsApp
+> engine state (browser + WebSocket + reconnect/error state) lives in an in-memory `Map`
+> in `SessionService`; there is **no** DB-backed session registry, **no** node-claim/lease,
+> and **no** Socket.IO Redis adapter (findings H1/H11).
+>
+> **Supported topology:** exactly **one** API instance per session-data volume. Running
+> multiple replicas against a shared session volume — as the multi-node examples below
+> describe — will cause **two browsers to write the same WhatsApp LocalAuth directory and
+> corrupt the session** (forced logout / ban), especially with `AUTO_START_SESSIONS=true`.
+>
+> Everything in this guide (session-claim, node affinity, `replicas: 3`) is a **future
+> design sketch**, retained for planning. Until it is implemented, deploy with
+> **`replicas: 1`** for the OpenWA API service.
+
+This guide explains a *proposed* design for deploying OpenWA in a horizontally scaled environment for high availability and increased capacity.
 
 ## 13.1 Architecture Overview
 
@@ -78,7 +94,7 @@ function getNodeForSession(sessionId: string, nodes: string[]): string {
 
 ### Strategy 3: Session Claim
 
-Each node "claims" sessions on startup and releases them on shutdown.
+Each node "claims" sessions on startup and releases them on shutdown. **(Not implemented — no claim/lease logic exists in code; this is the design target.)**
 
 ## 13.3 Docker Swarm Deployment
 
@@ -91,7 +107,7 @@ services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:0.2.0
     deploy:
-      replicas: 3
+      replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth (H1/H11)
       update_config:
         parallelism: 1
         delay: 30s
@@ -250,7 +266,7 @@ metadata:
   namespace: openwa
 spec:
   serviceName: openwa
-  replicas: 3
+  replicas: 1 # MUST stay 1 until session-claim is implemented (H1/H11) — see the warning at the top of this guide
   selector:
     matchLabels:
       app: openwa

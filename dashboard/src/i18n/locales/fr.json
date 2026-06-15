@@ -37,8 +37,6 @@
     "language": "Langue",
     "english": "English",
     "hebrew": "עברית",
-    "telugu": "తెలుగు",
-    "french": "Français",
     "back": "Retour",
     "next": "Suivant",
     "previous": "Précédent",
@@ -58,12 +56,55 @@
   "nav": {
     "dashboard": "Tableau de bord",
     "sessions": "Sessions",
+    "chats": "Discussions",
     "webhooks": "Webhooks",
     "apiKeys": "Clés API",
     "messageTester": "Testeur de messages",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
     "logs": "Journaux"
+  },
+  "chats": {
+    "subtitle": "Envoyez et répondez aux messages WhatsApp en temps réel",
+    "noSessionsTitle": "Aucune session connectée",
+    "noSessionsDesc": "Veuillez d'abord connecter une session WhatsApp depuis le menu <1>Sessions</1> pour utiliser la fonction de discussion.",
+    "sessionLabel": "Session WhatsApp",
+    "noPhone": "Aucun téléphone",
+    "searchPlaceholder": "Rechercher des discussions...",
+    "loadingChats": "Chargement des discussions...",
+    "empty": "Aucune discussion",
+    "noMessageYet": "Aucun message pour le moment",
+    "loadingMessages": "Chargement des messages...",
+    "noMessagesInChat": "Aucun message pour le moment. Envoyez le premier message pour commencer !",
+    "downloadDocument": "Télécharger le document",
+    "actions": {
+      "reply": "Répondre",
+      "react": "Réagir",
+      "delete": "Supprimer le message"
+    },
+    "replyingTo": "Réponse à {{name}}",
+    "you": "Vous",
+    "youPrefix": "Vous : ",
+    "yesterday": "Hier",
+    "attachTitle": "Envoyer un fichier / une image",
+    "emojiTitle": "Choisir un emoji",
+    "captionPlaceholder": "Ajouter une légende...",
+    "messagePlaceholder": "Tapez un message...",
+    "noPermission": "Vous n'avez pas la permission d'envoyer des messages",
+    "send": "Envoyer",
+    "placeholderTitle": "Commencer à discuter",
+    "placeholderDesc": "Sélectionnez une discussion active dans la barre latérale gauche pour commencer à lire et envoyer des messages WhatsApp.",
+    "deleteConfirm": "Supprimer ce message pour tout le monde ?",
+    "messageDeleted": "🚫 Ce message a été supprimé",
+    "errors": {
+      "loadSessions": "Échec du chargement des sessions",
+      "loadChats": "Échec du chargement des discussions",
+      "loadMessages": "Échec du chargement des messages",
+      "markRead": "Échec du marquage de la discussion comme lue",
+      "send": "Échec de l'envoi du message",
+      "react": "Échec de la réaction au message",
+      "delete": "Échec de la suppression du message"
+    }
   },
   "errorBoundary": {
     "title": "Une erreur est survenue",
@@ -188,12 +229,15 @@
       "readyTitle": "Session prête",
       "readyDesc": "La session WhatsApp est maintenant connectée",
       "disconnectedTitle": "Session déconnectée",
-      "disconnectedDesc": "La session WhatsApp a été déconnectée"
+      "disconnectedDesc": "La session WhatsApp a été déconnectée",
+      "failedTitle": "Échec de la session",
+      "failedDesc": "Le démarrage de la session WhatsApp a échoué. Ouvrez la session pour en voir la raison."
     },
     "card": {
       "phone": "Téléphone",
       "sessionId": "ID de session",
-      "lastActive": "Dernière activité"
+      "lastActive": "Dernière activité",
+      "error": "Erreur"
     }
   },
   "webhooks": {
@@ -403,6 +447,8 @@
       "poolSize": "Taille du pool",
       "ssl": "Connexion SSL",
       "sslDesc": "Activer TLS/SSL pour des connexions sécurisées à la base de données",
+      "sslRejectUnauthorized": "Vérifier le certificat SSL",
+      "sslRejectUnauthorizedDesc": "Rejeter les certificats auto-signés ou non valides. Désactivez cette option pour les bases Postgres gérées avec des certificats auto-signés (Supabase, Heroku, Render, Railway).",
       "migrationsTitle": "Migrations de base de données",
       "migrationsStatus": "Le schéma est auto-synchronisé avec TypeORM",
       "migrationsHint": "Les migrations sont gérées automatiquement. Utilisez la CLI pour les migrations manuelles."
@@ -475,7 +521,6 @@
     "engineCard": "Moteur WhatsApp actif",
     "running": "En cours d'exécution",
     "supportedFeatures": "Fonctionnalités supportées :",
-    "more": "+{{count}} de plus",
     "builtIn": "Intégré",
     "noDescription": "Aucune description disponible",
     "required": "Requis",

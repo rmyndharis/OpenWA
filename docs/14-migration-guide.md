@@ -750,7 +750,7 @@ docker run --rm \
   -v $(pwd)/data:/app/data \
   -e DATABASE_URL=sqlite:///app/data/openwa.db \
   ghcr.io/rmyndharis/openwa:0.2.0 \
-  npm run migration:run
+  npm run migration:run:prod   # the prod image strips ts-node/TS source — use :prod (M13)
 
 # 4. Migrate configuration
 echo "⚙️ Migrating configuration..."

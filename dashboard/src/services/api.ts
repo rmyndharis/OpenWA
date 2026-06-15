@@ -8,7 +8,9 @@
 // `VITE_API_URL=https://gateway.example.com` — and the '/api' prefix is appended here.
 // Previously VITE_API_URL was documented but never read, so the dashboard always called
 // same-origin '/api' and a split deployment failed with "Invalid API Key" (#91).
-const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
+// Exported so direct fetches (e.g. auth/validate in Login.tsx / App.tsx) honor VITE_API_URL
+// too — otherwise split-origin deployments break. Empty VITE_API_URL → '/api'.
+export const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
 
 // =============================================================================
 // Types
@@ -234,6 +236,18 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   };
 
   const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    // The stored API key is invalid/expired/revoked — clear it and return to login
+    // so the user isn't stuck on a dashboard that 401s every request.
+    sessionStorage.removeItem('openwa_api_key');
+    if (typeof window !== 'undefined') {
+      window.location.assign('/');
+      // The page is navigating away — halt this request's promise chain so callers neither
+      // throw the generic error below (flashing a toast) nor receive an undefined payload.
+      return new Promise<T>(() => {});
+    }
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }));

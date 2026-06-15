@@ -31,6 +31,11 @@ export function resolveSeedApiKey(): string {
 export class AuthService implements OnModuleInit {
   private readonly logger = createLogger('AuthService');
 
+  /** Coalesce per-request usage-stat writes to at most one DB write per key per window. */
+  private static readonly STAT_FLUSH_INTERVAL_MS = 60_000;
+  /** keyId -> usage increments observed but not yet persisted (flushed on the next windowed write). */
+  private readonly pendingUsage = new Map<string, number>();
+
   constructor(
     @InjectRepository(ApiKey, 'main')
     private readonly apiKeyRepository: Repository<ApiKey>,
@@ -159,6 +164,8 @@ export class AuthService implements OnModuleInit {
 
   async delete(id: string): Promise<void> {
     const apiKey = await this.findOne(id);
+    // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
+    this.pendingUsage.delete(id);
     await this.apiKeyRepository.remove(apiKey);
     this.logger.log(`API key deleted: ${apiKey.name}`, {
       keyId: id,
@@ -168,6 +175,9 @@ export class AuthService implements OnModuleInit {
 
   async revoke(id: string): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
+    // A revoked key fails validation before its next flush, so its accumulator would orphan —
+    // drop it here.
+    this.pendingUsage.delete(id);
     apiKey.isActive = false;
     return this.apiKeyRepository.save(apiKey);
   }
@@ -210,10 +220,23 @@ export class AuthService implements OnModuleInit {
       }
     }
 
-    // Update usage stats
+    // Update usage stats — coalesced. Validation above is unchanged/synchronous; only
+    // the stat WRITE is throttled to at most once per key per window. usageCount stays
+    // accurate via an in-memory accumulator; the returned object reflects the true count.
+    const pending = (this.pendingUsage.get(apiKey.id) ?? 0) + 1;
+    const previousLastUsedAt = apiKey.lastUsedAt;
     apiKey.lastUsedAt = new Date();
-    apiKey.usageCount += 1;
-    await this.apiKeyRepository.save(apiKey);
+    apiKey.usageCount += pending; // DB value + all not-yet-persisted increments (incl. this request)
+
+    const due =
+      !previousLastUsedAt ||
+      apiKey.lastUsedAt.getTime() - previousLastUsedAt.getTime() >= AuthService.STAT_FLUSH_INTERVAL_MS;
+    if (due) {
+      this.pendingUsage.delete(apiKey.id);
+      await this.apiKeyRepository.save(apiKey);
+    } else {
+      this.pendingUsage.set(apiKey.id, pending);
+    }
 
     return apiKey;
   }
@@ -223,7 +246,7 @@ export class AuthService implements OnModuleInit {
   }
 
   private isIpAllowed(clientIp: string, allowedIps: string[]): boolean {
-    // Phase 3 Security Audit: Support both exact match and CIDR notation
+    // Support both exact match and CIDR notation
     for (const entry of allowedIps) {
       if (entry.includes('/')) {
         // CIDR notation (e.g., "10.0.0.0/24")

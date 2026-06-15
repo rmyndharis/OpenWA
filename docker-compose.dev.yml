@@ -1,4 +1,11 @@
-# OpenWA - Docker Compose for Development
+# OpenWA - Local smoke / quick-start compose (L22)
+#
+# This builds and runs the PRODUCTION image (same Dockerfile) against a local SQLite DB
+# with a bind-mounted ./data — it is a single-container local smoke test, NOT a
+# hot-reload development environment (there is no source mount or `start:dev`).
+# DATABASE_SYNCHRONIZE=true keeps the SQLite schema zero-config for local use; the
+# production compose (docker-compose.yml) never forces synchronize (it defaults to false).
+#
 # Quick Start: docker compose -f docker-compose.dev.yml up -d
 
 services:
@@ -8,11 +15,28 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: openwa-api
+    # Container hardening (finding H7) — same posture as production (same Dockerfile/entrypoint).
+    security_opt:
+      - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 512
+    mem_limit: ${OPENWA_MEM_LIMIT:-2g}
     ports:
       - '127.0.0.1:2785:2785'
     environment:
       - NODE_ENV=development
       - PORT=2785
+      - HOME=/tmp
       - DATABASE_TYPE=sqlite
       - DATABASE_NAME=/app/data/openwa.sqlite
       - DATABASE_SYNCHRONIZE=true
@@ -29,7 +53,7 @@ services:
       - ./data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health']
+      test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
       interval: 30s
       timeout: 10s
       retries: 3

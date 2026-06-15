@@ -7,7 +7,7 @@ import { QUEUE_NAMES } from '../queue-names';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
-import { assertSafeWebhookUrl, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
+import { assertSafeFetchUrl, assertNoRedirect, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
 
 export interface WebhookJobResult {
   statusCode: number;
@@ -48,16 +48,21 @@ export class WebhookProcessor extends WorkerHost {
       'X-OpenWA-Retry-Count': String(job.attemptsMade),
     };
 
+    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (isSsrfProtectionEnabled()) {
-        await assertSafeWebhookUrl(url);
+      if (ssrfProtected) {
+        await assertSafeFetchUrl(url);
       }
       const response = await fetch(url, {
         method: 'POST',
         headers: requestHeaders,
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10000),
+        redirect: ssrfProtected ? 'manual' : 'follow',
       });
+      if (ssrfProtected) {
+        assertNoRedirect(response, url);
+      }
 
       const responseTime = Date.now() - startTime;
       const success = response.ok;

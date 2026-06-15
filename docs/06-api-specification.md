@@ -75,20 +75,14 @@ curl -X POST http://localhost:2785/api/auth/api-keys \
 **Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "2a8f41e3-3b9a-4a1d-b6d0-b9910df8f0be",
-    "name": "n8n Integration",
-    "keyPrefix": "owa_k1_abcd",
-    "role": "operator",
-    "isActive": true,
-    "usageCount": 0,
-    "createdAt": "2026-02-02T10:30:00.000Z",
-    "apiKey": "owa_k1_abcd1234..."
-  },
-  "meta": {
-    "timestamp": "2026-02-02T10:30:00.000Z"
-  }
+  "id": "2a8f41e3-3b9a-4a1d-b6d0-b9910df8f0be",
+  "name": "n8n Integration",
+  "keyPrefix": "owa_k1_abcd",
+  "role": "operator",
+  "isActive": true,
+  "usageCount": 0,
+  "createdAt": "2026-02-02T10:30:00.000Z",
+  "apiKey": "owa_k1_abcd1234..."
 }
 ```
 
@@ -106,41 +100,48 @@ curl -X POST http://localhost:2785/api/auth/api-keys \
 
 ## 6.2 Response Format
 
+> **OpenWA returns the raw handler payload directly — there is NO `{success, data, meta}`
+> envelope.** A resource endpoint returns that resource object; a list endpoint returns a
+> bare array. Read fields directly (`response.id`, not `response.data.id`). Errors use the
+> NestJS default shape with the HTTP status in the status line.
+>
+> *(The response examples elsewhere in this document predate this and may still show the
+> old wrapper; the shape described here is authoritative — see [the H8 finding](../_docs/2026-06-15-security-architecture-audit.md).)*
+
 ### Success Response
+
+A successful request returns the resource (or array) as-is:
 
 ```json
 {
-  "success": true,
-  "data": {},
-  "meta": {
-    "timestamp": "2025-02-02T10:00:00.000Z",
-    "requestId": "550e8400-e29b-41d4-a716-446655440000",
-    "version": "0.1.0"
-  }
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "my-session",
+  "status": "READY"
 }
+```
+
+List endpoints return a bare array:
+
+```json
+[
+  { "id": "…", "name": "session-a" },
+  { "id": "…", "name": "session-b" }
+]
 ```
 
 ### Error Response
 
+Errors use the NestJS default shape (the HTTP status is on the status line, not in a `code` field):
+
 ```json
 {
-  "success": false,
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Human readable message",
-    "details": {}
-  },
-  "meta": {
-    "timestamp": "2025-02-02T10:00:00.000Z",
-    "requestId": "550e8400-e29b-41d4-a716-446655440000"
-  }
+  "statusCode": 404,
+  "message": "Webhook with id 'x' not found",
+  "error": "Not Found"
 }
 ```
 
-### Request ID Convention
-
-- Recommended format: `req_<epoch_ms>` (example: `req_1706868000000`).
-- `X-Request-ID` is returned in `meta.requestId` when provided by the client.
+Validation errors (`statusCode: 400`) return `message` as an array of field-level strings.
 
 ### Timestamp Conventions
 
@@ -414,14 +415,11 @@ POST /api/sessions
 **Response (201 Created):**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "sess_abc123",
-    "name": "my-bot",
-    "status": "INITIALIZING",
-    "qr": null,
-    "createdAt": "2025-02-02T10:00:00.000Z"
-  }
+  "id": "sess_abc123",
+  "name": "my-bot",
+  "status": "INITIALIZING",
+  "qr": null,
+  "createdAt": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -442,24 +440,15 @@ GET /api/sessions
 
 **Response (200 OK):**
 ```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "sess_abc123",
-      "name": "my-bot",
-      "status": "CONNECTED",
-      "phoneNumber": "628123456789",
-      "createdAt": "2025-02-02T10:00:00.000Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 1,
-    "totalPages": 1
+[
+  {
+    "id": "sess_abc123",
+    "name": "my-bot",
+    "status": "CONNECTED",
+    "phoneNumber": "628123456789",
+    "createdAt": "2025-02-02T10:00:00.000Z"
   }
-}
+]
 ```
 
 ---
@@ -473,17 +462,14 @@ GET /api/sessions/:sessionId
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "sess_abc123",
-    "name": "my-bot",
-    "status": "CONNECTED",
-    "phoneNumber": "628123456789",
-    "pushName": "My Bot",
-    "platform": "android",
-    "connectedAt": "2025-02-02T10:05:00.000Z",
-    "createdAt": "2025-02-02T10:00:00.000Z"
-  }
+  "id": "sess_abc123",
+  "name": "my-bot",
+  "status": "CONNECTED",
+  "phoneNumber": "628123456789",
+  "pushName": "My Bot",
+  "platform": "android",
+  "connectedAt": "2025-02-02T10:05:00.000Z",
+  "createdAt": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -524,11 +510,8 @@ GET /api/sessions/:sessionId/qr
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "code": "2@ABC123...",
-    "image": "data:image/png;base64,..."
-  }
+  "code": "2@ABC123...",
+  "image": "data:image/png;base64,..."
 }
 ```
 
@@ -543,10 +526,7 @@ DELETE /api/sessions/:sessionId
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "message": "Session deleted successfully"
-  }
+  "message": "Session deleted successfully"
 }
 ```
 
@@ -561,10 +541,7 @@ POST /api/sessions/:sessionId/logout
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "message": "Session logged out successfully"
-  }
+  "message": "Session logged out successfully"
 }
 ```
 
@@ -602,12 +579,9 @@ POST /api/sessions/:sessionId/messages/send-text
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "messageId": "true_628123456789@c.us_3EB0ABC123",
-    "status": "sent",
-    "timestamp": "2025-02-02T10:00:00.000Z"
-  }
+  "messageId": "true_628123456789@c.us_3EB0ABC123",
+  "status": "sent",
+  "timestamp": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -644,12 +618,9 @@ POST /api/sessions/:sessionId/messages/send-image
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "messageId": "true_628123456789@c.us_3EB0ABC124",
-    "status": "sent",
-    "timestamp": "2025-02-02T10:00:00.000Z"
-  }
+  "messageId": "true_628123456789@c.us_3EB0ABC124",
+  "status": "sent",
+  "timestamp": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -824,14 +795,11 @@ POST /api/sessions/:sessionId/messages/send-bulk
 **Response (202 Accepted):**
 ```json
 {
-  "success": true,
-  "data": {
-    "batchId": "batch_abc123xyz",
-    "status": "processing",
-    "totalMessages": 2,
-    "estimatedCompletionTime": "2025-02-02T10:05:00.000Z",
-    "statusUrl": "/api/sessions/sess_abc123/messages/batch/batch_abc123xyz"
-  }
+  "batchId": "batch_abc123xyz",
+  "status": "processing",
+  "totalMessages": 2,
+  "estimatedCompletionTime": "2025-02-02T10:05:00.000Z",
+  "statusUrl": "/api/sessions/sess_abc123/messages/batch/batch_abc123xyz"
 }
 ```
 
@@ -846,34 +814,31 @@ GET /api/sessions/:sessionId/messages/batch/:batchId
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "batchId": "batch_abc123xyz",
-    "status": "completed",
-    "progress": {
-      "total": 100,
-      "sent": 95,
-      "failed": 5,
-      "pending": 0
+  "batchId": "batch_abc123xyz",
+  "status": "completed",
+  "progress": {
+    "total": 100,
+    "sent": 95,
+    "failed": 5,
+    "pending": 0
+  },
+  "results": [
+    {
+      "chatId": "628123456789@c.us",
+      "status": "sent",
+      "messageId": "true_628123456789@c.us_3EB0ABC123"
     },
-    "results": [
-      {
-        "chatId": "628123456789@c.us",
-        "status": "sent",
-        "messageId": "true_628123456789@c.us_3EB0ABC123"
-      },
-      {
-        "chatId": "628111111111@c.us",
-        "status": "failed",
-        "error": {
-          "code": "MESSAGE_NUMBER_NOT_ON_WHATSAPP",
-          "message": "Number not registered on WhatsApp"
-        }
+    {
+      "chatId": "628111111111@c.us",
+      "status": "failed",
+      "error": {
+        "code": "MESSAGE_NUMBER_NOT_ON_WHATSAPP",
+        "message": "Number not registered on WhatsApp"
       }
-    ],
-    "startedAt": "2025-02-02T10:00:00.000Z",
-    "completedAt": "2025-02-02T10:08:30.000Z"
-  }
+    }
+  ],
+  "startedAt": "2025-02-02T10:00:00.000Z",
+  "completedAt": "2025-02-02T10:08:30.000Z"
 }
 ```
 
@@ -888,16 +853,13 @@ POST /api/sessions/:sessionId/messages/batch/:batchId/cancel
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "batchId": "batch_abc123xyz",
-    "status": "cancelled",
-    "progress": {
-      "total": 100,
-      "sent": 45,
-      "failed": 2,
-      "cancelled": 53
-    }
+  "batchId": "batch_abc123xyz",
+  "status": "cancelled",
+  "progress": {
+    "total": 100,
+    "sent": 45,
+    "failed": 2,
+    "cancelled": 53
   }
 }
 ```
@@ -918,22 +880,19 @@ GET /api/sessions/:sessionId/chats/:chatId/messages
 
 **Response (200 OK):**
 ```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "true_628123456789@c.us_3EB0ABC123",
-      "from": "628123456789@c.us",
-      "to": "628987654321@c.us",
-      "body": "Hello!",
-      "type": "chat",
-      "waTimestamp": 1706868000,
-      "timestamp": "2025-02-02T10:00:00.000Z",
-      "fromMe": false,
-      "hasMedia": false
-    }
-  ]
-}
+[
+  {
+    "id": "true_628123456789@c.us_3EB0ABC123",
+    "from": "628123456789@c.us",
+    "to": "628987654321@c.us",
+    "body": "Hello!",
+    "type": "chat",
+    "waTimestamp": 1706868000,
+    "timestamp": "2025-02-02T10:00:00.000Z",
+    "fromMe": false,
+    "hasMedia": false
+  }
+]
 ```
 
 ---
@@ -979,11 +938,8 @@ POST /api/sessions/:sessionId/messages/send-template
 **Response (201 Created):**
 ```json
 {
-  "success": true,
-  "data": {
-    "messageId": "true_628123456789@c.us_3EB0ABC123",
-    "timestamp": "2025-02-02T10:00:00.000Z"
-  }
+  "messageId": "true_628123456789@c.us_3EB0ABC123",
+  "timestamp": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -1032,17 +988,14 @@ When rendered, the header, body, and footer are joined with blank lines.
 **Response (201 Created):**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "b1c2d3e4-f5a6-7890-bcde-f01234567890",
-    "sessionId": "sess_abc123",
-    "name": "order-confirmation",
-    "body": "Hi {{customer}}, your order {{orderId}} has shipped.",
-    "header": "OpenWA Store",
-    "footer": "Reply STOP to unsubscribe.",
-    "createdAt": "2025-02-02T10:00:00.000Z",
-    "updatedAt": "2025-02-02T10:00:00.000Z"
-  }
+  "id": "b1c2d3e4-f5a6-7890-bcde-f01234567890",
+  "sessionId": "sess_abc123",
+  "name": "order-confirmation",
+  "body": "Hi {{customer}}, your order {{orderId}} has shipped.",
+  "header": "OpenWA Store",
+  "footer": "Reply STOP to unsubscribe.",
+  "createdAt": "2025-02-02T10:00:00.000Z",
+  "updatedAt": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -1098,18 +1051,15 @@ GET /api/sessions/:sessionId/contacts
 
 **Response (200 OK):**
 ```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "628123456789@c.us",
-      "name": "John Doe",
-      "pushName": "John",
-      "isMyContact": true,
-      "isBlocked": false
-    }
-  ]
-}
+[
+  {
+    "id": "628123456789@c.us",
+    "name": "John Doe",
+    "pushName": "John",
+    "isMyContact": true,
+    "isBlocked": false
+  }
+]
 ```
 
 ---
@@ -1123,11 +1073,8 @@ GET /api/sessions/:sessionId/contacts/check/:phone
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "exists": true,
-    "chatId": "628123456789@c.us"
-  }
+  "exists": true,
+  "chatId": "628123456789@c.us"
 }
 ```
 
@@ -1142,10 +1089,7 @@ GET /api/sessions/:sessionId/contacts/:contactId/profile-picture
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "url": "https://pps.whatsapp.net/..."
-  }
+  "url": "https://pps.whatsapp.net/..."
 }
 ```
 
@@ -1161,18 +1105,15 @@ GET /api/sessions/:sessionId/groups
 
 **Response (200 OK):**
 ```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "628123456789-1234567890@g.us",
-      "name": "Family Group",
-      "description": "Family chat",
-      "participantsCount": 10,
-      "createdAt": "2024-01-01T00:00:00.000Z"
-    }
-  ]
-}
+[
+  {
+    "id": "628123456789-1234567890@g.us",
+    "name": "Family Group",
+    "description": "Family chat",
+    "participantsCount": 10,
+    "createdAt": "2024-01-01T00:00:00.000Z"
+  }
+]
 ```
 
 ---
@@ -1186,21 +1127,18 @@ GET /api/sessions/:sessionId/groups/:groupId
 **Response (200 OK):**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "628123456789-1234567890@g.us",
-    "name": "Family Group",
-    "description": "Family chat",
-    "owner": "628123456789@c.us",
-    "participants": [
-      {
-        "id": "628123456789@c.us",
-        "isAdmin": true,
-        "isSuperAdmin": true
-      }
-    ],
-    "createdAt": "2024-01-01T00:00:00.000Z"
-  }
+  "id": "628123456789-1234567890@g.us",
+  "name": "Family Group",
+  "description": "Family chat",
+  "owner": "628123456789@c.us",
+  "participants": [
+    {
+      "id": "628123456789@c.us",
+      "isAdmin": true,
+      "isSuperAdmin": true
+    }
+  ],
+  "createdAt": "2024-01-01T00:00:00.000Z"
 }
 ```
 
@@ -1253,14 +1191,11 @@ POST /api/sessions/:sessionId/webhooks
 **Response (201 Created):**
 ```json
 {
-  "success": true,
-  "data": {
-    "id": "wh_xyz789",
-    "url": "https://your-server.com/webhook",
-    "events": ["message.received", "message.sent"],
-    "active": true,
-    "createdAt": "2025-02-02T10:00:00.000Z"
-  }
+  "id": "wh_xyz789",
+  "url": "https://your-server.com/webhook",
+  "events": ["message.received", "message.sent"],
+  "active": true,
+  "createdAt": "2025-02-02T10:00:00.000Z"
 }
 ```
 
@@ -1298,30 +1233,23 @@ GET /health
 }
 ```
 
-The basic endpoint is public. The detailed endpoint requires an API key.
+The basic endpoint is public.
 
-#### Detailed Health Check
+#### Readiness / Liveness
 
 ```http
-GET /health/detailed
+GET /api/health/ready
+GET /api/health/live
 ```
+
+`/api/health/ready` reports whether the service is ready to receive traffic;
+`/api/health/live` reports process liveness. (There is no `/health/detailed` route.)
 
 **Response (200 OK):**
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
-  "uptime": 3600,
-  "timestamp": "2026-02-02T10:30:00Z",
-  "checks": {
-    "database": "ok",
-    "redis": "ok",
-    "sessions": {
-      "total": 5,
-      "connected": 4,
-      "disconnected": 1
-    }
-  }
+  "details": { "database": { "status": "up" } }
 }
 ```
 

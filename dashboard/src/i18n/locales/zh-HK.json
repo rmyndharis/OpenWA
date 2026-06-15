@@ -56,12 +56,55 @@
   "nav": {
     "dashboard": "控制面板",
     "sessions": "工作階段",
+    "chats": "聊天",
     "webhooks": "Webhooks",
     "apiKeys": "API 金鑰",
     "messageTester": "訊息測試器",
     "infrastructure": "基礎架構",
     "plugins": "外掛",
     "logs": "記錄"
+  },
+  "chats": {
+    "subtitle": "即時傳送和回覆 WhatsApp 訊息",
+    "noSessionsTitle": "沒有已連線的工作階段",
+    "noSessionsDesc": "請先從 <1>工作階段</1> 選單連線一個 WhatsApp 工作階段，才能使用聊天功能。",
+    "sessionLabel": "WhatsApp 工作階段",
+    "noPhone": "沒有電話",
+    "searchPlaceholder": "搜尋聊天...",
+    "loadingChats": "正在載入聊天...",
+    "empty": "沒有聊天",
+    "noMessageYet": "尚無訊息",
+    "loadingMessages": "正在載入訊息...",
+    "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
+    "downloadDocument": "下載文件",
+    "actions": {
+      "reply": "回覆",
+      "react": "回應",
+      "delete": "刪除訊息"
+    },
+    "replyingTo": "正在回覆 {{name}}",
+    "you": "你",
+    "youPrefix": "你：",
+    "yesterday": "昨天",
+    "attachTitle": "傳送檔案 / 圖片",
+    "emojiTitle": "選擇表情符號",
+    "captionPlaceholder": "新增說明文字...",
+    "messagePlaceholder": "輸入訊息...",
+    "noPermission": "你沒有傳送訊息的權限",
+    "send": "傳送",
+    "placeholderTitle": "開始聊天",
+    "placeholderDesc": "從左側邊欄選擇一個活躍聊天，即可開始閱讀和傳送 WhatsApp 訊息。",
+    "deleteConfirm": "為所有人刪除此訊息？",
+    "messageDeleted": "🚫 此訊息已被刪除",
+    "errors": {
+      "loadSessions": "載入工作階段失敗",
+      "loadChats": "載入聊天失敗",
+      "loadMessages": "載入訊息失敗",
+      "markRead": "將聊天標記為已讀失敗",
+      "send": "傳送訊息失敗",
+      "react": "回應訊息失敗",
+      "delete": "刪除訊息失敗"
+    }
   },
   "errorBoundary": {
     "title": "發生問題",
@@ -186,12 +229,15 @@
       "readyTitle": "工作階段就緒",
       "readyDesc": "WhatsApp 工作階段現已連線",
       "disconnectedTitle": "工作階段已中斷連線",
-      "disconnectedDesc": "WhatsApp 工作階段已中斷連線"
+      "disconnectedDesc": "WhatsApp 工作階段已中斷連線",
+      "failedTitle": "工作階段失敗",
+      "failedDesc": "WhatsApp 工作階段啟動失敗。開啟該工作階段以查看原因。"
     },
     "card": {
       "phone": "電話",
       "sessionId": "工作階段 ID",
-      "lastActive": "上次活躍"
+      "lastActive": "上次活躍",
+      "error": "錯誤"
     }
   },
   "webhooks": {
@@ -475,7 +521,6 @@
     "engineCard": "目前 WhatsApp 引擎",
     "running": "執行中",
     "supportedFeatures": "支援功能：",
-    "more": "+{{count}} 更多",
     "builtIn": "內置",
     "noDescription": "沒有可用描述",
     "required": "必需",

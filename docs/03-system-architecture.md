@@ -76,7 +76,12 @@ sequenceDiagram
 
 ## 3.2 Pluggable Architecture Philosophy
 
-OpenWA is designed with a **Pluggable Architecture** that allows infrastructure components to be swapped without changing application code. This enables flexible deployments ranging from minimal single-session bots to enterprise-scale multi-tenant platforms.
+OpenWA is designed with a **Pluggable Architecture** that allows infrastructure components to be swapped without changing application code. This enables flexible deployments ranging from minimal single-session bots to larger single-node, multi-session installs.
+
+> **Note — single-instance:** the live WhatsApp engine layer is stateful and held in-process
+> (an in-memory `Map` in `SessionService`). OpenWA currently runs as **one API instance per
+> session-data volume**; horizontal scaling across multiple API replicas is a future design
+> (not implemented). See [13 - Horizontal Scaling](13-horizontal-scaling.md).
 
 ### Design Philosophy
 

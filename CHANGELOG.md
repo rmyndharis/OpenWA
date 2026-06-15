@@ -5,6 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-15
+
+A security-hardening and reliability release. It tightens defaults (SSRF protection on,
+datastore secrets required, least-privilege webhook reads), closes a server-side
+request-forgery vector on media fetches and webhook deliveries, adds an optional Prometheus
+metrics endpoint, fixes headless Chromium startup in the non-root Docker image, and refreshes
+dependencies. **Please read the Upgrade notes below before upgrading from 0.2.1** — several
+defaults changed.
+
+### Added
+
+- **Prometheus metrics** at `GET /api/metrics` (session/message gauges, process stats).
+  Disabled by default; set `METRICS_TOKEN` and scrape with `Authorization: Bearer <token>`.
+
+### Security
+
+- **Webhook secrets no longer leak:** the HMAC `secret` and custom `headers` are never
+  returned from any webhook API response (responses are mapped through a scoped DTO).
+- **Media-fetch SSRF closed:** server-side `MessageMedia.fromUrl` now runs an SSRF host
+  guard + byte cap + timeout before fetching a caller-supplied URL.
+- **Redirects are not followed** on webhook deliveries or media fetches, so a `302` to an
+  internal host can't bypass the SSRF guard.
+- **Webhook SSRF protection is ON by default** and validated at registration.
+- **Docker hardening:** the socket-proxy is isolated on an `internal: true` network reachable
+  only by the API (not the dashboard); the API container runs with `cap_drop: [ALL]` (+ a
+  minimal re-add), `no-new-privileges`, a `read_only` rootfs + tmpfs, and pid/mem limits.
+- **Plugin loader** rejects a manifest `main` that escapes the plugin directory before
+  `require()`.
+- **WebSocket:** the API key is re-validated on every subscribe (a revoked key is
+  disconnected), is no longer sent in the handshake URL, and CORS uses the configured
+  allowlist instead of `*`.
+- **Production boot guard:** the app refuses to start in production with empty/placeholder
+  secrets, and the committed default datastore credentials were removed.
+- **Rate limiting** now keys on the resolved client IP instead of the proxy IP.
+
+### Changed
+
+- Webhook read routes now require an `OPERATOR`+ key.
+- Webhook `events[]` are validated against the known event types (plus `*`).
+- The six inline-body message endpoints (+ label/channel) now validate their input.
+- The `main` auth/audit DB `synchronize` is config-driven (`MAIN_DATABASE_SYNCHRONIZE`,
+  default on) with a bundled migration for `api_keys`/`audit_logs`.
+- The readiness probe (`/api/health/ready`) now performs real database checks and returns
+  503 when a dependency is down or the app is draining; the container `HEALTHCHECK` points
+  at it.
+
+### Fixed
+
+- Message ack status UPDATE is scoped by `sessionId` (no cross-session corruption) and
+  backed by a composite index.
+- `getMessages` sanitizes `limit`/`offset` so `?limit=abc` no longer reaches the query.
+- The Postgres database name now honors `DATABASE_NAME` consistently between the runtime and
+  the migration CLI.
+- Backup/restore scripts (`scripts/backup.sh`/`restore.sh`) capture **both** databases
+  (incl. the auth DB `main.sqlite`) + sessions, so a restore preserves API keys.
+- Boot-time environment validation rejects an unknown `DATABASE_TYPE` and missing Postgres
+  credentials instead of silently coercing.
+- Message-event idempotency keys are session-scoped.
+- Response-envelope documentation corrected to the real raw-payload shape; the unused
+  interceptor/filter were removed; horizontal-scaling docs marked single-instance.
+- **Headless Chromium now starts in the Docker image as the non-root `openwa` user** — `HOME`
+  points at a writable directory, so the engine no longer dies with
+  `chrome_crashpad_handler: --database is required` on a fresh container. (closes #242)
+- Marking a 1:1 chat as read now accepts the newer `@lid` (privacy Linked ID) JID, not just
+  `@c.us`. Thanks @suraj7974 (#241).
+- Allowlisted IPv6 literals in `SSRF_ALLOWED_HOSTS` now match whether or not the entry is
+  bracketed (e.g. `[::1]` and `::1`).
+- The dashboard returns cleanly to the login screen on a `401` instead of flashing a transient
+  error toast.
+- A webhook `secret` cleared via update is normalized to "no secret" (consistent with create)
+  and is length-capped.
+
+### Dependencies
+
+- `@bull-board/{api,nestjs,express}` 7.2.1 → 8.0.0 and `@types/archiver` 7 → 8 (aligned with the
+  archiver v8 runtime), plus a batch of minor/patch bumps (NestJS 11.1.27, BullMQ 5.78.1, AWS SDK,
+  ESLint 10.5, Prettier 3.8, typescript-eslint 8.61, and a dashboard dev-tool bump).
+
+### Upgrade notes (behavior changes)
+
+- **Webhook reads now require `OPERATOR`+** — a `VIEWER` key reading webhooks gets `403`.
+- **SSRF protection defaults ON** — deployments that deliver webhooks or fetch media from
+  internal hosts must set `SSRF_ALLOWED_HOSTS` (comma-separated) or `WEBHOOK_SSRF_PROTECT=false`.
+- **Datastore secrets are now required** — there is no `openwa`/`minioadmin` default;
+  `docker compose --profile postgres/minio up` needs `DATABASE_PASSWORD` / `S3_*` set, and
+  production refuses to boot with placeholder secrets.
+- **Bull Board `?apiKey=` removed** — authenticate via `X-API-Key`/`Authorization: Bearer`.
+- New env knobs: `SSRF_ALLOWED_HOSTS`, `MEDIA_DOWNLOAD_MAX_BYTES`, `MEDIA_DOWNLOAD_TIMEOUT_MS`,
+  `MAIN_DATABASE_SYNCHRONIZE`, `SHUTDOWN_DELAY_MS`, `OPENWA_MEM_LIMIT`, `METRICS_TOKEN`.
+
 ## [0.2.1] - 2026-06-15
 
 A patch release.
@@ -285,7 +375,7 @@ bugs. Backward compatible except for the two upgrade notes below.
 - **PostgreSQL boot crash on `main` connection**: `AuditLog.metadata` now uses `simple-json` instead of
   the dynamic `jsonColumnType()`. The `main` connection is always SQLite, so it must not switch to
   `jsonb` when `DATABASE_TYPE=postgres`. Fixes `DataTypeNotSupportedError: Data type "jsonb" in
-  "AuditLog.metadata" is not supported by "sqlite" database`.
+"AuditLog.metadata" is not supported by "sqlite" database`.
 - **Operator env vars ignored**: `data/.env.generated` no longer overrides `process.env` or project
   `.env`. Loading order is now `process env > .env > data/.env.generated`, so values from Docker /
   shell / systemd take precedence over Dashboard-saved config.

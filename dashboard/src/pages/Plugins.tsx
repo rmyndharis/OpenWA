@@ -17,7 +17,7 @@ import {
   Zap,
   X,
 } from 'lucide-react';
-import { pluginsApi } from '../services/api';
+import { pluginsApi, infraApi } from '../services/api';
 import type { Plugin } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
@@ -118,6 +118,16 @@ export default function Plugins() {
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
+      // Persist the engine section to the backend (.env.generated via PUT /infra/config).
+      // The engine `type` isn't a savable field (only whatsapp-web.js exists); the backend
+      // maps these to PUPPETEER_HEADLESS / SESSION_DATA_PATH / PUPPETEER_ARGS.
+      await infraApi.saveConfig({
+        engine: {
+          headless: engineConfig.headless,
+          sessionDataPath: engineConfig.sessionDataPath,
+          browserArgs: engineConfig.browserArgs,
+        },
+      });
       toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
       setShowConfigModal(false);
     } catch (err) {

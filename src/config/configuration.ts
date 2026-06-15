@@ -22,7 +22,10 @@ export default () => ({
   database: {
     type: 'sqlite' as const,
     database: './data/main.sqlite',
-    synchronize: true,
+    // Schema management for the auth/audit DB. Default ON (zero-config first boot).
+    // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
+    // instead (migrationsRun then creates api_keys/audit_logs).
+    synchronize: process.env.MAIN_DATABASE_SYNCHRONIZE !== 'false',
     logging: process.env.DATABASE_LOGGING === 'true',
   },
 
@@ -31,6 +34,10 @@ export default () => ({
     type: process.env.DATABASE_TYPE || 'sqlite',
     // SQLite path (used when type is sqlite)
     database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+    // Postgres database NAME (used when type is postgres). Resolved from the same
+    // DATABASE_NAME env as the migration CLI (data-source.ts) so the runtime factory and
+    // migrations never target different databases. Distinct sqlite-vs-pg defaults.
+    name: process.env.DATABASE_NAME || 'openwa',
     // PostgreSQL/MySQL connection (used when type is postgres/mysql)
     host: process.env.DATABASE_HOST || 'localhost',
     port: parseInt(process.env.DATABASE_PORT || '5432', 10),

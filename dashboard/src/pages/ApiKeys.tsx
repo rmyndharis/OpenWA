@@ -151,13 +151,8 @@ export function ApiKeys() {
           const apiKey = info.row.original;
           return (
             <span className="actions-cell">
-              <button
-                className="icon-btn"
-                onClick={() => copyToClipboard(apiKey.keyPrefix, apiKey.id)}
-                title={t('apiKeys.actions.copy')}
-              >
-                {copied === apiKey.id ? <Check size={16} /> : <Copy size={16} />}
-              </button>
+              {/* No per-row copy: the full key only exists once (post-creation modal); the row
+                  only has the prefix, so a copy button here could only copy a useless fragment. */}
               {apiKey.isActive && (
                 <button
                   className="icon-btn"
@@ -179,7 +174,7 @@ export function ApiKeys() {
         },
       }),
     ],
-    [visibleKeys, copied, t],
+    [visibleKeys, t],
   );
 
   const table = useReactTable({

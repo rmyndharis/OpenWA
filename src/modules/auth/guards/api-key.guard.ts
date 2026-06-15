@@ -5,7 +5,7 @@ import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
-import { ipMatches, normalizeIp } from '../../../common/utils/ip';
+import { resolveClientIp } from '../../../common/utils/ip';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -75,38 +75,7 @@ export class ApiKeyGuard implements CanActivate {
    * direct socket address is used — preventing IP-whitelist spoofing.
    */
   private getClientIp(request: Request): string {
-    const socketIp = normalizeIp(request.socket?.remoteAddress || request.ip || '');
     const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
-
-    if (trustedProxies.length === 0) {
-      return socketIp;
-    }
-
-    const isTrusted = (ip: string): boolean => trustedProxies.some(proxy => ipMatches(ip, proxy));
-
-    // Only trust the forwarded chain if the immediate peer is a trusted proxy.
-    if (!isTrusted(socketIp)) {
-      return socketIp;
-    }
-
-    const forwarded = request.headers['x-forwarded-for'];
-    if (!forwarded) {
-      return socketIp;
-    }
-
-    const hops = (Array.isArray(forwarded) ? forwarded.join(',') : forwarded)
-      .split(',')
-      .map(hop => normalizeIp(hop.trim()))
-      .filter(Boolean);
-
-    // Walk right-to-left and return the first hop that is not a trusted proxy:
-    // the closest address the trusted infrastructure actually observed.
-    for (let i = hops.length - 1; i >= 0; i--) {
-      if (!isTrusted(hops[i])) {
-        return hops[i];
-      }
-    }
-
-    return socketIp;
+    return resolveClientIp(request, trustedProxies);
   }
 }

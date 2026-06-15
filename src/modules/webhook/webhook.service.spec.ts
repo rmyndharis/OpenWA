@@ -1,8 +1,14 @@
+// SSRF protection is now ON by default; resolve any host to a public IP so existing
+// dispatch/create tests stay offline. Literal-IP tests (8.8.8.8 / 127.0.0.1) bypass lookup.
+jest.mock('dns/promises', () => ({
+  lookup: jest.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]),
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Repository } from 'typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { WebhookService, WebhookPayload } from './webhook.service';
@@ -120,6 +126,37 @@ describe('WebhookService', () => {
           secret: 'my-secret',
         }),
       );
+    });
+
+    // ── validate URL at registration, default-on ──────────
+
+    it('rejects an internal webhook URL at registration with 400 (protection on by default)', async () => {
+      const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
+      delete process.env.WEBHOOK_SSRF_PROTECT; // default → on
+      try {
+        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        expect(repository.create).not.toHaveBeenCalled();
+      } finally {
+        if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
+        else process.env.WEBHOOK_SSRF_PROTECT = origProtect;
+      }
+    });
+
+    it('accepts an internal webhook URL when protection is explicitly disabled', async () => {
+      const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
+      process.env.WEBHOOK_SSRF_PROTECT = 'false';
+      try {
+        const webhook = createMockWebhook({ url: 'http://127.0.0.1/hook' });
+        (repository.create as jest.Mock).mockReturnValue(webhook);
+        (repository.save as jest.Mock).mockResolvedValue(webhook);
+
+        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).resolves.toBeDefined();
+      } finally {
+        if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
+        else process.env.WEBHOOK_SSRF_PROTECT = origProtect;
+      }
     });
   });
 
@@ -282,6 +319,99 @@ describe('WebhookService', () => {
       await service.dispatch('sess-1', 'message.received', {});
 
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── custom-header sanitization ───────────────────────────────
+
+  describe('custom header merge', () => {
+    it('drops reserved custom headers so the system headers always win', async () => {
+      const webhook = createMockWebhook({
+        events: ['message.received'],
+        headers: { 'X-OpenWA-Event': 'forged', 'Content-Type': 'text/plain', 'X-Custom': 'ok' },
+      });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      const captured: Record<string, string> = {};
+      const mockFetch = jest.fn().mockImplementation((_url: string, opts: RequestInit) => {
+        Object.assign(captured, opts.headers as Record<string, string>);
+        return Promise.resolve({ ok: true, status: 200 });
+      });
+      global.fetch = mockFetch as typeof global.fetch;
+
+      const payload: WebhookPayload = {
+        event: 'message.received',
+        data: {},
+        timestamp: '',
+        sessionId: 'sess-1',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+      };
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: { sessionId: 'sess-1', event: 'message.received', payload },
+      });
+
+      await service.dispatch('sess-1', 'message.received', {});
+
+      expect(captured['X-OpenWA-Event']).toBe('message.received'); // system value, not 'forged'
+      expect(captured['Content-Type']).toBe('application/json');
+      expect(captured['X-Custom']).toBe('ok'); // legitimate custom header preserved
+      mockFetch.mockReset();
+    });
+  });
+
+  // ── redirect refusal ─────────────────────────────────────────
+
+  describe('dispatch — redirect refusal', () => {
+    const mockFetch = jest.fn();
+    const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
+
+    beforeEach(() => {
+      global.fetch = mockFetch as typeof global.fetch;
+      process.env.WEBHOOK_SSRF_PROTECT = 'true';
+    });
+
+    afterEach(() => {
+      mockFetch.mockReset();
+      if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
+      else process.env.WEBHOOK_SSRF_PROTECT = origProtect;
+    });
+
+    it('does NOT follow a redirect and treats it as a delivery failure when protection is on', async () => {
+      // Public literal IP → assertSafeFetchUrl passes with no DNS lookup; retryCount:1 → no retry loop.
+      const webhook = createMockWebhook({
+        url: 'https://8.8.8.8/webhook',
+        events: ['message.received'],
+        retryCount: 1,
+      });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      // Simulate undici's redirect:'manual' result — an opaque redirect, never followed.
+      mockFetch.mockResolvedValue({ ok: false, status: 0, type: 'opaqueredirect' });
+
+      const payload: WebhookPayload = {
+        event: 'message.received',
+        timestamp: '',
+        sessionId: 'sess-1',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+        data: {},
+      };
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: { sessionId: 'sess-1', event: 'message.received', payload },
+      });
+
+      await service.dispatch('sess-1', 'message.received', {});
+
+      // fetch was issued with redirect:'manual' and the redirect was NOT followed (no success path)
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://8.8.8.8/webhook',
+        expect.objectContaining({ redirect: 'manual' }),
+      );
+      expect(repository.update).not.toHaveBeenCalled(); // lastTriggeredAt never set → delivery failed
+      expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
     });
   });
 

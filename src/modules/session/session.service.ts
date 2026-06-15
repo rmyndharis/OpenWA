@@ -46,6 +46,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
 
+  // Sessions currently being stopped/deleted. An in-flight executeReconnect awaits
+  // engine init, so a stop/delete during that window could re-register an engine AFTER
+  // teardown (orphan). stop()/delete() add the id here; executeReconnect checks it after its
+  // awaits and destroys any engine it just created; start() clears it (intentional restart).
+  private stoppingSessions: Set<string> = new Set();
+
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepository: Repository<Session>,
@@ -211,6 +217,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async delete(id: string): Promise<void> {
     const session = await this.findOne(id);
 
+    // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
+    this.stoppingSessions.add(id);
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 
@@ -251,6 +259,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (this.engines.has(id)) {
       throw new BadRequestException('Session is already started');
     }
+
+    // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark.
+    this.stoppingSessions.delete(id);
 
     // Execute hook before starting
     await this.hookManager.execute(
@@ -466,7 +477,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         const status = ackToMessageStatus(ack);
         if (status) {
           void this.messageRepository
-            .update({ waMessageId: messageId, status: In(ackStatusTransitionFrom(status)) }, { status })
+            // Scope by sessionId: waMessageId is unique per account/chat, not global —
+            // an ack on one session must never advance a same-id row in another session.
+            .update({ sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(status)) }, { status })
             .then(result => {
               // affected:0 — the row was not advanced: either the send's 2nd save (which sets
               // waMessageId) hasn't committed yet, or the status is already at/above the target.
@@ -639,6 +652,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   private async executeReconnect(id: string, session: Session, state: ReconnectState): Promise<void> {
+    // The session may have been stopped/deleted before this fired — don't resurrect it.
+    if (this.stoppingSessions.has(id)) {
+      return;
+    }
     try {
       // Clean up old engine
       const oldEngine = this.engines.get(id);
@@ -649,6 +666,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
       // Re-initialize
       await this.initializeEngine(id, session);
+
+      // A stop()/delete() may have run while we awaited init — if so, tear down the engine we
+      // just registered so it isn't orphaned (the session is meant to be down).
+      if (this.stoppingSessions.has(id)) {
+        const resurrected = this.engines.get(id);
+        if (resurrected) {
+          await resurrected.destroy();
+          this.engines.delete(id);
+        }
+        return;
+      }
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`Reconnect attempt ${state.attempts} failed`, errorMessage, {
@@ -672,6 +700,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async stop(id: string): Promise<Session> {
     const session = await this.findOne(id);
 
+    // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
+    this.stoppingSessions.add(id);
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 

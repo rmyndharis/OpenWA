@@ -75,6 +75,13 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p ./data/sessions ./data/media && \
     chown -R openwa:openwa /app
 
+# The non-root openwa user has no home of its own (created with `useradd -r`, no -m), so $HOME
+# defaults to "/", which is not writable. Newer Chromium spawns chrome_crashpad_handler, which
+# needs a writable HOME-derived crash-dump dir or the browser fails to launch ("--database is
+# required"). Point HOME at the openwa-owned data dir so the engine starts under `docker run`,
+# Kubernetes, etc. (compose overrides this with HOME=/tmp on its read-only rootfs). See #242.
+ENV HOME=/app/data
+
 # Copy entrypoint: runs as root to fix named-volume ownership, then drops to openwa via gosu
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -84,7 +91,7 @@ EXPOSE 2785
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:2785/api/health || exit 1
+    CMD curl -f http://localhost:2785/api/health/ready || exit 1
 
 # dumb-init is PID 1 and handles signal forwarding.
 # It execs docker-entrypoint.sh (as root), which fixes volume ownership and

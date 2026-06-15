@@ -273,7 +273,7 @@ export function Chats() {
     [selectedSessionId],
   );
 
-  const { isConnected, subscribe, unsubscribe } = useWebSocket({
+  const { isConnected, connectionFailed, reconnect, subscribe, unsubscribe } = useWebSocket({
     onMessage: handleIncomingMessage,
     onMessageAck: handleIncomingMessageAck,
     onMessageReaction: handleIncomingMessageReaction,
@@ -572,6 +572,18 @@ export function Chats() {
   return (
     <div className="chats-page">
       <PageHeader title={t('nav.chats')} subtitle={t('chats.subtitle')} />
+
+      {/* Real-time connection permanently dropped — let the user re-establish it instead of
+          silently showing stale chats. */}
+      {connectionFailed && (
+        <div className="chats-reconnect-banner" role="alert">
+          <AlertCircle size={16} />
+          <span>{t('common.disconnected')}</span>
+          <button className="btn-secondary" onClick={reconnect}>
+            {t('common.refresh')}
+          </button>
+        </div>
+      )}
 
       {loadingSessions ? (
         <div className="chats-loading-container">

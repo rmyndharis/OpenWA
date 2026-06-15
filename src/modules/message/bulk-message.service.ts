@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -24,7 +24,7 @@ interface BulkMessageContent {
 }
 
 @Injectable()
-export class BulkMessageService {
+export class BulkMessageService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BulkMessageService.name);
   private readonly processingBatches = new Map<string, boolean>(); // Track active batches for cancellation
 
@@ -33,6 +33,25 @@ export class BulkMessageService {
     private readonly batchRepository: Repository<MessageBatch>,
     private readonly sessionService: SessionService,
   ) {}
+
+  /**
+   * Transition orphaned batches on startup. A batch still in PROCESSING belongs to a
+   * previous (crashed/restarted) process — this fresh process is not driving it, so it would
+   * otherwise be stuck in PROCESSING forever. Mark it FAILED. Auto-resume is intentionally NOT
+   * done here: resuming risks re-sending messages already delivered before the crash.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    const orphaned = await this.batchRepository.find({ where: { status: BatchStatus.PROCESSING } });
+    for (const batch of orphaned) {
+      batch.status = BatchStatus.FAILED;
+      await this.batchRepository.save(batch);
+    }
+    if (orphaned.length > 0) {
+      this.logger.warn(
+        `Marked ${orphaned.length} orphaned PROCESSING batch(es) FAILED on startup (interrupted by a restart)`,
+      );
+    }
+  }
 
   async createBatch(sessionId: string, dto: SendBulkMessageDto): Promise<MessageBatch> {
     // Validate session exists

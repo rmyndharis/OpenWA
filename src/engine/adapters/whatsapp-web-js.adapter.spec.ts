@@ -1,5 +1,7 @@
-import { WhatsAppWebJsAdapter, extractLinkedParentJID } from './whatsapp-web-js.adapter';
+import { MessageMedia } from 'whatsapp-web.js';
+import { WhatsAppWebJsAdapter, extractLinkedParentJID, loadRemoteMedia } from './whatsapp-web-js.adapter';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 
 describe('extractLinkedParentJID (#201)', () => {
   it('returns null when no metadata is provided', () => {
@@ -34,6 +36,54 @@ describe('extractLinkedParentJID (#201)', () => {
 
   it('ignores null/undefined candidates and falls through to the next', () => {
     expect(extractLinkedParentJID({ parentGroup: null, linkedParentGroup: 'b@g.us' })).toBe('b@g.us');
+  });
+});
+
+describe('loadRemoteMedia — media-fetch SSRF guard + cap + timeout', () => {
+  let fromUrlSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    fromUrlSpy = jest
+      .spyOn(MessageMedia, 'fromUrl')
+      .mockResolvedValue(new MessageMedia('image/png', 'ZmFrZQ==', 'x.png'));
+  });
+
+  afterEach(() => {
+    fromUrlSpy.mockRestore();
+    delete process.env.SSRF_ALLOWED_HOSTS;
+  });
+
+  it('blocks an internal/loopback URL BEFORE any fetch (no outbound socket)', async () => {
+    await expect(loadRemoteMedia('http://127.0.0.1/x.png')).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(fromUrlSpy).not.toHaveBeenCalled();
+  });
+
+  it('blocks the cloud-metadata IP before fetching', async () => {
+    await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+    expect(fromUrlSpy).not.toHaveBeenCalled();
+  });
+
+  it('fetches a public URL with a byte cap and an abort-timeout signal', async () => {
+    await loadRemoteMedia('https://8.8.8.8/x.png');
+
+    expect(fromUrlSpy).toHaveBeenCalledTimes(1);
+    const [url, options] = fromUrlSpy.mock.calls[0] as [
+      string,
+      { reqOptions: { size: number; signal: unknown; redirect: string } },
+    ];
+    expect(url).toBe('https://8.8.8.8/x.png');
+    expect(typeof options.reqOptions.size).toBe('number');
+    expect(options.reqOptions.size).toBeGreaterThan(0);
+    expect(options.reqOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(options.reqOptions.redirect).toBe('error'); // never follow redirects
+  });
+
+  it('honors the SSRF_ALLOWED_HOSTS escape-hatch for trusted internal media stores', async () => {
+    process.env.SSRF_ALLOWED_HOSTS = 'minio';
+    await loadRemoteMedia('http://minio:9000/bucket/x.png');
+    expect(fromUrlSpy).toHaveBeenCalledTimes(1);
   });
 });
 

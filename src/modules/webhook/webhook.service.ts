@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -10,7 +10,12 @@ import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
-import { assertSafeWebhookUrl, isSsrfProtectionEnabled } from '../../common/security/ssrf-guard';
+import {
+  assertSafeFetchUrl,
+  assertNoRedirect,
+  isSsrfProtectionEnabled,
+  SsrfBlockedError,
+} from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 
 export interface WebhookPayload {
@@ -50,7 +55,25 @@ export class WebhookService {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
   }
 
+  /**
+   * Reject an internal/unsafe webhook URL at registration, so a bad URL fails
+   * synchronously with a 400 instead of silently failing at delivery time. Honors the same
+   * SSRF flag + SSRF_ALLOWED_HOSTS escape-hatch as delivery. Maps the guard error to 400.
+   */
+  private async validateWebhookUrl(url: string): Promise<void> {
+    if (!isSsrfProtectionEnabled()) return;
+    try {
+      await assertSafeFetchUrl(url);
+    } catch (error) {
+      if (error instanceof SsrfBlockedError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
+  }
+
   async create(sessionId: string, dto: CreateWebhookDto): Promise<Webhook> {
+    await this.validateWebhookUrl(dto.url);
     const webhook = this.webhookRepository.create({
       sessionId,
       url: dto.url,
@@ -87,9 +110,14 @@ export class WebhookService {
   async update(id: string, dto: UpdateWebhookDto): Promise<Webhook> {
     const webhook = await this.findOne(id);
 
-    if (dto.url !== undefined) webhook.url = dto.url;
+    if (dto.url !== undefined) {
+      await this.validateWebhookUrl(dto.url);
+      webhook.url = dto.url;
+    }
     if (dto.events !== undefined) webhook.events = dto.events;
-    if (dto.secret !== undefined) webhook.secret = dto.secret;
+    // Normalize empty string to null (parity with create) — an empty secret means "no HMAC",
+    // not a stored blank that silently disables signing while looking configured.
+    if (dto.secret !== undefined) webhook.secret = dto.secret || null;
     if (dto.headers !== undefined) webhook.headers = dto.headers;
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
@@ -120,29 +148,35 @@ export class WebhookService {
 
     const body = JSON.stringify(testPayload);
     const headers: Record<string, string> = {
+      // Custom headers FIRST so the system headers below always win.
+      ...this.sanitizeCustomHeaders(webhook.headers),
       'Content-Type': 'application/json',
       'User-Agent': 'OpenWA-Webhook/1.0.0',
       'X-OpenWA-Event': 'test',
       'X-OpenWA-Idempotency-Key': testPayload.idempotencyKey,
       'X-OpenWA-Delivery-Id': testPayload.deliveryId,
       'X-OpenWA-Retry-Count': '0',
-      ...webhook.headers,
     };
 
     if (webhook.secret) {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
+    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (isSsrfProtectionEnabled()) {
-        await assertSafeWebhookUrl(webhook.url);
+      if (ssrfProtected) {
+        await assertSafeFetchUrl(webhook.url);
       }
       const response = await fetch(webhook.url, {
         method: 'POST',
         headers,
         body,
         signal: AbortSignal.timeout(10000),
+        redirect: ssrfProtected ? 'manual' : 'follow',
       });
+      if (ssrfProtected) {
+        assertNoRedirect(response, webhook.url);
+      }
 
       return {
         success: response.ok,
@@ -198,15 +232,15 @@ export class WebhookService {
       // Use potentially modified payload
       const finalPayload = (hookResult as { payload: WebhookPayload }).payload;
 
-      // Build headers
+      // Build headers — custom headers FIRST so the system headers below always win.
       const headers: Record<string, string> = {
+        ...this.sanitizeCustomHeaders(webhook.headers),
         'Content-Type': 'application/json',
         'User-Agent': 'OpenWA-Webhook/1.0.0',
         'X-OpenWA-Event': event,
         'X-OpenWA-Idempotency-Key': idempotencyKey,
         'X-OpenWA-Delivery-Id': deliveryId,
         'X-OpenWA-Retry-Count': '0',
-        ...webhook.headers,
       };
 
       // Use queue if available, otherwise fallback to direct delivery
@@ -318,16 +352,21 @@ export class WebhookService {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
+    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (isSsrfProtectionEnabled()) {
-        await assertSafeWebhookUrl(webhook.url);
+      if (ssrfProtected) {
+        await assertSafeFetchUrl(webhook.url);
       }
       const response = await fetch(webhook.url, {
         method: 'POST',
         headers,
         body,
         signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
+        redirect: ssrfProtected ? 'manual' : 'follow',
       });
+      if (ssrfProtected) {
+        assertNoRedirect(response, webhook.url);
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -358,6 +397,21 @@ export class WebhookService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Drop operator-supplied custom headers that target reserved names (Content-Type or any
+   * X-OpenWA-* header) so a webhook config cannot forge the signature/event/idempotency
+   * headers. Spread the result BEFORE the system headers so system always wins.
+   */
+  private sanitizeCustomHeaders(custom: Record<string, string> | null | undefined): Record<string, string> {
+    const safe: Record<string, string> = {};
+    for (const [key, value] of Object.entries(custom ?? {})) {
+      if (!/^(content-type|x-openwa-)/i.test(key)) {
+        safe[key] = value;
+      }
+    }
+    return safe;
   }
 
   private generateSignature(payload: string, secret: string): string {

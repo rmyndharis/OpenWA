@@ -1,21 +1,11 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Delete,
-  Param,
-  HttpCode,
-  HttpStatus,
-  BadRequestException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
-import { SessionService } from '../session/session.service';
+import { ContactService } from './contact.service';
 
 @ApiTags('contacts')
 @Controller('sessions/:sessionId/contacts')
 export class ContactController {
-  constructor(private readonly sessionService: SessionService) {}
+  constructor(private readonly contactService: ContactService) {}
 
   @Get()
   @ApiOperation({ summary: 'Get all contacts for a session' })
@@ -27,11 +17,7 @@ export class ContactController {
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async findAll(@Param('sessionId') sessionId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    return engine.getContacts();
+    return this.contactService.getContacts(sessionId);
   }
 
   @Get(':contactId')
@@ -44,15 +30,7 @@ export class ContactController {
   })
   @ApiResponse({ status: 404, description: 'Contact not found' })
   async findOne(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    const contact = await engine.getContactById(contactId);
-    if (!contact) {
-      throw new NotFoundException(`Contact ${contactId} not found`);
-    }
-    return contact;
+    return this.contactService.getContactById(sessionId, contactId);
   }
 
   @Get('check/:number')
@@ -64,11 +42,7 @@ export class ContactController {
     description: 'Number existence check result',
   })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    const exists = await engine.checkNumberExists(number);
+    const exists = await this.contactService.checkNumberExists(sessionId, number);
     return {
       number,
       exists,
@@ -87,11 +61,7 @@ export class ContactController {
     description: 'Profile picture URL',
   })
   async getProfilePicture(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    const url = await engine.getProfilePicture(contactId);
+    const url = await this.contactService.getProfilePicture(sessionId, contactId);
     return { url };
   }
 
@@ -105,11 +75,7 @@ export class ContactController {
     description: 'Contact blocked',
   })
   async blockContact(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    await engine.blockContact(contactId);
+    await this.contactService.blockContact(sessionId, contactId);
     return { success: true, message: 'Contact blocked' };
   }
 
@@ -122,11 +88,7 @@ export class ContactController {
     description: 'Contact unblocked',
   })
   async unblockContact(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    await engine.unblockContact(contactId);
+    await this.contactService.unblockContact(sessionId, contactId);
     return { success: true, message: 'Contact unblocked' };
   }
 }

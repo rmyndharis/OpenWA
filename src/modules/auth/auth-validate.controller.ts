@@ -17,6 +17,10 @@ export class AuthValidateController {
   @ApiResponse({ status: 200, description: 'API key is valid' })
   @ApiResponse({ status: 401, description: 'Invalid or missing API key' })
   async validate(@Headers('x-api-key') apiKey?: string): Promise<{ valid: boolean; role?: string }> {
+    // This route is behind the global API-key guard, so in normal operation only a valid key
+    // reaches this handler (a missing/invalid key 401s first) and the `valid:false` branches
+    // below are unreachable. They are retained as defense-in-depth in case the guard
+    // config ever changes — they are cheap and keep the endpoint safe to expose directly.
     if (!apiKey) {
       return { valid: false };
     }

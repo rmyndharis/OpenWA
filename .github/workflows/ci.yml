@@ -53,6 +53,9 @@ jobs:
       - name: Run unit tests
         run: npm test -- --coverage
 
+      - name: Run e2e smoke tests
+        run: npm run test:e2e
+
       - name: Upload coverage
         uses: codecov/codecov-action@v6
         if: always()
@@ -78,6 +81,9 @@ jobs:
 
       - name: Run ESLint
         run: cd dashboard && npm run lint
+
+      - name: Check i18n parity
+        run: cd dashboard && npm run i18n:check
 
       - name: Build dashboard
         run: cd dashboard && npm run build

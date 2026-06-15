@@ -5,6 +5,14 @@ import { BulkMessageService } from './bulk-message.service';
 import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { SendBulkMessageDto, BulkMessageResponseDto } from './dto/bulk-message.dto';
+import {
+  SendLocationDto,
+  SendContactDto,
+  ReplyMessageDto,
+  ForwardMessageDto,
+  ReactMessageDto,
+  DeleteMessageDto,
+} from './dto/message-actions.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
@@ -169,10 +177,7 @@ export class MessageController {
     description: 'Location sent',
     type: MessageResponseDto,
   })
-  async sendLocation(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; latitude: number; longitude: number; description?: string; address?: string },
-  ): Promise<MessageResponseDto> {
+  async sendLocation(@Param('sessionId') sessionId: string, @Body() dto: SendLocationDto): Promise<MessageResponseDto> {
     return this.messageService.sendLocation(sessionId, dto);
   }
 
@@ -185,10 +190,7 @@ export class MessageController {
     description: 'Contact sent',
     type: MessageResponseDto,
   })
-  async sendContact(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; contactName: string; contactNumber: string },
-  ): Promise<MessageResponseDto> {
+  async sendContact(@Param('sessionId') sessionId: string, @Body() dto: SendContactDto): Promise<MessageResponseDto> {
     return this.messageService.sendContact(sessionId, dto);
   }
 
@@ -217,10 +219,7 @@ export class MessageController {
     description: 'Reply sent',
     type: MessageResponseDto,
   })
-  async reply(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; quotedMessageId: string; text: string },
-  ): Promise<MessageResponseDto> {
+  async reply(@Param('sessionId') sessionId: string, @Body() dto: ReplyMessageDto): Promise<MessageResponseDto> {
     return this.messageService.reply(sessionId, dto);
   }
 
@@ -233,16 +232,14 @@ export class MessageController {
     description: 'Message forwarded',
     type: MessageResponseDto,
   })
-  async forward(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { fromChatId: string; toChatId: string; messageId: string },
-  ): Promise<MessageResponseDto> {
+  async forward(@Param('sessionId') sessionId: string, @Body() dto: ForwardMessageDto): Promise<MessageResponseDto> {
     return this.messageService.forward(sessionId, dto);
   }
 
   // ========== Phase 3: Reactions ==========
 
   @Post('react')
+  @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Add or remove a reaction to a message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -254,10 +251,7 @@ export class MessageController {
     status: 400,
     description: 'Session not active or message not found',
   })
-  async react(
-    @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; messageId: string; emoji: string },
-  ): Promise<{ success: boolean }> {
+  async react(@Param('sessionId') sessionId: string, @Body() dto: ReactMessageDto): Promise<{ success: boolean }> {
     await this.messageService.reactToMessage(sessionId, dto);
     return { success: true };
   }
@@ -316,6 +310,7 @@ export class MessageController {
   // ========== Delete Message ==========
 
   @Post('delete')
+  @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Delete a message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -329,7 +324,7 @@ export class MessageController {
   })
   async deleteMessage(
     @Param('sessionId') sessionId: string,
-    @Body() dto: { chatId: string; messageId: string; forEveryone?: boolean },
+    @Body() dto: DeleteMessageDto,
   ): Promise<{ success: boolean }> {
     await this.messageService.deleteMessage(sessionId, dto);
     return { success: true };
