@@ -39,7 +39,7 @@
     "@aws-sdk/client-s3": "^3.1063.0",
     "@bull-board/api": "^7.2.1",
     "@bull-board/express": "^7.2.1",
-    "@bull-board/nestjs": "^7.2.1",
+    "@bull-board/nestjs": "^8.0.0",
     "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.1.25",
