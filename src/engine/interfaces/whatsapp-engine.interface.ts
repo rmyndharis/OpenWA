@@ -227,6 +227,12 @@ export interface ChatSummary {
 }
 
 /**
+ * Engine-neutral chat presence state. `typing`/`recording` show the indicator to the chat;
+ * `paused` clears it. Best-effort: engines without a presence concept may no-op.
+ */
+export type ChatState = 'typing' | 'recording' | 'paused';
+
+/**
  * Structured payload for a remotely-revoked ("deleted for everyone") message.
  * The engine layer never emits a localized display string; `body` is intentionally
  * empty and the dashboard renders the localized "message deleted" text.
@@ -369,4 +375,9 @@ export interface IWhatsAppEngine {
   // Chats
   getChats(): Promise<ChatSummary[]>;
   sendSeen(chatId: string): Promise<boolean>;
+  /**
+   * Send a typing/recording presence indicator to a chat, or clear it (`paused`).
+   * Engine-agnostic and best-effort: engines without a presence concept should no-op.
+   */
+  sendChatState(chatId: string, state: ChatState): Promise<void>;
 }

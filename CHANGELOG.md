@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Typing simulation before single sends (anti-ban), on by default.** A text send now shows a "typing…"
+  indicator and pauses briefly (length-scaled, jittered) before sending, so automated messages don't look
+  instantaneous. Disable with `SIMULATE_TYPING=false`; cap the pause with `SIMULATE_TYPING_MAX_MS`
+  (default 5000). Exposed engine-agnostically via `IWhatsAppEngine.sendChatState` and a new
+  `POST /sessions/:id/chats/typing` endpoint (`state`: `typing` | `recording` | `paused`). Bulk sends are
+  unaffected (they keep their own `delayBetweenMessages` throttle).
+- The engine API (`GET /infra/engines`) and the dashboard Active Engine card now report the **underlying
+  engine library version** (e.g. `whatsapp-web.js 1.34.7`), distinct from the adapter plugin version.
+
+### Fixed
+
+- **Duplicate outgoing messages in the dashboard Chats view.** A race between the optimistic placeholder
+  and the realtime `message.sent` echo could render a sent message twice. Reconciliation is now race-safe.
+  (Display-only — the recipient always received exactly one message.)
+
+### Changed
+
+- `mark-chat-read` `chatId` validation is now engine-neutral (accepts any engine's JID scheme, e.g. a
+  Baileys `…@s.whatsapp.net`) instead of hardcoding the whatsapp-web.js `@c.us`/`@g.us`/`@lid` format.
+
 ## [0.2.6] - 2026-06-16
 
 A patch release: stop Chromium from failing to launch on hardened `read_only` containers, and make the

@@ -17,6 +17,7 @@ import {
   IWhatsAppEngine,
   EngineStatus,
   ChatSummary,
+  ChatState,
   IncomingMessage,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
@@ -802,6 +803,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     return engine.sendSeen(chatId);
+  }
+
+  async sendChatState(id: string, chatId: string, state: ChatState): Promise<void> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    await engine.sendChatState(chatId, state);
   }
 
   private async updateStatus(id: string, status: SessionStatus): Promise<void> {

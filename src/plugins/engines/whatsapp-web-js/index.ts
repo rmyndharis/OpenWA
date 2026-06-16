@@ -92,6 +92,19 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
     ];
   }
 
+  getEngineLibrary(): { name: string; version: string } {
+    // The actual whatsapp-web.js library version (e.g. 1.34.7), surfaced so operators can see which
+    // engine version is really running — distinct from this adapter plugin's manifest version (1.0.0).
+    let version = 'unknown';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      version = (require('whatsapp-web.js/package.json') as { version: string }).version;
+    } catch {
+      // Keep 'unknown' if the package metadata can't be resolved at runtime.
+    }
+    return { name: 'whatsapp-web.js', version };
+  }
+
   healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     return Promise.resolve({ healthy: true, message: 'WhatsApp-web.js engine is available' });
   }

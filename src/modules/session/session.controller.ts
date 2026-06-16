@@ -6,6 +6,7 @@ import {
   SessionResponseDto,
   QRCodeResponseDto,
   MarkChatReadDto,
+  SendChatStateDto,
   RequestPairingCodeDto,
   PairingCodeResponseDto,
 } from './dto';
@@ -210,6 +211,17 @@ export class SessionController {
   async markChatRead(@Param('id') id: string, @Body() dto: MarkChatReadDto): Promise<{ success: boolean }> {
     const success = await this.sessionService.sendSeen(id, dto.chatId);
     return { success };
+  }
+
+  @Post(':id/chats/typing')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: "Send a typing/recording presence indicator to a chat (or clear it with 'paused')" })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Presence sent' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async sendChatState(@Param('id') id: string, @Body() dto: SendChatStateDto): Promise<{ success: boolean }> {
+    await this.sessionService.sendChatState(id, dto.chatId, dto.state);
+    return { success: true };
   }
 
   @Get('stats/overview')

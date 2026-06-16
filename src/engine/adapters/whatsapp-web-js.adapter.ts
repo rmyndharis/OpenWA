@@ -27,6 +27,7 @@ import {
   ProductQueryOptions,
   PaginatedProducts,
   ChatSummary,
+  ChatState,
   RevokedMessage,
   ReactionEvent,
 } from '../interfaces/whatsapp-engine.interface';
@@ -1154,6 +1155,23 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     } catch (error) {
       this.logger.error(`Error marking chat ${chatId} as read`, String(error));
       return false;
+    }
+  }
+
+  async sendChatState(chatId: string, state: ChatState): Promise<void> {
+    this.ensureReady();
+    try {
+      const chat = await this.client!.getChatById(chatId);
+      if (state === 'typing') {
+        await chat.sendStateTyping();
+      } else if (state === 'recording') {
+        await chat.sendStateRecording();
+      } else {
+        await chat.clearState();
+      }
+    } catch (error) {
+      // Presence is best-effort — a failure here must never break the surrounding send.
+      this.logger.error(`Error setting chat state '${state}' for ${chatId}`, String(error));
     }
   }
 

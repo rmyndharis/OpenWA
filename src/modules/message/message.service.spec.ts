@@ -28,6 +28,7 @@ function createMockEngine() {
     getMessageReactions: jest.fn().mockResolvedValue([]),
     deleteMessage: jest.fn().mockResolvedValue(undefined),
     getChatHistory: jest.fn().mockResolvedValue([]),
+    sendChatState: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -38,6 +39,16 @@ describe('MessageService', () => {
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let templateService: jest.Mocked<Partial<TemplateService>>;
   let mockEngine: ReturnType<typeof createMockEngine>;
+
+  // Auto-typing is on by default; disable it for the unrelated send tests so they don't incur the
+  // real setTimeout delay and don't add an extra sendChatState call. The auto-typing suite opts in.
+  beforeEach(() => {
+    process.env.SIMULATE_TYPING = 'false';
+  });
+  afterEach(() => {
+    delete process.env.SIMULATE_TYPING;
+    delete process.env.SIMULATE_TYPING_MAX_MS;
+  });
 
   beforeEach(async () => {
     repository = {
@@ -80,6 +91,24 @@ describe('MessageService', () => {
   });
 
   // ── sendText ──────────────────────────────────────────────────────
+
+  describe('auto-typing before send (SIMULATE_TYPING, on by default)', () => {
+    it('sends a typing presence before the message by default', async () => {
+      delete process.env.SIMULATE_TYPING; // default = on
+      process.env.SIMULATE_TYPING_MAX_MS = '1'; // keep the humanising delay ~instant in tests
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });
+
+      expect(mockEngine.sendChatState).toHaveBeenCalledWith('628123456789@c.us', 'typing');
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'Hello');
+    });
+
+    it('does not send typing presence when SIMULATE_TYPING=false', async () => {
+      process.env.SIMULATE_TYPING = 'false';
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });
+      expect(mockEngine.sendChatState).not.toHaveBeenCalled();
+    });
+  });
 
   describe('sendText', () => {
     it('should send text message and return messageId + timestamp', async () => {
