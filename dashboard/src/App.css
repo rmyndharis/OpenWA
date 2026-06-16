@@ -21,6 +21,10 @@
 
 /* Dark Mode */
 [data-theme='dark'] {
+  /* Make native controls (select option popups, scrollbars, date pickers) follow the EXPLICIT
+     app theme, not just the OS preference — otherwise toggling dark while the OS is light left
+     native dropdowns rendered in the light scheme (#249). */
+  color-scheme: dark;
   --bg-light: #0f172a; /* Slate 900 */
   --bg-white: #1e293b; /* Slate 800 */
   --bg-card: #1e293b;
@@ -31,6 +35,11 @@
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.3);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+}
+
+/* Explicit light toggle: keep native controls light even if the OS prefers dark. */
+[data-theme='light'] {
+  color-scheme: light;
 }
 
 /* System preference dark mode */
