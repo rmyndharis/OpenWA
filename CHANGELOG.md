@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.7] - 2026-06-16
+
+A feature + fix release: typing simulation (anti-ban, on by default), a delete-chat endpoint, and a fix
+for duplicate outgoing messages in the dashboard — plus engine-agnostic groundwork and the nginx/
+singleton-lock container fixes.
 
 ### Added
 
@@ -17,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected (they keep their own `delayBetweenMessages` throttle).
 - The engine API (`GET /infra/engines`) and the dashboard Active Engine card now report the **underlying
   engine library version** (e.g. `whatsapp-web.js 1.34.7`), distinct from the adapter plugin version.
+- **Delete a chat** from the chat list via `POST /sessions/:id/chats/delete` (e.g. to clear out groups
+  you've left). `OPERATOR` role, engine-agnostic DTO. Thanks @tobiasstrebitzer (#261).
 
 ### Fixed
 
