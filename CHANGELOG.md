@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-06-16
+
+A patch release: pairing-code linking, a Chromium crash-dumps fix, and dark-mode native controls.
+
+### Added
+
+- **Pairing-code linking** — `POST /sessions/:id/pairing-code` returns an 8-character code so a
+  session can be linked via WhatsApp's "Link with phone number" instead of scanning the QR (useful
+  for single-device / mobile onboarding). The session must be started and not yet authenticated. (#252)
+
+### Fixed
+
+- Chromium is now given an explicit writable `--crash-dumps-dir` so its crashpad handler always
+  receives a `--database`, avoiding `chrome_crashpad_handler: --database is required` browser-launch
+  failures on some hardened/container hosts. (#254)
+- Dashboard native controls (select option popups, scrollbars) now follow the explicit app theme via
+  `color-scheme`, instead of only the OS preference. (#249)
+
 ## [0.2.4] - 2026-06-16
 
 A patch release: stop LAN dashboard logins from 500-ing, add a pin for the WhatsApp Web version
