@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiSecurity } from '@nestjs/swagger';
 import { CatalogService } from './catalog.service';
 import { SendProductDto, SendCatalogDto, ProductQueryDto } from './dto/send-product.dto';
 
 @ApiTags('Catalog')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId')
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}

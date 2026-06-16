@@ -1,5 +1,5 @@
 import { Controller, Get, Put, Post, Body, BadRequestException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiSecurity } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -165,6 +165,7 @@ interface SavedConfigResponse {
 }
 
 @ApiTags('infrastructure')
+@ApiSecurity('X-API-Key')
 @Controller('infra')
 export class InfraController {
   private readonly logger = createLogger('InfraController');

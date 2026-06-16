@@ -1,5 +1,5 @@
 import { Controller, Get, Put, Body } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiSecurity } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -24,6 +24,7 @@ interface Settings {
 }
 
 @ApiTags('settings')
+@ApiSecurity('X-API-Key')
 @Controller('settings')
 export class SettingsController {
   private settings: Settings;

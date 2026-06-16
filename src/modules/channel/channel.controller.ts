@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Delete, Param, Body, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery, ApiSecurity } from '@nestjs/swagger';
 import { ChannelService } from './channel.service';
 import { SubscribeChannelDto } from './dto/subscribe-channel.dto';
 
 @ApiTags('channels')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId/channels')
 export class ChannelController {
   constructor(private readonly channelService: ChannelService) {}

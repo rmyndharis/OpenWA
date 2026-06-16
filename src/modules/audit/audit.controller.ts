@@ -1,9 +1,10 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiSecurity } from '@nestjs/swagger';
 import { AuditService, AuditQueryOptions } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 
 @ApiTags('audit')
+@ApiSecurity('X-API-Key')
 @Controller('audit')
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}

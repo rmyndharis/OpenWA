@@ -1,11 +1,12 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiSecurity } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto, ApiKeyCreatedResponseDto } from './dto';
 import { RequireRole } from './decorators/auth.decorators';
 import { ApiKeyRole } from './entities/api-key.entity';
 
 @ApiTags('auth')
+@ApiSecurity('X-API-Key')
 @Controller('auth/api-keys')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}

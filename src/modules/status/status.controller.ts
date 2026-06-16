@@ -1,10 +1,11 @@
 import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiSecurity } from '@nestjs/swagger';
 import { StatusService } from './status.service';
 import { SendTextStatusDto } from './dto/send-text-status.dto';
 import { SendImageStatusDto, SendVideoStatusDto } from './dto/send-media-status.dto';
 
 @ApiTags('Status')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId/status')
 export class StatusController {
   constructor(private readonly statusService: StatusService) {}

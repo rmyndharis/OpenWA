@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiSecurity } from '@nestjs/swagger';
 import { GroupService } from './group.service';
 import { CreateGroupDto, ParticipantsDto, GroupSubjectDto, GroupDescriptionDto } from './dto/group.dto';
 
 @ApiTags('groups')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId/groups')
 export class GroupController {
   constructor(private readonly groupService: GroupService) {}

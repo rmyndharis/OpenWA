@@ -1,5 +1,5 @@
 import { Controller, Post, Get, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiSecurity } from '@nestjs/swagger';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
@@ -17,6 +17,7 @@ import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('messages')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId/messages')
 export class MessageController {
   constructor(

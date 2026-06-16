@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiSecurity } from '@nestjs/swagger';
 import { LabelService } from './label.service';
 import { AddLabelDto } from './dto/add-label.dto';
 
 @ApiTags('labels')
+@ApiSecurity('X-API-Key')
 @Controller('sessions/:sessionId/labels')
 export class LabelController {
   constructor(private readonly labelService: LabelService) {}
