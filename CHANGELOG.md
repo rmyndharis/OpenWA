@@ -5,10 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.4] - 2026-06-16
+
+A patch release: stop LAN dashboard logins from 500-ing, add a pin for the WhatsApp Web version
+(works around sessions stuck at "authenticating"), and harden the data-export stream.
+
+### Added
+
+- **Pinnable WhatsApp Web version** via `WWEBJS_WEB_VERSION`. whatsapp-web.js 1.34.x can hang at
+  `authenticating` (the post-link sync never completes) when the auto-selected WA-Web version is
+  incompatible; set a known-good version (browse
+  [wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version)) to pin it.
+  Opt-in — unset keeps the default auto-version behavior. (#251)
 
 ### Fixed
 
+- **Dashboard login over LAN no longer returns 500.** A disallowed CORS origin threw inside the
+  cors callback, surfacing as an Internal Server Error; it now denies without throwing — so the
+  bundled (same-origin) dashboard works on a LAN/remote host out of the box, while a genuine
+  cross-origin dashboard still needs its origin in `CORS_ORIGINS`. (#250)
 - Data-export stream now surfaces archive-level errors (gzip/finalize) on the response stream
   instead of an unhandled rejection or a silently truncated download. (#248)
 
