@@ -22,13 +22,32 @@ export interface MediaInput {
   caption?: string;
 }
 
+/**
+ * Engine-neutral message type. Each adapter maps its library's native message-type tokens
+ * (e.g. whatsapp-web.js `chat`/`ptt`/`vcard`) to this vocabulary at the adapter boundary,
+ * so no consumer outside the adapter sees engine-specific type strings. `unknown` covers any
+ * type the active engine reports that doesn't map to a first-class kind.
+ */
+export type MessageType =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'voice'
+  | 'document'
+  | 'sticker'
+  | 'location'
+  | 'contact'
+  | 'revoked'
+  | 'unknown';
+
 export interface IncomingMessage {
   id: string;
   from: string;
   to: string;
   chatId: string;
   body: string;
-  type: string;
+  type: MessageType;
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;

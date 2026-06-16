@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Dashboard chat delivery ticks now update **live** over the websocket (the ack push was previously never emitted).
   - Minor deprecated-surface deltas: the legacy webhook `ack` reports `3` (not `4`) for a "played" voice/video receipt,
     and a play-after-read no longer emits a second `message.ack` (both map to `status: 'read'`).
+- **Message `type` is now an engine-neutral enum** (engine-pluggability decoupling, #265). Raw whatsapp-web.js
+  message-type tokens no longer leak past the engine adapter — incoming live/history messages, persisted rows, and the
+  `message.received`/`message.sent` webhooks now use a neutral `MessageType`
+  (`text`/`image`/`video`/`audio`/`voice`/`document`/`sticker`/`location`/`contact`/`revoked`/`unknown`), consistent with
+  outgoing sends. A non-whatsapp-web.js engine maps its own tokens at the adapter boundary.
+  - **Webhook contract change** (both `message.received` and `message.sent`): incoming `type` was previously raw — e.g.
+    `chat` → **`text`**, `ptt` → **`voice`**, `vcard` → **`contact`**. New consumers should expect the neutral enum.
+  - A one-shot migration backfills existing `messages.type` rows to the neutral vocabulary, so historical chats render
+    correctly and message-type stats don't split the same kind across old/new tokens.
+  - Fixes a latent dashboard bug where incoming text (`chat`) was mis-styled as media and shown as `[chat]` in reply previews.
 
 ## [0.2.7] - 2026-06-16
 

@@ -412,7 +412,7 @@ describe('SessionService', () => {
       to: 'me@c.us',
       chatId: 'peer@c.us',
       body: 'hello',
-      type: 'chat',
+      type: 'text',
       timestamp: 1706868000,
       fromMe: false,
       isGroup: false,

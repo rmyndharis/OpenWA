@@ -1,4 +1,38 @@
-import { IncomingMessage } from '../interfaces/whatsapp-engine.interface';
+import { IncomingMessage, MessageType } from '../interfaces/whatsapp-engine.interface';
+
+/**
+ * Map a whatsapp-web.js `MessageTypes` token to the engine-neutral {@link MessageType}, so no
+ * consumer outside the adapter sees wwebjs-specific type strings. Notably `chat` -> `text` (aligning
+ * incoming with the neutral types outgoing sends already use) and `ptt` -> `voice`. Anything not
+ * mapped becomes `unknown`.
+ */
+export function mapWwebjsMessageType(raw: string): MessageType {
+  switch (raw) {
+    case 'chat':
+      return 'text';
+    case 'image':
+      return 'image';
+    case 'video':
+      return 'video';
+    case 'audio':
+      return 'audio';
+    case 'ptt':
+      return 'voice';
+    case 'document':
+      return 'document';
+    case 'sticker':
+      return 'sticker';
+    case 'location':
+      return 'location';
+    case 'vcard':
+    case 'multi_vcard':
+      return 'contact';
+    case 'revoked':
+      return 'revoked';
+    default:
+      return 'unknown';
+  }
+}
 
 /**
  * The subset of whatsapp-web.js `Message` fields we read synchronously to build
@@ -34,7 +68,7 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     to: msg.to,
     chatId,
     body: msg.body,
-    type: msg.type,
+    type: mapWwebjsMessageType(msg.type),
     timestamp: msg.timestamp,
     fromMe: msg.fromMe,
     isGroup: chatId.endsWith('@g.us'),

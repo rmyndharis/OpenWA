@@ -770,7 +770,6 @@ export function Chats() {
                             );
                           case 'audio':
                           case 'voice':
-                          case 'ptt':
                             return (
                               <div className="message-media-audio">
                                 <audio src={mediaSrc} controls className="chat-audio-media" />

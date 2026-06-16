@@ -1,4 +1,4 @@
-import { buildIncomingMessageBase, RawMessageFields } from './message-mapper';
+import { buildIncomingMessageBase, mapWwebjsMessageType, RawMessageFields } from './message-mapper';
 
 describe('buildIncomingMessageBase', () => {
   const base: RawMessageFields = {
@@ -11,10 +11,11 @@ describe('buildIncomingMessageBase', () => {
     fromMe: false,
   };
 
-  it('maps the core fields and flags 1:1 chats as non-group', () => {
+  it('maps the core fields, neutralizes the type (chat -> text), and flags 1:1 chats as non-group', () => {
     const r = buildIncomingMessageBase(base);
     expect(r.id).toBe('MSG1');
     expect(r.chatId).toBe('123@c.us');
+    expect(r.type).toBe('text'); // wwebjs 'chat' is neutralized to 'text'
     expect(r.isGroup).toBe(false);
     expect(r.author).toBeUndefined();
     expect(r.contact).toBeUndefined();
@@ -48,5 +49,24 @@ describe('buildIncomingMessageBase', () => {
     const r = buildIncomingMessageBase({ ...base, fromMe: true, from: 'me@c.us', to: 'group-1@g.us' });
     expect(r.chatId).toBe('group-1@g.us');
     expect(r.isGroup).toBe(true);
+  });
+});
+
+describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundary, #265)', () => {
+  it.each([
+    ['chat', 'text'],
+    ['ptt', 'voice'],
+    ['image', 'image'],
+    ['video', 'video'],
+    ['audio', 'audio'],
+    ['document', 'document'],
+    ['sticker', 'sticker'],
+    ['location', 'location'],
+    ['vcard', 'contact'],
+    ['multi_vcard', 'contact'],
+    ['revoked', 'revoked'],
+    ['e2e_notification', 'unknown'], // any unmapped wwebjs type
+  ])('maps wwebjs type %s -> %s', (raw, expected) => {
+    expect(mapWwebjsMessageType(raw)).toBe(expected);
   });
 });
