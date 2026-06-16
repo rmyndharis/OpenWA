@@ -42,11 +42,13 @@ export class ContactController {
     description: 'Number existence check result',
   })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
-    const exists = await this.contactService.checkNumberExists(sessionId, number);
+    // The engine returns the canonical chat id in its native format; we don't build the JID here
+    // (decoupled from the whatsapp-web.js `@c.us` scheme).
+    const whatsappId = await this.contactService.getNumberId(sessionId, number);
     return {
       number,
-      exists,
-      whatsappId: exists ? `${number}@c.us` : null,
+      exists: whatsappId !== null,
+      whatsappId,
     };
   }
 

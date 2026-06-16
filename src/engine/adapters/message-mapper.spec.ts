@@ -17,8 +17,14 @@ describe('buildIncomingMessageBase', () => {
     expect(r.chatId).toBe('123@c.us');
     expect(r.type).toBe('text'); // wwebjs 'chat' is neutralized to 'text'
     expect(r.isGroup).toBe(false);
+    expect(r.isStatusBroadcast).toBe(false);
     expect(r.author).toBeUndefined();
     expect(r.contact).toBeUndefined();
+  });
+
+  it('flags a status/story broadcast via isStatusBroadcast (engine pseudo-JID stays in the adapter)', () => {
+    const r = buildIncomingMessageBase({ ...base, fromMe: true, from: 'me@c.us', to: 'status@broadcast' });
+    expect(r.isStatusBroadcast).toBe(true);
   });
 
   it('includes author and pushName for a group message', () => {

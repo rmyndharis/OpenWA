@@ -453,11 +453,19 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.sent')).toHaveLength(0);
     });
 
-    it('does not dispatch message.sent for a status@broadcast (Story) post', async () => {
+    it('does not dispatch message.sent for a status/story broadcast (isStatusBroadcast flag)', async () => {
       const callbacks = await startAndCaptureCallbacks();
 
+      // The adapter flags status broadcasts; session.service branches on the neutral flag, not the
+      // engine-specific `status@broadcast` pseudo-JID.
       callbacks.onMessageCreate!(
-        makeMessage({ id: 'wa-status', from: 'me@c.us', to: 'status@broadcast', fromMe: true }),
+        makeMessage({
+          id: 'wa-status',
+          from: 'me@c.us',
+          to: 'status@broadcast',
+          fromMe: true,
+          isStatusBroadcast: true,
+        }),
       );
       await flush();
 

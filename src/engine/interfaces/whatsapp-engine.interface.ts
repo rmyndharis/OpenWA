@@ -51,6 +51,11 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /**
+   * True for a status/story broadcast (not a real conversation). Set by the adapter so engine-neutral
+   * code can skip these without matching an engine-specific pseudo-JID (e.g. `status@broadcast`).
+   */
+  isStatusBroadcast?: boolean;
   /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
   author?: string;
   /** Sender display info, best-effort from the WhatsApp Web contact cache. */
@@ -347,6 +352,11 @@ export interface IWhatsAppEngine {
   getContacts(): Promise<Contact[]>;
   getContactById(contactId: string): Promise<Contact | null>;
   checkNumberExists(number: string): Promise<boolean>;
+  /**
+   * Resolve a phone number to its canonical chat id in the engine's native format, or null if the
+   * number is not registered. The engine owns the JID scheme, so callers never build it themselves.
+   */
+  getNumberId(number: string): Promise<string | null>;
 
   // Groups - Basic
   getGroups(): Promise<Group[]>;

@@ -546,10 +546,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
   }
 
-  async checkNumberExists(number: string): Promise<boolean> {
+  async getNumberId(number: string): Promise<string | null> {
     this.ensureReady();
     const numberId = await this.client!.getNumberId(number);
-    return numberId !== null;
+    return numberId?._serialized ?? null;
+  }
+
+  async checkNumberExists(number: string): Promise<boolean> {
+    return (await this.getNumberId(number)) !== null;
   }
 
   async getGroups(): Promise<Group[]> {
@@ -984,10 +988,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // Reuse the shared mapper so history messages carry the same author/contact
       // enrichment as live incoming messages (#223). The mapper defaults chatId to
       // msg.from, which is wrong here (history includes fromMe messages whose `from`
-      // is our own number), so override it to the requested chat and recompute isGroup.
+      // is our own number), so override it to the requested chat and recompute the
+      // chatId-derived flags (isGroup, isStatusBroadcast) from the real chat.
       const out = buildIncomingMessageBase(msg);
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
+      out.isStatusBroadcast = chatId === 'status@broadcast';
       if (includeMedia && msg.hasMedia) {
         try {
           const media = await msg.downloadMedia();

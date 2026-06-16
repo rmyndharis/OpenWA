@@ -118,6 +118,7 @@ describe('WhatsAppWebJsAdapter readiness guard (#100)', () => {
 
     await expect(adapter.getGroups()).rejects.toBeInstanceOf(EngineNotReadyError);
     await expect(adapter.checkNumberExists('628123')).rejects.toBeInstanceOf(EngineNotReadyError);
+    await expect(adapter.getNumberId('628123')).rejects.toBeInstanceOf(EngineNotReadyError);
   });
 
   it('carries HTTP 409 so NestJS returns "session not connected" (not 500) without a custom filter', () => {

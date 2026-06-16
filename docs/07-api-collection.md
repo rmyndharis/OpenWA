@@ -588,25 +588,26 @@ curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/default/contacts/628123456789
 ```
 
-### GET /api/sessions/:id/contacts/:phone/exists
+### GET /api/sessions/:id/contacts/check/:number
 
 Check if number exists on WhatsApp.
 
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/default/contacts/628123456789/exists
+  http://localhost:2785/api/sessions/default/contacts/check/628123456789
 ```
 
 **Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "exists": true,
-    "jid": "628123456789@c.us"
-  }
+  "number": "628123456789",
+  "exists": true,
+  "whatsappId": "628123456789@c.us"
 }
 ```
+
+`whatsappId` is the engine's canonical WhatsApp ID (`null` when `exists` is
+`false`); it may be normalized and differ from the submitted number.
 
 ### POST /api/sessions/:id/contacts/:phone/block
 

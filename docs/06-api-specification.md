@@ -1073,10 +1073,16 @@ GET /api/sessions/:sessionId/contacts/check/:phone
 **Response (200 OK):**
 ```json
 {
+  "number": "628123456789",
   "exists": true,
-  "chatId": "628123456789@c.us"
+  "whatsappId": "628123456789@c.us"
 }
 ```
+
+> `whatsappId` is the engine's canonical WhatsApp ID for the number (and `null`
+> when `exists` is `false`). It is resolved by the engine, so it may be
+> normalized and differ from the submitted number's `@c.us` form (e.g. a `@lid`
+> identifier) — use it verbatim as the chat target rather than rebuilding it.
 
 ---
 

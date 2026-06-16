@@ -72,6 +72,9 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     timestamp: msg.timestamp,
     fromMe: msg.fromMe,
     isGroup: chatId.endsWith('@g.us'),
+    // Flag status/story broadcasts here (the engine-specific `status@broadcast` pseudo-JID stays in
+    // the adapter) so engine-neutral code can skip them without matching the literal.
+    isStatusBroadcast: msg.to === 'status@broadcast' || chatId === 'status@broadcast',
   };
 
   // In a group, `from` is the group JID, so `author` is the only way to know the real sender.

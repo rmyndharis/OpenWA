@@ -434,9 +434,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           return;
         }
 
-        // Status/Story posts (`status@broadcast`) are account-created but not real conversations;
-        // don't emit `message.sent` for them.
-        if (message.to === 'status@broadcast' || message.chatId === 'status@broadcast') {
+        // Status/Story posts are account-created but not real conversations; don't emit `message.sent`
+        // for them. The adapter flags these (the engine-specific pseudo-JID stays out of this layer).
+        if (message.isStatusBroadcast) {
           return;
         }
 

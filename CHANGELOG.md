@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     mode, including the zero-config SQLite default where data migrations don't), so historical chats render correctly
     and message-type stats don't split the same kind across old/new tokens.
   - Fixes a latent dashboard bug where incoming text (`chat`) was mis-styled as media and shown as `[chat]` in reply previews.
+- **JID construction moved into the engine** (engine-pluggability decoupling, #265). The check-number endpoint
+  (`GET /sessions/:id/contacts/check/:number`) now returns the engine's canonical chat id via a new
+  `IWhatsAppEngine.getNumberId(number)` instead of the controller hand-building a `…@c.us` JID. As a result the
+  returned `whatsappId` is the engine-resolved id and may be normalized — it can differ from the submitted number's
+  `…@c.us` form (e.g. a `@lid` identifier) rather than echoing the input. And status/story
+  broadcasts are flagged with a neutral `isStatusBroadcast` on the message payload, so engine-neutral code no longer
+  matches the engine-specific `status@broadcast` pseudo-JID. A non-whatsapp-web.js engine supplies its own JID scheme.
 
 ## [0.2.7] - 2026-06-16
 

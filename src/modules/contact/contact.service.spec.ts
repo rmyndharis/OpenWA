@@ -23,4 +23,10 @@ describe('ContactService', () => {
     await expect(makeService({ checkNumberExists }).checkNumberExists('s1', '628123')).resolves.toBe(true);
     expect(checkNumberExists).toHaveBeenCalledWith('628123');
   });
+
+  it('delegates getNumberId to the engine (canonical JID resolution)', async () => {
+    const getNumberId = jest.fn().mockResolvedValue('628123@c.us');
+    await expect(makeService({ getNumberId }).getNumberId('s1', '628123')).resolves.toBe('628123@c.us');
+    expect(getNumberId).toHaveBeenCalledWith('628123');
+  });
 });
