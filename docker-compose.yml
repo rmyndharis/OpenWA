@@ -89,6 +89,11 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       # Writable HOME on tmpfs so Chromium's HOME-relative writes don't hit the read_only rootfs
       - HOME=/tmp
+      # Chromium resolves its home from the passwd entry (no /home/openwa), ignoring $HOME, so without
+      # writable, existing config/cache dirs it hard-crashes at launch on the read_only rootfs. Pin XDG
+      # to the tmpfs; the entrypoint pre-creates these owned by openwa. (#254)
+      - XDG_CONFIG_HOME=/tmp/.config
+      - XDG_CACHE_HOME=/tmp/.cache
       - PORT=2785
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Database

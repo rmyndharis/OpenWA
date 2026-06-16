@@ -75,12 +75,16 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p ./data/sessions ./data/media && \
     chown -R openwa:openwa /app
 
-# The non-root openwa user has no home of its own (created with `useradd -r`, no -m), so $HOME
-# defaults to "/", which is not writable. Newer Chromium spawns chrome_crashpad_handler, which
-# needs a writable HOME-derived crash-dump dir or the browser fails to launch ("--database is
-# required"). Point HOME at the openwa-owned data dir so the engine starts under `docker run`,
-# Kubernetes, etc. (compose overrides this with HOME=/tmp on its read-only rootfs). See #242.
+# The non-root openwa user has no home of its own (`useradd -r`, no -m). Chromium resolves the home
+# dir from the passwd entry via glib's getpwuid() — it IGNORES $HOME — so it tries to read/write
+# /home/openwa, which does not exist. On hardened/read-only hosts that makes the browser HARD-CRASH
+# at launch (SIGTRAP/int3, logged as "chrome_crashpad_handler: --database is required"). The robust
+# fix is to point Chromium's config + cache at writable, pre-created dirs via XDG_* (honored directly,
+# bypassing the passwd lookup); docker-entrypoint.sh creates them owned by openwa. On a read_only
+# rootfs these live on the tmpfs /tmp. HOME is kept for any other HOME-relative tooling. See #254/#242.
 ENV HOME=/app/data
+ENV XDG_CONFIG_HOME=/tmp/.config
+ENV XDG_CACHE_HOME=/tmp/.cache
 
 # Copy entrypoint: runs as root to fix named-volume ownership, then drops to openwa via gosu
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

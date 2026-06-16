@@ -38,6 +38,8 @@ services:
       - NODE_ENV=development
       - PORT=2785
       - HOME=/tmp
+      - XDG_CONFIG_HOME=/tmp/.config
+      - XDG_CACHE_HOME=/tmp/.cache
       - XDG_CONFIG_HOME=/tmp/.chromium
       - WWEBJS_WEB_VERSION=2.3000.1023204257
       - DATABASE_TYPE=sqlite
