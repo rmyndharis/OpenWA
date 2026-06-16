@@ -205,8 +205,8 @@ docker compose up -d
 stuck. Often seen on ARM64 (e.g. Raspberry Pi) after upgrading to v0.2.x.
 
 **Cause:** whatsapp-web.js auto-selects a WhatsApp Web client version, and an incompatible version
-stalls the post-link sync. (The `chrome_crashpad_handler: --database is required` log is a separate,
-harmless line — Chromium still launches.)
+stalls the post-link sync. (If you also see `chrome_crashpad_handler: --database is required` *and the
+session never starts at all*, that is a different problem — see "Session fails to launch …" below.)
 
 **Fix:** pin a known-good WhatsApp Web version with `WWEBJS_WEB_VERSION`:
 
@@ -218,6 +218,35 @@ WWEBJS_WEB_VERSION=2.3000.1023204257
 Restart the container after setting it. Browse newer versions at
 [wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder).
 Set `WWEBJS_WEB_VERSION=latest` (or leave it unset) to restore the default auto-version behavior.
+
+### Issue: Session fails to launch with `chrome_crashpad_handler: --database is required`
+
+**Symptoms:** The session never starts; the engine log shows `Failed to launch the browser process` with
+`chrome_crashpad_handler: --database is required`, and the host kernel log shows a Chromium
+`trap int3` / `Trace/breakpoint trap (core dumped)`. Seen on hardened, `read_only` containers.
+
+**Cause:** Chromium resolves its home directory from the passwd entry (glibc `getpwuid()`) and **ignores
+`$HOME`**. The non-root `openwa` user has no home dir, so Chromium tries to use `/home/openwa`, which does
+not exist on the read-only rootfs — and aborts at launch. (Setting `HOME=` does **not** help, and
+`--crash-dumps-dir` is a no-op for the crashpad database on Debian/Ubuntu system Chromium.)
+
+**Fix:** Give Chromium writable, pre-created config/cache dirs via `XDG_CONFIG_HOME` / `XDG_CACHE_HOME`.
+The bundled image and `docker-compose.yml` already do this (the entrypoint creates them on the tmpfs `/tmp`,
+owned by `openwa`). If you run a custom container, ensure both are set to a writable, existing path:
+
+```bash
+XDG_CONFIG_HOME=/tmp/.config
+XDG_CACHE_HOME=/tmp/.cache
+# and create them owned by the runtime user before launch:
+#   mkdir -p /tmp/.config /tmp/.cache && chown <user> /tmp/.config /tmp/.cache
+```
+
+On a `read_only` rootfs you **must** also mount a writable tmpfs/emptyDir at `/tmp` (compose:
+`tmpfs: [/tmp]`; k8s: an `emptyDir` at `/tmp`) — otherwise the entrypoint cannot create these dirs and
+will exit at startup with a clear `FATAL:` message rather than crash-looping later.
+
+Do **not** work around this by dropping `--no-sandbox` security hardening or using `seccomp:unconfined`
+(confirmed not to help, and it widens the attack surface).
 
 ### Issue: Frequent Disconnections
 

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-06-16
+
+A patch release: stop Chromium from failing to launch on hardened `read_only` containers, and make the
+Login language selector legible in dark mode.
+
+### Fixed
+
+- Chromium no longer hard-crashes at launch (`Trace/breakpoint trap` / `chrome_crashpad_handler:
+  --database is required`) on hardened `read_only` containers. Chromium resolves its home dir from the
+  passwd entry and ignores `$HOME`, so the home-less `openwa` user pointed it at a nonexistent
+  `/home/openwa`. It is now given writable, pre-created `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` dirs (created
+  by the entrypoint, owned by `openwa`). This supersedes the ineffective `--crash-dumps-dir` approach
+  from 0.2.5, which is a confirmed no-op for the crashpad database on Debian/Ubuntu system Chromium. (#254)
+- The Login screen's language `<select>` option popup is now legible in dark mode. The login route never
+  sets `data-theme`, so it relied solely on the `prefers-color-scheme` media block, which set dark colors
+  but left `color-scheme` ambiguous — rendering the native popup light with light text. (#249)
+
 ## [0.2.5] - 2026-06-16
 
 A patch release: pairing-code linking, a Chromium crash-dumps fix, and dark-mode native controls.

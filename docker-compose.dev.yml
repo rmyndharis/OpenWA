@@ -38,6 +38,10 @@ services:
       - NODE_ENV=development
       - PORT=2785
       - HOME=/tmp
+      # Chromium reads its home from the passwd entry (no /home/openwa), so it needs writable, existing
+      # config/cache dirs on the tmpfs or it hard-crashes at launch; the entrypoint pre-creates them. (#254)
+      - XDG_CONFIG_HOME=/tmp/.config
+      - XDG_CACHE_HOME=/tmp/.cache
       - DATABASE_TYPE=sqlite
       - DATABASE_NAME=/app/data/openwa.sqlite
       - DATABASE_SYNCHRONIZE=true

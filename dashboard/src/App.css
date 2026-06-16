@@ -45,6 +45,10 @@
 /* System preference dark mode */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
+    /* Match native controls (e.g. the Login page <select> option popup) to the dark theme.
+       The Login screen never sets data-theme, so it relies solely on this block — without an
+       explicit color-scheme the popup rendered light, leaving the light option text illegible (#249). */
+    color-scheme: dark;
     --bg-light: #0f172a;
     --bg-white: #1e293b;
     --bg-card: #1e293b;
