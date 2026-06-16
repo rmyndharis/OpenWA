@@ -18,13 +18,14 @@ import {
   EngineStatus,
   ChatSummary,
   ChatState,
+  DeliveryStatus,
   IncomingMessage,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
-import { ackToMessageStatus, ackStatusTransitionFrom } from '../message/message-status.util';
+import { deliveryStatusToMessageStatus, deliveryStatusToAck, ackStatusTransitionFrom } from '../message/message-status.util';
 
 interface ReconnectState {
   attempts: number;
@@ -462,48 +463,65 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             this.eventsGateway.emitMessageSent(id, finalMessage);
           });
       },
-      onMessageAck: (messageId, ack): void => {
-        this.logger.debug(`Message ack: ${messageId} -> ${ack}`, {
+      onMessageAck: (messageId, status: DeliveryStatus): void => {
+        this.logger.debug(`Message ack: ${messageId} -> ${status}`, {
           sessionId: id,
           messageId,
-          ack,
+          status,
           action: 'message_ack',
         });
 
-        // Reflect real delivery state on the stored message (#220): ack=2 -> delivered, >=3 -> read,
-        // <0 -> failed. A send that never reaches ack>=2 stays SENT — visibly "not delivered".
+        // Reflect real delivery state on the stored message (#220): delivered/read/failed advance the
+        // stored status; pending/sent carry no upgrade (it's already SENT — visibly "not delivered").
         // The UPDATE is guarded to the allowed prior statuses so delivery state only ADVANCES: an
         // out-of-order/late ack cannot downgrade a higher status, which also makes these
         // fire-and-forget writes race-safe at the DB level.
-        const status = ackToMessageStatus(ack);
-        if (status) {
+        const messageStatus = deliveryStatusToMessageStatus(status);
+        if (messageStatus) {
           void this.messageRepository
             // Scope by sessionId: waMessageId is unique per account/chat, not global —
             // an ack on one session must never advance a same-id row in another session.
-            .update({ sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(status)) }, { status })
+            .update(
+              { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
+              { status: messageStatus },
+            )
             .then(result => {
               // affected:0 — the row was not advanced: either the send's 2nd save (which sets
               // waMessageId) hasn't committed yet, or the status is already at/above the target.
               if (result.affected === 0) {
-                this.logger.debug(`Message ack ${messageId}: no status row advanced to ${status} (ack=${ack})`, {
+                this.logger.debug(`Message ack ${messageId}: no status row advanced to ${messageStatus} (${status})`, {
                   sessionId: id,
                   messageId,
-                  ack,
+                  status,
                   action: 'message_ack_noop',
                 });
               }
             });
         }
 
+        // Push the live delivery/read tick to the dashboard over the websocket (neutral status).
+        this.eventsGateway.emitMessageAck(id, { messageId, status });
+
         // Dispatch the delivery/read receipt to webhooks (#155). Outgoing `message.sent` is handled
         // solely by `onMessageCreate`, so the ack path deliberately does NOT emit `message.sent`.
         // `id` mirrors the field every other message.* webhook carries (and the idempotency key
-        // resolver reads); `messageId` is kept for backward compatibility.
-        void this.webhookService.dispatch(id, 'message.ack', { id: messageId, messageId, ack });
+        // resolver reads). `ack` is a deprecated legacy field kept for backward compatibility —
+        // new consumers should read the neutral `status`.
+        void this.webhookService.dispatch(id, 'message.ack', {
+          id: messageId,
+          messageId,
+          status,
+          ack: deliveryStatusToAck(status),
+        });
 
         // Surface delivery failures actively so consumers don't have to poll for them (#220).
-        if (ack < 0) {
-          void this.webhookService.dispatch(id, 'message.failed', { id: messageId, messageId, ack });
+        if (status === 'failed') {
+          void this.webhookService.dispatch(id, 'message.failed', {
+            id: messageId,
+            messageId,
+            status,
+            ack: deliveryStatusToAck(status),
+          });
         }
       },
       onMessageRevoked: (message): void => {

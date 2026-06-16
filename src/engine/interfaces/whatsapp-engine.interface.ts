@@ -233,6 +233,13 @@ export interface ChatSummary {
 export type ChatState = 'typing' | 'recording' | 'paused';
 
 /**
+ * Engine-neutral message delivery status. Each adapter maps its native delivery signal
+ * (e.g. whatsapp-web.js MessageAck integers, Baileys WAMessageStatus) to this vocabulary,
+ * so no consumer outside the adapter sees engine-specific ack codes.
+ */
+export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+/**
  * Structured payload for a remotely-revoked ("deleted for everyone") message.
  * The engine layer never emits a localized display string; `body` is intentionally
  * empty and the dashboard renders the localized "message deleted" text.
@@ -263,7 +270,11 @@ export interface EngineEventCallbacks {
    * linked phone, which the `message`/`onMessage` event never delivers. Used to emit `message.sent`.
    */
   onMessageCreate?: (message: IncomingMessage) => void;
-  onMessageAck?: (messageId: string, ack: number) => void;
+  /**
+   * Fired when the delivery status of an outgoing message advances. The adapter maps its native
+   * delivery signal to the neutral `DeliveryStatus`, so consumers never see engine-specific codes.
+   */
+  onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onDisconnected?: (reason: string) => void;

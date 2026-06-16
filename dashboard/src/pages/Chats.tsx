@@ -216,21 +216,14 @@ export function Chats() {
   );
 
   const handleIncomingMessageAck = useCallback(
-    (event: { sessionId: string; messageId: string; ack: number }) => {
+    (event: { sessionId: string; messageId: string; status: ChatMessageView['status'] }) => {
       if (event.sessionId !== selectedSessionId) return;
 
       setMessages(prev =>
         prev.map(msg => {
           if (msg.id === event.messageId || msg.waMessageId === event.messageId) {
-            const statusMap: Record<number, ChatMessageView['status']> = {
-              [-1]: 'failed',
-              [0]: 'pending',
-              [1]: 'sent',
-              [2]: 'delivered',
-              [3]: 'read',
-              [4]: 'read',
-            };
-            return { ...msg, status: statusMap[event.ack] || msg.status };
+            // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
+            return { ...msg, status: event.status || msg.status };
           }
           return msg;
         }),

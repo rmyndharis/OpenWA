@@ -33,6 +33,7 @@ import type {
   WSPongResponse,
 } from './dto/ws-messages.dto';
 import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
+import type { DeliveryStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 
 /**
  * Whether an API key may subscribe to a session's WebSocket event rooms.
@@ -289,9 +290,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   /**
-   * Emit message acknowledgment
+   * Emit a live delivery-status update (neutral DeliveryStatus, e.g. delivered/read/failed).
    */
-  emitMessageAck(sessionId: string, data: { messageId: string; ack: number; ackName: string }) {
+  emitMessageAck(sessionId: string, data: { messageId: string; status: DeliveryStatus }) {
     this.emitToRooms(sessionId, 'message.ack', data);
   }
 

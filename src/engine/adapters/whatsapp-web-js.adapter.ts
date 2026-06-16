@@ -28,6 +28,7 @@ import {
   PaginatedProducts,
   ChatSummary,
   ChatState,
+  DeliveryStatus,
   RevokedMessage,
   ReactionEvent,
 } from '../interfaces/whatsapp-engine.interface';
@@ -52,6 +53,19 @@ const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
 function positiveIntFromEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
+ * wwebjs: -1 ERROR, 0 PENDING, 1 SERVER (sent), 2 DEVICE (delivered), 3 READ, 4 PLAYED.
+ * PLAYED collapses to `read` (preserving prior behaviour, which treated ack>=3 as read).
+ */
+export function wwebjsAckToDeliveryStatus(ack: number): DeliveryStatus {
+  if (ack < 0) return 'failed';
+  if (ack >= 3) return 'read';
+  if (ack === 2) return 'delivered';
+  if (ack === 1) return 'sent';
+  return 'pending';
 }
 
 /**
@@ -318,7 +332,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('message_ack', (msg, ack) => {
-      this.callbacks.onMessageAck?.(msg.id._serialized, ack);
+      // Map the whatsapp-web.js MessageAck integer to the neutral DeliveryStatus here, at the
+      // adapter boundary, so no downstream consumer ever sees engine-specific ack codes.
+      this.callbacks.onMessageAck?.(msg.id._serialized, wwebjsAckToDeliveryStatus(ack));
     });
 
     this.client.on('message_revoke_everyone', after => {

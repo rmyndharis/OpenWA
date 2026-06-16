@@ -40,11 +40,12 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       return `msg_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
 
     case 'message.ack':
-      // Message ID + ack status together are unique
-      return `ack_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
+      // Message ID + delivery status together are unique. Key on the neutral `status`; fall back to
+      // the legacy `ack` integer for backward compatibility with older payloads.
+      return `ack_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 
     case 'message.failed':
-      return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.ack, '0')}`;
+      return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 
     case 'message.revoked':
       return `rev_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;

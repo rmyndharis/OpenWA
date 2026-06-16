@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Message delivery status is now engine-agnostic** (engine-pluggability decoupling, #265). The raw whatsapp-web.js
+  ack integer no longer leaks past the engine adapter — a neutral `DeliveryStatus`
+  (`pending`/`sent`/`delivered`/`read`/`failed`) flows through the interface, services, webhooks, websocket, and
+  dashboard, so a non-whatsapp-web.js engine (e.g. Baileys) can map its own delivery codes at the adapter boundary.
+  - The `message.ack`/`message.failed` webhooks now include a neutral **`status`** field. The legacy **`ack`** integer
+    is **kept (deprecated)** for backward compatibility — new consumers should read `status`.
+  - Dashboard chat delivery ticks now update **live** over the websocket (the ack push was previously never emitted).
+  - Minor deprecated-surface deltas: the legacy webhook `ack` reports `3` (not `4`) for a "played" voice/video receipt,
+    and a play-after-read no longer emits a second `message.ack` (both map to `status: 'read'`).
+
 ## [0.2.7] - 2026-06-16
 
 A feature + fix release: typing simulation (anti-ban, on by default), a delete-chat endpoint, and a fix

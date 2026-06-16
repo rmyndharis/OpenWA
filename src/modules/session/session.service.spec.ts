@@ -89,6 +89,7 @@ describe('SessionService', () => {
       emitSessionStatus: jest.fn(),
       emitMessage: jest.fn(),
       emitMessageSent: jest.fn(),
+      emitMessageAck: jest.fn(),
       emitMessageRevoked: jest.fn(),
       emitMessageReaction: jest.fn(),
     };
@@ -434,7 +435,7 @@ describe('SessionService', () => {
       const callbacks = await startAndCaptureCallbacks();
       expect(typeof callbacks.onMessageAck).toBe('function');
 
-      callbacks.onMessageAck!('wa-msg-1', 2); // ack=2 -> DELIVERED
+      callbacks.onMessageAck!('wa-msg-1', 'delivered');
       await flush();
 
       expect(messageRepository.update).toHaveBeenCalledWith(
@@ -477,17 +478,17 @@ describe('SessionService', () => {
       const callbacks = await startAndCaptureCallbacks();
       expect(typeof callbacks.onMessageAck).toBe('function');
 
-      callbacks.onMessageAck!('wa-out-1', 3);
+      callbacks.onMessageAck!('wa-out-1', 'read');
       await flush();
 
       expect(dispatchedEvents('message.ack')).toHaveLength(1);
       expect(dispatchedEvents('message.sent')).toHaveLength(0);
     });
 
-    it('reflects delivery on the stored message: ack=2 updates status to DELIVERED (#220)', async () => {
+    it("reflects delivery on the stored message: 'delivered' updates status to DELIVERED (#220)", async () => {
       const callbacks = await startAndCaptureCallbacks();
 
-      callbacks.onMessageAck!('wa-out-1', 2);
+      callbacks.onMessageAck!('wa-out-1', 'delivered');
       await flush();
 
       expect(messageRepository.update as jest.Mock).toHaveBeenCalledWith(
@@ -496,10 +497,10 @@ describe('SessionService', () => {
       );
     });
 
-    it('marks the stored message FAILED and dispatches message.failed on an error ack (<0) (#220)', async () => {
+    it("marks the stored message FAILED and dispatches message.failed on a 'failed' status (#220)", async () => {
       const callbacks = await startAndCaptureCallbacks();
 
-      callbacks.onMessageAck!('wa-out-1', -1);
+      callbacks.onMessageAck!('wa-out-1', 'failed');
       await flush();
 
       expect(messageRepository.update as jest.Mock).toHaveBeenCalledWith(
@@ -509,10 +510,10 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.failed')).toHaveLength(1);
     });
 
-    it('does not upgrade the stored status (or emit message.failed) for a server-only ack (1)', async () => {
+    it("does not upgrade the stored status (or emit message.failed) for a 'sent' status", async () => {
       const callbacks = await startAndCaptureCallbacks();
 
-      callbacks.onMessageAck!('wa-out-1', 1);
+      callbacks.onMessageAck!('wa-out-1', 'sent');
       await flush();
 
       expect(messageRepository.update as jest.Mock).not.toHaveBeenCalled();

@@ -7,7 +7,7 @@ describe('Idempotency Utils', () => {
       expect(key).toBe('msg_A_ABC123');
     });
 
-    it('should generate a session-scoped key for message.ack', () => {
+    it('falls back to the legacy `ack` integer for message.ack when no `status` is present', () => {
       const key = generateIdempotencyKey('message.ack', { messageId: 'ABC123', ack: 3, sessionId: 'A' });
       expect(key).toBe('ack_A_ABC123_3');
     });
@@ -23,9 +23,9 @@ describe('Idempotency Utils', () => {
       expect(key).toBe('msg_A_REAL');
     });
 
-    it('should use the `id` field for message.ack (the real dispatch shape)', () => {
-      const key = generateIdempotencyKey('message.ack', { id: 'ABC123', ack: 3, sessionId: 'A' });
-      expect(key).toBe('ack_A_ABC123_3');
+    it('keys message.ack on the neutral `status` (the real dispatch shape), preferring it over `ack`', () => {
+      const key = generateIdempotencyKey('message.ack', { id: 'ABC123', status: 'read', ack: 3, sessionId: 'A' });
+      expect(key).toBe('ack_A_ABC123_read');
     });
 
     it('should use the `id` field for message.revoked (the real dispatch shape)', () => {
@@ -34,8 +34,8 @@ describe('Idempotency Utils', () => {
     });
 
     it('gives the same waMessageId in different sessions DISTINCT keys', () => {
-      const a = generateIdempotencyKey('message.ack', { id: 'X', ack: 2, sessionId: 'A' });
-      const b = generateIdempotencyKey('message.ack', { id: 'X', ack: 2, sessionId: 'B' });
+      const a = generateIdempotencyKey('message.ack', { id: 'X', status: 'delivered', sessionId: 'A' });
+      const b = generateIdempotencyKey('message.ack', { id: 'X', status: 'delivered', sessionId: 'B' });
       expect(a).not.toBe(b);
     });
 

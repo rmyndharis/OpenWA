@@ -4,9 +4,26 @@ import {
   extractLinkedParentJID,
   loadRemoteMedia,
   resolveWebVersionPin,
+  wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+
+describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
+  // Regression-locks the integer boundary the decoupling moved behaviour into, incl. the
+  // PLAYED(4) -> 'read' collapse that the old ackToMessageStatus(4) -> READ test used to cover.
+  it.each([
+    [-1, 'failed'],
+    [0, 'pending'],
+    [1, 'sent'],
+    [2, 'delivered'],
+    [3, 'read'],
+    [4, 'read'], // PLAYED collapses to read
+    [5, 'read'], // any future/higher ack stays read, never crashes
+  ])('maps wwebjs ack %i -> %s', (ack, expected) => {
+    expect(wwebjsAckToDeliveryStatus(ack as number)).toBe(expected);
+  });
+});
 
 describe('extractLinkedParentJID (#201)', () => {
   it('returns null when no metadata is provided', () => {
