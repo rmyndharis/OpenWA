@@ -116,7 +116,9 @@ function ToastContainer({ toasts, removeToast }: ToastContainerProps) {
         const Icon = icons[toast.type];
         return (
           <div key={toast.id} className={`toast toast-${toast.type}`}>
-            <Icon className="toast-icon" size={20} />
+            <div className="toast-icon">
+              <Icon size={18} />
+            </div>
             <div className="toast-content">
               <div className="toast-title">{toast.title}</div>
               {toast.message && <div className="toast-message">{toast.message}</div>}

@@ -1,5 +1,6 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { WarningCircle, ArrowClockwise } from '@phosphor-icons/react';
+import { Button } from './ui/button';
 import i18n from '../i18n';
 
 interface Props {
@@ -32,28 +33,28 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          justifyContent: 'center', minHeight: '100vh', padding: '2rem',
-          fontFamily: 'system-ui, sans-serif', color: '#374151',
-        }}>
-          <AlertCircle size={48} style={{ color: '#DC2626', marginBottom: '1rem' }} />
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{i18n.t('errorBoundary.title')}</h1>
-          <p style={{ color: '#6B7280', marginBottom: '1.5rem', textAlign: 'center' }}>
-            {i18n.t('errorBoundary.description')}
-          </p>
-          <button
-            onClick={this.handleReload}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem',
-              padding: '0.75rem 1.5rem', backgroundColor: '#2563EB',
-              color: 'white', border: 'none', borderRadius: '0.5rem',
-              cursor: 'pointer', fontSize: '1rem',
-            }}
-          >
-            <RefreshCw size={18} />
-            {i18n.t('errorBoundary.reload')}
-          </button>
+        <div className="flex flex-col items-center justify-center min-h-screen p-8 bg-background text-foreground">
+          <div className="flex flex-col items-center text-center max-w-sm w-full">
+            <div className="w-16 h-16 rounded-full bg-whatsapp-green/15 flex items-center justify-center mb-6">
+              <WarningCircle size={32} className="text-whatsapp-green" />
+            </div>
+
+            <h1 className="text-[28px] font-light text-foreground/80 mb-2">
+              {i18n.t('errorBoundary.title')}
+            </h1>
+
+            <p className="text-[14px] leading-relaxed text-muted-foreground mb-8 max-w-md">
+              {i18n.t('errorBoundary.description')}
+            </p>
+
+            <Button
+              onClick={this.handleReload}
+              className="rounded-full bg-whatsapp-green hover:bg-whatsapp-green/90 text-white h-11 px-8 text-[15px]"
+            >
+              <ArrowClockwise size={18} weight="bold" />
+              {i18n.t('errorBoundary.reload')}
+            </Button>
+          </div>
         </div>
       );
     }

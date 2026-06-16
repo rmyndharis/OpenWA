@@ -45,7 +45,8 @@
     "logout": "登出",
     "refresh": "重新整理",
     "errorGeneric": "發生錯誤",
-    "unknownError": "未知錯誤"
+    "unknownError": "未知錯誤",
+    "viewAll": "查看全部"
   },
   "theme": {
     "light": "淺色",

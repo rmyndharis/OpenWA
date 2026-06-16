@@ -1,12 +1,21 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { PaperPlaneRight, CheckCircle, XCircle, CircleNotch } from '@phosphor-icons/react';
 import { messageApi } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useSessionsQuery, useSessionGroupsQuery } from '../hooks/queries';
-import { PageHeader } from '../components/PageHeader';
-import './MessageTester.css';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '../lib/utils';
 
 interface ApiResponse {
   success: boolean;
@@ -33,24 +42,15 @@ export function MessageTester() {
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
 
-  const { data: groups = [], isLoading: loadingGroups } = useSessionGroupsQuery(
-    session,
-    recipientType === 'group',
-  );
+  const { data: groups = [], isLoading: loadingGroups } = useSessionGroupsQuery(session, recipientType === 'group');
 
   useEffect(() => {
-    if (sessions.length > 0 && !session) {
-      setSession(sessions[0].id);
-    }
+    if (sessions.length > 0 && !session) setSession(sessions[0].id);
   }, [sessions, session]);
 
   useEffect(() => {
-    if (groups.length > 0 && !selectedGroup) {
-      setSelectedGroup(groups[0].id);
-    }
-    if (recipientType !== 'group') {
-      setSelectedGroup('');
-    }
+    if (groups.length > 0 && !selectedGroup) setSelectedGroup(groups[0].id);
+    if (recipientType !== 'group') setSelectedGroup('');
   }, [groups, selectedGroup, recipientType]);
 
   const handleSend = async () => {
@@ -93,195 +93,168 @@ export function MessageTester() {
 
   if (loadingSessions) {
     return (
-      <div
-        className="message-tester"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}
-      >
-        <Loader2 className="animate-spin" size={32} />
+      <div className="flex h-full items-center justify-center bg-background">
+        <CircleNotch size={32} className="animate-spin text-whatsapp-green" />
       </div>
     );
   }
 
   return (
-    <div className="message-tester">
-      <PageHeader title={t('messageTester.title')} subtitle={t('messageTester.subtitle')} />
+    <ScrollArea className="h-full bg-background">
+      <div className="p-4 sm:p-8 flex flex-col gap-6 max-w-7xl mx-auto">
+        <header>
+          <h1 className="text-3xl font-bold tracking-tight">{t('messageTester.title')}</h1>
+          <p className="text-muted-foreground mt-1">{t('messageTester.subtitle')}</p>
+        </header>
 
-      <div className="tester-panels">
-        <div className="compose-panel">
-          <h2>{t('messageTester.compose')}</h2>
-
-          <div className="form-group">
-            <label>{t('messageTester.session')}</label>
-            <select value={session} onChange={e => setSession(e.target.value)}>
-              {sessions.length === 0 && <option value="">{t('messageTester.noReadySessions')}</option>}
-              {sessions.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.phone || t('messageTester.sessionOptionPhoneNone')})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label>{t('messageTester.recipientType')}</label>
-            <div className="toggle-group">
-              <button
-                className={recipientType === 'personal' ? 'active' : ''}
-                onClick={() => setRecipientType('personal')}
-              >
-                {t('messageTester.personal')}
-              </button>
-              <button className={recipientType === 'group' ? 'active' : ''} onClick={() => setRecipientType('group')}>
-                {t('messageTester.group')}
-              </button>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label>{recipientType === 'group' ? t('messageTester.selectGroup') : t('messageTester.recipientPhone')}</label>
-            {recipientType === 'group' ? (
-              <>
-                <select
-                  value={selectedGroup}
-                  onChange={e => setSelectedGroup(e.target.value)}
-                  disabled={loadingGroups || groups.length === 0}
-                >
-                  {loadingGroups && <option value="">{t('messageTester.loadingGroups')}</option>}
-                  {!loadingGroups && groups.length === 0 && <option value="">{t('messageTester.noGroupsFound')}</option>}
-                  {groups.map(g => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
-                <span className="hint">{t('messageTester.selectGroupHint')}</span>
-              </>
-            ) : (
-              <>
-                <input
-                  type="text"
-                  value={recipient}
-                  onChange={e => setRecipient(e.target.value)}
-                  placeholder="+62812345678"
-                />
-                <span className="hint">{t('messageTester.phoneHint')}</span>
-              </>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label>{t('messageTester.messageType')}</label>
-            <div className="toggle-group">
-              {messageTypes.map(type => (
-                <button
-                  key={type}
-                  className={messageType === type ? 'active' : ''}
-                  onClick={() => setMessageType(type)}
-                >
-                  {t(`messageTester.types.${type}`)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {messageType === 'text' ? (
-            <div className="form-group">
-              <label>{t('messageTester.messageContent')}</label>
-              <textarea
-                value={content}
-                onChange={e => setContent(e.target.value)}
-                placeholder={t('messageTester.messagePlaceholder')}
-                rows={5}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="form-group">
-                <label>{t('messageTester.mediaUrl')}</label>
-                <input
-                  type="text"
-                  value={mediaUrl}
-                  onChange={e => setMediaUrl(e.target.value)}
-                  placeholder="https://example.com/file.jpg"
-                />
-              </div>
-              {messageType !== 'audio' && (
-                <div className="form-group">
-                  <label>
-                    {messageType === 'document' ? t('messageTester.filename') : t('messageTester.caption')} ({t('common.optional')})
-                  </label>
-                  <input
-                    type="text"
-                    value={content}
-                    onChange={e => setContent(e.target.value)}
-                    placeholder={messageType === 'document' ? t('messageTester.filenamePlaceholder') : t('messageTester.captionPlaceholder')}
-                  />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="flex flex-col gap-6">
+            <div>
+              <h2 className="text-sm font-bold text-foreground mb-4">{t('messageTester.compose')}</h2>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-muted-foreground">{t('messageTester.session')}</label>
+                  <Select value={session} onValueChange={setSession}>
+                    <SelectTrigger className="bg-muted border-none rounded-lg">
+                      <SelectValue placeholder={t('messageTester.noReadySessions')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sessions.map(s => (
+                        <SelectItem key={s.id} value={s.id}>{s.name} ({s.phone || t('messageTester.sessionOptionPhoneNone')})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-            </>
-          )}
 
-          <button
-            className="send-btn"
-            onClick={handleSend}
-            disabled={!canWrite || isLoading || !session || (recipientType === 'group' ? !selectedGroup : !recipient)}
-          >
-            {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
-            {isLoading ? t('messageTester.sending') : canWrite ? t('messageTester.send') : t('messageTester.viewOnly')}
-          </button>
-        </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-muted-foreground">{t('messageTester.recipientType')}</label>
+                  <div className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
+                    {(['personal', 'group'] as const).map(type => (
+                      <button key={type} onClick={() => setRecipientType(type)}
+                        className={cn("px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                          recipientType === type ? 'bg-whatsapp-green text-white' : 'text-muted-foreground hover:text-foreground'
+                        )}>
+                        {t(`messageTester.${type}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-        <div className="response-panel">
-          <h2>{t('messageTester.responseTitle')}</h2>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-muted-foreground">
+                    {recipientType === 'group' ? t('messageTester.selectGroup') : t('messageTester.recipientPhone')}
+                  </label>
+                  {recipientType === 'group' ? (
+                    <>
+                      <Select value={selectedGroup} onValueChange={setSelectedGroup} disabled={loadingGroups || groups.length === 0}>
+                        <SelectTrigger className="bg-muted border-none rounded-lg">
+                          <SelectValue placeholder={loadingGroups ? t('messageTester.loadingGroups') : t('messageTester.noGroupsFound')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {groups.map(g => (
+                            <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-[11px] text-muted-foreground">{t('messageTester.selectGroupHint')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Input value={recipient} onChange={e => setRecipient(e.target.value)} placeholder="+62812345678" className="bg-muted border-none rounded-lg" />
+                      <span className="text-[11px] text-muted-foreground">{t('messageTester.phoneHint')}</span>
+                    </>
+                  )}
+                </div>
 
-          {response ? (
-            <>
-              <div className={`response-status ${response.success ? 'success' : 'error'}`}>
-                {response.success ? (
-                  <>
-                    <CheckCircle size={20} />
-                    <span>{t('messageTester.successLabel')}</span>
-                  </>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-muted-foreground">{t('messageTester.messageType')}</label>
+                  <div className="flex flex-wrap gap-1 p-1 bg-muted rounded-lg">
+                    {messageTypes.map(type => (
+                      <button key={type} onClick={() => setMessageType(type)}
+                        className={cn("px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors",
+                          messageType === type ? 'bg-whatsapp-green text-white' : 'text-muted-foreground hover:text-foreground'
+                        )}>
+                        {t(`messageTester.types.${type}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {messageType === 'text' ? (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-bold text-muted-foreground">{t('messageTester.messageContent')}</label>
+                    <textarea value={content} onChange={e => setContent(e.target.value)}
+                      placeholder={t('messageTester.messagePlaceholder')} rows={5}
+                      className="w-full bg-muted border-none rounded-lg p-3 text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none focus-visible:ring-1 focus-visible:ring-whatsapp-green" />
+                  </div>
                 ) : (
                   <>
-                    <XCircle size={20} />
-                    <span>{t('messageTester.failedLabel')}</span>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-muted-foreground">{t('messageTester.mediaUrl')}</label>
+                      <Input value={mediaUrl} onChange={e => setMediaUrl(e.target.value)} placeholder="https://example.com/file.jpg" className="bg-muted border-none rounded-lg" />
+                    </div>
+                    {messageType !== 'audio' && (
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-bold text-muted-foreground">
+                          {messageType === 'document' ? t('messageTester.filename') : t('messageTester.caption')} ({t('common.optional')})
+                        </label>
+                        <Input value={content} onChange={e => setContent(e.target.value)}
+                          placeholder={messageType === 'document' ? t('messageTester.filenamePlaceholder') : t('messageTester.captionPlaceholder')}
+                          className="bg-muted border-none rounded-lg" />
+                      </div>
+                    )}
                   </>
                 )}
-              </div>
 
-              <div className="response-details">
-                <div className="detail-row">
-                  <span className="detail-label">{t('messageTester.response.timestamp')}</span>
-                  <span className="detail-value">{response.timestamp}</span>
-                </div>
-                {response.messageId && (
-                  <div className="detail-row">
-                    <span className="detail-label">{t('messageTester.response.messageId')}</span>
-                    <span className="detail-value mono">{response.messageId}</span>
-                  </div>
-                )}
-                {response.error && (
-                  <div className="detail-row">
-                    <span className="detail-label">{t('messageTester.response.error')}</span>
-                    <span className="detail-value" style={{ color: '#DC2626' }}>
-                      {response.error}
-                    </span>
-                  </div>
-                )}
+                <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg w-full"
+                  onClick={handleSend}
+                  disabled={!canWrite || isLoading || !session || (recipientType === 'group' ? !selectedGroup : !recipient)}>
+                  {isLoading ? <CircleNotch size={18} className="animate-spin" /> : <PaperPlaneRight size={18} weight="bold" />}
+                  {isLoading ? t('messageTester.sending') : canWrite ? t('messageTester.send') : t('messageTester.viewOnly')}
+                </Button>
               </div>
-
-              <div className="response-json">
-                <pre>{JSON.stringify(response, null, 2)}</pre>
-              </div>
-            </>
-          ) : (
-            <div className="response-empty">
-              <p>{t('messageTester.responseEmpty')}</p>
             </div>
-          )}
+          </div>
+
+          <div>
+            <h2 className="text-sm font-bold text-foreground mb-4">{t('messageTester.responseTitle')}</h2>
+            {response ? (
+              <div className="bg-muted rounded-lg p-4 flex flex-col gap-4">
+                <div className={cn("flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium",
+                  response.success ? 'bg-whatsapp-green/10 text-whatsapp-green' : 'bg-destructive/10 text-destructive'
+                )}>
+                  {response.success ? <CheckCircle size={18} weight="fill" /> : <XCircle size={18} weight="fill" />}
+                  <span>{response.success ? t('messageTester.successLabel') : t('messageTester.failedLabel')}</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between py-1.5 text-sm">
+                    <span className="text-muted-foreground">{t('messageTester.response.timestamp')}</span>
+                    <span className="font-mono text-xs">{response.timestamp}</span>
+                  </div>
+                  {response.messageId && (
+                    <div className="flex justify-between py-1.5 text-sm">
+                      <span className="text-muted-foreground">{t('messageTester.response.messageId')}</span>
+                      <span className="font-mono text-xs truncate max-w-[200px]">{response.messageId}</span>
+                    </div>
+                  )}
+                  {response.error && (
+                    <div className="flex justify-between py-1.5 text-sm">
+                      <span className="text-muted-foreground">{t('messageTester.response.error')}</span>
+                      <span className="text-xs text-destructive max-w-[200px] truncate">{response.error}</span>
+                    </div>
+                  )}
+                </div>
+                <pre className="p-3 bg-background rounded-md text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground bg-muted rounded-lg">
+                <PaperPlaneRight size={48} weight="thin" />
+                <p className="text-sm mt-4">{t('messageTester.responseEmpty')}</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </ScrollArea>
   );
 }

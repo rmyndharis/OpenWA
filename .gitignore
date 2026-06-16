@@ -68,8 +68,18 @@ uploads/
 
 # AI Agents
 .remember/
-.agent/
+.agents/
 .claude/
 docs/plans/
 CLAUDE.md
 _docs/
+.cursor/
+.gemini/
+.codex/
+.kiro/
+.rovodev/
+.pi/
+.opencode/
+.github/
+
+.impeccable.md

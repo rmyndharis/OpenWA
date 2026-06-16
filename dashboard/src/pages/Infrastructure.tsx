@@ -1,29 +1,29 @@
 import { useState, useEffect } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import {
-  Database,
-  Server,
-  HardDrive,
-  Save,
-  ExternalLink,
-  Loader2,
-  CheckCircle,
-  Trash2,
-  Globe,
-  Webhook,
-  Gauge,
-} from 'lucide-react';
+import { CheckCircle, CircleNotch } from '@phosphor-icons/react';
 import { infraApi, API_BASE_URL } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery } from '../hooks/queries';
-import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/Toast';
-import './Infrastructure.css';
-
-import sqliteIcon from '../assets/icons/sqlite.svg';
-import postgresIcon from '../assets/icons/postgresql.svg';
-import folderIcon from '../assets/icons/folder.svg';
-import s3Icon from '../assets/icons/s3.svg';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { cn } from '../lib/utils';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface DatabaseConfig {
   type: 'sqlite' | 'postgres';
@@ -82,6 +82,62 @@ interface WebhookConfig {
 interface RateLimitConfig {
   ttl: number;
   max: number;
+}
+
+function Toggle({ checked, onChange, id }: { checked: boolean; onChange: (v: boolean) => void; id?: string }) {
+  return (
+    <label htmlFor={id} className="relative inline-flex h-5 w-9 cursor-pointer items-center">
+      <input id={id} type="checkbox" className="peer sr-only" checked={checked} onChange={e => onChange(e.target.checked)} />
+      <span className="absolute inset-0 rounded-full bg-muted-foreground/30 transition-colors peer-checked:bg-whatsapp-green" />
+      <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4" />
+    </label>
+  );
+}
+
+function RadioCard<T extends string>({ options, value, onChange }: {
+  options: { value: T; label: string; desc: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {options.map(opt => (
+        <button key={opt.value} type="button" onClick={() => onChange(opt.value)}
+          className={cn(
+            "flex flex-col gap-0.5 p-3 rounded-lg text-left transition-colors",
+            value === opt.value
+              ? 'bg-whatsapp-green/10 ring-1 ring-whatsapp-green'
+              : 'bg-background hover:bg-muted/50'
+          )}>
+          <span className="text-sm font-bold text-foreground">{opt.label}</span>
+          <span className="text-xs text-muted-foreground">{opt.desc}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs font-bold text-muted-foreground">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function ToggleRow({ label, desc, checked, onChange }: {
+  label: string; desc: string; checked: boolean; onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col gap-0.5">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-xs text-muted-foreground">{desc}</span>
+      </div>
+      <Toggle checked={checked} onChange={onChange} />
+    </div>
+  );
 }
 
 export function Infrastructure() {
@@ -187,10 +243,6 @@ export function Infrastructure() {
     });
   }, [infraStatus]);
 
-  // Hydrate the editable form from the saved config (data/.env.generated) so the form
-  // reflects what was actually persisted — including fields /status does not expose
-  // (username, pool size, SSL flags, S3 details). Secrets are never returned, so their
-  // inputs stay empty; an empty submit preserves the stored secret on the backend (#226).
   useEffect(() => {
     if (!savedConfig) return;
     setDbConfig(prev => ({
@@ -226,11 +278,8 @@ export function Infrastructure() {
 
   if (loading) {
     return (
-      <div
-        className="infrastructure-page"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}
-      >
-        <Loader2 className="animate-spin" size={32} />
+      <div className="flex h-full items-center justify-center bg-background">
+        <CircleNotch size={32} className="animate-spin text-whatsapp-green" />
       </div>
     );
   }
@@ -333,730 +382,499 @@ export function Infrastructure() {
   };
 
   return (
-    <div className="infrastructure-page">
-      <PageHeader title={t('infrastructure.title')} subtitle={t('infrastructure.subtitle')} />
+    <ScrollArea className="h-full bg-background">
+      <div className="p-4 sm:p-8 flex flex-col gap-6 max-w-7xl mx-auto">
+        <header>
+          <h1 className="text-3xl font-bold tracking-tight">{t('infrastructure.title')}</h1>
+          <p className="text-muted-foreground mt-1">{t('infrastructure.subtitle')}</p>
+        </header>
 
-      <div className="infra-sections">
-        {/* Server Configuration */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Globe size={20} />
-              <h2>{t('infrastructure.server.title')}</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Server Configuration */}
+          <div className="bg-muted rounded-lg p-4 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-foreground">{t('infrastructure.server.title')}</h2>
+              <Badge className={cn(
+                "text-[10px] font-bold uppercase border-none",
+                serverConfig.nodeEnv === 'production'
+                  ? 'bg-whatsapp-green/10 text-whatsapp-green'
+                  : 'bg-blue-500/10 text-blue-500'
+              )}>
+                {serverConfig.nodeEnv === 'production' ? t('infrastructure.server.production') : t('infrastructure.server.development')}
+              </Badge>
             </div>
-            <span className={`status-indicator ${serverConfig.nodeEnv === 'production' ? 'connected' : 'sqlite'}`}>
-              ● {serverConfig.nodeEnv === 'production' ? t('infrastructure.server.production') : t('infrastructure.server.development')}
-            </span>
-          </div>
 
-          <div className="config-form">
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.server.environment')}</label>
-                <select
-                  value={serverConfig.nodeEnv}
-                  onChange={e => updateServerConfig('nodeEnv', e.target.value as 'production' | 'development')}
-                >
-                  <option value="production">{t('infrastructure.server.production')}</option>
-                  <option value="development">{t('infrastructure.server.development')}</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.domain')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.domain}
-                  onChange={e => updateServerConfig('domain', e.target.value)}
-                  placeholder="localhost"
-                />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <FormField label={t('infrastructure.server.environment')}>
+                <Select value={serverConfig.nodeEnv}
+                  onValueChange={v => updateServerConfig('nodeEnv', v as 'production' | 'development')}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="production">{t('infrastructure.server.production')}</SelectItem>
+                    <SelectItem value="development">{t('infrastructure.server.development')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormField>
+              <FormField label={t('infrastructure.server.domain')}>
+                <Input type="text" value={serverConfig.domain}
+                  onChange={e => updateServerConfig('domain', e.target.value)} placeholder="localhost"
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
             </div>
-            <div className="form-row">
-              <div className="form-group small">
-                <label>{t('infrastructure.server.apiPort')}</label>
-                <input type="text" value={serverConfig.port} onChange={e => updateServerConfig('port', e.target.value)} />
-              </div>
-              <div className="form-group small">
-                <label>{t('infrastructure.server.dashboardPort')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.dashboardPort}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <FormField label={t('infrastructure.server.apiPort')}>
+                <Input type="text" value={serverConfig.port}
+                  onChange={e => updateServerConfig('port', e.target.value)}
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
+              <FormField label={t('infrastructure.server.dashboardPort')}>
+                <Input type="text" value={serverConfig.dashboardPort}
                   onChange={e => updateServerConfig('dashboardPort', e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.corsOrigins')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.corsOrigins}
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
+              <FormField label={t('infrastructure.server.corsOrigins')}>
+                <Input type="text" value={serverConfig.corsOrigins}
                   onChange={e => updateServerConfig('corsOrigins', e.target.value)}
                   placeholder={t('infrastructure.server.corsPlaceholder')}
-                />
-              </div>
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
             </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.server.publicApiUrl')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.baseUrl}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <FormField label={t('infrastructure.server.publicApiUrl')}>
+                <Input type="text" value={serverConfig.baseUrl}
                   onChange={e => updateServerConfig('baseUrl', e.target.value)}
                   placeholder="https://api.yourdomain.com"
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.publicDashboardUrl')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.dashboardUrl}
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
+              <FormField label={t('infrastructure.server.publicDashboardUrl')}>
+                <Input type="text" value={serverConfig.dashboardUrl}
                   onChange={e => updateServerConfig('dashboardUrl', e.target.value)}
                   placeholder="https://dashboard.yourdomain.com"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Webhook & Rate Limiting */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Webhook size={20} />
-              <h2>{t('infrastructure.webhook.title')}</h2>
+                  className="bg-background border-none rounded-lg" />
+              </FormField>
             </div>
           </div>
 
-          <div className="config-form">
-            <h3 style={{ margin: '0 0 1rem', fontSize: '0.9375rem', color: '#475569', fontWeight: 600 }}>
-              <Webhook size={16} style={{ marginInlineEnd: '0.5rem', verticalAlign: 'middle' }} />
-              {t('infrastructure.webhook.settings')}
-            </h3>
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.webhook.timeout')}</label>
-                <input
-                  type="number"
-                  value={webhookConfig.timeout}
-                  onChange={e => updateWebhookConfig('timeout', parseInt(e.target.value) || 10000)}
-                />
-              </div>
-              <div className="form-group small">
-                <label>{t('infrastructure.webhook.maxRetries')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  value={webhookConfig.maxRetries}
-                  onChange={e => updateWebhookConfig('maxRetries', parseInt(e.target.value) || 3)}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.webhook.retryDelay')}</label>
-                <input
-                  type="number"
-                  value={webhookConfig.retryDelay}
-                  onChange={e => updateWebhookConfig('retryDelay', parseInt(e.target.value) || 5000)}
-                />
+          {/* Webhook & Rate Limiting */}
+          <div className="bg-muted rounded-lg p-4 flex flex-col gap-4">
+            <h2 className="text-sm font-bold text-foreground">{t('infrastructure.webhook.title')}</h2>
+
+            <div>
+              <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">{t('infrastructure.webhook.settings')}</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <FormField label={t('infrastructure.webhook.timeout')}>
+                  <Input type="number" value={webhookConfig.timeout}
+                    onChange={e => updateWebhookConfig('timeout', parseInt(e.target.value) || 10000)}
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
+                <FormField label={t('infrastructure.webhook.maxRetries')}>
+                  <Input type="number" min="0" max="10" value={webhookConfig.maxRetries}
+                    onChange={e => updateWebhookConfig('maxRetries', parseInt(e.target.value) || 3)}
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
+                <FormField label={t('infrastructure.webhook.retryDelay')}>
+                  <Input type="number" value={webhookConfig.retryDelay}
+                    onChange={e => updateWebhookConfig('retryDelay', parseInt(e.target.value) || 5000)}
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
               </div>
             </div>
 
-            <div style={{ borderTop: '1px solid var(--border)', margin: '1.5rem 0', paddingTop: '1.5rem' }}>
-              <h3 style={{ margin: '0 0 1rem', fontSize: '0.9375rem', color: '#475569', fontWeight: 600 }}>
-                <Gauge size={16} style={{ marginInlineEnd: '0.5rem', verticalAlign: 'middle' }} />
-                {t('infrastructure.webhook.rateLimit')}
-              </h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>{t('infrastructure.webhook.window')}</label>
-                  <input
-                    type="number"
-                    value={rateLimitConfig.ttl}
+            <div>
+              <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-3">{t('infrastructure.webhook.rateLimit')}</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <FormField label={t('infrastructure.webhook.window')}>
+                  <Input type="number" value={rateLimitConfig.ttl}
                     onChange={e => updateRateLimitConfig('ttl', parseInt(e.target.value) || 60)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>{t('infrastructure.webhook.maxReq')}</label>
-                  <input
-                    type="number"
-                    value={rateLimitConfig.max}
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
+                <FormField label={t('infrastructure.webhook.maxReq')}>
+                  <Input type="number" value={rateLimitConfig.max}
                     onChange={e => updateRateLimitConfig('max', parseInt(e.target.value) || 100)}
-                  />
-                </div>
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
               </div>
             </div>
           </div>
-        </section>
 
-        {/* Database */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Database size={20} />
-              <h2>{t('infrastructure.database.title')}</h2>
+          {/* Database */}
+          <div className="bg-muted rounded-lg p-4 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-foreground">{t('infrastructure.database.title')}</h2>
+              <Badge className={cn(
+                "text-[10px] font-bold uppercase border-none",
+                dbConfig.type === 'postgres' ? 'bg-whatsapp-green/10 text-whatsapp-green' : 'bg-blue-500/10 text-blue-500'
+              )}>
+                {dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
+              </Badge>
             </div>
-            <span className={`status-indicator ${dbConfig.type === 'postgres' ? 'connected' : 'sqlite'}`}>
-              ● {dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
-            </span>
-          </div>
 
-          <div className="radio-group">
-            <label className={`radio-option ${dbConfig.type === 'sqlite' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="dbType"
-                checked={dbConfig.type === 'sqlite'}
-                onChange={() => updateDbConfig('type', 'sqlite')}
-              />
-              <img src={sqliteIcon} alt="" className="watermark-icon" />
-              <span>{t('infrastructure.database.sqlite')}</span>
-              <small>{t('infrastructure.database.sqliteDesc')}</small>
-            </label>
-            <label className={`radio-option ${dbConfig.type === 'postgres' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="dbType"
-                checked={dbConfig.type === 'postgres'}
-                onChange={() => updateDbConfig('type', 'postgres')}
-              />
-              <img src={postgresIcon} alt="" className="watermark-icon" />
-              <span>{t('infrastructure.database.postgres')}</span>
-              <small>{t('infrastructure.database.postgresDesc')}</small>
-            </label>
-          </div>
+            <RadioCard
+              options={[
+                { value: 'sqlite' as const, label: t('infrastructure.database.sqlite'), desc: t('infrastructure.database.sqliteDesc') },
+                { value: 'postgres' as const, label: t('infrastructure.database.postgres'), desc: t('infrastructure.database.postgresDesc') },
+              ]}
+              value={dbConfig.type}
+              onChange={v => updateDbConfig('type', v)}
+            />
 
-          {dbConfig.type === 'postgres' && (
-            <>
-              <div className="toggle-row" style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-                <div className="toggle-info">
-                  <span>{t('infrastructure.database.useBuiltIn')}</span>
-                  <small>{t('infrastructure.database.builtInDesc')}</small>
-                </div>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={dbConfig.builtIn}
-                    onChange={e => updateDbConfig('builtIn', e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
-              </div>
-
-              {!dbConfig.builtIn && (
-                <div className="config-form">
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>{t('common.host')}</label>
-                      <input type="text" value={dbConfig.host} onChange={e => updateDbConfig('host', e.target.value)} />
-                    </div>
-                    <div className="form-group small">
-                      <label>{t('common.port')}</label>
-                      <input type="text" value={dbConfig.port} onChange={e => updateDbConfig('port', e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>{t('common.username')}</label>
-                      <input
-                        type="text"
-                        value={dbConfig.username}
-                        onChange={e => updateDbConfig('username', e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>{t('common.password')}</label>
-                      <input
-                        type="password"
-                        value={dbConfig.password}
-                        onChange={e => updateDbConfig('password', e.target.value)}
-                      />
-                    </div>
-                  </div>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>{t('infrastructure.database.dbName')}</label>
-                      <input
-                        type="text"
-                        value={dbConfig.database}
-                        onChange={e => updateDbConfig('database', e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group small">
-                      <label>{t('infrastructure.database.poolSize')}</label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="50"
-                        value={dbConfig.poolSize}
-                        onChange={e => updateDbConfig('poolSize', parseInt(e.target.value))}
-                      />
-                    </div>
-                  </div>
-                  <div className="toggle-row">
-                    <div className="toggle-info">
-                      <span>{t('infrastructure.database.ssl')}</span>
-                      <small>{t('infrastructure.database.sslDesc')}</small>
-                    </div>
-                    <label className="toggle-switch">
-                      <input
-                        type="checkbox"
-                        checked={dbConfig.sslEnabled}
-                        onChange={e => updateDbConfig('sslEnabled', e.target.checked)}
-                      />
-                      <span className="toggle-slider"></span>
-                    </label>
-                  </div>
-                  {dbConfig.sslEnabled && (
-                    <div className="toggle-row">
-                      <div className="toggle-info">
-                        <span>{t('infrastructure.database.sslRejectUnauthorized')}</span>
-                        <small>{t('infrastructure.database.sslRejectUnauthorizedDesc')}</small>
-                      </div>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={dbConfig.sslRejectUnauthorized}
-                          onChange={e => updateDbConfig('sslRejectUnauthorized', e.target.checked)}
-                        />
-                        <span className="toggle-slider"></span>
-                      </label>
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-
-          <div
-            className="empty-state-card"
-            style={{
-              padding: '2.5rem',
-              textAlign: 'center',
-              background: '#F8FAFC',
-              borderRadius: '12px',
-              border: '1px dashed #E2E8F0',
-              marginTop: '1rem',
-            }}
-          >
-            <Database size={32} style={{ color: '#22C55E', marginBottom: '1rem', opacity: 0.7 }} />
-            <p style={{ margin: 0, color: '#475569', fontSize: '0.9375rem', fontWeight: 500 }}>
-              {t('infrastructure.database.migrationsTitle')}
-            </p>
-            <p
-              style={{
-                margin: '0.75rem 0 0',
-                color: '#22C55E',
-                fontSize: '0.875rem',
-                fontWeight: 500,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '0.375rem',
-              }}
-            >
-              <CheckCircle size={16} />
-              {t('infrastructure.database.migrationsStatus')}
-            </p>
-            <p style={{ margin: '0.5rem 0 0', color: '#64748B', fontSize: '0.8125rem', lineHeight: 1.5 }}>
-              {t('infrastructure.database.migrationsHint')}
-            </p>
-          </div>
-        </section>
-
-        {/* Redis */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Server size={20} />
-              <h2>{t('infrastructure.redis.title')}</h2>
-            </div>
-            <span
-              className={`status-indicator ${redisEnabled && redisConfig.connected ? 'connected' : 'disconnected'}`}
-            >
-              ● {redisEnabled
-                ? redisConfig.connected
-                  ? t('infrastructure.statusLabels.connected')
-                  : t('infrastructure.statusLabels.disconnected')
-                : t('infrastructure.statusLabels.disabled')}
-            </span>
-          </div>
-
-          <div
-            className="toggle-row"
-            style={{
-              borderBottom: redisEnabled ? '1px solid var(--border)' : 'none',
-              marginBottom: redisEnabled ? '1.5rem' : 0,
-              paddingBottom: redisEnabled ? '1.25rem' : 0,
-            }}
-          >
-            <div className="toggle-info">
-              <span>{t('infrastructure.redis.enable')}</span>
-              <small>{t('infrastructure.redis.enableDesc')}</small>
-            </div>
-            <label className="toggle-switch">
-              <input
-                type="checkbox"
-                checked={redisEnabled}
-                onChange={e => {
-                  setRedisEnabled(e.target.checked);
-                  if (!e.target.checked) setQueueEnabled(false);
-                }}
-              />
-              <span className="toggle-slider"></span>
-            </label>
-          </div>
-
-          {redisEnabled ? (
-            <>
-              <div className="toggle-row" style={{ marginBottom: '1rem' }}>
-                <div className="toggle-info">
-                  <span>{t('infrastructure.redis.useBuiltIn')}</span>
-                  <small>{t('infrastructure.redis.builtInDesc')}</small>
-                </div>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={redisConfig.builtIn}
-                    onChange={e => updateRedisConfig('builtIn', e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
-              </div>
-
-              {!redisConfig.builtIn && (
-                <div className="config-form">
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label>{t('common.host')}</label>
-                      <input
-                        type="text"
-                        value={redisConfig.host}
-                        onChange={e => updateRedisConfig('host', e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group small">
-                      <label>{t('common.port')}</label>
-                      <input
-                        type="text"
-                        value={redisConfig.port}
-                        onChange={e => updateRedisConfig('port', e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>{t('common.password')}</label>
-                      <input
-                        type="password"
-                        value={redisConfig.password}
-                        onChange={e => updateRedisConfig('password', e.target.value)}
-                        placeholder={t('infrastructure.redis.passwordOptional')}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div
-                className="toggle-row"
-                style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem', marginTop: '0.5rem' }}
-              >
-                <div className="toggle-info">
-                  <span>{t('infrastructure.redis.queueTitle')}</span>
-                  <small>{t('infrastructure.redis.queueDesc')}</small>
-                </div>
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={queueEnabled} onChange={e => setQueueEnabled(e.target.checked)} />
-                  <span className="toggle-slider"></span>
-                </label>
-              </div>
-
-              {queueEnabled && (
-                <div className="queue-stats">
-                  <h3>{t('infrastructure.redis.statsTitle')}</h3>
-                  <div className="stats-row">
-                    <div className="queue-stat-card">
-                      <h4>{t('infrastructure.redis.messageQueue')}</h4>
-                      <div className="stat-values">
-                        <div className="stat-item pending">
-                          <span className="value">{queueStats.messages.pending}</span>
-                          <span className="label">{t('infrastructure.redis.pending')}</span>
-                        </div>
-                        <div className="stat-item completed">
-                          <span className="value">{queueStats.messages.completed.toLocaleString()}</span>
-                          <span className="label">{t('infrastructure.redis.completed')}</span>
-                        </div>
-                        <div className="stat-item failed">
-                          <span className="value">{queueStats.messages.failed}</span>
-                          <span className="label">{t('infrastructure.redis.failed')}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="queue-stat-card">
-                      <h4>{t('infrastructure.redis.webhookQueue')}</h4>
-                      <div className="stat-values">
-                        <div className="stat-item pending">
-                          <span className="value">{queueStats.webhooks.pending}</span>
-                          <span className="label">{t('infrastructure.redis.pending')}</span>
-                        </div>
-                        <div className="stat-item completed">
-                          <span className="value">{queueStats.webhooks.completed.toLocaleString()}</span>
-                          <span className="label">{t('infrastructure.redis.completed')}</span>
-                        </div>
-                        <div className="stat-item failed">
-                          <span className="value">{queueStats.webhooks.failed}</span>
-                          <span className="label">{t('infrastructure.redis.failed')}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="queue-actions">
-                    <button className="btn-danger-outline">
-                      <Trash2 size={16} />
-                      {t('infrastructure.redis.clearFailed')}
-                    </button>
-                    <button
-                      className="btn-outline"
-                      onClick={() => window.open(`${API_BASE_URL}/admin/queues`, '_blank')}
-                    >
-                      <ExternalLink size={16} />
-                      {t('infrastructure.redis.viewBullMq')}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div
-              className="empty-state-card"
-              style={{
-                padding: '2.5rem',
-                textAlign: 'center',
-                background: '#F8FAFC',
-                borderRadius: '12px',
-                border: '1px dashed #E2E8F0',
-                marginTop: '1rem',
-              }}
-            >
-              <Server size={32} style={{ color: '#94A3B8', marginBottom: '1rem', opacity: 0.5 }} />
-              <p style={{ margin: 0, color: '#475569', fontSize: '0.9375rem', fontWeight: 500 }}>
-                {t('infrastructure.redis.disabledTitle')}
-              </p>
-              <p style={{ margin: '0.5rem 0 0', color: '#64748B', fontSize: '0.8125rem', lineHeight: 1.5 }}>
-                {t('infrastructure.redis.disabledDesc')}
-              </p>
-            </div>
-          )}
-        </section>
-
-        {/* Storage */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <HardDrive size={20} />
-              <h2>{t('infrastructure.storage.title')}</h2>
-            </div>
-          </div>
-
-          <div className="radio-group">
-            <label className={`radio-option ${storageConfig.type === 'local' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="storageType"
-                checked={storageConfig.type === 'local'}
-                onChange={() => updateStorageConfig('type', 'local')}
-              />
-              <img src={folderIcon} alt="" className="watermark-icon" />
-              <span>{t('infrastructure.storage.local')}</span>
-              <small>{t('infrastructure.storage.localDesc')}</small>
-            </label>
-            <label className={`radio-option ${storageConfig.type === 's3' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="storageType"
-                checked={storageConfig.type === 's3'}
-                onChange={() => updateStorageConfig('type', 's3')}
-              />
-              <img src={s3Icon} alt="" className="watermark-icon" />
-              <span>{t('infrastructure.storage.s3')}</span>
-              <small>{t('infrastructure.storage.s3Desc')}</small>
-            </label>
-          </div>
-
-          <div className="config-form">
-            {storageConfig.type === 'local' && (
-              <div className="form-group">
-                <label>{t('infrastructure.storage.storagePath')}</label>
-                <input
-                  type="text"
-                  value={storageConfig.localPath}
-                  onChange={e => updateStorageConfig('localPath', e.target.value)}
-                />
-              </div>
-            )}
-
-            {storageConfig.type === 's3' && (
+            {dbConfig.type === 'postgres' && (
               <>
-                <div className="toggle-row" style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-                  <div className="toggle-info">
-                    <span>{t('infrastructure.storage.useBuiltIn')}</span>
-                    <small>{t('infrastructure.storage.builtInDesc')}</small>
-                  </div>
-                  <label className="toggle-switch">
-                    <input
-                      type="checkbox"
-                      checked={storageConfig.builtIn}
-                      onChange={e => updateStorageConfig('builtIn', e.target.checked)}
-                    />
-                    <span className="toggle-slider"></span>
-                  </label>
-                </div>
+                <ToggleRow
+                  label={t('infrastructure.database.useBuiltIn')}
+                  desc={t('infrastructure.database.builtInDesc')}
+                  checked={dbConfig.builtIn}
+                  onChange={v => updateDbConfig('builtIn', v)}
+                />
 
-                {!storageConfig.builtIn && (
-                  <>
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label>{t('infrastructure.storage.bucket')}</label>
-                        <input
-                          type="text"
-                          value={storageConfig.s3Bucket}
-                          onChange={e => updateStorageConfig('s3Bucket', e.target.value)}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>{t('infrastructure.storage.region')}</label>
-                        <input
-                          type="text"
-                          value={storageConfig.s3Region}
-                          onChange={e => updateStorageConfig('s3Region', e.target.value)}
-                        />
-                      </div>
+                {!dbConfig.builtIn && (
+                  <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <FormField label={t('common.host')}>
+                        <Input type="text" value={dbConfig.host}
+                          onChange={e => updateDbConfig('host', e.target.value)}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
+                      <FormField label={t('common.port')}>
+                        <Input type="text" value={dbConfig.port}
+                          onChange={e => updateDbConfig('port', e.target.value)}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
                     </div>
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label>{t('infrastructure.storage.accessKey')}</label>
-                        <input
-                          type="text"
-                          value={storageConfig.s3AccessKey}
-                          onChange={e => updateStorageConfig('s3AccessKey', e.target.value)}
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>{t('infrastructure.storage.secretKey')}</label>
-                        <input
-                          type="password"
-                          value={storageConfig.s3SecretKey}
-                          onChange={e => updateStorageConfig('s3SecretKey', e.target.value)}
-                        />
-                      </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <FormField label={t('common.username')}>
+                        <Input type="text" value={dbConfig.username}
+                          onChange={e => updateDbConfig('username', e.target.value)}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
+                      <FormField label={t('common.password')}>
+                        <Input type="password" value={dbConfig.password}
+                          onChange={e => updateDbConfig('password', e.target.value)}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
                     </div>
-                    <div className="form-group">
-                      <label>{t('infrastructure.storage.endpoint')}</label>
-                      <input
-                        type="text"
-                        value={storageConfig.s3Endpoint}
-                        onChange={e => updateStorageConfig('s3Endpoint', e.target.value)}
-                        placeholder={t('infrastructure.storage.endpointHint')}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <FormField label={t('infrastructure.database.dbName')}>
+                        <Input type="text" value={dbConfig.database}
+                          onChange={e => updateDbConfig('database', e.target.value)}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
+                      <FormField label={t('infrastructure.database.poolSize')}>
+                        <Input type="number" min="1" max="50" value={dbConfig.poolSize}
+                          onChange={e => updateDbConfig('poolSize', parseInt(e.target.value))}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
+                    </div>
+                    <ToggleRow
+                      label={t('infrastructure.database.ssl')}
+                      desc={t('infrastructure.database.sslDesc')}
+                      checked={dbConfig.sslEnabled}
+                      onChange={v => updateDbConfig('sslEnabled', v)}
+                    />
+                    {dbConfig.sslEnabled && (
+                      <ToggleRow
+                        label={t('infrastructure.database.sslRejectUnauthorized')}
+                        desc={t('infrastructure.database.sslRejectUnauthorizedDesc')}
+                        checked={dbConfig.sslRejectUnauthorized}
+                        onChange={v => updateDbConfig('sslRejectUnauthorized', v)}
                       />
-                    </div>
-                  </>
+                    )}
+                  </div>
                 )}
               </>
             )}
-          </div>
-        </section>
-      </div>
 
-      {showRestartModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: '500px', textAlign: 'center' }}>
-            <div className="modal-header" style={{ justifyContent: 'center', borderBottom: 'none' }}>
-              <h2>
+            <div className="flex flex-col items-center py-6 text-muted-foreground bg-background rounded-lg">
+              <p className="text-sm font-medium text-foreground">{t('infrastructure.database.migrationsTitle')}</p>
+              <p className="text-xs text-whatsapp-green font-medium mt-2 flex items-center gap-1.5">
+                <CheckCircle size={14} weight="fill" />
+                {t('infrastructure.database.migrationsStatus')}
+              </p>
+              <p className="text-xs text-muted-foreground mt-2 max-w-sm text-center">{t('infrastructure.database.migrationsHint')}</p>
+            </div>
+          </div>
+
+          {/* Redis */}
+          <div className="bg-muted rounded-lg p-4 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-foreground">{t('infrastructure.redis.title')}</h2>
+              <Badge className={cn(
+                "text-[10px] font-bold uppercase border-none",
+                redisEnabled && redisConfig.connected
+                  ? 'bg-whatsapp-green/10 text-whatsapp-green'
+                  : redisEnabled
+                    ? 'bg-destructive/10 text-destructive'
+                    : 'bg-background text-muted-foreground'
+              )}>
+                {redisEnabled
+                  ? redisConfig.connected
+                    ? t('infrastructure.statusLabels.connected')
+                    : t('infrastructure.statusLabels.disconnected')
+                  : t('infrastructure.statusLabels.disabled')}
+              </Badge>
+            </div>
+
+            <ToggleRow
+              label={t('infrastructure.redis.enable')}
+              desc={t('infrastructure.redis.enableDesc')}
+              checked={redisEnabled}
+              onChange={v => {
+                setRedisEnabled(v);
+                if (!v) setQueueEnabled(false);
+              }}
+            />
+
+            {redisEnabled && (
+              <>
+                <ToggleRow
+                  label={t('infrastructure.redis.useBuiltIn')}
+                  desc={t('infrastructure.redis.builtInDesc')}
+                  checked={redisConfig.builtIn}
+                  onChange={v => updateRedisConfig('builtIn', v)}
+                />
+
+                {!redisConfig.builtIn && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <FormField label={t('common.host')}>
+                      <Input type="text" value={redisConfig.host}
+                        onChange={e => updateRedisConfig('host', e.target.value)}
+                        className="bg-background border-none rounded-lg" />
+                    </FormField>
+                    <FormField label={t('common.port')}>
+                      <Input type="text" value={redisConfig.port}
+                        onChange={e => updateRedisConfig('port', e.target.value)}
+                        className="bg-background border-none rounded-lg" />
+                    </FormField>
+                    <FormField label={t('common.password')}>
+                      <Input type="password" value={redisConfig.password}
+                        onChange={e => updateRedisConfig('password', e.target.value)}
+                        placeholder={t('infrastructure.redis.passwordOptional')}
+                        className="bg-background border-none rounded-lg" />
+                    </FormField>
+                  </div>
+                )}
+
+                <div>
+                  <ToggleRow
+                    label={t('infrastructure.redis.queueTitle')}
+                    desc={t('infrastructure.redis.queueDesc')}
+                    checked={queueEnabled}
+                    onChange={setQueueEnabled}
+                  />
+                </div>
+
+                {queueEnabled && (
+                  <div className="flex flex-col gap-3 pt-2">
+                    <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('infrastructure.redis.statsTitle')}</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="bg-background rounded-lg p-3 flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-muted-foreground">{t('infrastructure.redis.messageQueue')}</h4>
+                        <div className="flex gap-4">
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-orange-500">{queueStats.messages.pending}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-orange-500 font-bold">{t('infrastructure.redis.pending')}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-whatsapp-green">{queueStats.messages.completed.toLocaleString()}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-whatsapp-green font-bold">{t('infrastructure.redis.completed')}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-destructive">{queueStats.messages.failed}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-destructive font-bold">{t('infrastructure.redis.failed')}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="bg-background rounded-lg p-3 flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-muted-foreground">{t('infrastructure.redis.webhookQueue')}</h4>
+                        <div className="flex gap-4">
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-orange-500">{queueStats.webhooks.pending}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-orange-500 font-bold">{t('infrastructure.redis.pending')}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-whatsapp-green">{queueStats.webhooks.completed.toLocaleString()}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-whatsapp-green font-bold">{t('infrastructure.redis.completed')}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-lg font-bold text-destructive">{queueStats.webhooks.failed}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-destructive font-bold">{t('infrastructure.redis.failed')}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="destructive" size="sm" className="rounded-lg">
+                        {t('infrastructure.redis.clearFailed')}
+                      </Button>
+                      <Button variant="secondary" size="sm" className="rounded-lg"
+                        onClick={() => window.open(`${API_BASE_URL}/admin/queues`, '_blank')}>
+                        {t('infrastructure.redis.viewBullMq')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {!redisEnabled && (
+              <div className="flex flex-col items-center py-6 text-muted-foreground bg-background rounded-lg">
+                <p className="text-sm font-medium text-foreground">{t('infrastructure.redis.disabledTitle')}</p>
+                <p className="text-xs text-muted-foreground mt-1">{t('infrastructure.redis.disabledDesc')}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Storage */}
+          <div className="bg-muted rounded-lg p-4 flex flex-col gap-4 lg:col-span-2">
+            <h2 className="text-sm font-bold text-foreground">{t('infrastructure.storage.title')}</h2>
+
+            <RadioCard
+              options={[
+                { value: 'local' as const, label: t('infrastructure.storage.local'), desc: t('infrastructure.storage.localDesc') },
+                { value: 's3' as const, label: t('infrastructure.storage.s3'), desc: t('infrastructure.storage.s3Desc') },
+              ]}
+              value={storageConfig.type}
+              onChange={v => updateStorageConfig('type', v)}
+            />
+
+            <div className="flex flex-col gap-3">
+              {storageConfig.type === 'local' && (
+                <FormField label={t('infrastructure.storage.storagePath')}>
+                  <Input type="text" value={storageConfig.localPath}
+                    onChange={e => updateStorageConfig('localPath', e.target.value)}
+                    className="bg-background border-none rounded-lg" />
+                </FormField>
+              )}
+
+              {storageConfig.type === 's3' && (
+                <>
+                  <ToggleRow
+                    label={t('infrastructure.storage.useBuiltIn')}
+                    desc={t('infrastructure.storage.builtInDesc')}
+                    checked={storageConfig.builtIn}
+                    onChange={v => updateStorageConfig('builtIn', v)}
+                  />
+
+                  {!storageConfig.builtIn && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <FormField label={t('infrastructure.storage.bucket')}>
+                          <Input type="text" value={storageConfig.s3Bucket}
+                            onChange={e => updateStorageConfig('s3Bucket', e.target.value)}
+                            className="bg-background border-none rounded-lg" />
+                        </FormField>
+                        <FormField label={t('infrastructure.storage.region')}>
+                          <Input type="text" value={storageConfig.s3Region}
+                            onChange={e => updateStorageConfig('s3Region', e.target.value)}
+                            className="bg-background border-none rounded-lg" />
+                        </FormField>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <FormField label={t('infrastructure.storage.accessKey')}>
+                          <Input type="text" value={storageConfig.s3AccessKey}
+                            onChange={e => updateStorageConfig('s3AccessKey', e.target.value)}
+                            className="bg-background border-none rounded-lg" />
+                        </FormField>
+                        <FormField label={t('infrastructure.storage.secretKey')}>
+                          <Input type="password" value={storageConfig.s3SecretKey}
+                            onChange={e => updateStorageConfig('s3SecretKey', e.target.value)}
+                            className="bg-background border-none rounded-lg" />
+                        </FormField>
+                      </div>
+                      <FormField label={t('infrastructure.storage.endpoint')}>
+                        <Input type="text" value={storageConfig.s3Endpoint}
+                          onChange={e => updateStorageConfig('s3Endpoint', e.target.value)}
+                          placeholder={t('infrastructure.storage.endpointHint')}
+                          className="bg-background border-none rounded-lg" />
+                      </FormField>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg" onClick={handleSaveConfig} disabled={saving}>
+            {saving ? <CircleNotch size={18} className="animate-spin" /> : null}
+            {saving ? t('infrastructure.saving') : t('infrastructure.saveConfig')}
+          </Button>
+        </div>
+
+        <Dialog open={showRestartModal} onOpenChange={v => { if (!v) setShowRestartModal(false); }}>
+          <DialogContent className="sm:max-w-md text-center">
+            <DialogHeader>
+              <DialogTitle>
                 {restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
                 {restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
                 {restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
                 {restartStatus === 'success' && t('infrastructure.restart.successTitle')}
                 {restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
-              </h2>
-            </div>
-            <div className="modal-body" style={{ padding: '2rem' }}>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col items-center gap-4 py-4">
               {restartStatus === 'idle' && (
                 <>
-                  <p style={{ fontSize: '1rem', color: '#475569', marginBottom: '1.5rem' }}>
+                  <p className="text-sm text-muted-foreground">
                     <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
                   </p>
-                  <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-                    <button className="btn-secondary" onClick={() => setShowRestartModal(false)}>
+                  <div className="flex gap-3">
+                    <Button variant="ghost" onClick={() => setShowRestartModal(false)} className="rounded-lg">
                       {t('infrastructure.restart.later')}
-                    </button>
-                    <button className="btn-primary" onClick={handleRestart}>
+                    </Button>
+                    <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg" onClick={handleRestart}>
                       {t('infrastructure.restart.now')}
-                    </button>
+                    </Button>
                   </div>
                 </>
               )}
 
               {(restartStatus === 'restarting' || restartStatus === 'waiting') && (
                 <>
-                  <div style={{ marginBottom: '1.5rem' }}>
-                    <Loader2 className="animate-spin" size={48} style={{ color: '#22C55E', marginBottom: '1rem' }} />
-                    <p style={{ fontSize: '1.125rem', color: '#1E293B', fontWeight: 500 }}>
-                      {restartCountdown > 0
-                        ? t('infrastructure.restart.restartingMsg', { count: restartCountdown })
-                        : t('infrastructure.restart.checking')}
-                    </p>
-                  </div>
-                  <div
-                    style={{
-                      width: '100%',
-                      height: '8px',
-                      background: '#E2E8F0',
-                      borderRadius: '4px',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: restartCountdown > 0 ? `${((30 - restartCountdown) / 30) * 100}%` : '100%',
-                        height: '100%',
-                        background: 'linear-gradient(90deg, #22C55E, #10B981)',
-                        transition: 'width 1s linear',
-                      }}
-                    />
-                  </div>
-                  <p style={{ marginTop: '1rem', fontSize: '0.875rem', color: '#64748B' }}>
-                    {t('infrastructure.restart.dontClose')}
+                  <CircleNotch size={48} className="animate-spin text-whatsapp-green" />
+                  <p className="text-sm font-medium text-foreground">
+                    {restartCountdown > 0
+                      ? t('infrastructure.restart.restartingMsg', { count: restartCountdown })
+                      : t('infrastructure.restart.checking')}
                   </p>
+                  <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-whatsapp-green rounded-full transition-all duration-1000"
+                      style={{ width: restartCountdown > 0 ? `${((30 - restartCountdown) / 30) * 100}%` : '100%' }} />
+                  </div>
+                  <p className="text-xs text-muted-foreground">{t('infrastructure.restart.dontClose')}</p>
                 </>
               )}
 
               {restartStatus === 'success' && (
                 <>
-                  <CheckCircle size={48} style={{ color: '#22C55E', marginBottom: '1rem' }} />
-                  <p style={{ fontSize: '1rem', color: '#475569' }}>
-                    {t('infrastructure.restart.successMsg')}
-                  </p>
+                  <CheckCircle size={48} className="text-whatsapp-green" weight="fill" />
+                  <p className="text-sm text-muted-foreground">{t('infrastructure.restart.successMsg')}</p>
                 </>
               )}
 
               {restartStatus === 'error' && (
                 <>
-                  <p style={{ fontSize: '1rem', color: '#DC2626', marginBottom: '1rem' }}>
-                    {t('infrastructure.restart.errorMsg')}
-                  </p>
-                  <button className="btn-primary" onClick={() => window.location.reload()}>
+                  <p className="text-sm text-destructive">{t('infrastructure.restart.errorMsg')}</p>
+                  <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg"
+                    onClick={() => window.location.reload()}>
                     {t('infrastructure.restart.reload')}
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      <footer className="page-footer">
-        <button className="btn-primary large" onClick={handleSaveConfig} disabled={saving}>
-          {saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
-          {saving ? t('infrastructure.saving') : t('infrastructure.saveConfig')}
-        </button>
-      </footer>
-    </div>
+            {restartStatus === 'error' && (
+              <DialogFooter>
+                <Button variant="ghost" onClick={() => { setShowRestartModal(false); setRestartStatus('idle'); }} className="rounded-lg">
+                  {t('common.cancel')}
+                </Button>
+              </DialogFooter>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    </ScrollArea>
   );
 }

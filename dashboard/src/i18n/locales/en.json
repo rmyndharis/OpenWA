@@ -45,7 +45,8 @@
     "logout": "Logout",
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "viewAll": "View All"
   },
   "theme": {
     "light": "Light",
@@ -70,6 +71,11 @@
     "noSessionsDesc": "Please connect a WhatsApp session from the <1>Sessions</1> menu first to use the chat feature.",
     "sessionLabel": "WhatsApp session",
     "noPhone": "No phone",
+    "filters": {
+      "all": "All",
+      "unread": "Unread",
+      "groups": "Groups"
+    },
     "searchPlaceholder": "Search chats...",
     "loadingChats": "Loading chats...",
     "empty": "No chats",
@@ -96,6 +102,11 @@
     "placeholderDesc": "Select an active chat from the left sidebar to start reading and sending WhatsApp messages.",
     "deleteConfirm": "Delete this message for everyone?",
     "messageDeleted": "🚫 This message was deleted",
+    "menu": {
+      "copyId": "Copy Chat ID",
+      "clearMessages": "Clear Messages",
+      "closeChat": "Close Chat"
+    },
     "errors": {
       "loadSessions": "Failed to load sessions",
       "loadChats": "Failed to load chats",
@@ -154,6 +165,7 @@
     "initializing": "Starting...",
     "connecting": "Connecting...",
     "qr_ready": "Scan QR",
+    "authenticating": "Authenticating",
     "ready": "Connected",
     "disconnected": "Disconnected"
   },

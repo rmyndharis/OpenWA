@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenWA</title>
+    <script>
+      (function() {
+        var theme = localStorage.getItem('openwa_theme') || 'system';
+        var root = document.documentElement;
+        if (theme === 'dark') {
+          root.setAttribute('data-theme', 'dark');
+          root.classList.add('dark');
+        } else if (theme === 'light') {
+          root.setAttribute('data-theme', 'light');
+        } else {
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            root.classList.add('dark');
+          }
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -45,7 +45,8 @@
     "logout": "יציאה",
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
-    "unknownError": "שגיאה לא ידועה"
+    "unknownError": "שגיאה לא ידועה",
+    "viewAll": "הצג הכל"
   },
   "theme": {
     "light": "בהיר",

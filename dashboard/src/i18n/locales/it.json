@@ -45,7 +45,8 @@
     "logout": "Disconnetti",
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
-    "unknownError": "Errore sconosciuto"
+    "unknownError": "Errore sconosciuto",
+    "viewAll": "Visualizza tutto"
   },
   "theme": {
     "light": "Chiaro",

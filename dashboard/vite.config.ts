@@ -14,6 +14,11 @@ const { version: pkgVersion } = JSON.parse(readFileSync(resolve(process.cwd(), '
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@": resolve(__dirname, "./src"),
+    },
+  },
   appType: 'spa', // Enable SPA fallback for client-side routing
   define: {
     __APP_VERSION__: JSON.stringify(process.env.APP_VERSION || pkgVersion),

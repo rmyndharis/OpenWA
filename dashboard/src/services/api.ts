@@ -19,7 +19,7 @@ export const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+
 export interface Session {
   id: string;
   name: string;
-  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected' | 'failed';
+  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'authenticating' | 'ready' | 'disconnected' | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;
@@ -93,6 +93,7 @@ export interface Chat {
   unreadCount: number;
   timestamp: number;
   lastMessage?: string;
+  profilePic?: string;
 }
 
 export interface ChatMessage {
@@ -290,6 +291,8 @@ export const sessionApi = {
     request<{ messages: ChatMessage[]; total: number }>(
       `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}`,
     ),
+  getProfilePicture: (sessionId: string, contactId: string) =>
+    request<{ url: string }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/profile-picture`),
 };
 
 // =============================================================================

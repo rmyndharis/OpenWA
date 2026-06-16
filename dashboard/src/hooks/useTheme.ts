@@ -14,10 +14,12 @@ export function useTheme() {
     const root = document.documentElement;
 
     if (newTheme === 'system') {
-      // Remove data-theme to let CSS media query handle it
       root.removeAttribute('data-theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.classList.toggle('dark', prefersDark);
     } else {
       root.setAttribute('data-theme', newTheme);
+      root.classList.toggle('dark', newTheme === 'dark');
     }
   }, []);
 
@@ -25,6 +27,17 @@ export function useTheme() {
     applyTheme(theme);
     localStorage.setItem(THEME_KEY, theme);
   }, [theme, applyTheme]);
+
+  // Listen for OS theme changes when in 'system' mode
+  useEffect(() => {
+    if (theme !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => {
+      document.documentElement.classList.toggle('dark', mq.matches);
+    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [theme]);
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
@@ -38,9 +51,12 @@ export function useTheme() {
     });
   }, []);
 
-  // Get the resolved theme (what's actually displayed)
   const resolvedTheme =
-    theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme;
+    theme === 'system'
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+      : theme;
 
   return { theme, setTheme, toggleTheme, resolvedTheme };
 }

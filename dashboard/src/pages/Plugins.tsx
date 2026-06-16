@@ -2,21 +2,15 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Puzzle,
+  PuzzlePiece,
   Power,
-  PowerOff,
-  Settings,
+  Prohibit,
+  Gear,
   CheckCircle,
-  AlertCircle,
-  Loader2,
-  RefreshCw,
-  Cpu,
-  Database,
-  Server,
-  Shield,
-  Zap,
-  X,
-} from 'lucide-react';
+  WarningCircle,
+  CircleNotch,
+  ArrowClockwise,
+} from '@phosphor-icons/react';
 import { pluginsApi, infraApi } from '../services/api';
 import type { Plugin } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -27,22 +21,21 @@ import {
   useInfraStatusQuery,
   queryKeys,
 } from '../hooks/queries';
-import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/Toast';
-import './Plugins.css';
-
-type PluginType = 'engine' | 'storage' | 'queue' | 'auth' | 'extension';
-
-const pluginTypeIcons: Record<PluginType, typeof Puzzle> = {
-  engine: Cpu,
-  storage: Database,
-  queue: Server,
-  auth: Shield,
-  extension: Zap,
-};
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { cn } from '../lib/utils';
 
 interface EngineConfig {
-  type: string;
   headless: boolean;
   sessionDataPath: string;
   browserArgs: string;
@@ -61,11 +54,9 @@ export default function Plugins() {
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-
-  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [configPlugin, setConfigPlugin] = useState<Plugin | null>(null);
   const [engineConfig, setEngineConfig] = useState<EngineConfig>({
-    type: infraStatus?.engine?.type || 'whatsapp-web.js',
     headless: infraStatus?.engine?.headless ?? true,
     sessionDataPath: '/data/sessions',
     browserArgs: '--no-sandbox --disable-gpu',
@@ -112,15 +103,12 @@ export default function Plugins() {
 
   const handleOpenConfig = (plugin: Plugin) => {
     setConfigPlugin(plugin);
-    setShowConfigModal(true);
+    setConfigOpen(true);
   };
 
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
-      // Persist the engine section to the backend (.env.generated via PUT /infra/config).
-      // The engine `type` isn't a savable field (only whatsapp-web.js exists); the backend
-      // maps these to PUPPETEER_HEADLESS / SESSION_DATA_PATH / PUPPETEER_ARGS.
       await infraApi.saveConfig({
         engine: {
           headless: engineConfig.headless,
@@ -129,7 +117,7 @@ export default function Plugins() {
         },
       });
       toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
-      setShowConfigModal(false);
+      setConfigOpen(false);
     } catch (err) {
       toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
@@ -139,11 +127,8 @@ export default function Plugins() {
 
   if (loading) {
     return (
-      <div
-        className="plugins-page"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}
-      >
-        <Loader2 className="animate-spin" size={32} />
+      <div className="flex h-full items-center justify-center bg-background">
+        <CircleNotch size={48} className="animate-spin text-whatsapp-green" />
       </div>
     );
   }
@@ -151,274 +136,220 @@ export default function Plugins() {
   const activeEngine = engines.find(e => e.id === currentEngine);
 
   return (
-    <div className="plugins-page">
-      <PageHeader
-        title={t('plugins.title')}
-        subtitle={t('plugins.subtitle')}
-        actions={
-          <button className="btn-secondary" onClick={refetchAll}>
-            <RefreshCw size={16} />
-            {t('plugins.refresh')}
-          </button>
-        }
-      />
-
-      {error && (
-        <div className="error-banner">
-          <AlertCircle size={20} />
-          <span className="error-banner-text">{error}</span>
-        </div>
-      )}
-
-      <div className="engine-card">
-        <div className="engine-header">
-          <div className="engine-info">
-            <div className="engine-icon-wrapper">
-              <Cpu size={24} />
-            </div>
-            <div>
-              <h3 className="engine-title">{t('plugins.engineCard')}</h3>
-              <span className="engine-name">{currentEngine}</span>
-            </div>
+    <ScrollArea className="h-full bg-background">
+      <div className="p-4 sm:p-8 flex flex-col gap-6 max-w-7xl mx-auto">
+        <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">{t('plugins.title')}</h1>
+            <p className="text-muted-foreground mt-1">{t('plugins.subtitle')}</p>
           </div>
-          <span className="status-badge connected">{t('plugins.running')}</span>
-        </div>
+          <Button variant="secondary" onClick={refetchAll}>
+            <ArrowClockwise size={16} weight="bold" />
+            {t('plugins.refresh')}
+          </Button>
+        </header>
 
-        {activeEngine && activeEngine.features.length > 0 && (
-          <div className="engine-features">
-            <p className="features-label">{t('plugins.supportedFeatures')}</p>
-            <div className="features-list">
-              {activeEngine.features.map(feature => (
-                <span key={feature} className="feature-tag">
-                  {feature.replace(/-/g, ' ')}
-                </span>
-              ))}
-            </div>
+        {error && (
+          <div className="flex items-center gap-2 p-3 bg-destructive/10 text-destructive text-sm rounded-md">
+            <WarningCircle size={18} weight="fill" />
+            <span>{error}</span>
           </div>
         )}
-      </div>
 
-      <div className="plugins-grid">
-        {plugins.map(plugin => {
-          const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
-          const isLoading = actionLoading === plugin.id;
-
-          return (
-            <div key={plugin.id} className="plugin-card">
-              <div className={`plugin-card-header type-${plugin.type}`}>
-                <div className="plugin-info">
-                  <div className="plugin-icon-wrapper">
-                    <TypeIcon size={20} />
-                  </div>
-                  <div>
-                    <h3 className="plugin-name">{plugin.name}</h3>
-                    <span className="plugin-version">v{plugin.version}</span>
-                  </div>
-                </div>
-                {plugin.builtIn && <span className="plugin-builtin-badge">{t('plugins.builtIn')}</span>}
+        <div className="p-4 bg-muted rounded-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold">{t('plugins.engineCard')}</h3>
+              <p className="text-xs text-muted-foreground">{currentEngine}</p>
+            </div>
+            <Badge className="bg-whatsapp-green/10 text-whatsapp-green border-none">{t('plugins.running')}</Badge>
+          </div>
+          {activeEngine && activeEngine.features.length > 0 && (
+            <div className="mt-3">
+              <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-1.5">{t('plugins.supportedFeatures')}</p>
+              <div className="flex flex-wrap gap-1">
+                {activeEngine.features.map(feature => (
+                  <span key={feature} className="text-xs text-muted-foreground">
+                    {feature.replace(/-/g, ' ')}
+                  </span>
+                ))}
               </div>
+            </div>
+          )}
+        </div>
 
-              <div className="plugin-card-body">
-                <p className="plugin-description">{plugin.description || t('plugins.noDescription')}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {plugins.map(plugin => {
+            const isLoading = actionLoading === plugin.id;
 
-                <div className="plugin-status-row">
-                  <div className="plugin-status">
-                    <span className={`status-dot ${plugin.status}`} />
-                    <span className="status-text">{plugin.status}</span>
+            return (
+              <div key={plugin.id} className="flex flex-col bg-muted rounded-lg">
+                <div className="flex items-start justify-between gap-2 p-4">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold truncate">{plugin.name}</h3>
+                    <p className="text-[11px] text-muted-foreground">v{plugin.version}</p>
                   </div>
-                  <span className="plugin-type-label">{plugin.type}</span>
+                  {plugin.builtIn && (
+                    <Badge className="text-[10px] text-whatsapp-green border-none bg-whatsapp-green/10 shrink-0">
+                      {t('plugins.builtIn')}
+                    </Badge>
+                  )}
                 </div>
 
-                {plugin.error && (
-                  <div className="plugin-error">
-                    <p className="plugin-error-text">{plugin.error}</p>
+                <div className="px-4 pb-4 flex-1 flex flex-col gap-3">
+                  <p className="text-sm text-muted-foreground flex-1">{plugin.description || t('plugins.noDescription')}</p>
+
+                  <div className="flex items-center justify-between">
+                    <Badge className={cn(
+                      "text-[10px] font-bold uppercase tracking-wider border-none",
+                      plugin.status === 'enabled' ? 'bg-whatsapp-green/10 text-whatsapp-green' : 'bg-background text-muted-foreground'
+                    )}>
+                      {plugin.status}
+                    </Badge>
+                    <span className="text-[11px] text-muted-foreground capitalize">{plugin.type}</span>
                   </div>
-                )}
 
-                {plugin.provides && plugin.provides.length > 0 && (
-                  <div className="plugin-provides">
-                    {plugin.provides.map(item => (
-                      <span key={item} className="provides-tag">
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="plugin-actions">
-                  {plugin.type === 'engine' ? (
-                    (() => {
-                      const enginePlugins = plugins.filter(p => p.type === 'engine');
-                      const isOnlyEngine = enginePlugins.length === 1;
-                      const isActive = plugin.status === 'enabled';
-
-                      if (isOnlyEngine && isActive) {
-                        return (
-                          <span className="btn-required">
-                            <CheckCircle size={16} />
-                            {t('plugins.required')}
-                          </span>
-                        );
-                      } else if (isActive) {
-                        return (
-                          <span className="btn-active">
-                            <CheckCircle size={16} />
-                            {t('plugins.active')}
-                          </span>
-                        );
-                      } else {
-                        return (
-                          <button
-                            onClick={() => handleToggle(plugin)}
-                            disabled={isLoading}
-                            className="btn-toggle enable"
-                          >
-                            {isLoading ? (
-                              <Loader2 size={16} className="animate-spin" />
-                            ) : (
-                              <>
-                                <Power size={16} />
-                                {t('plugins.activate')}
-                              </>
-                            )}
-                          </button>
-                        );
-                      }
-                    })()
-                  ) : (
-                    <button
-                      onClick={() => handleToggle(plugin)}
-                      disabled={isLoading}
-                      className={`btn-toggle ${plugin.status === 'enabled' ? 'disable' : 'enable'}`}
-                    >
-                      {isLoading ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : plugin.status === 'enabled' ? (
-                        <>
-                          <PowerOff size={16} />
-                          {t('plugins.disable')}
-                        </>
-                      ) : (
-                        <>
-                          <Power size={16} />
-                          {t('plugins.enable')}
-                        </>
-                      )}
-                    </button>
+                  {plugin.error && (
+                    <div className="p-2 bg-destructive/10 text-destructive text-xs rounded-md">{plugin.error}</div>
                   )}
 
-                  <button
-                    onClick={() => handleHealthCheck(plugin.id)}
-                    disabled={isLoading}
-                    className="btn-action"
-                    title={t('plugins.healthCheck')}
-                  >
-                    <CheckCircle size={16} />
-                  </button>
+                  {plugin.provides && plugin.provides.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {plugin.provides.map(item => (
+                        <span key={item} className="text-[10px] text-muted-foreground">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
-                  <button className="btn-action" title={t('plugins.configure')} onClick={() => handleOpenConfig(plugin)}>
-                    <Settings size={16} />
-                  </button>
+                  <div className="flex items-center gap-2 pt-1">
+                    {plugin.type === 'engine' ? (
+                      (() => {
+                        const enginePlugins = plugins.filter(p => p.type === 'engine');
+                        const isOnlyEngine = enginePlugins.length === 1;
+                        const isActive = plugin.status === 'enabled';
+
+                        if (isOnlyEngine && isActive) {
+                          return (
+                            <span className="flex items-center gap-1 text-xs text-whatsapp-green font-medium">
+                              <CheckCircle size={14} weight="fill" />
+                              {t('plugins.required')}
+                            </span>
+                          );
+                        } else if (isActive) {
+                          return (
+                            <span className="flex items-center gap-1 text-xs text-whatsapp-green font-medium">
+                              <CheckCircle size={14} weight="fill" />
+                              {t('plugins.active')}
+                            </span>
+                          );
+                        } else {
+                          return (
+                            <Button size="sm" className="bg-whatsapp-green hover:bg-whatsapp-green/90 text-white rounded-lg"
+                              onClick={() => handleToggle(plugin)} disabled={isLoading}>
+                              {isLoading ? <CircleNotch size={14} className="animate-spin" /> : <Power size={14} weight="bold" />}
+                              {t('plugins.activate')}
+                            </Button>
+                          );
+                        }
+                      })()
+                    ) : (
+                      <Button size="sm" variant={plugin.status === 'enabled' ? 'destructive' : 'default'}
+                        className={cn(
+                          "rounded-lg",
+                          plugin.status !== 'enabled' ? 'bg-whatsapp-green hover:bg-whatsapp-green/90' : ''
+                        )}
+                        onClick={() => handleToggle(plugin)} disabled={isLoading}>
+                        {isLoading ? <CircleNotch size={14} className="animate-spin" /> :
+                          plugin.status === 'enabled' ? <Prohibit size={14} weight="bold" /> : <Power size={14} weight="bold" />}
+                        {plugin.status === 'enabled' ? t('plugins.disable') : t('plugins.enable')}
+                      </Button>
+                    )}
+
+                    <Button variant="ghost" size="icon-sm" onClick={() => handleHealthCheck(plugin.id)} disabled={isLoading} title={t('plugins.healthCheck')}>
+                      <CheckCircle size={16} />
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => handleOpenConfig(plugin)} title={t('plugins.configure')}>
+                      <Gear size={16} />
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {plugins.length === 0 && !loading && (
-        <div className="empty-state">
-          <Puzzle size={64} />
-          <h3>{t('plugins.empty.title')}</h3>
-          <p>{t('plugins.empty.description')}</p>
+            );
+          })}
         </div>
-      )}
 
-      {showConfigModal && configPlugin && (
-        <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
-          <div className="modal config-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('plugins.config.title', { name: configPlugin.name })}</h2>
-              <button className="btn-icon" onClick={() => setShowConfigModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
+        {plugins.length === 0 && !loading && (
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+            <PuzzlePiece size={64} weight="thin" />
+            <h3 className="font-bold text-foreground text-sm">{t('plugins.empty.title')}</h3>
+            <p className="text-sm">{t('plugins.empty.description')}</p>
+          </div>
+        )}
 
-            <div className="modal-body">
-              {configPlugin.type === 'engine' ? (
+        <Dialog open={configOpen} onOpenChange={setConfigOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('plugins.config.title', { name: configPlugin?.name || '' })}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4">
+              {configPlugin?.type === 'engine' ? (
                 <>
-                  <div className="config-info-banner">
-                    <AlertCircle size={16} />
+                  <div className="flex items-center gap-2 p-3 bg-orange-500/10 text-orange-500 text-xs rounded-md">
+                    <WarningCircle size={16} weight="fill" />
                     <span>{t('plugins.config.restartNotice')}</span>
                   </div>
-
-                  <div className="config-form">
-                    <div className="form-group">
-                      <label>{t('plugins.config.engineType')}</label>
-                      <select
-                        value={engineConfig.type}
-                        onChange={e => setEngineConfig({ ...engineConfig, type: e.target.value })}
-                      >
-                        <option value="whatsapp-web.js">WhatsApp Web.js</option>
-                      </select>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-muted-foreground">{t('plugins.config.engineType')}</label>
+                      <Input value="whatsapp-web.js" readOnly className="bg-muted border-none rounded-lg" />
                     </div>
-
-                    <div className="form-group toggle-group">
-                      <div className="toggle-info">
-                        <label>{t('plugins.config.headless')}</label>
-                        <small>{t('plugins.config.headlessDesc')}</small>
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-bold text-muted-foreground">{t('plugins.config.headless')}</span>
+                        <span className="text-[11px] text-muted-foreground">{t('plugins.config.headlessDesc')}</span>
                       </div>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={engineConfig.headless}
-                          onChange={e => setEngineConfig({ ...engineConfig, headless: e.target.checked })}
-                        />
-                        <span className="toggle-slider"></span>
+                      <label className="relative inline-flex h-5 w-9 cursor-pointer items-center">
+                        <input type="checkbox" className="peer sr-only" checked={engineConfig.headless}
+                          onChange={e => setEngineConfig({ ...engineConfig, headless: e.target.checked })} />
+                        <span className="absolute inset-0 rounded-full bg-muted transition-colors peer-checked:bg-whatsapp-green" />
+                        <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4" />
                       </label>
                     </div>
-
-                    <div className="form-group">
-                      <label>{t('plugins.config.sessionDataPath')}</label>
-                      <input
-                        type="text"
-                        value={engineConfig.sessionDataPath}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-muted-foreground">{t('plugins.config.sessionDataPath')}</label>
+                      <Input value={engineConfig.sessionDataPath}
                         onChange={e => setEngineConfig({ ...engineConfig, sessionDataPath: e.target.value })}
-                      />
+                        className="bg-muted border-none rounded-lg" />
                     </div>
-
-                    <div className="form-group">
-                      <label>{t('plugins.config.browserArgs')}</label>
-                      <input
-                        type="text"
-                        value={engineConfig.browserArgs}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold text-muted-foreground">{t('plugins.config.browserArgs')}</label>
+                      <Input value={engineConfig.browserArgs}
                         onChange={e => setEngineConfig({ ...engineConfig, browserArgs: e.target.value })}
                         placeholder="--no-sandbox --disable-gpu"
-                      />
+                        className="bg-muted border-none rounded-lg" />
                     </div>
                   </div>
                 </>
               ) : (
-                <div className="no-config">
-                  <Settings size={48} style={{ opacity: 0.3 }} />
-                  <p>{t('plugins.config.noOptions')}</p>
+                <div className="flex flex-col items-center py-8 text-muted-foreground">
+                  <Gear size={48} className="opacity-30" />
+                  <p className="text-sm mt-2">{t('plugins.config.noOptions')}</p>
                 </div>
               )}
             </div>
-
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
-                {t('common.cancel')}
-              </button>
-              {configPlugin.type === 'engine' && (
-                <button className="btn-primary" onClick={handleSaveConfig} disabled={savingConfig}>
-                  {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
-                </button>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setConfigOpen(false)}>{t('common.cancel')}</Button>
+              {configPlugin?.type === 'engine' && (
+                <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg" onClick={handleSaveConfig} disabled={savingConfig}>
+                  {savingConfig ? <CircleNotch size={16} className="animate-spin" /> : t('plugins.config.save')}
+                </Button>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </ScrollArea>
   );
 }

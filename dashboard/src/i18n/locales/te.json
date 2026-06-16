@@ -45,7 +45,8 @@
     "logout": "లాగౌట్",
     "refresh": "రిఫ్రెష్",
     "errorGeneric": "ఒక లోపం సంభవించింది",
-    "unknownError": "తెలియని లోపం"
+    "unknownError": "తెలియని లోపం",
+    "viewAll": "అన్నీ చూపించు"
   },
   "theme": {
     "light": "లైట్",

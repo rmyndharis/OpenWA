@@ -1,13 +1,42 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter } from 'lucide-react';
+import { Plus, QrCode, ArrowClockwise, Trash, Eye, CircleNotch, Play, Stop, MagnifyingGlass, WarningCircle } from '@phosphor-icons/react';
 import { sessionApi, type Session } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
-import { PageHeader } from '../components/PageHeader';
-import './Sessions.css';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '../lib/utils';
+
+const statusColors: Record<string, string> = {
+  created: 'bg-teal-500/10 text-teal-600',
+  idle: 'bg-violet-500/10 text-violet-600',
+  initializing: 'bg-amber-500/10 text-amber-600',
+  connecting: 'bg-amber-500/10 text-amber-600',
+  qr_ready: 'bg-blue-500/10 text-blue-600',
+  authenticating: 'bg-purple-500/10 text-purple-600',
+  ready: 'bg-whatsapp-green/10 text-whatsapp-green',
+  disconnected: 'bg-orange-500/10 text-orange-600',
+  failed: 'bg-red-500/10 text-red-600',
+};
 
 export function Sessions() {
   const { t } = useTranslation();
@@ -49,7 +78,6 @@ export function Sessions() {
         } else if (event.status === 'disconnected') {
           toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
         } else if (event.status === 'failed') {
-          // Refresh so the card picks up the lastError reason from the API.
           void fetchSessions();
           toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
         }
@@ -58,8 +86,6 @@ export function Sessions() {
     ),
   });
 
-  // The gateway delivers events only to subscribed rooms; join the wildcard
-  // session.status room so status changes for every session are received live.
   useEffect(() => {
     if (isConnected) {
       subscribe('*', ['session.status', 'session.qr']);
@@ -84,11 +110,9 @@ export function Sessions() {
         fetchSessions();
       }
     } catch {
-      // Keep qrData alive so the polling interval keeps retrying until the QR
-      // is ready. Only stop polling if the session itself has failed.
       const currentSession = await sessionApi.get(sessionId).catch(() => null);
       const stillInitializing = currentSession &&
-        ['initializing', 'connecting', 'qr_ready'].includes(currentSession.status);
+        ['initializing', 'connecting', 'qr_ready', 'authenticating'].includes(currentSession.status);
       if (!stillInitializing) {
         setQrData(null);
         currentSessionName.current = '';
@@ -169,8 +193,6 @@ export function Sessions() {
   const handleShowQR = async (id: string) => {
     const session = sessions.find(s => s.id === id);
     const sessionName = session?.name || '';
-    // Show loading state immediately so the modal opens and polling starts
-    // even before Chromium has finished initializing.
     setQrData({ sessionId: id, sessionName, qrCode: '' });
     currentSessionName.current = sessionName;
     try {
@@ -178,8 +200,6 @@ export function Sessions() {
       setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
     } catch (err) {
       console.error('Failed to get QR:', err);
-      // Do not clear qrData here — keep the loading modal open so the
-      // polling interval (every 5 s) retries until the QR becomes available.
     }
   };
 
@@ -212,115 +232,199 @@ export function Sessions() {
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
       (statusFilter === 'inactive' && ['created', 'idle', 'disconnected'].includes(s.status)) ||
-      (statusFilter === 'connecting' && ['initializing', 'connecting', 'qr_ready'].includes(s.status));
+      (statusFilter === 'connecting' && ['initializing', 'connecting', 'qr_ready', 'authenticating'].includes(s.status));
     return matchesSearch && matchesStatus;
   });
 
   if (loading) {
     return (
-      <div
-        className="sessions-page"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}
-      >
-        <Loader2 className="animate-spin" size={32} />
+      <div className="flex h-full items-center justify-center">
+        <CircleNotch size={32} className="animate-spin text-whatsapp-green" />
       </div>
     );
   }
 
   return (
-    <div className="sessions-page">
-      <PageHeader
-        title={t('sessions.title')}
-        subtitle={t('sessions.subtitle')}
-        actions={
-          canWrite && (
-            <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
-              <Plus size={18} />
+    <ScrollArea className="h-full bg-background">
+      <div className="p-4 sm:p-8 flex flex-col gap-6 max-w-7xl mx-auto">
+        <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">{t('sessions.title')}</h1>
+            <p className="text-muted-foreground mt-1">{t('sessions.subtitle')}</p>
+          </div>
+          {canWrite && (
+            <Button className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg" onClick={() => setShowCreateModal(true)}>
+              <Plus size={16} weight="bold" />
               {t('sessions.newSession')}
-            </button>
-          )
-        }
-      />
+            </Button>
+          )}
+        </header>
 
-      <div className="filters-bar">
-        <div className="search-input">
-          <Search size={18} />
-          <input
-            type="text"
-            placeholder={t('sessions.searchPlaceholder')}
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-          />
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Input
+              type="text"
+              placeholder={t('sessions.searchPlaceholder')}
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="bg-muted border-0 rounded-lg pl-9"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('sessions.filter.all')}</SelectItem>
+              <SelectItem value="active">{t('sessions.filter.active')}</SelectItem>
+              <SelectItem value="inactive">{t('sessions.filter.inactive')}</SelectItem>
+              <SelectItem value="connecting">{t('sessions.filter.connecting')}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="filter-group">
-          <Filter size={16} />
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="all">{t('sessions.filter.all')}</option>
-            <option value="active">{t('sessions.filter.active')}</option>
-            <option value="inactive">{t('sessions.filter.inactive')}</option>
-            <option value="connecting">{t('sessions.filter.connecting')}</option>
-          </select>
-        </div>
-      </div>
+        {error && (
+          <div className="flex items-center gap-2 bg-destructive/10 text-destructive px-4 py-3 rounded-lg text-sm">
+            <WarningCircle size={18} weight="fill" />
+            {error}
+          </div>
+        )}
 
-      {error && (
-        <div
-          style={{
-            background: '#FEE2E2',
-            padding: '1rem',
-            borderRadius: '8px',
-            color: '#DC2626',
-            marginBottom: '1rem',
-          }}
-        >
-          {error}
-        </div>
-      )}
+        {filteredSessions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+            <QrCode size={64} weight="thin" />
+            <h3 className="font-bold text-foreground text-sm">{t('sessions.empty.title')}</h3>
+            <p className="text-sm">{t('sessions.empty.description')}</p>
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {filteredSessions.map((session, idx) => (
+              <div key={session.id} className={cn(
+                "px-3 py-[10px] hover:bg-muted/50 transition-colors",
+                idx < filteredSessions.length - 1 && "border-b border-border"
+              )}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className={cn(
+                      "w-9 h-9 rounded-full flex items-center justify-center shrink-0",
+                      session.status === 'ready' ? 'bg-whatsapp-green/10' : 'bg-muted'
+                    )}>
+                      <QrCode size={18} className={session.status === 'ready' ? 'text-whatsapp-green' : 'text-muted-foreground'} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-foreground truncate">{session.name}</span>
+                        <Badge className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium border-0", statusColors[session.status] || 'bg-muted text-muted-foreground')}>
+                          {formatStatus(session.status)}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                        <span>{session.phone || '—'}</span>
+                        <span className="font-mono">{session.id.substring(0, 12)}...</span>
+                        <span>{t('sessions.card.lastActive')}: {formatLastActive(session.lastActive)}</span>
+                      </div>
+                      {session.status === 'failed' && session.lastError && (
+                        <p className="text-xs text-destructive mt-0.5 truncate" title={session.lastError}>
+                          {session.lastError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setSelectedSession(session)}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                    >
+                      <Eye size={14} />
+                      {t('sessions.actions.view')}
+                    </button>
+                    {canWrite && (
+                      ['created', 'idle', 'disconnected'].includes(session.status) ? (
+                        <button
+                          onClick={() => handleStart(session.id)}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-whatsapp-green hover:bg-whatsapp-green/10 transition-colors"
+                        >
+                          <Play size={14} weight="fill" />
+                          {t('sessions.actions.start')}
+                        </button>
+                      ) : ['ready', 'initializing', 'connecting', 'qr_ready', 'authenticating'].includes(session.status) ? (
+                        <button
+                          onClick={() => handleStop(session.id)}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+                        >
+                          <Stop size={14} weight="fill" />
+                          {t('sessions.actions.stop')}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleStart(session.id)}
+                          className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                        >
+                          <ArrowClockwise size={14} />
+                          {t('sessions.actions.reconnect')}
+                        </button>
+                      )
+                    )}
+                    {canWrite && (
+                      <button
+                        onClick={() => setDeleteConfirmId(session.id)}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded text-xs font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      >
+                        <Trash size={14} />
+                        {t('sessions.actions.delete')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.create.title')}</h2>
-              <button className="btn-icon" onClick={() => setShowCreateModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label>{t('sessions.create.label')}</label>
-              <input
-                type="text"
-                placeholder={t('sessions.create.placeholder')}
-                value={newSessionName}
-                onChange={e => {
-                  const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
-                  setNewSessionName(value);
-                }}
-                onKeyDown={e => e.key === 'Enter' && handleCreate()}
-              />
-              <p className="input-hint">
-                <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
-              </p>
-              {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
-                <p className="input-error">{t('sessions.create.invalidChars')}</p>
-              )}
-              {newSessionName && newSessionName.length > 50 && (
-                <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
-              )}
-              {newSessionName &&
-                /^[a-z0-9-]+$/.test(newSessionName) &&
-                newSessionName.length <= 50 &&
-                sessions.some(s => s.name === newSessionName) && (
-                  <p className="input-error">{t('sessions.create.duplicate')}</p>
+        {/* Create Modal */}
+        <Dialog open={showCreateModal} onOpenChange={v => { if (!v) setShowCreateModal(false); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('sessions.create.title')}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-muted-foreground">{t('sessions.create.label')}</label>
+                <Input
+                  type="text"
+                  placeholder={t('sessions.create.placeholder')}
+                  value={newSessionName}
+                  onChange={e => {
+                    const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
+                    setNewSessionName(value);
+                  }}
+                  onKeyDown={e => e.key === 'Enter' && handleCreate()}
+                  className="bg-muted border-0 rounded-lg"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  <Trans i18nKey="sessions.create.hint" components={{ code: <code className="bg-muted px-1 rounded text-[10px] font-mono" /> }} />
+                </p>
+                {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
+                  <p className="text-xs text-destructive font-medium">{t('sessions.create.invalidChars')}</p>
                 )}
+                {newSessionName && newSessionName.length > 50 && (
+                  <p className="text-xs text-destructive font-medium">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
+                )}
+                {newSessionName &&
+                  /^[a-z0-9-]+$/.test(newSessionName) &&
+                  newSessionName.length <= 50 &&
+                  sessions.some(s => s.name === newSessionName) && (
+                  <p className="text-xs text-destructive font-medium">{t('sessions.create.duplicate')}</p>
+                )}
+              </div>
             </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
+            <DialogFooter>
+              <Button variant="outline" className="rounded-lg" onClick={() => setShowCreateModal(false)}>
                 {t('common.cancel')}
-              </button>
-              <button
-                className="btn-primary"
+              </Button>
+              <Button
+                className="bg-whatsapp-green hover:bg-whatsapp-green/90 rounded-lg"
                 onClick={handleCreate}
                 disabled={
                   creating ||
@@ -330,213 +434,116 @@ export function Sessions() {
                   sessions.some(s => s.name === newSessionName)
                 }
               >
-                {creating ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                {creating ? <CircleNotch size={16} className="animate-spin" /> : t('common.create')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-      {qrData && (
-        <div className="modal-overlay" onClick={() => setQrData(null)}>
-          <div className="modal qr-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <h2>{t('sessions.qr.title')}</h2>
-                <span className="session-name">{qrData.sessionName}</span>
-              </div>
-              <button className="btn-close" onClick={() => setQrData(null)} aria-label={t('common.close')}>
-                <X size={20} color="#64748b" />
-              </button>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'center' }}>
-              {qrData.qrCode ? (
+        {/* QR Modal */}
+        <Dialog open={!!qrData} onOpenChange={v => { if (!v) setQrData(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{t('sessions.qr.title')}</DialogTitle>
+              {qrData && <p className="text-sm text-muted-foreground">{qrData.sessionName}</p>}
+            </DialogHeader>
+            <div className="flex flex-col items-center gap-4">
+              {qrData?.qrCode ? (
                 <>
-                  <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
-                  <div className="qr-instructions">
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} /></p>
+                  <img src={qrData.qrCode} alt="QR" className="max-w-[280px] rounded-lg" />
+                  <div className="w-full bg-muted rounded-lg p-3 flex flex-col gap-2 text-sm">
+                    <p className="text-muted-foreground"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong className="text-foreground" /> }} /></p>
+                    <p className="text-muted-foreground"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong className="text-foreground" /> }} /></p>
+                    <p className="text-muted-foreground"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong className="text-foreground" /> }} /></p>
                   </div>
-                  <p className="qr-auto-refresh">
-                    <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
-                  </p>
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <ArrowClockwise size={14} className="animate-spin" />
+                    {t('sessions.qr.autoRefresh')}
+                  </div>
                 </>
               ) : (
-                <div style={{ padding: '2rem' }}>
-                  <Loader2 className="animate-spin" size={48} />
-                  <p>{t('sessions.qr.generating')}</p>
+                <div className="flex flex-col items-center gap-3 py-8">
+                  <CircleNotch size={48} className="animate-spin text-whatsapp-green" />
+                  <p className="text-sm text-muted-foreground">{t('sessions.qr.generating')}</p>
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
+          </DialogContent>
+        </Dialog>
 
-      {selectedSession && (
-        <div className="modal-overlay" onClick={() => setSelectedSession(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.details.title')}</h2>
-              <button className="btn-icon" onClick={() => setSelectedSession(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.name')}</span>
-                  <span className="detail-value">{selectedSession.name}</span>
+        {/* Details Modal */}
+        <Dialog open={!!selectedSession} onOpenChange={v => { if (!v) setSelectedSession(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('sessions.details.title')}</DialogTitle>
+            </DialogHeader>
+            {selectedSession && (
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.name')}</span>
+                  <span className="text-sm text-foreground font-medium">{selectedSession.name}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.status')}</span>
-                  <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.status')}</span>
+                  <Badge className={cn("w-fit text-[10px] px-1.5 py-0.5 rounded font-medium border-0", statusColors[selectedSession.status] || 'bg-muted text-muted-foreground')}>
+                    {formatStatus(selectedSession.status)}
+                  </Badge>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.sessionId')}</span>
-                  <span className="detail-value mono">{selectedSession.id}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.sessionId')}</span>
+                  <code className="text-sm text-foreground bg-muted px-2 py-1 rounded font-mono">{selectedSession.id}</code>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.phone')}</span>
-                  <span className="detail-value">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.phone')}</span>
+                  <span className="text-sm text-foreground">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.created')}</span>
-                  <span className="detail-value">{new Date(selectedSession.createdAt).toLocaleString()}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.created')}</span>
+                  <span className="text-sm text-foreground">{new Date(selectedSession.createdAt).toLocaleString()}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.lastActive')}</span>
-                  <span className="detail-value">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">{t('sessions.details.lastActive')}</span>
+                  <span className="text-sm text-foreground">
                     {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
                   </span>
                 </div>
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setSelectedSession(null)}>
+            )}
+            <DialogFooter>
+              <Button variant="outline" className="rounded-lg" onClick={() => setSelectedSession(null)}>
                 {t('common.close')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-      {deleteConfirmId && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirmId(null)}>
-          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.delete.title')}</h2>
-              <button className="btn-icon" onClick={() => setDeleteConfirmId(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>
+        {/* Delete Confirm Modal */}
+        <Dialog open={!!deleteConfirmId} onOpenChange={v => { if (!v) setDeleteConfirmId(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{t('sessions.delete.title')}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-foreground">
                 <Trans
                   i18nKey="sessions.delete.message"
                   values={{ name: sessions.find(s => s.id === deleteConfirmId)?.name }}
                   components={{ strong: <strong /> }}
                 />
               </p>
-              <p className="text-muted">{t('sessions.delete.warning')}</p>
+              <p className="text-xs text-muted-foreground">{t('sessions.delete.warning')}</p>
             </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)}>
+            <DialogFooter>
+              <Button variant="outline" className="rounded-lg" onClick={() => setDeleteConfirmId(null)}>
                 {t('common.cancel')}
-              </button>
-              <button className="btn-danger" onClick={() => handleDelete(deleteConfirmId)}>
+              </Button>
+              <Button variant="destructive" className="rounded-lg" onClick={() => deleteConfirmId && handleDelete(deleteConfirmId)}>
                 {t('common.delete')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="sessions-grid">
-        {filteredSessions.length === 0 ? (
-          <div className="empty-state">
-            <QrCode size={48} />
-            <h3>{t('sessions.empty.title')}</h3>
-            <p>{t('sessions.empty.description')}</p>
-          </div>
-        ) : (
-          filteredSessions.map(session => (
-            <div key={session.id} className="session-card">
-              <div className="card-header">
-                <h3 title={session.name}>{session.name}</h3>
-                <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
-              </div>
-
-              {session.status === 'initializing' || session.status === 'connecting' || session.status === 'qr_ready' ? (
-                <div className="qr-placeholder">
-                  <QrCode size={80} className="qr-icon" />
-                  <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
-                  <button
-                    className="btn-sm"
-                    onClick={() => handleShowQR(session.id)}
-                    disabled={session.status !== 'qr_ready'}
-                  >
-                    {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
-                  </button>
-                </div>
-              ) : (
-                <div className="session-info">
-                  <div className="info-row">
-                    <span className="info-label">{t('sessions.card.phone')}</span>
-                    <span className="info-value">{session.phone || '—'}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="info-label">{t('sessions.card.sessionId')}</span>
-                    <span className="info-value mono">{session.id.substring(0, 12)}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="info-label">{t('sessions.card.lastActive')}</span>
-                    <span className="info-value">{formatLastActive(session.lastActive)}</span>
-                  </div>
-                  {session.status === 'failed' && session.lastError ? (
-                    <div className="info-row session-error">
-                      <span className="info-label">{t('sessions.card.error')}</span>
-                      <span className="info-value error-text" title={session.lastError}>
-                        {session.lastError}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-              )}
-
-              <div className="card-actions">
-                <button className="btn-action" onClick={() => setSelectedSession(session)}>
-                  <Eye size={16} />
-                  {t('sessions.actions.view')}
-                </button>
-                {canWrite &&
-                (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <Play size={16} />
-                    {t('sessions.actions.start')}
-                  </button>
-                ) : canWrite && ['ready', 'initializing', 'connecting', 'qr_ready'].includes(session.status) ? (
-                  <button className="btn-action" onClick={() => handleStop(session.id)}>
-                    <Square size={16} />
-                    {t('sessions.actions.stop')}
-                  </button>
-                ) : canWrite ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <RefreshCw size={16} />
-                    {t('sessions.actions.reconnect')}
-                  </button>
-                ) : null}
-                {canWrite && (
-                  <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>
-                    <Trash2 size={16} />
-                    {t('sessions.actions.delete')}
-                  </button>
-                )}
-              </div>
-            </div>
-          ))
-        )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
-    </div>
+    </ScrollArea>
   );
 }

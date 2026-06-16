@@ -45,7 +45,8 @@
     "logout": "Déconnexion",
     "refresh": "Actualiser",
     "errorGeneric": "Une erreur est survenue",
-    "unknownError": "Erreur inconnue"
+    "unknownError": "Erreur inconnue",
+    "viewAll": "Voir tout"
   },
   "theme": {
     "light": "Clair",

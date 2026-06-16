@@ -45,7 +45,8 @@
     "logout": "تسجيل الخروج",
     "refresh": "تحديث",
     "errorGeneric": "حدث خطأ",
-    "unknownError": "خطأ غير معروف"
+    "unknownError": "خطأ غير معروف",
+    "viewAll": "عرض الكل"
   },
   "theme": {
     "light": "فاتح",
