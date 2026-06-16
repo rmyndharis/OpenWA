@@ -38,13 +38,15 @@ services:
       - NODE_ENV=development
       - PORT=2785
       - HOME=/tmp
+      - XDG_CONFIG_HOME=/tmp/.chromium
+      - WWEBJS_WEB_VERSION=2.3000.1023204257
       - DATABASE_TYPE=sqlite
       - DATABASE_NAME=/app/data/openwa.sqlite
       - DATABASE_SYNCHRONIZE=true
       - ENGINE_TYPE=whatsapp-web.js
       - SESSION_DATA_PATH=/app/data/sessions
       - PUPPETEER_HEADLESS=true
-      - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+      - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--no-zygote
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=/app/data/media
       - WEBHOOK_TIMEOUT=10000
