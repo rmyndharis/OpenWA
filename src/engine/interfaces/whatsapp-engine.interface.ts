@@ -369,4 +369,5 @@ export interface IWhatsAppEngine {
   // Chats
   getChats(): Promise<ChatSummary[]>;
   sendSeen(chatId: string): Promise<boolean>;
+  deleteChat(chatId: string): Promise<boolean>;
 }

@@ -77,6 +77,7 @@ describe('SessionService', () => {
       getGroups: jest.fn().mockResolvedValue([]),
       getChats: jest.fn().mockResolvedValue([]),
       sendSeen: jest.fn().mockResolvedValue(true),
+      deleteChat: jest.fn().mockResolvedValue(true),
     };
 
     engineFactory = {
@@ -673,6 +674,31 @@ describe('SessionService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.sendSeen('sess-uuid-1', '123@c.us')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ── deleteChat ────────────────────────────────────────────────────
+
+  describe('deleteChat', () => {
+    it('should delegate to engine.deleteChat with the chatId', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+      mockEngine.deleteChat.mockResolvedValue(true);
+
+      const result = await service.deleteChat('sess-uuid-1', '1234567890-123@g.us');
+
+      expect(mockEngine.deleteChat).toHaveBeenCalledWith('1234567890-123@g.us');
+      expect(result).toBe(true);
+    });
+
+    it('should throw BadRequestException when session is not started', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+
+      await expect(service.deleteChat('sess-uuid-1', '1234567890-123@g.us')).rejects.toThrow(BadRequestException);
     });
   });
 

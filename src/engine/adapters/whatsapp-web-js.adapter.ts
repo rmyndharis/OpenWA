@@ -1157,6 +1157,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
   }
 
+  async deleteChat(chatId: string): Promise<boolean> {
+    this.ensureReady();
+    try {
+      const chat = await this.client!.getChatById(chatId);
+      return await chat.delete();
+    } catch (error) {
+      this.logger.error(`Error deleting chat ${chatId}`, String(error));
+      return false;
+    }
+  }
+
   private ensureReady(): void {
     if (this.status !== EngineStatus.READY || !this.client) {
       // Typed so the global filter returns 409 Conflict ("session not connected")
