@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Duplicate outgoing messages in the dashboard Chats view.** A race between the optimistic placeholder
   and the realtime `message.sent` echo could render a sent message twice. Reconciliation is now race-safe.
   (Display-only — the recipient always received exactly one message.)
+- Dashboard (simple nginx image) proxied API/WebSocket requests to a `openwa` host that doesn't match the
+  backend service name; `dashboard/nginx.conf` now targets `openwa-api` for both `/api/` and `/socket.io/`,
+  matching the production compose and `Dockerfile.traefik`. Thanks @Abhishekrajpurohit (#259).
+- The container entrypoint now clears stale Chromium `SingletonLock`/`SingletonSocket`/`SingletonCookie` files
+  from session profiles on start, so a session can re-launch after an unclean shutdown instead of failing with
+  "profile appears to be in use by another Chromium process" (exit Code 21). Thanks @Abhishekrajpurohit (#259).
 
 ### Changed
 
