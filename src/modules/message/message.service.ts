@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
 import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
+import { MediaInput, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
@@ -53,6 +53,9 @@ export class MessageService {
       body: finalDto.text,
       type: 'text',
     });
+
+    // Opt-in humanising "typing…" pause before the actual send (anti-automation signal).
+    await this.simulateTypingIfEnabled(engine, finalDto.chatId, finalDto.text);
 
     try {
       const result = await engine.sendTextMessage(finalDto.chatId, finalDto.text);
@@ -563,6 +566,27 @@ export class MessageService {
       throw new BadRequestException(`Session '${sessionId}' is not active. Start the session first.`);
     }
     return engine;
+  }
+
+  /**
+   * Humanising delay: show the engine's typing indicator and pause for a length-scaled, jittered
+   * interval before the real send, so automated single sends don't look instantaneous (anti-ban).
+   * ON by default — set `SIMULATE_TYPING=false` to disable. Engine-agnostic (goes through
+   * `sendChatState`) and strictly best-effort — it never throws and never blocks the send if presence
+   * fails or the engine has no presence concept. `SIMULATE_TYPING_MAX_MS` (default 5000) caps the pause.
+   * Note: this covers single sends only; bulk sends use their own `delayBetweenMessages` throttle.
+   */
+  private async simulateTypingIfEnabled(engine: IWhatsAppEngine, chatId: string, text: string): Promise<void> {
+    if (process.env.SIMULATE_TYPING === 'false') return;
+    try {
+      await engine.sendChatState(chatId, 'typing');
+      const maxMs = Number(process.env.SIMULATE_TYPING_MAX_MS) || 5000;
+      const planned = Math.min(maxMs, 500 + text.length * 45);
+      const jittered = Math.round(planned * (0.85 + Math.random() * 0.3)); // ±15% so it isn't metronomic
+      await new Promise(resolve => setTimeout(resolve, jittered));
+    } catch (error) {
+      this.logger.warn(`simulateTyping skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**

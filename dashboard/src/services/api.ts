@@ -492,6 +492,8 @@ export interface Engine {
   name: string;
   enabled: boolean;
   features: string[];
+  /** Underlying engine library (e.g. whatsapp-web.js 1.34.7), distinct from the adapter version. */
+  library?: { name: string; version: string };
 }
 
 // =============================================================================

@@ -512,11 +512,19 @@ export function Chats() {
         result = await messageApi.sendText(selectedSessionId, activeChat.id, textToSend);
       }
 
-      setMessages(prev =>
-        prev.map(m =>
+      setMessages(prev => {
+        // Race guard: the realtime `message.sent` echo can arrive before this response and already
+        // append the message by its real WA id (the dedup at receive time misses because the
+        // optimistic placeholder still carries the temp id). If so, drop the placeholder instead of
+        // renaming it — otherwise both the echo and the renamed temp render as duplicate bubbles.
+        const echoAlreadyAdded = prev.some(m => m.id === result.messageId || m.waMessageId === result.messageId);
+        if (echoAlreadyAdded) {
+          return prev.filter(m => m.id !== tempId);
+        }
+        return prev.map(m =>
           m.id === tempId ? { ...m, id: result.messageId, waMessageId: result.messageId, status: 'sent' } : m,
-        ),
-      );
+        );
+      });
 
       // Update sidebar chat list (move active chat to the top with the new snippet)
       setChats(prevChats => {

@@ -178,7 +178,10 @@ export default function Plugins() {
             </div>
             <div>
               <h3 className="engine-title">{t('plugins.engineCard')}</h3>
-              <span className="engine-name">{currentEngine}</span>
+              <span className="engine-name">
+                {currentEngine}
+                {activeEngine?.library && ` · ${activeEngine.library.name} ${activeEngine.library.version}`}
+              </span>
             </div>
           </div>
           <span className="status-badge connected">{t('plugins.running')}</span>

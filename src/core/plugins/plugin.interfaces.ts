@@ -147,6 +147,10 @@ export interface IEnginePlugin extends IPlugin {
 
   // Get supported features
   getFeatures: () => string[];
+
+  // Underlying engine library name + version (e.g. { name: 'whatsapp-web.js', version: '1.34.7' }) —
+  // distinct from the adapter/plugin's own manifest version. Optional: an engine may not report it.
+  getEngineLibrary?: () => { name: string; version: string };
 }
 
 // ============================================================================

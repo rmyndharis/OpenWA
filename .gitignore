@@ -67,6 +67,7 @@ uploads/
 .worktrees/
 
 # AI Agents
+.playwright-mcp/
 .remember/
 .agent/
 .claude/

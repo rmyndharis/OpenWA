@@ -3,15 +3,15 @@ import { IsNotEmpty, IsString, Matches } from 'class-validator';
 
 export class DeleteChatDto {
   @ApiProperty({
-    description:
-      'WhatsApp chat ID to delete from the chat list (e.g., 1234567890@c.us, 1234567890-123@g.us, or 1234567890@lid)',
+    description: "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
     example: '1234567890-123@g.us',
   })
   @IsString()
   @IsNotEmpty()
-  // Reject malformed IDs early with a clear 400 instead of a silent no-op at the engine layer.
-  @Matches(/^[0-9-]+@(?:[cg]\.us|lid)$/, {
-    message: 'chatId must be a valid WhatsApp JID (e.g. 1234567890@c.us, 1234567890-123@g.us, or 1234567890@lid)',
+  // Engine-neutral structural check (localpart@host, no whitespace) so a different engine's JID scheme
+  // (e.g. Baileys `…@s.whatsapp.net`) is accepted too; the adapter validates/normalises for its engine.
+  @Matches(/^[^\s@]+@[^\s@]+$/, {
+    message: 'chatId must be a valid chat JID in the form localpart@host',
   })
   chatId: string;
 }

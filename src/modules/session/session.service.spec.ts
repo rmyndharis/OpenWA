@@ -78,6 +78,7 @@ describe('SessionService', () => {
       getChats: jest.fn().mockResolvedValue([]),
       sendSeen: jest.fn().mockResolvedValue(true),
       deleteChat: jest.fn().mockResolvedValue(true),
+      sendChatState: jest.fn().mockResolvedValue(undefined),
     };
 
     engineFactory = {
@@ -699,6 +700,29 @@ describe('SessionService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.deleteChat('sess-uuid-1', '1234567890-123@g.us')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ── sendChatState (typing/recording/paused) ───────────────────────
+
+  describe('sendChatState', () => {
+    it('should delegate to engine.sendChatState with the chatId and state', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+
+      await service.sendChatState('sess-uuid-1', '123@c.us', 'typing');
+
+      expect(mockEngine.sendChatState).toHaveBeenCalledWith('123@c.us', 'typing');
+    });
+
+    it('should throw BadRequestException when session is not started', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+
+      await expect(service.sendChatState('sess-uuid-1', '123@c.us', 'typing')).rejects.toThrow(BadRequestException);
     });
   });
 
