@@ -154,7 +154,12 @@ async function bootstrap() {
       if (corsPolicy.allowAnyOrigin || corsPolicy.origins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        // Deny WITHOUT throwing. Throwing here surfaced as a 500 Internal Server Error (#250).
+        // Returning false simply omits the CORS headers: the browser blocks a true cross-origin
+        // request itself (correct), while same-origin requests — e.g. the bundled dashboard served
+        // through the proxy, which the browser never subjects to CORS — keep working. A genuine
+        // cross-origin dashboard still needs its origin in CORS_ORIGINS.
+        callback(null, false);
       }
     },
     credentials: corsPolicy.credentials,
