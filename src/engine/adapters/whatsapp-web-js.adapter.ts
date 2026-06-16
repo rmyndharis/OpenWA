@@ -89,6 +89,30 @@ export interface WhatsAppWebJsConfig {
 }
 
 /**
+ * Optional pin for the WhatsApp Web client version. whatsapp-web.js 1.34.x can get stuck at
+ * "authenticating" (the post-link sync never completes) when the auto-fetched WA-Web version is
+ * incompatible (#251). Set WWEBJS_WEB_VERSION to a known-good version string (browse
+ * https://github.com/wppconnect-team/wa-version) to pin it; WWEBJS_WEB_VERSION_REMOTE_PATH
+ * overrides the URL template (use `{version}` as the placeholder) if you self-host the HTML.
+ * Unset (or `latest`/`off`) keeps whatsapp-web.js's default auto-version behavior.
+ */
+export function resolveWebVersionPin():
+  | { webVersion: string; webVersionCache: { type: 'remote'; remotePath: string } }
+  | undefined {
+  const version = process.env.WWEBJS_WEB_VERSION?.trim();
+  if (!version || version.toLowerCase() === 'off' || version.toLowerCase() === 'latest') {
+    return undefined;
+  }
+  const template =
+    process.env.WWEBJS_WEB_VERSION_REMOTE_PATH?.trim() ||
+    'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html';
+  return {
+    webVersion: version,
+    webVersionCache: { type: 'remote', remotePath: template.replace('{version}', version) },
+  };
+}
+
+/**
  * Extracts the JID of the parent community a group is linked to, if any.
  * The field name has varied across whatsapp-web.js/WA Web versions, so
  * known candidates are checked in order.
@@ -146,6 +170,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
+      // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
+      // hang on some setups, #251). Opt-in: unset leaves whatsapp-web.js to auto-select.
+      const versionPin = resolveWebVersionPin();
+      if (versionPin) {
+        this.logger.log(`Pinning WhatsApp Web version ${versionPin.webVersion}`);
+      }
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
@@ -158,6 +189,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
           ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
         },
+        ...(versionPin ?? {}),
       });
 
       this.setupEventHandlers();
