@@ -6,6 +6,12 @@ set -e
 mkdir -p /app/data/sessions /app/data/media /app/data/plugins
 chown -R openwa:openwa /app/data
 
+# Chromium leaves SingletonLock/SingletonSocket/SingletonCookie in each session profile and does
+# not remove them on an unclean shutdown; stale locks block the next launch ("profile appears to be
+# in use by another Chromium process", exit Code 21). No Chromium is running yet at entrypoint time,
+# so clearing them lets sessions re-launch after a crash/restart. (#259)
+rm -f /app/data/sessions/*/Singleton* 2>/dev/null || true
+
 # Chromium resolves its home from the passwd entry (no /home/openwa exists), so it hard-crashes at
 # launch unless its config/cache dirs exist and are writable. XDG_CONFIG_HOME/XDG_CACHE_HOME (set in
 # the image) point here; create them owned by openwa. On a read_only rootfs these live on tmpfs /tmp,
