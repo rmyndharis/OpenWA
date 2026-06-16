@@ -743,6 +743,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     };
   }
 
+  /**
+   * Request an 8-char pairing code (link via phone number) as an alternative to scanning the QR.
+   * The session must be started but not yet authenticated.
+   */
+  async requestPairingCode(id: string, phoneNumber: string): Promise<{ pairingCode: string; status: SessionStatus }> {
+    const session = await this.findOne(id);
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started. Call POST /sessions/:id/start first.');
+    }
+    if (session.status === SessionStatus.READY) {
+      throw new BadRequestException('Session is already authenticated, no pairing needed');
+    }
+
+    const pairingCode = await engine.requestPairingCode(phoneNumber);
+    return { pairingCode, status: session.status };
+  }
+
   getEngine(id: string): IWhatsAppEngine | undefined {
     return this.engines.get(id);
   }

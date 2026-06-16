@@ -1,7 +1,14 @@
 import { Controller, Get, Post, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { SessionService } from './session.service';
-import { CreateSessionDto, SessionResponseDto, QRCodeResponseDto, MarkChatReadDto } from './dto';
+import {
+  CreateSessionDto,
+  SessionResponseDto,
+  QRCodeResponseDto,
+  MarkChatReadDto,
+  RequestPairingCodeDto,
+  PairingCodeResponseDto,
+} from './dto';
 import { Session } from './entities/session.entity';
 import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
 import { AuditService } from '../audit/audit.service';
@@ -154,6 +161,20 @@ export class SessionController {
       sessionId: id,
     });
     return qrCode;
+  }
+
+  @Post(':id/pairing-code')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Request an 8-char pairing code to link via phone number (alternative to QR)' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 201, description: 'Pairing code generated', type: PairingCodeResponseDto })
+  @ApiResponse({ status: 400, description: 'Session not started or already authenticated' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async requestPairingCode(
+    @Param('id') id: string,
+    @Body() dto: RequestPairingCodeDto,
+  ): Promise<PairingCodeResponseDto> {
+    return this.sessionService.requestPairingCode(id, dto.phoneNumber);
   }
 
   @Get(':id/groups')

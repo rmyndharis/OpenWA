@@ -282,6 +282,8 @@ export interface IWhatsAppEngine {
   // Status
   getStatus(): EngineStatus;
   getQRCode(): string | null;
+  /** Request an 8-char pairing code to link via phone number instead of scanning the QR. */
+  requestPairingCode(phoneNumber: string): Promise<string>;
   getPhoneNumber(): string | null;
   getPushName(): string | null;
 

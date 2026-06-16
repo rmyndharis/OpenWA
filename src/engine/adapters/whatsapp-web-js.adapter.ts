@@ -433,6 +433,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.qrCode;
   }
 
+  /**
+   * Request an 8-char pairing code so the user can link via "Link with phone number" instead of
+   * scanning the QR. Must be called after the engine has started (the client is initialized and
+   * waiting to link); whatsapp-web.js throws if called before it is ready or after authentication.
+   */
+  async requestPairingCode(phoneNumber: string): Promise<string> {
+    if (!this.client) {
+      throw new EngineNotReadyError();
+    }
+    return this.client.requestPairingCode(phoneNumber);
+  }
+
   getPhoneNumber(): string | null {
     return this.phoneNumber;
   }
