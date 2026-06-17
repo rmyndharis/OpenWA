@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `…@c.us` form (e.g. a `@lid` identifier) rather than echoing the input. And status/story
   broadcasts are flagged with a neutral `isStatusBroadcast` on the message payload, so engine-neutral code no longer
   matches the engine-specific `status@broadcast` pseudo-JID. A non-whatsapp-web.js engine supplies its own JID scheme.
+### Fixed
+
+- The `WWEBJS_WEB_VERSION` (and `WWEBJS_WEB_VERSION_REMOTE_PATH`) workaround for sessions stuck at
+  "authenticating" (#251) is now actually passed through by the Docker Compose files. The `environment:`
+  blocks enumerate vars explicitly with no `env_file`, so setting `WWEBJS_WEB_VERSION` in `.env` previously
+  never reached the container — making the documented fix a no-op for Compose users. Added the passthrough
+  (empty default = auto-select, no behavior change when unset) to `docker-compose.yml` and
+  `docker-compose.dev.yml`. (#273)
 
 ## [0.2.7] - 2026-06-16
 
