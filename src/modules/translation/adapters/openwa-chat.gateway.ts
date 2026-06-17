@@ -31,14 +31,18 @@ export class OpenWaChatGateway implements ChatGateway {
       return [];
     }
     const admins = info.participants.filter(p => p.isAdmin || p.isSuperAdmin).map(p => p.id);
-    // Diagnostic: surface the exact WID format so admin-match failures (LID vs @c.us) are visible.
+    // Participant ids can be in the phone (@c.us) scheme while message authors arrive as LID
+    // (@lid). The group `owner` is reported in the author's scheme, so including it recognizes the
+    // group creator across that split (see spec §16, WID/LID). Non-owner admins on the differing
+    // scheme are not auto-resolved yet — the owner can delegate them via `/tr grant @user`.
+    if (info.owner) admins.push(info.owner);
+    const uniqueAdmins = [...new Set(admins)];
     this.logger.debug('getGroupAdmins resolved', {
       chatId,
       action: 'admins_resolved',
-      adminCount: admins.length,
-      admins,
-      sampleParticipants: info.participants.slice(0, 5).map(p => ({ id: p.id, isAdmin: p.isAdmin })),
+      adminCount: uniqueAdmins.length,
+      admins: uniqueAdmins,
     });
-    return admins;
+    return uniqueAdmins;
   }
 }
