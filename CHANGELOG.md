@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outgoing sends. A non-whatsapp-web.js engine maps its own tokens at the adapter boundary.
   - **Webhook contract change** (both `message.received` and `message.sent`): incoming `type` was previously raw — e.g.
     `chat` → **`text`**, `ptt` → **`voice`**, `vcard` → **`contact`**. New consumers should expect the neutral enum.
-  - A one-shot migration backfills existing `messages.type` rows to the neutral vocabulary, so historical chats render
-    correctly and message-type stats don't split the same kind across old/new tokens.
+  - An idempotent startup backfill rewrites existing `messages.type` rows to the neutral vocabulary (runs in every DB
+    mode, including the zero-config SQLite default where data migrations don't), so historical chats render correctly
+    and message-type stats don't split the same kind across old/new tokens.
   - Fixes a latent dashboard bug where incoming text (`chat`) was mis-styled as media and shown as `[chat]` in reply previews.
 
 ## [0.2.7] - 2026-06-16
