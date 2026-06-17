@@ -1286,14 +1286,16 @@ OpenWA provides an idempotency mechanism to prevent duplicate processing on the 
 #### Idempotency Key Format
 
 ```
-Format: {event_type}_{unique_identifier}_{timestamp}
+Keys are content-based and do NOT include a timestamp, so a replayed/retried event with an
+identical payload produces the same key for correct de-duplication.
 
 Examples:
-- message.received: msg_{messageId}_{timestamp}
-- message.sent: msg_{messageId}_{timestamp}
-- message.ack: ack_{messageId}_{ackLevel}_{timestamp}
-- session.status: sess_{sessionId}_{status}_{timestamp}
-- group.join: grp_{groupId}_{participantId}_{timestamp}
+- message.received: msg_{sessionId}_{messageId}
+- message.sent: msg_{sessionId}_{messageId}
+- message.ack: ack_{sessionId}_{messageId}_{status}
+- message.failed: failed_{sessionId}_{messageId}_{status}
+- session.status: sess_{sessionId}_{status}
+- group.join: grp_{groupId}_{participantId}_join
 ```
 
 #### Client-Side Idempotency Implementation
@@ -1455,21 +1457,25 @@ flowchart TB
   "timestamp": "2025-02-02T10:00:00.000Z",
   "sessionId": "sess_abc123",
   "data": {
+    "id": "true_628123456789@c.us_3EB0ABC123",
     "messageId": "true_628123456789@c.us_3EB0ABC123",
-    "ack": 3,
-    "ackName": "read"
+    "status": "read",
+    "ack": 3
   }
 }
 ```
 
-| Ack | Name | Description |
-|-----|------|-------------|
-| 0 | error | Error |
-| 1 | pending | Pending |
-| 2 | sent | Sent to server |
-| 3 | delivered | Delivered |
-| 4 | read | Read |
-| 5 | played | Played (audio) |
+Read the engine-neutral **`status`** field — it is the canonical delivery state and is identical
+across engines. The legacy **`ack`** integer is **deprecated**, derived from `status` for backward
+compatibility only (a non-whatsapp-web.js engine still reports the same `status`).
+
+| `status` | `ack` (deprecated) | Description |
+|----------|--------------------|-------------|
+| `pending` | 0 | Queued, not yet sent to the server |
+| `sent` | 1 | Sent to the server |
+| `delivered` | 2 | Delivered to the recipient's device |
+| `read` | 3 | Read by the recipient (a played voice/video note also reports `read`) |
+| `failed` | -1 | Delivery failed (also dispatched as a separate `message.failed` event) |
 
 ### session.status
 

@@ -32,6 +32,26 @@ interface ChatMessageView extends ChatMessage {
   };
 }
 
+// Delivery acks must only ADVANCE the tick, never regress it. The backend DB update is forward-only
+// (ackStatusTransitionFrom), but the live websocket ack fires on every receipt (incl. pending/sent)
+// and engine acks can arrive out of order or be replayed on reconnect — so a late/duplicate lower
+// ack must not visually downgrade a row already shown as delivered/read. This mirrors the backend's
+// transition rules exactly: pending<sent<delivered<read advances by rank; `failed` only applies from
+// pending/sent (a late failure must not clobber a confirmed delivered/read), and is terminal once set.
+const DELIVERY_RANK: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 };
+const mergeDeliveryStatus = (
+  current: ChatMessageView['status'] | undefined,
+  incoming: ChatMessageView['status'] | undefined,
+): ChatMessageView['status'] | undefined => {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (current === 'failed') return 'failed'; // terminal — nothing advances from failed
+  if (incoming === 'failed') return current === 'pending' || current === 'sent' ? 'failed' : current;
+  if (!(incoming in DELIVERY_RANK)) return current; // unknown status — ignore
+  if (!(current in DELIVERY_RANK)) return incoming;
+  return DELIVERY_RANK[incoming] >= DELIVERY_RANK[current] ? incoming : current;
+};
+
 interface IncomingWsMessage {
   id: string;
   chatId: string;
@@ -223,7 +243,8 @@ export function Chats() {
         prev.map(msg => {
           if (msg.id === event.messageId || msg.waMessageId === event.messageId) {
             // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
-            return { ...msg, status: event.status || msg.status };
+            // Merge forward-only so an out-of-order/replayed lower ack can't downgrade the tick.
+            return { ...msg, status: mergeDeliveryStatus(msg.status, event.status) ?? msg.status };
           }
           return msg;
         }),
