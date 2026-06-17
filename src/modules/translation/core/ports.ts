@@ -16,6 +16,8 @@ export interface ParticipantState {
   source: 'learned' | 'pinned';
   enabled: boolean;
   samples: number;
+  /** Candidate language awaiting a 2nd consecutive detection before a learned switch. */
+  pendingLang?: string;
   updatedAt: string;
 }
 
