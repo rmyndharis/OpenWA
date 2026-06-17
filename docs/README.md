@@ -188,7 +188,7 @@ socket.on('message', msg => {
 
 | Layer     | Technology                    |
 | --------- | ----------------------------- |
-| Runtime   | Node.js 20 LTS                |
+| Runtime   | Node.js 22 LTS                |
 | Framework | NestJS 11.x                   |
 | Language  | TypeScript 5.x                |
 | WA Engine | whatsapp-web.js               |
