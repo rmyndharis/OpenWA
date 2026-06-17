@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 
 /**
@@ -11,7 +12,7 @@ import * as path from 'path';
  * from being treated as inside the root.
  */
 export function isPathWithin(root: string, target: string): boolean {
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(resolvedRoot, target);
+  const resolvedRoot = fs.realpathSync(path.resolve(root));
+  const resolvedTarget = fs.realpathSync(path.resolve(resolvedRoot, target));
   return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
 }
