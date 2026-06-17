@@ -34,6 +34,8 @@ export interface IncomingMessage {
   isGroup: boolean;
   /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
   author?: string;
+  /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
+  mentionedIds?: string[];
   /** Sender display info, best-effort from the WhatsApp Web contact cache. */
   contact?: {
     name?: string;

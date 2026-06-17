@@ -15,6 +15,8 @@ export interface RawMessageFields {
   fromMe: boolean;
   /** Set on group messages: the participant WID that actually sent the message. */
   author?: string;
+  /** WIDs @mentioned in the message; whatsapp-web.js attaches this to every Message. */
+  mentionedIds?: string[];
   /** Raw wwebjs payload; `notifyName` carries the sender's push name without an extra lookup. */
   _data?: { notifyName?: string };
 }
@@ -43,6 +45,10 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
   // In a group, `from` is the group JID, so `author` is the only way to know the real sender.
   if (msg.author) {
     incoming.author = msg.author;
+  }
+
+  if (msg.mentionedIds && msg.mentionedIds.length > 0) {
+    incoming.mentionedIds = msg.mentionedIds;
   }
 
   // Push name is available synchronously on the raw payload — no contact lookup needed.

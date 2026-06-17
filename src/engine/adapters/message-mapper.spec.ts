@@ -49,4 +49,32 @@ describe('buildIncomingMessageBase', () => {
     expect(r.chatId).toBe('group-1@g.us');
     expect(r.isGroup).toBe(true);
   });
+
+  it('maps mentionedIds when present on the raw message', () => {
+    const result = buildIncomingMessageBase({
+      id: { _serialized: 'ABC' },
+      from: '123-456@g.us',
+      to: 'me@c.us',
+      body: '/tr grant',
+      type: 'chat',
+      timestamp: 1700000000,
+      fromMe: false,
+      author: '111@c.us',
+      mentionedIds: ['222@c.us', '333@c.us'],
+    });
+    expect(result.mentionedIds).toEqual(['222@c.us', '333@c.us']);
+  });
+
+  it('omits mentionedIds when absent', () => {
+    const result = buildIncomingMessageBase({
+      id: { _serialized: 'ABC' },
+      from: '123@c.us',
+      to: 'me@c.us',
+      body: 'hi',
+      type: 'chat',
+      timestamp: 1700000000,
+      fromMe: false,
+    });
+    expect(result.mentionedIds).toBeUndefined();
+  });
 });
