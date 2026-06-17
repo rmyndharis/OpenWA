@@ -22,6 +22,18 @@ export interface CoordinatorOptions {
 
 const URL_OR_EMOJI_ONLY = /^(?:\s|\p{Emoji}|https?:\/\/\S+)+$/u;
 
+/**
+ * Compare two WhatsApp IDs tolerantly: exact match, or same user part ignoring
+ * an `@domain` and any `:device` suffix (e.g. `123@c.us` === `123:7@c.us`).
+ * Note: this does NOT bridge the LID (`@lid`) and phone (`@c.us`) namespaces —
+ * those have different user numbers (see spec §16).
+ */
+function widEquals(a: string, b: string): boolean {
+  if (a === b) return true;
+  const userPart = (w: string): string => w.split('@')[0].split(':')[0];
+  return userPart(a) === userPart(b);
+}
+
 export class TranslationCoordinator {
   constructor(
     private readonly translator: Translator,
@@ -69,13 +81,21 @@ export class TranslationCoordinator {
     }
     this.applyLearning(sender, detected);
 
-    const targets = this.targetLanguages(state, detected);
+    // Pick the effective source language. Detection misfires on short/colloquial text — it often
+    // returns a near-neighbour language (e.g. es misread as gl/ca) — so trust the detected code only
+    // when it names a language the group actually uses; otherwise fall back to the sender's known
+    // language. Combined with excluding the sender's own language from the targets below, this stops
+    // a message ever being "translated" into its own language (the duplicate/echo bug).
+    const knownLangs = this.knownLanguages(state);
+    const source = knownLangs.includes(detected) ? detected : (sender.lang ?? detected);
+
+    const targets = this.targetLanguages(state, source, sender.lang);
     if (targets.length === 0) {
       await this.store.save(state);
       return;
     }
 
-    const settled = await Promise.allSettled(targets.map(t => this.translator.translate(text, detected, t)));
+    const settled = await Promise.allSettled(targets.map(t => this.translator.translate(text, source, t)));
     const translations: Translation[] = [];
     settled.forEach((r, i) => {
       if (r.status === 'fulfilled') translations.push({ lang: targets[i], text: r.value });
@@ -87,11 +107,24 @@ export class TranslationCoordinator {
     await this.store.save(state);
   }
 
-  /** Distinct languages of enabled participants, minus the detected source language. */
-  private targetLanguages(state: GroupState, source: string): string[] {
+  /** Distinct languages currently spoken by enabled participants. */
+  private knownLanguages(state: GroupState): string[] {
     const langs = new Set<string>();
     for (const p of Object.values(state.participants)) {
-      if (p.enabled && p.lang && p.lang !== source) langs.add(p.lang);
+      if (p.enabled && p.lang) langs.add(p.lang);
+    }
+    return [...langs];
+  }
+
+  /**
+   * Distinct languages of enabled participants, excluding the message source language AND the
+   * sender's own language — a sender never needs their own message translated back to themselves
+   * (this also guards against a detection misfire leaving the source language in the target set).
+   */
+  private targetLanguages(state: GroupState, source: string, senderLang: string | null): string[] {
+    const langs = new Set<string>();
+    for (const p of Object.values(state.participants)) {
+      if (p.enabled && p.lang && p.lang !== source && p.lang !== senderLang) langs.add(p.lang);
     }
     return [...langs];
   }
@@ -140,13 +173,18 @@ export class TranslationCoordinator {
     const isSelfServe = (cmd.name === 'setlang' || cmd.name === 'auto') && targetsSelf;
     if (!isSelfServe) {
       const admins = await this.gateway.getGroupAdmins(sessionId, msg.chatId);
-      const isAdmin = admins.includes(msg.author);
-      const isController = isAdmin || state.delegatedControllers.includes(msg.author);
+      const isAdmin = admins.some(a => widEquals(a, msg.author));
+      const isController = isAdmin || state.delegatedControllers.some(c => widEquals(c, msg.author));
       const adminOnly = cmd.name === 'grant' || cmd.name === 'revoke';
       if ((adminOnly && !isAdmin) || (!adminOnly && !isController)) {
-        if (this.opts.denyReply) {
-          await this.gateway.sendText(sessionId, msg.chatId, '⛔ Only group admins can do that.');
-        }
+        // Always reply on denial — a command must never fail silently.
+        await this.gateway.sendText(
+          sessionId,
+          msg.chatId,
+          adminOnly
+            ? '⛔ Only group admins can use that command.'
+            : '⛔ Only group admins or delegated users can use that command.',
+        );
         return;
       }
     }
@@ -178,7 +216,7 @@ export class TranslationCoordinator {
         return;
       }
       case 'auto': {
-        if (!targetWid) return;
+        if (!targetWid) return this.replyError(sessionId, msg, this.targetHelp());
         const p = this.ensureParticipant(state, targetWid);
         p.source = 'learned';
         p.pendingLang = undefined;
@@ -187,7 +225,7 @@ export class TranslationCoordinator {
       }
       case 'ignore':
       case 'unignore': {
-        if (!targetWid) return;
+        if (!targetWid) return this.replyError(sessionId, msg, this.targetHelp());
         const p = this.ensureParticipant(state, targetWid);
         p.enabled = cmd.name === 'unignore';
         await this.confirm(
@@ -200,7 +238,7 @@ export class TranslationCoordinator {
       }
       case 'grant':
       case 'revoke': {
-        if (!targetWid) return;
+        if (!targetWid) return this.replyError(sessionId, msg, this.targetHelp());
         const set = new Set(state.delegatedControllers);
         if (cmd.name === 'grant') set.add(targetWid);
         else set.delete(targetWid);
@@ -241,5 +279,9 @@ export class TranslationCoordinator {
 
   private replyError(sessionId: string, msg: InboundMessage, text: string): Promise<void> {
     return this.gateway.sendText(sessionId, msg.chatId, text);
+  }
+
+  private targetHelp(): string {
+    return "⚠️ Couldn't identify that user. Target them by @mention, by phone number, or use 'me' for yourself.";
   }
 }

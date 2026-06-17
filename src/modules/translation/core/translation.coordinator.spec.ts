@@ -113,6 +113,28 @@ describe('TranslationCoordinator', () => {
     expect(mocks.sendCombinedReply).toHaveBeenCalledWith('s', 'g@g.us', 'M1', expect.stringContaining('Hola'));
   });
 
+  it('falls back to the sender language and never translates into the source when detection misfires', async () => {
+    const state = freshState({
+      announced: true,
+      active: true,
+      participants: {
+        '111@c.us': { lang: 'en', source: 'learned', enabled: true, samples: 3, updatedAt: 'x' },
+        '222@c.us': { lang: 'es', source: 'pinned', enabled: true, samples: 3, updatedAt: 'x' },
+      },
+    });
+    const { store, gateway, translator, mocks } = makeDeps(state);
+    // Detection misfires on colloquial Spanish, returning 'gl' — a language the group does not use.
+    mocks.detect.mockResolvedValue({ lang: 'gl', confidence: 0.5 });
+    mocks.translate.mockResolvedValue('Let me know');
+    const c = new TranslationCoordinator(translator, store, gateway, OPTS);
+    await c.handleMessage('s', msg({ author: '222@c.us', body: 'Haber dime que debo darte' }));
+    // Effective source falls back to the sender's known 'es'; 'en' is the only target.
+    expect(mocks.translate).toHaveBeenCalledTimes(1);
+    expect(mocks.translate).toHaveBeenCalledWith('Haber dime que debo darte', 'es', 'en');
+    // Must never translate a message into the sender's own language.
+    expect(mocks.translate).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'es');
+  });
+
   it('learns a sender language only after a 2-message debounce', async () => {
     const state = freshState({
       announced: true,
