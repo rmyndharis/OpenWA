@@ -71,9 +71,39 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const error = useCallback(
     (title: string, message?: string) => {
+      const isConnectionError =
+        message?.toLowerCase().includes('failed to fetch') ||
+        message?.toLowerCase().includes('networkerror') ||
+        message?.toLowerCase().includes('http 502') ||
+        message?.toLowerCase().includes('http 503') ||
+        title.toLowerCase().includes('failed to fetch') ||
+        title.toLowerCase().includes('networkerror');
+
+      if (isConnectionError) {
+        setToasts(prev => {
+          const offlineTitle = 'Server Connection Lost';
+          const hasOfflineToast = prev.some(t => t.title === offlineTitle);
+          if (hasOfflineToast) return prev;
+
+          const id = crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          setTimeout(() => removeToast(id), 6000);
+
+          return [
+            ...prev,
+            {
+              id,
+              type: 'error',
+              title: offlineTitle,
+              message: 'The backend server is unreachable. Please check if the server is running.',
+              duration: 6000,
+            },
+          ];
+        });
+        return;
+      }
       addToast({ type: 'error', title, message, duration: 6000 });
     },
-    [addToast],
+    [addToast, removeToast],
   );
 
   const warning = useCallback(
