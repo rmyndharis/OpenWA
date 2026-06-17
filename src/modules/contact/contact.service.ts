@@ -38,6 +38,10 @@ export class ContactService {
     return this.getEngine(sessionId).getNumberId(number);
   }
 
+  resolveContactPhone(sessionId: string, contactId: string) {
+    return this.getEngine(sessionId).resolveContactPhone(contactId);
+  }
+
   getProfilePicture(sessionId: string, contactId: string) {
     return this.getEngine(sessionId).getProfilePicture(contactId);
   }

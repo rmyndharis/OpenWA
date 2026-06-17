@@ -7,6 +7,7 @@ import {
   wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 
 describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
@@ -119,10 +120,38 @@ describe('WhatsAppWebJsAdapter readiness guard (#100)', () => {
     await expect(adapter.getGroups()).rejects.toBeInstanceOf(EngineNotReadyError);
     await expect(adapter.checkNumberExists('628123')).rejects.toBeInstanceOf(EngineNotReadyError);
     await expect(adapter.getNumberId('628123')).rejects.toBeInstanceOf(EngineNotReadyError);
+    await expect(adapter.resolveContactPhone('123@lid')).rejects.toBeInstanceOf(EngineNotReadyError);
   });
 
   it('carries HTTP 409 so NestJS returns "session not connected" (not 500) without a custom filter', () => {
     expect(new EngineNotReadyError().getStatus()).toBe(409);
+  });
+});
+
+describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
+  // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
+  const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = { getContactLidAndPhone };
+    return adapter;
+  };
+
+  it('returns the phone JID stripped to MSISDN digits', async () => {
+    const adapter = readyAdapter(jest.fn().mockResolvedValue([{ lid: '123@lid', pn: '628123456789@c.us' }]));
+    await expect(adapter.resolveContactPhone('123@lid')).resolves.toBe('628123456789');
+  });
+
+  it('returns null when the engine has no mapping (empty result or empty pn)', async () => {
+    await expect(readyAdapter(jest.fn().mockResolvedValue([])).resolveContactPhone('123@lid')).resolves.toBeNull();
+    await expect(
+      readyAdapter(jest.fn().mockResolvedValue([{ lid: '123@lid', pn: '' }])).resolveContactPhone('123@lid'),
+    ).resolves.toBeNull();
+  });
+
+  it('is best-effort: a thrown engine error resolves to null, not a rejection', async () => {
+    const adapter = readyAdapter(jest.fn().mockRejectedValue(new Error('Evaluation failed')));
+    await expect(adapter.resolveContactPhone('123@lid')).resolves.toBeNull();
   });
 });
 

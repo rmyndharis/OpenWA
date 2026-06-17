@@ -20,6 +20,22 @@ describe('buildIncomingMessageBase', () => {
     expect(r.isStatusBroadcast).toBe(false);
     expect(r.author).toBeUndefined();
     expect(r.contact).toBeUndefined();
+    expect(r.isLidSender).toBeUndefined(); // a normal @c.us sender is not flagged
+  });
+
+  it('flags a 1:1 sender identified by an @lid privacy id (#263)', () => {
+    const r = buildIncomingMessageBase({ ...base, from: '111@lid' });
+    expect(r.isLidSender).toBe(true);
+  });
+
+  it('flags an @lid group participant via author, not the group JID (#263)', () => {
+    const r = buildIncomingMessageBase({ ...base, from: 'group-1@g.us', author: '222@lid' });
+    expect(r.isLidSender).toBe(true);
+  });
+
+  it('does not flag a group whose participant is a normal number', () => {
+    const r = buildIncomingMessageBase({ ...base, from: 'group-1@g.us', author: '456@c.us' });
+    expect(r.isLidSender).toBeUndefined();
   });
 
   it('flags a status/story broadcast via isStatusBroadcast (engine pseudo-JID stays in the adapter)', () => {

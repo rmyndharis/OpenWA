@@ -1099,6 +1099,30 @@ GET /api/sessions/:sessionId/contacts/:contactId/profile-picture
 }
 ```
 
+#### Resolve a contact id to a phone number
+
+Resolve a contact identified by a WhatsApp privacy id (`@lid`) to its phone number. Pass the `@lid`
+JID as `:contactId`.
+
+```http
+GET /api/sessions/:sessionId/contacts/:contactId/phone
+```
+
+**Response (200 OK):**
+```json
+{
+  "contactId": "123456789@lid",
+  "phone": "628123456789"
+}
+```
+
+> **Best-effort.** `phone` is MSISDN digits when the account knows the mapping, or `null` otherwise —
+> `@lid` exists specifically to hide phone numbers, so a stranger you've never interacted with (or a
+> privacy-protected sender) won't resolve. This is a WhatsApp-engine limitation, not an OpenWA one.
+
+To get this resolved automatically on each incoming message instead of calling the endpoint, see
+`RESOLVE_LID_TO_PHONE` under [message.received](#messagereceived).
+
 ---
 
 ### 6.4.5 Groups
@@ -1454,6 +1478,12 @@ flowchart TB
   }
 }
 ```
+
+> **Optional `senderPhone` (`@lid` resolution).** When a sender is identified by a WhatsApp privacy id
+> (`from`/`author` ends in `@lid`) and `RESOLVE_LID_TO_PHONE=true` is set, the payload also carries a
+> best-effort `senderPhone` (MSISDN digits, or `null` when the engine can't map it). Off by default
+> because it adds a per-sender lookup (results are cached). See also the on-demand
+> [resolve endpoint](#resolve-a-contact-id-to-a-phone-number). (#263)
 
 ### message.ack
 

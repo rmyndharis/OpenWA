@@ -29,4 +29,12 @@ describe('ContactService', () => {
     await expect(makeService({ getNumberId }).getNumberId('s1', '628123')).resolves.toBe('628123@c.us');
     expect(getNumberId).toHaveBeenCalledWith('628123');
   });
+
+  it('delegates resolveContactPhone to the engine', async () => {
+    const resolveContactPhone = jest.fn().mockResolvedValue('628123456789');
+    await expect(makeService({ resolveContactPhone }).resolveContactPhone('s1', '123@lid')).resolves.toBe(
+      '628123456789',
+    );
+    expect(resolveContactPhone).toHaveBeenCalledWith('123@lid');
+  });
 });

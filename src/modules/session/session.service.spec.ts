@@ -79,6 +79,7 @@ describe('SessionService', () => {
       sendSeen: jest.fn().mockResolvedValue(true),
       deleteChat: jest.fn().mockResolvedValue(true),
       sendChatState: jest.fn().mockResolvedValue(undefined),
+      resolveContactPhone: jest.fn().mockResolvedValue('628111222333'),
     };
 
     engineFactory = {
@@ -536,6 +537,79 @@ describe('SessionService', () => {
 
       expect(dispatchedEvents('message.received')).toHaveLength(1);
       expect(dispatchedEvents('message.sent')).toHaveLength(0);
+    });
+
+    // The default hookManager mock returns an empty `data: {}`; echo the message through so the
+    // engine-set fields (isLidSender) survive the hook and reach the inline-resolution branch.
+    const echoHook = () =>
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+
+    it('attaches senderPhone inline for an @lid sender when RESOLVE_LID_TO_PHONE is on (#263)', async () => {
+      process.env.RESOLVE_LID_TO_PHONE = 'true';
+      try {
+        echoHook();
+        mockEngine.resolveContactPhone.mockResolvedValue('628111222333');
+        const callbacks = await startAndCaptureCallbacks();
+
+        callbacks.onMessage!(makeMessage({ from: '111@lid', chatId: '111@lid', isLidSender: true }));
+        await flush();
+
+        const received = dispatchedEvents('message.received');
+        expect(received).toHaveLength(1);
+        expect((received[0][2] as IncomingMessage).senderPhone).toBe('628111222333');
+        expect(mockEngine.resolveContactPhone).toHaveBeenCalledWith('111@lid');
+      } finally {
+        delete process.env.RESOLVE_LID_TO_PHONE;
+      }
+    });
+
+    it('does not resolve senderPhone when RESOLVE_LID_TO_PHONE is unset (default off)', async () => {
+      delete process.env.RESOLVE_LID_TO_PHONE;
+      echoHook();
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage!(makeMessage({ from: '111@lid', chatId: '111@lid', isLidSender: true }));
+      await flush();
+
+      const received = dispatchedEvents('message.received');
+      expect(received).toHaveLength(1);
+      expect((received[0][2] as IncomingMessage).senderPhone).toBeUndefined();
+      expect(mockEngine.resolveContactPhone).not.toHaveBeenCalled();
+    });
+
+    it('does not resolve for a normal (non-lid) sender even when the flag is on', async () => {
+      process.env.RESOLVE_LID_TO_PHONE = 'true';
+      try {
+        echoHook();
+        const callbacks = await startAndCaptureCallbacks();
+
+        callbacks.onMessage!(makeMessage({ from: 'peer@c.us', chatId: 'peer@c.us' })); // no isLidSender
+        await flush();
+
+        expect(mockEngine.resolveContactPhone).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.RESOLVE_LID_TO_PHONE;
+      }
+    });
+
+    it('caches @lid resolution so the same sender is queried only once (#263)', async () => {
+      process.env.RESOLVE_LID_TO_PHONE = 'true';
+      try {
+        echoHook();
+        mockEngine.resolveContactPhone.mockResolvedValue('628111222333');
+        const callbacks = await startAndCaptureCallbacks();
+
+        callbacks.onMessage!(makeMessage({ id: 'm1', from: '111@lid', chatId: '111@lid', isLidSender: true }));
+        await flush();
+        callbacks.onMessage!(makeMessage({ id: 'm2', from: '111@lid', chatId: '111@lid', isLidSender: true }));
+        await flush();
+
+        expect(mockEngine.resolveContactPhone).toHaveBeenCalledTimes(1);
+      } finally {
+        delete process.env.RESOLVE_LID_TO_PHONE;
+      }
     });
 
     it('dispatches the message.revoked webhook and WS event on a revoke (#152)', async () => {

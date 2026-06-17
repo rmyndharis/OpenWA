@@ -67,6 +67,19 @@ export class ContactController {
     return { url };
   }
 
+  @Get(':contactId/phone')
+  @ApiOperation({ summary: 'Resolve a contact id (e.g. an @lid) to a phone number — best-effort' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'contactId', description: 'Contact ID / JID to resolve (e.g., an @lid)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Resolved phone number (MSISDN digits), or null when the engine cannot map it',
+  })
+  async resolvePhone(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
+    const phone = await this.contactService.resolveContactPhone(sessionId, contactId);
+    return { contactId, phone };
+  }
+
   @Post(':contactId/block')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Block a contact' })

@@ -82,6 +82,13 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     incoming.author = msg.author;
   }
 
+  // Flag senders identified by a WhatsApp privacy id (`@lid`) so engine-neutral code can opt to
+  // resolve a phone number without matching the engine-specific JID scheme itself (#263).
+  const senderJid = msg.author ?? msg.from;
+  if (senderJid.endsWith('@lid')) {
+    incoming.isLidSender = true;
+  }
+
   // Push name is available synchronously on the raw payload — no contact lookup needed.
   const pushName = msg._data?.notifyName;
   if (pushName) {

@@ -58,6 +58,18 @@ export interface IncomingMessage {
   isStatusBroadcast?: boolean;
   /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
   author?: string;
+  /**
+   * Set by the adapter when the sender is identified by a privacy id (e.g. a WhatsApp `@lid`) rather
+   * than a phone number, so engine-neutral code can decide whether to attempt phone resolution without
+   * matching an engine-specific JID scheme.
+   */
+  isLidSender?: boolean;
+  /**
+   * Best-effort phone number (MSISDN digits) of the sender, resolved from a privacy id when inline
+   * resolution is enabled (`RESOLVE_LID_TO_PHONE`). `null` when the engine cannot map it. Only
+   * populated for `isLidSender` messages.
+   */
+  senderPhone?: string | null;
   /** Sender display info, best-effort from the WhatsApp Web contact cache. */
   contact?: {
     name?: string;
@@ -357,6 +369,12 @@ export interface IWhatsAppEngine {
    * number is not registered. The engine owns the JID scheme, so callers never build it themselves.
    */
   getNumberId(number: string): Promise<string | null>;
+  /**
+   * Best-effort resolution of a contact id to a phone number (MSISDN digits), or `null` when the
+   * engine cannot map it (e.g. a privacy `@lid` the account has never seen). The contact id is the
+   * engine's native scheme; the adapter decides how to resolve it.
+   */
+  resolveContactPhone(contactId: string): Promise<string | null>;
 
   // Groups - Basic
   getGroups(): Promise<Group[]>;

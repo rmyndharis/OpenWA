@@ -556,6 +556,23 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return (await this.getNumberId(number)) !== null;
   }
 
+  async resolveContactPhone(contactId: string): Promise<string | null> {
+    this.ensureReady();
+    try {
+      // Queried one id at a time: the batch form is prone to "Evaluation failed" and rate-limiting
+      // (whatsapp-web.js #3857/#3969). `pn` is the phone JID (`<digits>@c.us`) when the account knows
+      // the mapping; best-effort, so a missing mapping or any failure resolves to null.
+      const [result] = await this.client!.getContactLidAndPhone([contactId]);
+      const pn = result?.pn;
+      return pn ? pn.replace(/@c\.us$/i, '').replace(/\D/g, '') || null : null;
+    } catch (error) {
+      this.logger.debug(`resolveContactPhone failed for ${contactId}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   async getGroups(): Promise<Group[]> {
     this.ensureReady();
     const chats = await this.client!.getChats();

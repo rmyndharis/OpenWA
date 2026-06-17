@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Resolve a `@lid` privacy id to a phone number** (#263), engine-neutral via a new
+  `IWhatsAppEngine.resolveContactPhone`. On-demand endpoint `GET /sessions/:id/contacts/:contactId/phone`
+  → `{ contactId, phone }` (MSISDN digits, or `null` when the engine can't map it — best-effort, since
+  `@lid` exists to hide numbers). Optional **inline** resolution: set `RESOLVE_LID_TO_PHONE=true` to attach
+  a best-effort `senderPhone` to the `message.received` webhook + websocket payload for `@lid` senders
+  (off by default; per-sender lookups are cached). A non-whatsapp-web.js engine implements its own mapping.
+
 ### Changed
 
 - **Message delivery status is now engine-agnostic** (engine-pluggability decoupling, #265). The raw whatsapp-web.js

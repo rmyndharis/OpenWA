@@ -44,6 +44,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   // In-memory map of active engine instances
   private engines: Map<string, IWhatsAppEngine> = new Map();
+  // Bounded cache for inline @lid -> phone resolution (#263), keyed `${sessionId}:${lid}`. Caches
+  // misses (null) too, so a chatty unmapped sender isn't re-queried on every message (which also
+  // reduces engine rate-limit pressure). Best-effort feature, so staleness is acceptable.
+  private readonly lidPhoneCache = new Map<string, string | null>();
+  private static readonly LID_PHONE_CACHE_MAX = 5000;
   // Transient, human-readable reason for the most recent terminal engine failure,
   // keyed by session id. Surfaced on read so the dashboard can explain a FAILED
   // status; cleared when the session re-initializes or becomes ready.
@@ -386,7 +391,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: id,
             source: 'Engine',
           })
-          .then(({ continue: shouldContinue, data: finalMessage }) => {
+          .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
               // Plugin stopped processing (e.g., auto-reply handled it)
               return;
@@ -394,6 +399,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
             // Persist the incoming message so the dashboard chats view can render history.
             const incoming: IncomingMessage = finalMessage;
+
+            // Inline @lid -> phone resolution (#263), opt-in via RESOLVE_LID_TO_PHONE. Best-effort:
+            // attaches senderPhone (digits or null) before persist/dispatch so webhook/ws consumers
+            // get it in a single pass. Only for privacy-id senders, so no lookup for normal numbers.
+            if (process.env.RESOLVE_LID_TO_PHONE === 'true' && incoming.isLidSender && !incoming.fromMe) {
+              incoming.senderPhone = await this.resolveSenderPhone(id, incoming.author ?? incoming.from);
+            }
+
             const metadata: Record<string, unknown> = {};
             if (incoming.media) {
               metadata.media = incoming.media;
@@ -787,6 +800,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   getEngine(id: string): IWhatsAppEngine | undefined {
     return this.engines.get(id);
+  }
+
+  /**
+   * Best-effort resolution of a privacy-id sender (`@lid`) to a phone number for inline attachment on
+   * incoming messages (#263). Cached per session (incl. misses). Never throws — returns null on any
+   * failure or when the engine isn't available. Gated by the caller on `RESOLVE_LID_TO_PHONE`.
+   */
+  private async resolveSenderPhone(sessionId: string, contactId: string): Promise<string | null> {
+    const key = `${sessionId}:${contactId}`;
+    const cached = this.lidPhoneCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let phone: string | null;
+    try {
+      phone = (await this.getEngine(sessionId)?.resolveContactPhone(contactId)) ?? null;
+    } catch {
+      phone = null;
+    }
+    // Bounded FIFO eviction: Map preserves insertion order, so the first key is the oldest.
+    if (this.lidPhoneCache.size >= SessionService.LID_PHONE_CACHE_MAX) {
+      for (const oldest of this.lidPhoneCache.keys()) {
+        this.lidPhoneCache.delete(oldest);
+        break;
+      }
+    }
+    this.lidPhoneCache.set(key, phone);
+    return phone;
   }
 
   async getGroups(id: string): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
