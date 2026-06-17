@@ -413,6 +413,9 @@ export class MessageService {
       },
     });
 
+    // Match sendText: humanising "typing…" pause before the real send (anti-ban).
+    await this.simulateTypingIfEnabled(engine, dto.chatId, dto.text);
+
     try {
       const result = await engine.replyToMessage(dto.chatId, dto.quotedMessageId, dto.text);
 
