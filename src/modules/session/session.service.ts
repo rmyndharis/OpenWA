@@ -25,7 +25,11 @@ import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
-import { deliveryStatusToMessageStatus, deliveryStatusToAck, ackStatusTransitionFrom } from '../message/message-status.util';
+import {
+  deliveryStatusToMessageStatus,
+  deliveryStatusToAck,
+  ackStatusTransitionFrom,
+} from '../message/message-status.util';
 
 interface ReconnectState {
   attempts: number;

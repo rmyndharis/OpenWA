@@ -21,7 +21,7 @@ describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus bo
     [4, 'read'], // PLAYED collapses to read
     [5, 'read'], // any future/higher ack stays read, never crashes
   ])('maps wwebjs ack %i -> %s', (ack, expected) => {
-    expect(wwebjsAckToDeliveryStatus(ack as number)).toBe(expected);
+    expect(wwebjsAckToDeliveryStatus(ack)).toBe(expected);
   });
 });
 
