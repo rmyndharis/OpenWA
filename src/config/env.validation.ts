@@ -42,6 +42,10 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   checkPort('DATABASE_PORT');
   checkPort('REDIS_PORT');
 
+  if (str('TRANSLATION_ENABLED') === 'true' && !str('LIBRETRANSLATE_URL')) {
+    errors.push('LIBRETRANSLATE_URL is required when TRANSLATION_ENABLED=true');
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);
   }

@@ -112,4 +112,17 @@ export default () => ({
       endpoint: process.env.S3_ENDPOINT,
     },
   },
+
+  // WhatsApp group auto-translation
+  translation: {
+    enabled: process.env.TRANSLATION_ENABLED === 'true',
+    libretranslateUrl: process.env.LIBRETRANSLATE_URL || 'http://localhost:7001',
+    libretranslateApiKey: process.env.LIBRETRANSLATE_API_KEY || undefined,
+    timeoutMs: parseInt(process.env.LIBRETRANSLATE_TIMEOUT_MS || '5000', 10),
+    commandPrefix: process.env.TRANSLATION_COMMAND_PREFIX || '/tr',
+    minLength: parseInt(process.env.TRANSLATION_MIN_LENGTH || '2', 10),
+    maxLength: parseInt(process.env.TRANSLATION_MAX_LENGTH || '2000', 10),
+    throttleIntervalMs: parseInt(process.env.TRANSLATION_THROTTLE_INTERVAL_MS || '0', 10),
+    denyReply: process.env.TRANSLATION_DENY_REPLY === 'true',
+  },
 });

@@ -23,4 +23,18 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ PORT: '70000' })).toThrow(/PORT/);
     expect(() => validateEnv({ PORT: '2785' })).not.toThrow();
   });
+
+  it('requires LIBRETRANSLATE_URL when TRANSLATION_ENABLED=true', () => {
+    expect(() => validateEnv({ TRANSLATION_ENABLED: 'true' })).toThrow(/LIBRETRANSLATE_URL/);
+  });
+
+  it('accepts TRANSLATION_ENABLED=true with a URL', () => {
+    expect(() =>
+      validateEnv({ TRANSLATION_ENABLED: 'true', LIBRETRANSLATE_URL: 'http://localhost:7001' }),
+    ).not.toThrow();
+  });
+
+  it('ignores translation vars when disabled', () => {
+    expect(() => validateEnv({ TRANSLATION_ENABLED: 'false' })).not.toThrow();
+  });
 });
