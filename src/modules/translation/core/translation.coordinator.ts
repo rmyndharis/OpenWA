@@ -219,6 +219,10 @@ export class TranslationCoordinator {
   private resolveTarget(msg: InboundMessage, target?: CommandTarget): string | null {
     if (!target || target.kind === 'me') return msg.author;
     if (target.kind === 'mention') return msg.mentionedIds[0] ?? null;
+    // NOTE: a `<number>` target assumes phone-number JID keying (`<number>@c.us`). Under
+    // WhatsApp's newer LID scheme participants may be keyed by an opaque `@lid` id instead,
+    // so this constructed wid can fail to match the stored participant. The `@mention` and
+    // `me` forms resolve to the actual wid and are robust to LID; prefer them. See spec §16.
     return `${target.number}@c.us`;
   }
 

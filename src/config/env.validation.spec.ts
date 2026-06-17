@@ -37,4 +37,27 @@ describe('validateEnv', () => {
   it('ignores translation vars when disabled', () => {
     expect(() => validateEnv({ TRANSLATION_ENABLED: 'false' })).not.toThrow();
   });
+
+  it('rejects a non-numeric LIBRETRANSLATE_TIMEOUT_MS', () => {
+    expect(() => validateEnv({ LIBRETRANSLATE_TIMEOUT_MS: 'foo' })).toThrow(/LIBRETRANSLATE_TIMEOUT_MS/);
+  });
+
+  it('rejects a non-positive TRANSLATION_MAX_LENGTH', () => {
+    expect(() => validateEnv({ TRANSLATION_MAX_LENGTH: '0' })).toThrow(/TRANSLATION_MAX_LENGTH/);
+  });
+
+  it('accepts valid translation numerics', () => {
+    expect(() =>
+      validateEnv({
+        LIBRETRANSLATE_TIMEOUT_MS: '5000',
+        TRANSLATION_MIN_LENGTH: '2',
+        TRANSLATION_MAX_LENGTH: '2000',
+        TRANSLATION_THROTTLE_INTERVAL_MS: '0',
+      }),
+    ).not.toThrow();
+  });
+
+  it('ignores translation numerics when absent', () => {
+    expect(() => validateEnv({})).not.toThrow();
+  });
 });

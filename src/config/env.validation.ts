@@ -46,6 +46,19 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push('LIBRETRANSLATE_URL is required when TRANSLATION_ENABLED=true');
   }
 
+  const checkInt = (key: string, min: number): void => {
+    const raw = str(key);
+    if (raw === undefined) return;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < min) {
+      errors.push(`${key} must be an integer >= ${min} (got "${raw}")`);
+    }
+  };
+  checkInt('LIBRETRANSLATE_TIMEOUT_MS', 1);
+  checkInt('TRANSLATION_MIN_LENGTH', 0);
+  checkInt('TRANSLATION_MAX_LENGTH', 1);
+  checkInt('TRANSLATION_THROTTLE_INTERVAL_MS', 0);
+
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);
   }
