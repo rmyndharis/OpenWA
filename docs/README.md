@@ -57,6 +57,13 @@
 | 22  | [n8n Integration](./22-n8n-integration.md)                       | n8n community nodes for OpenWA                    |
 | 23  | [Community Integrations](./23-community-integrations.md)         | Third-party adapters built on the OpenWA API      |
 
+**Examples**
+
+| Example | Description |
+| ------- | ----------- |
+| [Webhook Signature Verification](./examples/webhook-signature-verification.md) | Verify signed OpenWA webhook deliveries in Node.js and Python |
+| [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md) | Build an appointment-booking flow with OpenWA and n8n |
+
 ## Quick Start
 
 ### Option A: Minimal Setup (SQLite, no Docker services)
