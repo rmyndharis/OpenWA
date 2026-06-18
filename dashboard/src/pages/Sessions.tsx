@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter } from 'lucide-react';
+import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, Skull } from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
@@ -201,6 +201,22 @@ export function Sessions() {
     } catch (err) {
       console.error('Failed to stop:', err);
       fetchSessions();
+    }
+  };
+
+  const handleForceKill = async (id: string) => {
+    const session = sessions.find(s => s.id === id);
+    try {
+      const updated = await sessionApi.forceKill(id);
+      setSessions(sessions.map(s => (s.id === id ? { ...s, status: updated.status, lastError: undefined } : s)));
+      toast.success(
+        t('sessions.forceKill.successTitle'),
+        t('sessions.forceKill.successDesc', { name: session?.name }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : t('sessions.forceKill.errorDefault');
+      console.error('Failed to force-kill:', err);
+      toast.error(t('sessions.forceKill.errorTitle'), msg);
     }
   };
 
@@ -531,10 +547,18 @@ export function Sessions() {
                     {t('sessions.actions.stop')}
                   </button>
                 ) : canWrite ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <RefreshCw size={16} />
-                    {t('sessions.actions.reconnect')}
-                  </button>
+                  <>
+                    {session.status === 'failed' && (
+                      <button className="btn-action danger" onClick={() => handleForceKill(session.id)}>
+                        <Skull size={16} />
+                        {t('sessions.actions.killStuck')}
+                      </button>
+                    )}
+                    <button className="btn-action" onClick={() => handleStart(session.id)}>
+                      <RefreshCw size={16} />
+                      {t('sessions.actions.reconnect')}
+                    </button>
+                  </>
                 ) : null}
                 {canWrite && (
                   <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>

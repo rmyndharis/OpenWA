@@ -226,7 +226,14 @@
       "start": "Start",
       "stop": "Stop",
       "reconnect": "Reconnect",
+      "killStuck": "Kill Stuck",
       "delete": "Delete"
+    },
+    "forceKill": {
+      "successTitle": "Session Killed",
+      "successDesc": "Orphaned Chromium processes terminated for \"{{name}}\"",
+      "errorTitle": "Kill Failed",
+      "errorDefault": "Failed to kill orphaned processes"
     },
     "toasts": {
       "readyTitle": "Session Ready",

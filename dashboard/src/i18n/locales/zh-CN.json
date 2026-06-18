@@ -226,7 +226,14 @@
       "start": "启动",
       "stop": "停止",
       "reconnect": "重新连接",
+      "killStuck": "强制终止",
       "delete": "删除"
+    },
+    "forceKill": {
+      "successTitle": "会话已终止",
+      "successDesc": "已终止「{{name}}」的孤立 Chromium 进程",
+      "errorTitle": "终止失败",
+      "errorDefault": "无法终止孤立进程"
     },
     "toasts": {
       "readyTitle": "会话就绪",

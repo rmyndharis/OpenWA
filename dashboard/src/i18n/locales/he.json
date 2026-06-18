@@ -226,7 +226,14 @@
       "start": "הפעלה",
       "stop": "עצירה",
       "reconnect": "התחברות מחדש",
+      "killStuck": "סיום תקוע",
       "delete": "מחיקה"
+    },
+    "forceKill": {
+      "successTitle": "ה-Session נסגר",
+      "successDesc": "תהליכי Chromium יתומים הוסרו עבור \"{{name}}\"",
+      "errorTitle": "סגירה נכשלה",
+      "errorDefault": "נכשל לסיים תהליכים יתומים"
     },
     "toasts": {
       "readyTitle": "ה-Session מוכן",
