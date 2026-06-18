@@ -172,6 +172,24 @@ Send daily reminders to a list of contacts.
      └── Daily 9AM          └── Get contacts                     └── Send reminder
 ```
 
+### 6. Appointment Booking
+
+Collect appointment requests over WhatsApp, check availability in an external scheduling source, and send a confirmation or alternative time slots.
+
+See [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md) for a complete example.
+
+```
+[OpenWA Trigger] → [IF: Booking intent?] → [Set: Normalize request]
+                                               │
+                                               ▼
+                                      [Availability Source]
+                                               │
+                         ┌─────────────────────┴─────────────────────┐
+                         ▼                                           ▼
+              [Create Booking] → [OpenWA: Send Text]      [OpenWA: Send Text]
+                  confirmed confirmation                  alternative slots
+```
+
 ## Best Practices
 
 ### 1. Error Handling
@@ -272,6 +290,7 @@ docker run -it --rm \
 
 - [OpenWA API Specification](./06-api-specification.md)
 - [Webhook System](./03-system-architecture.md#webhooks)
+- [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md)
 - [n8n Documentation](https://docs.n8n.io/)
 
 ---
