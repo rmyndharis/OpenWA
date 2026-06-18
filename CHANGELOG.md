@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Baileys QR code is now scannable from the dashboard.** The Baileys engine returned the raw WhatsApp QR
+  ref string from `GET /sessions/:id/qr`, while the dashboard (and the whatsapp-web.js engine) expect a PNG
+  data URL — so the dashboard's `<img>` showed a broken image and Baileys sessions could not be linked via
+  the UI. The Baileys adapter now renders the QR to a `data:image/png` URL, matching the whatsapp-web.js
+  engine's contract (the REST response shape is now consistent across engines).
+- **Adopting migrations over a `synchronize`-created SQLite data DB no longer crashes on boot.** A data DB
+  whose schema was created by `DATABASE_SYNCHRONIZE=true` has an empty migrations table, so the baseline
+  migration re-ran `CREATE TABLE "sessions"` and aborted startup with `table "sessions" already exists`. The
+  baseline migration is now idempotent (it skips when the schema already exists, mirroring the other
+  migrations), so switching a SQLite data DB from synchronize to migration-managed boots cleanly and the DB
+  becomes migration-managed going forward (existing rows preserved). Fresh deployments are unaffected.
+- **Graceful shutdown no longer logs "could not find DataSource" on SIGTERM.** With two named TypeORM
+  connections (`main` + `data`), `@nestjs/typeorm`'s shutdown hook resolved the default (unnamed) DataSource
+  token and threw `Nest could not find DataSource element`, leaving the DataSources undestroyed and the
+  process exiting non-zero. The connection factories now carry their `name`, so the shutdown hook resolves
+  the correct named DataSource and the app shuts down cleanly (exit 0).
+
+### Changed
+
+- Internal: the SQLite data-DB configuration comment and a dead `synchronize` default in `app.module.ts` now
+  reflect the actual behavior (the data DB is migration-managed by default; `DATABASE_SYNCHRONIZE=true` opts
+  into synchronize). No runtime behavior change.
+
 ## [0.4.0] - 2026-06-18
 
 Single-port deployment. The API now serves the bundled dashboard SPA itself, and the bundled Traefik

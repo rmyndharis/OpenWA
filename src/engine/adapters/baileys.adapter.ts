@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as qrcode from 'qrcode';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { buildIncomingMessageFromBaileys, mapBaileysStatus } from './baileys-message-mapper';
@@ -169,9 +170,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
     const { connection, qr, lastDisconnect } = update;
 
     if (qr) {
-      this.qrCode = qr;
-      this.setStatus(EngineStatus.QR_READY);
-      this.callbacks.onQRCode?.(qr);
+      // Baileys hands us the raw QR ref string; render it to a PNG data URL so the stored
+      // value matches the whatsapp-web.js engine's contract (the dashboard does <img src={qrCode}>).
+      void this.handleQrCode(qr);
     }
 
     if (connection === 'connecting') {
@@ -231,6 +232,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
           this.callbacks.onError?.(err instanceof Error ? err.message : String(err));
         });
       }, delay);
+    }
+  }
+
+  /** Render the raw Baileys QR ref to a PNG data URL, then publish it (mirrors the whatsapp-web.js engine). */
+  private async handleQrCode(qr: string): Promise<void> {
+    try {
+      this.qrCode = await qrcode.toDataURL(qr);
+      this.setStatus(EngineStatus.QR_READY);
+      this.callbacks.onQRCode?.(this.qrCode);
+    } catch (error) {
+      this.logger.error('Error generating QR code', String(error));
     }
   }
 

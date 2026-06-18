@@ -4,6 +4,16 @@ export class AddMessageStatus1770108659848 implements MigrationInterface {
   name = 'AddMessageStatus1770108659848';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // Idempotency guard for the synchronize -> migrations adoption path. A DB whose schema was
+    // created by `synchronize` has an empty migrations tracking table, so TypeORM tries to run this
+    // baseline from scratch and collides on the already-existing tables ("table sessions already
+    // exists"). If the schema is already present, skip the creates (TypeORM still records this
+    // migration as applied). The webhooks CASCADE FK is declared on the entity, so a synchronize-built
+    // schema already matches. Mirrors the hasTable guard in AddTemplates / AddBaileysStoredMessages.
+    if (await queryRunner.hasTable('sessions')) {
+      return;
+    }
+
     const isPostgres = queryRunner.connection.options.type === 'postgres';
 
     if (isPostgres) {

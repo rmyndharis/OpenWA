@@ -85,6 +85,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         // api_keys/audit_logs schema instead — never both at once.
         const synchronize = configService.get<boolean>('database.synchronize', true);
         return {
+          name: 'main',
           type: 'sqlite' as const,
           database: configService.get<string>('database.database', './data/main.sqlite'),
           entities: [
@@ -123,6 +124,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         if (dbType === 'postgres') {
           return {
             ...baseConfig,
+            name: 'data',
             type: 'postgres' as const,
             host: configService.get<string>('dataDatabase.host'),
             port: configService.get<number>('dataDatabase.port'),
@@ -147,15 +149,18 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
           };
         }
 
-        // SQLite: zero-config. Default to synchronize=true so the embedded
-        // database "just works" on first boot without a separate migration step.
-        // Users can opt out with DATABASE_SYNCHRONIZE=false to use migrations instead.
+        // SQLite data DB: schema is MIGRATION-managed by default (DATABASE_SYNCHRONIZE unset/false),
+        // matching configuration.ts and .env.example ("Set false in production"). Set
+        // DATABASE_SYNCHRONIZE=true for zero-config synchronize instead. Computed once: the resolved
+        // value is always a boolean, so a get(..., true) fallback would never fire (and would be a trap).
+        const synchronize = configService.get<boolean>('dataDatabase.synchronize', false);
         return {
           ...baseConfig,
+          name: 'data',
           type: 'sqlite' as const,
           database: configService.get<string>('dataDatabase.database', './data/openwa.sqlite'),
-          synchronize: configService.get<boolean>('dataDatabase.synchronize', true),
-          migrationsRun: !configService.get<boolean>('dataDatabase.synchronize', true),
+          synchronize,
+          migrationsRun: !synchronize,
         };
       },
     }),

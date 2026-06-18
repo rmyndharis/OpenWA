@@ -92,14 +92,23 @@ describe('BaileysAdapter lifecycle & status', () => {
     expect(newAdapter().getStatus()).toBe(EngineStatus.DISCONNECTED);
   });
 
-  it('emits onQRCode and moves to QR_READY on a connection.update with a qr', async () => {
-    const onQRCode = jest.fn();
+  it('renders the QR to a PNG data URL and moves to QR_READY on a connection.update with a qr', async () => {
+    // QR rendering (qrcode.toDataURL) is async, so await the real completion signal — the onQRCode
+    // callback — rather than guessing tick counts.
+    let resolveQr!: (url: string) => void;
+    const qrPublished = new Promise<string>(resolve => {
+      resolveQr = resolve;
+    });
+    const onQRCode = jest.fn((url: string) => resolveQr(url));
     const adapter = newAdapter();
     await adapter.initialize(noopCallbacks({ onQRCode }));
     fakeSock.fire('connection.update', { qr: 'QR-STRING' });
-    expect(onQRCode).toHaveBeenCalledWith('QR-STRING');
+
+    const rendered = await qrPublished;
+    // The dashboard renders <img src={qrCode}>, so engines must emit a data URL, not the raw ref.
+    expect(rendered).toMatch(/^data:image\/png;base64,/);
     expect(adapter.getStatus()).toBe(EngineStatus.QR_READY);
-    expect(adapter.getQRCode()).toBe('QR-STRING');
+    expect(adapter.getQRCode()).toBe(rendered);
   });
 
   it('captures phone/pushName and fires onReady on connection open', async () => {
