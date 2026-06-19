@@ -160,6 +160,66 @@ describe('WhatsAppWebJsAdapter readiness guard (#100)', () => {
   });
 });
 
+describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a synthetic fwd_ id)', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('returns the real id of the forwarded copy fetched from the destination chat', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, forward }]) };
+    const destChat = {
+      fetchMessages: jest.fn().mockResolvedValue([
+        { id: { _serialized: 'OLD' }, timestamp: 100 },
+        { id: { _serialized: 'REAL_FWD' }, timestamp: 200 }, // most recent fromMe = the forwarded copy
+      ]),
+    };
+    const client = {
+      getChatById: jest.fn((id: string) => Promise.resolve(id === 'dest@c.us' ? destChat : sourceChat)),
+    };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(forward).toHaveBeenCalledWith('dest@c.us');
+    expect(result.id).toBe('REAL_FWD');
+    expect(result.id).not.toMatch(/^fwd_/);
+  });
+
+  it('returns an explicit-unknown id (empty, not a real/synthetic id) when the sent copy cannot be identified', async () => {
+    // Empty id leaves the forward row's waMessageId unset, so no ack can mis-match it (a source/synthetic
+    // id could cross-drive another row's delivery status).
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, forward }]) };
+    const destChat = { fetchMessages: jest.fn().mockResolvedValue([]) };
+    const client = {
+      getChatById: jest.fn((id: string) => Promise.resolve(id === 'dest@c.us' ? destChat : sourceChat)),
+    };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(result.id).toBe('');
+    expect(result.id).not.toMatch(/^fwd_/);
+  });
+
+  it('does not report a failure when post-forward id recovery throws (the forward already happened)', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, forward }]) };
+    const client = {
+      getChatById: jest.fn((id: string) =>
+        id === 'dest@c.us' ? Promise.reject(new Error('puppeteer detached')) : Promise.resolve(sourceChat),
+      ),
+    };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(forward).toHaveBeenCalledWith('dest@c.us');
+    expect(result.id).toBe('');
+  });
+});
+
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
   // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
   const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {

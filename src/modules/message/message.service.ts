@@ -449,8 +449,11 @@ export class MessageService {
     try {
       const result = await engine.forwardMessage(dto.fromChatId, dto.toChatId, dto.messageId);
 
-      // Update with actual WhatsApp message ID and status
-      message.waMessageId = result.id;
+      // Update with actual WhatsApp message ID and status. A forward whose engine could not recover the
+      // sent copy's real id returns an empty id — leave waMessageId unset (NULL) so no ack mis-matches it.
+      if (result.id) {
+        message.waMessageId = result.id;
+      }
       message.status = MessageStatus.SENT;
       message.timestamp = result.timestamp;
       await this.messageRepository.save(message);
