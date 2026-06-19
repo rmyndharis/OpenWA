@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Container no longer crashes on browser-cleanup paths when `ps` is missing.** The production image is based on
+  `node:22-slim`, which omits the `ps` binary; cleanup code that shells out to `ps` (e.g. process-tree kills) fails
+  with `spawn ps ENOENT`, and that unhandled child-process error can take down the whole Node runtime. The image now
+  installs `procps`. This does not change the underlying browser-init timeout — it only prevents the missing-`ps`
+  cleanup failure from being fatal. (#359)
+
 ### Documentation
 
 - **Documented chat-history limits.** A new guide explains the difference between the local message-history
