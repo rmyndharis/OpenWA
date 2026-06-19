@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Forwarded messages on the whatsapp-web.js engine now report a real WhatsApp message id, so their
+  delivery status advances.** A forward returned a synthetic `fwd_<id>` (the underlying library's forward
+  call yields no id), which the delivery-ack matcher could never match — leaving the forward stuck at
+  "sent" and uncorrelatable by webhook / n8n consumers. The adapter now reads the sent copy back from the
+  destination chat and returns its real id (matching the Baileys engine), falling back to the source id
+  rather than a fabricated one.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

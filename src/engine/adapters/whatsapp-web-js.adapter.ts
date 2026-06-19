@@ -700,11 +700,31 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
 
     await msgToForward.forward(toChatId);
-    // forward() returns void, so we generate a result based on original message
-    return {
-      id: `fwd_${messageId}`,
-      timestamp: Date.now(),
-    };
+
+    // whatsapp-web.js's forward() returns void, so BEST-EFFORT recover the REAL id of the sent copy by
+    // reading it back from the destination chat (the most recent outgoing message). The delivery-ack
+    // matcher keys on this id, so a synthetic one would leave the forward stuck at SENT; Baileys already
+    // returns the real id. The forward already succeeded here, so recovery must NEVER fail the operation.
+    // When the copy can't be identified we return an explicit-unknown id (empty): message.service then
+    // leaves the row's waMessageId unset so no ack can mis-match it — unlike a synthetic or source id,
+    // which could cross-drive another row's delivery status. Concurrent forwards to the same chat may
+    // mis-identify the copy — acceptable for delivery-status accuracy.
+    try {
+      const destChat = await this.client!.getChatById(toChatId);
+      const sentByMe = (await destChat?.fetchMessages({ limit: 5, fromMe: true })) ?? [];
+      let sent: (typeof sentByMe)[number] | undefined;
+      for (const m of sentByMe) {
+        if (!sent || m.timestamp > sent.timestamp) {
+          sent = m;
+        }
+      }
+      if (sent) {
+        return { id: sent.id._serialized, timestamp: sent.timestamp };
+      }
+    } catch (error) {
+      this.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
+    }
+    return { id: '', timestamp: Math.floor(Date.now() / 1000) };
   }
 
   // ============= Phase 3: Group Management =============
