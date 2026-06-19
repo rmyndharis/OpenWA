@@ -1,7 +1,9 @@
 import { Injectable, NestMiddleware, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../../modules/auth/auth.service';
 import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
+import { resolveClientIp } from '../utils/ip';
 
 /**
  * Protects the Bull Board UI (/admin/queues).
@@ -16,7 +18,10 @@ import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
  */
 @Injectable()
 export class BullBoardAuthMiddleware implements NestMiddleware {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async use(req: Request, _res: Response, next: NextFunction): Promise<void> {
     try {
@@ -49,6 +54,9 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
   }
 
   private getClientIp(req: Request): string {
-    return req.socket?.remoteAddress || req.ip || '';
+    // Mirror the ApiKeyGuard's IP model so allowedIps is enforced consistently for the queue UI:
+    // X-Forwarded-For is honored only behind a configured trusted proxy.
+    const trustedProxies = this.configService.get<string[]>('security.trustedProxies') ?? [];
+    return resolveClientIp(req, trustedProxies);
   }
 }

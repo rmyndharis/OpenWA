@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsEnum, IsArray, IsDateString, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsArray, IsDateString, MinLength, MaxLength, Validate } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ApiKeyRole } from '../entities/api-key.entity';
+import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
 
 export class CreateApiKeyDto {
   @ApiProperty({
@@ -28,6 +29,7 @@ export class CreateApiKeyDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @Validate(IsIpOrCidrConstraint, { each: true })
   allowedIps?: string[];
 
   @ApiPropertyOptional({
@@ -110,6 +112,7 @@ export class UpdateApiKeyDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @Validate(IsIpOrCidrConstraint, { each: true })
   allowedIps?: string[];
 
   @ApiPropertyOptional()

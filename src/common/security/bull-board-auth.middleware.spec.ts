@@ -1,4 +1,5 @@
 import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { BullBoardAuthMiddleware } from './bull-board-auth.middleware';
 import { AuthService } from '../../modules/auth/auth.service';
@@ -7,6 +8,7 @@ import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
 describe('BullBoardAuthMiddleware', () => {
   let mw: BullBoardAuthMiddleware;
   let authService: { validateApiKey: jest.Mock; hasPermission: jest.Mock };
+  let configService: { get: jest.Mock };
   const res = {} as Response;
 
   const reqWith = (headers: Record<string, unknown> = {}, query: Record<string, unknown> = {}): Request =>
@@ -14,7 +16,8 @@ describe('BullBoardAuthMiddleware', () => {
 
   beforeEach(() => {
     authService = { validateApiKey: jest.fn(), hasPermission: jest.fn() };
-    mw = new BullBoardAuthMiddleware(authService as unknown as AuthService);
+    configService = { get: jest.fn().mockReturnValue(undefined) }; // no trusted proxies by default
+    mw = new BullBoardAuthMiddleware(authService as unknown as AuthService, configService as unknown as ConfigService);
   });
 
   it('rejects when no API key is provided', async () => {
@@ -54,6 +57,26 @@ describe('BullBoardAuthMiddleware', () => {
 
     await mw.use(reqWith({ authorization: 'Bearer abc' }), res, jest.fn());
     expect(authService.validateApiKey).toHaveBeenCalledWith('abc', '127.0.0.1');
+  });
+
+  it('honors X-Forwarded-For only behind a configured trusted proxy (allowedIps parity with the guard)', async () => {
+    configService.get.mockReturnValue(['127.0.0.1']); // the socket peer is a trusted proxy
+    authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
+    authService.hasPermission.mockReturnValue(true);
+
+    await mw.use(reqWith({ 'x-api-key': 'admin', 'x-forwarded-for': '203.0.113.5' }), res, jest.fn());
+
+    expect(authService.validateApiKey).toHaveBeenCalledWith('admin', '203.0.113.5');
+  });
+
+  it('ignores a spoofed X-Forwarded-For when no trusted proxy is configured (uses the socket address)', async () => {
+    configService.get.mockReturnValue([]); // no trusted proxies — XFF is attacker-controlled
+    authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
+    authService.hasPermission.mockReturnValue(true);
+
+    await mw.use(reqWith({ 'x-api-key': 'admin', 'x-forwarded-for': '203.0.113.5' }), res, jest.fn());
+
+    expect(authService.validateApiKey).toHaveBeenCalledWith('admin', '127.0.0.1');
   });
 
   it('rejects an ?apiKey query param (no key in the URL)', async () => {
