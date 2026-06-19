@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter } from 'lucide-react';
+import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, Skull } from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
@@ -25,6 +25,7 @@ export function Sessions() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async (): Promise<Session[]> => {
     try {
@@ -201,6 +202,20 @@ export function Sessions() {
     } catch (err) {
       console.error('Failed to stop:', err);
       fetchSessions();
+    }
+  };
+
+  const handleForceKill = async (id: string) => {
+    try {
+      await sessionApi.forceKill(id);
+      setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'disconnected' } : s)));
+      toast.success(t('sessions.forceKill.successTitle'), t('sessions.forceKill.success'));
+    } catch (err) {
+      console.error('Failed to force-kill:', err);
+      toast.error(t('sessions.forceKill.failedTitle'), t('sessions.forceKill.failed'));
+      fetchSessions();
+    } finally {
+      setKillConfirmId(null);
     }
   };
 
@@ -462,6 +477,37 @@ export function Sessions() {
         </div>
       )}
 
+      {killConfirmId && (
+        <div className="modal-overlay" onClick={() => setKillConfirmId(null)}>
+          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{t('sessions.forceKill.title')}</h2>
+              <button className="btn-icon" onClick={() => setKillConfirmId(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>
+                <Trans
+                  i18nKey="sessions.forceKill.message"
+                  values={{ name: sessions.find(s => s.id === killConfirmId)?.name }}
+                  components={{ strong: <strong /> }}
+                />
+              </p>
+              <p className="text-muted">{t('sessions.forceKill.warning')}</p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setKillConfirmId(null)}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn-danger" onClick={() => handleForceKill(killConfirmId)}>
+                {t('sessions.forceKill.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="sessions-grid">
         {filteredSessions.length === 0 ? (
           <div className="empty-state">
@@ -540,6 +586,12 @@ export function Sessions() {
                   <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>
                     <Trash2 size={16} />
                     {t('sessions.actions.delete')}
+                  </button>
+                )}
+                {canWrite && session.status === 'failed' && (
+                  <button className="btn-action danger" onClick={() => setKillConfirmId(session.id)}>
+                    <Skull size={16} />
+                    {t('sessions.actions.killStuck')}
                   </button>
                 )}
               </div>
