@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plugin enable/disable and configuration now persist.** Enabling, disabling, or configuring a plugin
+  updated only in-memory state — the registry on disk was never written, so the change was silently lost
+  on restart (an enabled plugin came back disabled and its saved configuration, including secrets such as
+  an API key, was gone), while the API still reported success. A registry entry is now created when a
+  plugin loads, so these writes are durable, and a plugin's saved configuration is restored on the next
+  start. For safety, plugins are not auto-enabled on boot — re-enable them after a restart; their
+  configuration is preserved.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

@@ -39,11 +39,18 @@ export class PluginStorageService {
     try {
       const dir = path.dirname(this.registryPath);
       if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
 
       const entries = Array.from(this.registry.values());
-      fs.writeFileSync(this.registryPath, JSON.stringify(entries, null, 2));
+      // Owner-only: plugin config can hold secrets (e.g. an API key). writeFileSync's mode only
+      // applies on CREATE, so chmod an already-existing, looser file too (best-effort).
+      fs.writeFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
+      try {
+        fs.chmodSync(this.registryPath, 0o600);
+      } catch {
+        /* best-effort hardening */
+      }
     } catch (error) {
       this.logger.error('Failed to save plugin registry', String(error), {
         action: 'registry_save_failed',
