@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Documented chat-history limits.** A new guide explains the difference between the local message-history
+  endpoint (`GET /sessions/:id/messages`, reads OpenWA's database) and the bounded live-history endpoint
+  (`GET /sessions/:id/messages/:chatId/history`, asks the engine): live history defaults to `limit=50` and is
+  clamped to `[1, 100]` (so `limit=999` returns 100, not the full account history), and is a recent-history
+  helper rather than a complete server-side import. (#356)
+
 ## [0.4.3] - 2026-06-19
 
 A security-hardening and reliability release: outbound-request and storage hardening, plugin/message persistence

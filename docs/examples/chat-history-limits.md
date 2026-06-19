@@ -27,11 +27,17 @@ The endpoint is intentionally bounded:
 - Values such as `limit=999` do not request unbounded history; they are reduced to the maximum allowed limit.
 - `includeMedia=true` downloads media data and is slower than metadata-only history.
 
-## What It Does Not Guarantee
+## How Deep It Can Reach
 
-The live history endpoint does not guarantee a complete import of all server-side WhatsApp history.
+The live history endpoint returns at most the **100 most recent** messages per request (the `limit` clamp
+above). The `whatsapp-web.js` engine *can* load older messages on demand — internally it drives WhatsApp
+Web's "load earlier messages" mechanism — so reaching further back is bounded by **OpenWA's current cap**,
+not by what WhatsApp Web is willing to expose. To go back weeks or months you would need a much larger
+window than 100; a deeper-history mode is tracked in [#347](https://github.com/rmyndharis/OpenWA/issues/347).
 
-For the `whatsapp-web.js` engine, available history is limited by what WhatsApp Web exposes to the browser session. If WhatsApp Web itself requires manual loading of older messages from the phone, OpenWA cannot assume that the entire account history is already available through a single history request.
+There is still an ultimate ceiling: once WhatsApp's servers stop returning older messages for the linked
+session, no further history is retrievable through the web engine, regardless of `limit`. So the endpoint
+does not guarantee a complete import of all server-side WhatsApp history.
 
 ## Recommended Usage
 
