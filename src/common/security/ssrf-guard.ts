@@ -73,6 +73,38 @@ const BLOCKED_V4: ReadonlyArray<readonly [string, number]> = [
  * CGNAT, multicast, IPv6 loopback/ULA/link-local, IPv4-mapped variants).
  * Anything that isn't a recognizable public IP is treated as blocked (fail-closed).
  */
+/** Two 16-bit hextets → dotted IPv4 string (for IPv4-in-IPv6 embeddings like ::ffff:, 6to4, NAT64). */
+function hextetsToV4(hi: number, lo: number): string {
+  return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+}
+
+/**
+ * Expand a (possibly ::-compressed, possibly dotted-IPv4-tailed) IPv6 literal to its 8 numeric
+ * hextets, or null if malformed. Full expansion is required so a compressed all-zero embedded segment
+ * (e.g. 2002:7f00:: → 127.0.0.0) is read as 0x0000 rather than silently skipped.
+ */
+function expandIPv6(lower: string): number[] | null {
+  let s = lower;
+  // Fold a trailing dotted IPv4 (::a.b.c.d) into two hex hextets so the remainder is pure hex.
+  const dotted = s.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (dotted) {
+    const octets = dotted.slice(1, 5).map(Number);
+    if (octets.some(o => o > 255)) return null;
+    const [a, b, c, d] = octets;
+    s = s.slice(0, dotted.index) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const gap = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : gap < 1) return null;
+  const parts = [...head, ...Array<string>(Math.max(gap, 0)).fill('0'), ...tail];
+  if (parts.length !== 8) return null;
+  const nums = parts.map(h => (/^[0-9a-f]{1,4}$/.test(h) ? parseInt(h, 16) : NaN));
+  return nums.some(n => Number.isNaN(n)) ? null : nums;
+}
+
 export function isBlockedAddress(ip: string): boolean {
   if (isIPv4(ip)) {
     const n = ipv4ToInt(ip);
@@ -101,6 +133,24 @@ export function isBlockedAddress(ip: string): boolean {
     const firstHextet = lower.split(':')[0];
     if (firstHextet.startsWith('fc') || firstHextet.startsWith('fd')) return true; // ULA fc00::/7
     if (/^fe[89ab]/.test(firstHextet)) return true; // link-local fe80::/10
+
+    // IPv6 forms that embed an IPv4 — 6to4 (2002::/16), NAT64 (64:ff9b::/96), and the deprecated
+    // IPv4-compatible ::/96 — are classified by the embedded address so they reach the IPv4 blocklist,
+    // mirroring the ::ffff: handling above. The literal is fully expanded first so a compressed all-zero
+    // embedded hextet (e.g. 2002:7f00:: → 127.0.0.0) is not skipped. A 6to4/NAT64/compat of a genuinely
+    // public IPv4 still returns false, so legitimate IPv6 delivery is unaffected.
+    const hextets = expandIPv6(lower);
+    if (hextets) {
+      if (hextets[0] === 0x2002) {
+        return isBlockedAddress(hextetsToV4(hextets[1], hextets[2])); // 6to4
+      }
+      if (hextets[0] === 0x64 && hextets[1] === 0xff9b) {
+        return isBlockedAddress(hextetsToV4(hextets[6], hextets[7])); // NAT64
+      }
+      if (hextets.slice(0, 6).every(h => h === 0) && (hextets[6] | hextets[7]) !== 0) {
+        return isBlockedAddress(hextetsToV4(hextets[6], hextets[7])); // IPv4-compatible ::/96
+      }
+    }
     return false;
   }
 

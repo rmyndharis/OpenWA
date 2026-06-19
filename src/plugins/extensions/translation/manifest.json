@@ -13,7 +13,7 @@
       "libretranslateUrl": {
         "type": "string",
         "title": "LibreTranslate URL",
-        "description": "Base URL of the LibreTranslate instance (e.g. http://libretranslate:7001).",
+        "description": "Base URL of the LibreTranslate instance (e.g. http://libretranslate:7001). With SSRF protection on (the default), a loopback/internal URL such as http://localhost:7001 must be added to SSRF_ALLOWED_HOSTS.",
         "default": "http://localhost:7001",
         "required": true
       },

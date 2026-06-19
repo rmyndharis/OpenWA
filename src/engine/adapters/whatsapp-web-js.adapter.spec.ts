@@ -2,6 +2,7 @@ import { MessageMedia } from 'whatsapp-web.js';
 import {
   WhatsAppWebJsAdapter,
   extractLinkedParentJID,
+  isSupportedProxyUrl,
   loadRemoteMedia,
   resolveWebVersionPin,
   wwebjsAckToDeliveryStatus,
@@ -31,6 +32,19 @@ describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus bo
     [5, 'read'], // any future/higher ack stays read, never crashes
   ])('maps wwebjs ack %i -> %s', (ack, expected) => {
     expect(wwebjsAckToDeliveryStatus(ack)).toBe(expected);
+  });
+});
+
+describe('isSupportedProxyUrl', () => {
+  it.each(['http://proxy:8080', 'https://proxy:8443', 'socks4://proxy:1080', 'socks5://user:pass@proxy:1080'])(
+    'accepts %s',
+    url => {
+      expect(isSupportedProxyUrl(url)).toBe(true);
+    },
+  );
+
+  it.each(['not a url', 'ftp://proxy:21', 'proxy:8080', ''])('rejects %s', url => {
+    expect(isSupportedProxyUrl(url)).toBe(false);
   });
 });
 
