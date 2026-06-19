@@ -20,9 +20,14 @@ jest.mock('fs', () => {
   };
 });
 
+import { DataSource } from 'typeorm';
 import { InfraController } from './infra.controller';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { Session, SessionStatus } from '../session/entities/session.entity';
+import { Webhook } from '../webhook/entities/webhook.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { MessageBatch, BatchStatus } from '../message/entities/message-batch.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -194,6 +199,144 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
     expect(env).not.toContain('S3_BUCKET=');
     expect(env).not.toContain('S3_ACCESS_KEY_ID=');
     expect(env).not.toContain('S3_SECRET_ACCESS_KEY=');
+  });
+});
+
+describe('InfraController.importData round-trips export-data (no silent message/batch loss)', () => {
+  let ds: DataSource;
+  let controller: InfraController;
+  // exportData only reads dataDatabase.type off the config; everything else is unused here.
+  const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
+
+  const newController = () =>
+    new InfraController(cfg as never, {} as never, ds, {} as never, {} as never, {} as never, {} as never, {} as never);
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [Session, Webhook, Message, MessageBatch],
+      synchronize: true,
+    });
+    await ds.initialize();
+    controller = newController();
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  const seedSession = (id: string) =>
+    ds.getRepository(Session).save(
+      ds.getRepository(Session).create({
+        id,
+        name: `session-${id}`,
+        status: SessionStatus.READY,
+        phone: null,
+        pushName: null,
+        config: {},
+        proxyUrl: null,
+        proxyType: null,
+        connectedAt: null,
+        lastActiveAt: null,
+      }),
+    );
+
+  it('restores messages and message_batches faithfully — not silently to zero', async () => {
+    await seedSession('s1');
+    await ds.getRepository(Message).save(
+      ds.getRepository(Message).create({
+        id: 'm1',
+        sessionId: 's1',
+        waMessageId: 'WA1',
+        chatId: 'c1@s.whatsapp.net',
+        from: 'a@s.whatsapp.net',
+        to: 'b@s.whatsapp.net',
+        body: 'hello',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        timestamp: 1700000000,
+        metadata: { ack: 2 },
+        status: MessageStatus.DELIVERED,
+      }),
+    );
+    await ds.getRepository(MessageBatch).save(
+      ds.getRepository(MessageBatch).create({
+        id: 'b1',
+        batchId: 'BATCH1',
+        sessionId: 's1',
+        status: BatchStatus.COMPLETED,
+        messages: [{ chatId: 'c1', type: 'text', content: {} }],
+        options: null as never,
+        progress: null as never,
+        results: null as never,
+        currentIndex: 0,
+        startedAt: null,
+        completedAt: null,
+      }),
+    );
+
+    const dump = await controller.exportData();
+    expect(dump.counts.messages).toBe(1);
+    expect(dump.counts.messageBatches).toBe(1);
+
+    const res = await controller.importData({ tables: dump.tables });
+
+    // The whole point of the bug: a valid backup must restore with no warnings and imported:true.
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.messages).toBe(1);
+    expect(res.counts.messageBatches).toBe(1);
+
+    // ...and the rows must actually be present after the DELETE+reinsert, with fields intact.
+    expect(await ds.getRepository(Message).count()).toBe(1);
+    expect(await ds.getRepository(MessageBatch).count()).toBe(1);
+    const m = await ds.getRepository(Message).findOneByOrFail({ id: 'm1' });
+    expect(m.body).toBe('hello');
+    expect(m.waMessageId).toBe('WA1');
+    expect(m.from).toBe('a@s.whatsapp.net');
+    expect(m.to).toBe('b@s.whatsapp.net');
+    expect(m.metadata).toEqual({ ack: 2 });
+    const b = await ds.getRepository(MessageBatch).findOneByOrFail({ id: 'b1' });
+    expect(b.batchId).toBe('BATCH1');
+    expect(b.status).toBe(BatchStatus.COMPLETED);
+  });
+
+  it('rolls back and reports imported:false when a row fails — existing data is preserved', async () => {
+    // Pre-existing data that must survive a failed import.
+    await seedSession('s1');
+    await ds.getRepository(Message).save(
+      ds.getRepository(Message).create({
+        id: 'm1',
+        sessionId: 's1',
+        waMessageId: 'WA1',
+        chatId: 'c1',
+        from: 'a',
+        to: 'b',
+        body: 'keep me',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.DELIVERED,
+      }),
+    );
+
+    // A backup whose message row is malformed (missing the non-null from/to) must fail the whole import.
+    const res = await controller.importData({
+      tables: {
+        sessions: [{ id: 's2', name: 'imported', status: 'ready' }] as never,
+        messages: [
+          { id: 'mX', sessionId: 's2', chatId: 'c', type: 'text', direction: 'incoming', status: 'sent' },
+        ] as never,
+      },
+    });
+
+    expect(res.imported).toBe(false);
+    expect(res.warnings.length).toBeGreaterThan(0);
+
+    // The destructive DELETE must have been rolled back — original data intact, nothing from the bad import.
+    expect(await ds.getRepository(Message).count()).toBe(1);
+    expect((await ds.getRepository(Message).findOneByOrFail({ id: 'm1' })).body).toBe('keep me');
+    expect(await ds.getRepository(Session).findOneBy({ id: 's2' })).toBeNull();
   });
 });
 
