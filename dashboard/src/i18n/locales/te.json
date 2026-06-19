@@ -226,7 +226,8 @@
       "start": "ప్రారంభించు",
       "stop": "ఆపివేయి",
       "reconnect": "మళ్లీ కనెక్ట్ చేయి",
-      "delete": "తొలగించు"
+      "delete": "తొలగించు",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "సెషన్ సిద్ధంగా ఉంది",
@@ -241,6 +242,16 @@
       "sessionId": "సెషన్ ID",
       "lastActive": "చివరిసారి యాక్టివ్",
       "error": "లోపం"
+    },
+    "forceKill": {
+      "title": "Kill Stuck Session",
+      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
+      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
+      "confirm": "Kill Session",
+      "successTitle": "Session Killed",
+      "success": "Session has been force-killed. You can restart it now.",
+      "failedTitle": "Force-Kill Failed",
+      "failed": "Failed to force-kill the session."
     }
   },
   "webhooks": {

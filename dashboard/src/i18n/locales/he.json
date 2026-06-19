@@ -226,7 +226,8 @@
       "start": "הפעלה",
       "stop": "עצירה",
       "reconnect": "התחברות מחדש",
-      "delete": "מחיקה"
+      "delete": "מחיקה",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "ה-Session מוכן",
@@ -241,6 +242,16 @@
       "sessionId": "מזהה Session",
       "lastActive": "פעילות אחרונה",
       "error": "שגיאה"
+    },
+    "forceKill": {
+      "title": "Kill Stuck Session",
+      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
+      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
+      "confirm": "Kill Session",
+      "successTitle": "Session Killed",
+      "success": "Session has been force-killed. You can restart it now.",
+      "failedTitle": "Force-Kill Failed",
+      "failed": "Failed to force-kill the session."
     }
   },
   "webhooks": {

@@ -226,7 +226,8 @@
       "start": "Start",
       "stop": "Stop",
       "reconnect": "Reconnect",
-      "delete": "Delete"
+      "delete": "Delete",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "Session Ready",
@@ -241,6 +242,16 @@
       "sessionId": "Session ID",
       "lastActive": "Last Active",
       "error": "Error"
+    },
+    "forceKill": {
+      "title": "Kill Stuck Session",
+      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
+      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
+      "confirm": "Kill Session",
+      "successTitle": "Session Killed",
+      "success": "Session has been force-killed. You can restart it now.",
+      "failedTitle": "Force-Kill Failed",
+      "failed": "Failed to force-kill the session."
     }
   },
   "webhooks": {

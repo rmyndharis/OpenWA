@@ -226,7 +226,8 @@
       "start": "启动",
       "stop": "停止",
       "reconnect": "重新连接",
-      "delete": "删除"
+      "delete": "删除",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "会话就绪",
@@ -241,6 +242,16 @@
       "sessionId": "会话 ID",
       "lastActive": "上次活跃",
       "error": "错误"
+    },
+    "forceKill": {
+      "title": "Kill Stuck Session",
+      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
+      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
+      "confirm": "Kill Session",
+      "successTitle": "Session Killed",
+      "success": "Session has been force-killed. You can restart it now.",
+      "failedTitle": "Force-Kill Failed",
+      "failed": "Failed to force-kill the session."
     }
   },
   "webhooks": {
