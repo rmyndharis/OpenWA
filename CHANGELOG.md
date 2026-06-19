@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk-sent messages are now recorded, their errors no longer leak internal addresses, and a running
+  batch can be cancelled across instances.** Messages sent via a bulk batch went straight to the engine
+  and were never written to the messages table, so they were invisible to chat history and statistics; a
+  blocked-destination (SSRF) failure stored the refused internal address verbatim in the batch result
+  (readable via the batch-status endpoint); and a cancellation was only honoured by the process that
+  created the batch. Bulk sends now persist like single sends, a blocked-destination error is reported as a
+  generic code, and the batch is re-checked against the database as it runs so a cancel issued by another
+  instance (or after a restart) stops it.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

@@ -480,9 +480,10 @@ export class MessageService {
 
   /**
    * Save outgoing message to database.
-   * When called before sending, creates a record with PENDING status.
+   * When called before sending, creates a record with PENDING status; bulk send reuses this after a
+   * successful send (status SENT) so batch messages are persisted like single sends.
    */
-  private async saveOutgoingMessage(
+  async saveOutgoingMessage(
     sessionId: string,
     data: {
       waMessageId?: string;

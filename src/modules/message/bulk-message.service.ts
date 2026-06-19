@@ -10,8 +10,11 @@ import {
   BatchMessageResult,
 } from './entities/message-batch.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
+import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
-import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { MessageService } from './message.service';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
 // Type definitions for bulk message content
 interface BulkMessageContent {
@@ -40,6 +43,18 @@ export function resolveFinalBatchStatus(
   return progress.failed > 0 && progress.sent === 0 ? BatchStatus.FAILED : BatchStatus.COMPLETED;
 }
 
+/**
+ * Build the error stored on a batch result. An SSRF block names the internal host/IP it refused, so
+ * it must never be persisted/returned verbatim — it would be readable via GET batch status. Map it to
+ * a generic, code-tagged message; ordinary errors keep their (non-sensitive) message.
+ */
+export function sanitizeBatchError(error: unknown): { code: string; message: string } {
+  if (error instanceof SsrfBlockedError) {
+    return { code: 'SEND_BLOCKED', message: 'Destination address is not allowed' };
+  }
+  return { code: 'SEND_FAILED', message: error instanceof Error ? error.message : String(error) };
+}
+
 @Injectable()
 export class BulkMessageService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BulkMessageService.name);
@@ -49,6 +64,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     @InjectRepository(MessageBatch, 'data')
     private readonly batchRepository: Repository<MessageBatch>,
     private readonly sessionService: SessionService,
+    private readonly messageService: MessageService,
   ) {}
 
   /**
@@ -182,6 +198,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
 
     const results: BatchMessageResult[] = batch.results || [];
     let stoppedOnError = false;
+    let cancelledByDb = false;
 
     for (let i = batch.currentIndex; i < batch.messages.length; i++) {
       // Check for cancellation
@@ -209,17 +226,21 @@ export class BulkMessageService implements OnApplicationBootstrap {
         batch.progress.sent++;
         batch.progress.pending--;
 
+        // Persist like a single send so the message shows in chat history + stats. The engine echo
+        // (onMessageCreate) fires the webhook/WS but does NOT write the DB, so without this the
+        // bulk-sent message is invisible to the messages table.
+        await this.persistSentMessage(batch.sessionId, msg.chatId, msg.type, content, messageResult);
+
         this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
       } catch (error) {
         result.status = BatchMessageStatus.FAILED;
-        result.error = {
-          code: 'SEND_FAILED',
-          message: String(error),
-        };
+        // Sanitize: an SSRF block names an internal address — never store/return/log it verbatim.
+        const sanitized = sanitizeBatchError(error);
+        result.error = sanitized;
         batch.progress.failed++;
         batch.progress.pending--;
 
-        this.logger.warn(`Batch ${batch.batchId}: Failed message ${i + 1} to ${msg.chatId}: ${String(error)}`);
+        this.logger.warn(`Batch ${batch.batchId}: Failed message ${i + 1} to ${msg.chatId}: ${sanitized.message}`);
 
         if (batch.options.stopOnError) {
           batch.status = BatchStatus.FAILED;
@@ -235,6 +256,15 @@ export class BulkMessageService implements OnApplicationBootstrap {
 
       // Save progress periodically (every 10 messages or last message)
       if (i % 10 === 0 || i === batch.messages.length - 1) {
+        // Honor a cancellation issued by ANOTHER instance / after a restart — the in-memory Map only
+        // sees same-process cancels. Re-read the status BEFORE saving so we don't clobber a CANCELLED
+        // back to PROCESSING.
+        const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: ['status'] });
+        if (fresh?.status === BatchStatus.CANCELLED) {
+          cancelledByDb = true;
+          this.logger.log(`Batch ${batch.batchId} cancelled (DB) at index ${i}`);
+          break;
+        }
         await this.batchRepository.save(batch);
       }
 
@@ -247,7 +277,16 @@ export class BulkMessageService implements OnApplicationBootstrap {
 
     // Final update. NOTE: `batch` still holds the in-memory PROCESSING status from the start, so a
     // cancellation persisted by cancelBatch would be overwritten if we saved without re-deriving it.
-    const cancelled = !this.processingBatches.get(batch.id);
+    // A cancel may also have landed AFTER the last cadence re-read (multi-replica / post-restart); the
+    // unconditional save below would clobber it back to a terminal non-cancelled status, so re-read
+    // once more here unless we already know the batch was cancelled.
+    if (!cancelledByDb) {
+      const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: ['status'] });
+      if (fresh?.status === BatchStatus.CANCELLED) {
+        cancelledByDb = true;
+      }
+    }
+    const cancelled = cancelledByDb || !this.processingBatches.get(batch.id);
     batch.status = resolveFinalBatchStatus(cancelled, stoppedOnError, batch.progress);
     if (cancelled) {
       // Reconcile the counters the same way cancelBatch does, so the persisted state is consistent.
@@ -295,12 +334,48 @@ export class BulkMessageService implements OnApplicationBootstrap {
     return processValue(content) as BulkMessageContent;
   }
 
+  /**
+   * Persist a successfully-sent batch message via the shared single-send persistence path, so it
+   * shows up in chat history and stats like any other outgoing message. Best-effort: a persistence
+   * failure must never flip a message that actually went out to FAILED.
+   */
+  private async persistSentMessage(
+    sessionId: string,
+    chatId: string,
+    type: string,
+    content: BulkMessageContent,
+    result: MessageResult,
+  ): Promise<void> {
+    const media = content.image ?? content.video ?? content.audio ?? content.document;
+    try {
+      await this.messageService.saveOutgoingMessage(sessionId, {
+        waMessageId: result.id,
+        chatId,
+        body: content.text ?? content.caption ?? '',
+        type,
+        timestamp: result.timestamp,
+        status: MessageStatus.SENT,
+        metadata: media
+          ? {
+              media: {
+                mimetype: media.mimetype,
+                data: media.url ?? media.base64,
+                filename: content.document?.filename,
+              },
+            }
+          : undefined,
+      });
+    } catch (error) {
+      this.logger.warn(`Batch message persisted-after-send failed: ${String(error)}`);
+    }
+  }
+
   private sendMessage(
     engine: IWhatsAppEngine,
     chatId: string,
     type: string,
     content: BulkMessageContent,
-  ): Promise<{ id: string }> {
+  ): Promise<MessageResult> {
     switch (type) {
       case 'text':
         return engine.sendTextMessage(chatId, content.text || '');
