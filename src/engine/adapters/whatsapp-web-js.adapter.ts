@@ -34,6 +34,7 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { assertSafeFetchUrl } from '../../common/security/ssrf-guard';
 import {
   GroupChat,
@@ -44,6 +45,7 @@ import {
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
 import { buildIncomingMessageBase } from './message-mapper';
+import { capInboundMedia } from './inbound-media-cap';
 
 /** Default cap on a server-side media download: 50 MiB (overridable via MEDIA_DOWNLOAD_MAX_BYTES). */
 const DEFAULT_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
@@ -285,11 +287,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           try {
             const media = await msg.downloadMedia();
             if (media) {
-              incomingMessage.media = {
+              // Cap inbound media so an oversized blob isn't persisted/webhooked/broadcast.
+              incomingMessage.media = capInboundMedia({
                 mimetype: media.mimetype,
                 filename: media.filename || undefined,
-                data: media.data,
-              };
+                sizeBytes: Buffer.byteLength(media.data, 'base64'),
+                toBase64: () => media.data,
+              });
+              if (incomingMessage.media.omitted) {
+                this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
+                  msgId: msg.id._serialized,
+                  sizeBytes: incomingMessage.media.sizeBytes,
+                });
+              }
             }
           } catch (error) {
             this.logger.error('Error downloading media', String(error));
@@ -669,7 +679,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
 
     if (!quotedMsg) {
-      throw new Error(`Message ${quotedMsgId} not found`);
+      throw new MessageNotFoundError(quotedMsgId);
     }
 
     const msg = await quotedMsg.reply(text);
@@ -686,7 +696,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msgToForward = messages.find(m => m.id._serialized === messageId);
 
     if (!msgToForward) {
-      throw new Error(`Message ${messageId} not found`);
+      throw new MessageNotFoundError(messageId);
     }
 
     await msgToForward.forward(toChatId);
@@ -820,7 +830,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId);
     if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
+      throw new MessageNotFoundError(messageId, chatId);
     }
     await (message as MessageWithReactions).react(emoji);
     this.logger.log(`Reacted to message ${messageId} with ${emoji || '(removed)'}`);
@@ -832,7 +842,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId);
     if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
+      throw new MessageNotFoundError(messageId, chatId);
     }
     const msgWithReactions = message as MessageWithReactions;
     if (!msgWithReactions.hasReaction) {
@@ -1015,11 +1025,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         try {
           const media = await msg.downloadMedia();
           if (media) {
-            out.media = {
+            // Cap history media too: a large historical blob shouldn't bloat the response/heap.
+            out.media = capInboundMedia({
               mimetype: media.mimetype,
               filename: media.filename || undefined,
-              data: media.data,
-            };
+              sizeBytes: Buffer.byteLength(media.data, 'base64'),
+              toBase64: () => media.data,
+            });
           }
         } catch (error) {
           this.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
@@ -1037,7 +1049,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId || m.id.id === messageId);
     if (!message) {
-      throw new Error(`Message ${messageId} not found in chat ${chatId}`);
+      throw new MessageNotFoundError(messageId, chatId);
     }
     await message.delete(forEveryone);
     this.logger.log(`Deleted message ${messageId} from chat ${chatId} (forEveryone: ${forEveryone})`);

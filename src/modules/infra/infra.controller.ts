@@ -98,34 +98,40 @@ interface WebhookRow {
   updatedAt: string;
 }
 
+// Shapes mirror the REAL table columns as returned by `SELECT *` (export-data), not the
+// camelCase TypeORM entity properties. `messages` columns are the property names; `message_batches`
+// columns are snake_case (the entity maps them via `name:`). Keeping these accurate is what keeps
+// the import column lists below from drifting back into "no such column" failures.
 interface MessageRow {
   id: string;
   sessionId: string;
-  messageId: string;
+  waMessageId: string | null;
   chatId: string;
-  direction: string;
+  from: string;
+  to: string;
+  body: string | null;
   type: string;
-  content: string | Record<string, unknown>;
+  direction: string;
+  timestamp: number | string | null;
+  metadata: string | Record<string, unknown> | null;
   status: string;
-  metadata: string | Record<string, unknown>;
   createdAt: string;
-  updatedAt: string;
 }
 
 interface MessageBatchRow {
   id: string;
-  batchId: string;
-  sessionId: string;
+  batch_id: string;
+  session_id: string;
   status: string;
   messages: string | unknown[];
-  options: string | Record<string, unknown>;
-  progress: string | Record<string, unknown>;
-  results: string | unknown[];
-  currentIndex: number;
-  createdAt: string;
-  updatedAt: string;
-  startedAt: string | null;
-  completedAt: string | null;
+  options: string | Record<string, unknown> | null;
+  progress: string | Record<string, unknown> | null;
+  results: string | unknown[] | null;
+  current_index: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
 }
 
 interface MigrationTables {
@@ -723,20 +729,26 @@ export class InfraController {
         for (const msg of data.tables.messages) {
           try {
             await queryRunner.query(
-              `INSERT INTO messages (id, "sessionId", "messageId", "chatId", direction, type, content, status, metadata, "createdAt", "updatedAt") 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
               [
                 msg.id,
                 msg.sessionId,
-                msg.messageId,
+                msg.waMessageId ?? null,
                 msg.chatId,
-                msg.direction,
+                msg.from,
+                msg.to,
+                msg.body ?? null,
                 msg.type,
-                typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || {}),
+                msg.direction,
+                msg.timestamp ?? null,
+                msg.metadata == null
+                  ? null
+                  : typeof msg.metadata === 'string'
+                    ? msg.metadata
+                    : JSON.stringify(msg.metadata),
                 msg.status,
-                typeof msg.metadata === 'string' ? msg.metadata : JSON.stringify(msg.metadata || {}),
                 msg.createdAt,
-                msg.updatedAt,
               ],
             );
             messagesCount++;
@@ -752,22 +764,34 @@ export class InfraController {
         for (const batch of data.tables.messageBatches) {
           try {
             await queryRunner.query(
-              `INSERT INTO message_batches (id, "batchId", "sessionId", status, messages, options, progress, results, "currentIndex", "createdAt", "updatedAt", "startedAt", "completedAt") 
+              `INSERT INTO message_batches (id, batch_id, session_id, status, messages, options, progress, results, current_index, created_at, updated_at, started_at, completed_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
               [
                 batch.id,
-                batch.batchId,
-                batch.sessionId,
+                batch.batch_id,
+                batch.session_id,
                 batch.status,
-                typeof batch.messages === 'string' ? batch.messages : JSON.stringify(batch.messages || []),
-                typeof batch.options === 'string' ? batch.options : JSON.stringify(batch.options || {}),
-                typeof batch.progress === 'string' ? batch.progress : JSON.stringify(batch.progress || {}),
-                typeof batch.results === 'string' ? batch.results : JSON.stringify(batch.results || []),
-                batch.currentIndex,
-                batch.createdAt,
-                batch.updatedAt,
-                batch.startedAt,
-                batch.completedAt,
+                typeof batch.messages === 'string' ? batch.messages : JSON.stringify(batch.messages ?? []),
+                batch.options == null
+                  ? null
+                  : typeof batch.options === 'string'
+                    ? batch.options
+                    : JSON.stringify(batch.options),
+                batch.progress == null
+                  ? null
+                  : typeof batch.progress === 'string'
+                    ? batch.progress
+                    : JSON.stringify(batch.progress),
+                batch.results == null
+                  ? null
+                  : typeof batch.results === 'string'
+                    ? batch.results
+                    : JSON.stringify(batch.results),
+                batch.current_index,
+                batch.created_at,
+                batch.updated_at,
+                batch.started_at,
+                batch.completed_at,
               ],
             );
             messageBatchesCount++;
@@ -777,18 +801,24 @@ export class InfraController {
         }
       }
 
-      await queryRunner.commitTransaction();
-
-      return {
-        imported: true,
-        counts: {
-          sessions: sessionsCount,
-          webhooks: webhooksCount,
-          messages: messagesCount,
-          messageBatches: messageBatchesCount,
-        },
-        warnings,
+      const counts = {
+        sessions: sessionsCount,
+        webhooks: webhooksCount,
+        messages: messagesCount,
+        messageBatches: messageBatchesCount,
       };
+
+      // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any
+      // INSERT failed we must roll back (restoring the pre-import data) rather than commit a
+      // half-wiped DB and report success. A partial restore reported as imported:true was how
+      // message history could silently vanish on a SQLite->Postgres migration.
+      if (warnings.length > 0) {
+        await queryRunner.rollbackTransaction();
+        return { imported: false, counts, warnings };
+      }
+
+      await queryRunner.commitTransaction();
+      return { imported: true, counts, warnings };
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

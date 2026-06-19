@@ -189,14 +189,14 @@ describe('WebhookService', () => {
       const webhook = createMockWebhook();
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
 
-      const result = await service.findOne('wh-uuid-1');
+      const result = await service.findOne('sess-1', 'wh-uuid-1');
       expect(result.id).toBe('wh-uuid-1');
     });
 
     it('should throw NotFoundException if not found', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.findOne('nonexistent')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('sess-1', 'nonexistent')).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -208,7 +208,7 @@ describe('WebhookService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
       (repository.save as jest.Mock).mockImplementation(w => Promise.resolve(w));
 
-      const result = await service.update('wh-uuid-1', { url: 'https://new-url.com/hook' });
+      const result = await service.update('sess-1', 'wh-uuid-1', { url: 'https://new-url.com/hook' });
 
       expect(result.url).toBe('https://new-url.com/hook');
       expect(result.events).toEqual(['message.received']); // unchanged
@@ -223,7 +223,7 @@ describe('WebhookService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
       (repository.remove as jest.Mock).mockResolvedValue(webhook);
 
-      await service.delete('wh-uuid-1');
+      await service.delete('sess-1', 'wh-uuid-1');
 
       expect(repository.remove).toHaveBeenCalledWith(webhook);
     });
