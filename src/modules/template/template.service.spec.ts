@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { TemplateService } from './template.service';
 import { Template } from './entities/template.entity';
 import { Session } from '../session/entities/session.entity';
@@ -120,13 +120,18 @@ describe('TemplateService', () => {
       expect(result).toBe(template);
     });
 
-    it('should resolve by templateName', async () => {
+    it('should resolve by templateName deterministically (earliest first)', async () => {
       const template = createMockTemplate();
       (repository.findOne as jest.Mock).mockResolvedValue(template);
 
       const result = await service.resolve('sess-1', { templateName: 'order-confirmation' });
 
-      expect(repository.findOne).toHaveBeenCalledWith({ where: { name: 'order-confirmation', sessionId: 'sess-1' } });
+      // Order by createdAt ASC so resolve-by-name is deterministic even before the unique index is
+      // enforced (and after, there is only one row anyway).
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { name: 'order-confirmation', sessionId: 'sess-1' },
+        order: { createdAt: 'ASC' },
+      });
       expect(result).toBe(template);
     });
 
@@ -178,6 +183,31 @@ describe('TemplateService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
 
       await expect(service.delete('sess-1', 'missing')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ── name uniqueness (one name per session) ────────────────────────
+
+  describe('name uniqueness', () => {
+    const uniqueViolation = (): Error =>
+      Object.assign(new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: templates.sessionId, templates.name'), {
+        code: 'SQLITE_CONSTRAINT',
+      });
+
+    it('translates a duplicate-name violation on create into 409 Conflict', async () => {
+      (repository.save as jest.Mock).mockRejectedValueOnce(uniqueViolation());
+      await expect(service.create('sess-1', { name: 'dup', body: 'x' })).rejects.toThrow(ConflictException);
+    });
+
+    it('translates a duplicate-name violation on update into 409 Conflict', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockTemplate());
+      (repository.save as jest.Mock).mockRejectedValueOnce(uniqueViolation());
+      await expect(service.update('sess-1', 'tpl-uuid-1', { name: 'dup' })).rejects.toThrow(ConflictException);
+    });
+
+    it('rethrows a non-uniqueness DB error unchanged', async () => {
+      (repository.save as jest.Mock).mockRejectedValueOnce(new Error('disk I/O error'));
+      await expect(service.create('sess-1', { name: 'x', body: 'y' })).rejects.toThrow('disk I/O error');
     });
   });
 });
