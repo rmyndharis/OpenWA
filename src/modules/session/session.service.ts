@@ -63,6 +63,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // awaits and destroys any engine it just created; start() clears it (intentional restart).
   private stoppingSessions: Set<string> = new Set();
 
+  // Sessions whose engine is mid-initialization (a start() is in flight). Reserved synchronously
+  // in start() so a near-simultaneous second start() can't pass the engines.has() check during the
+  // awaited hook and orphan an engine the lifecycle could never destroy.
+  private initializingSessions: Set<string> = new Set();
+
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepository: Repository<Session>,
@@ -286,37 +291,49 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async start(id: string): Promise<Session> {
     const session = await this.findOne(id);
 
+    // Reserve the slot SYNCHRONOUSLY (same tick as the has() check) so two near-simultaneous
+    // start() calls can't both pass the check and orphan an engine — the has() -> engines.set()
+    // window spans the awaited hook below. The second caller is rejected; the finally clears the
+    // reservation on success AND failure so a failed start never wedges at "already starting".
     if (this.engines.has(id)) {
       throw new BadRequestException('Session is already started');
     }
+    if (this.initializingSessions.has(id)) {
+      throw new BadRequestException('Session is already starting');
+    }
+    this.initializingSessions.add(id);
 
-    // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark.
-    this.stoppingSessions.delete(id);
+    try {
+      // A fresh start intentionally (re-)creates the engine — clear any stale stop/delete mark.
+      this.stoppingSessions.delete(id);
 
-    // Execute hook before starting
-    await this.hookManager.execute(
-      'session:starting',
-      { sessionId: id },
-      {
-        sessionId: id,
-        source: 'SessionService',
-      },
-    );
+      // Execute hook before starting
+      await this.hookManager.execute(
+        'session:starting',
+        { sessionId: id },
+        {
+          sessionId: id,
+          source: 'SessionService',
+        },
+      );
 
-    // Initialize reconnect state
-    const config = session.config as {
-      maxReconnectAttempts?: number;
-      reconnectBaseDelay?: number;
-    } | null;
-    this.reconnectStates.set(id, {
-      attempts: 0,
-      timer: null,
-      maxAttempts: config?.maxReconnectAttempts ?? 5,
-      baseDelay: config?.reconnectBaseDelay ?? 5000,
-    });
+      // Initialize reconnect state
+      const config = session.config as {
+        maxReconnectAttempts?: number;
+        reconnectBaseDelay?: number;
+      } | null;
+      this.reconnectStates.set(id, {
+        attempts: 0,
+        timer: null,
+        maxAttempts: config?.maxReconnectAttempts ?? 5,
+        baseDelay: config?.reconnectBaseDelay ?? 5000,
+      });
 
-    await this.initializeEngine(id, session);
-    return this.findOne(id);
+      await this.initializeEngine(id, session);
+      return this.findOne(id);
+    } finally {
+      this.initializingSessions.delete(id);
+    }
   }
 
   private async initializeEngine(id: string, session: Session): Promise<void> {

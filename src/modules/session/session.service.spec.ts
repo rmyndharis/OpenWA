@@ -203,6 +203,37 @@ describe('SessionService', () => {
     });
   });
 
+  // ── start (concurrency) ───────────────────────────────────────────
+  describe('start concurrency (F-04)', () => {
+    it('rejects a concurrent second start for the same id, creating only one engine (no orphan)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+
+      // Two near-simultaneous start() calls for the SAME id. The has()->set() window spans an
+      // awaited hook, so without a synchronous reservation both would create an engine and the
+      // second set() would orphan the first's Chromium/lock dir.
+      const results = await Promise.allSettled([service.start('sess-uuid-1'), service.start('sess-uuid-1')]);
+
+      expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(BadRequestException);
+      // The decisive assertion: exactly ONE engine was ever created — no orphaned second engine.
+      expect(engineFactory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows a fresh start after the previous one completed (reservation is cleared)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+
+      await service.start('sess-uuid-1');
+      // Engine is now in the map, so a second start is 'already started' (not wedged at 'starting').
+      await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
   describe('findByName', () => {
     it('should return session by name', async () => {
       const session = createMockSession();
