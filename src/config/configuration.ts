@@ -117,4 +117,12 @@ export default () => ({
       endpoint: process.env.S3_ENDPOINT,
     },
   },
+
+  // LLM provider configuration
+  llm: {
+    provider: process.env.LLM_PROVIDER || '',
+    apiKey: process.env.LLM_API_KEY || '',
+    model: process.env.LLM_MODEL || '',
+    baseUrl: process.env.LLM_BASE_URL || '',
+  },
 });
