@@ -63,4 +63,24 @@ describe('BaileysPlugin.createEngine (opaque config)', () => {
     plugin.createEngine({ sessionId: 'sess-1' });
     expect(BaileysAdapter).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-1', messageStore: store }));
   });
+
+  it('Uses the constructor-supplied engine config when onLoad never ran (enable-failure path)', () => {
+    const plugin = new BaileysPlugin(undefined, { baileys: { authDir: '/op/baileys' } });
+    plugin.createEngine({ sessionId: 'sess-3' });
+    expect(BaileysAdapter).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sess-3', authDir: '/op/baileys' }),
+    );
+  });
+
+  it('Prefers context.config over the constructor blob on the healthy enable path', () => {
+    const plugin = new BaileysPlugin(undefined, { baileys: { authDir: '/ctor/baileys' } });
+    void plugin.onLoad({
+      config: { baileys: { authDir: '/context/baileys' } },
+      logger: { log: jest.fn() },
+    } as unknown as PluginContext);
+    plugin.createEngine({ sessionId: 'sess-4' });
+    expect(BaileysAdapter).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sess-4', authDir: '/context/baileys' }),
+    );
+  });
 });

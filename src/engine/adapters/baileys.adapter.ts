@@ -134,6 +134,30 @@ export class BaileysAdapter implements IWhatsAppEngine {
       return;
     }
 
+    // An internal reconnect (transient drop) overwrites this.sock WITHOUT going through
+    // disconnect/logout/destroy, so the previous socket's WebSocket and the 9 ev listeners we
+    // register below would leak on every reconnect. Tear the prior socket down first. Detach OUR
+    // connection.update listener BEFORE end(): Baileys' own end() synchronously emits a synthetic
+    // connection.update {connection:'close'}, which — if still wired — would re-enter
+    // handleConnectionUpdate and schedule a spurious second reconnect.
+    const previous = this.sock;
+    if (previous) {
+      try {
+        previous.ev.removeAllListeners('connection.update');
+        previous.ev.removeAllListeners('creds.update');
+        previous.ev.removeAllListeners('messages.upsert');
+        previous.ev.removeAllListeners('messages.update');
+        previous.ev.removeAllListeners('contacts.upsert');
+        previous.ev.removeAllListeners('contacts.update');
+        previous.ev.removeAllListeners('chats.upsert');
+        previous.ev.removeAllListeners('chats.update');
+        previous.ev.removeAllListeners('messaging-history.set');
+        previous.end(undefined);
+      } catch {
+        // end() may already have run from Baileys' own close handler — a safe no-op.
+      }
+    }
+
     const sock = b.default({
       auth: state,
       version,

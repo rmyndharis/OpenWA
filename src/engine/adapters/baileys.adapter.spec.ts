@@ -10,6 +10,10 @@ class FakeSock extends EventEmitter {
     on: (event: string, handler: (arg: unknown) => void) => {
       this.emitter.on(event, handler);
     },
+    // Mirrors the real Baileys typed event emitter, which exposes removeAllListeners(event).
+    removeAllListeners: (event: string) => {
+      this.emitter.removeAllListeners(event);
+    },
   };
   public emitter = new EventEmitter();
   public user: { id: string; name?: string } | undefined;
@@ -352,6 +356,68 @@ describe('BaileysAdapter lifecycle hardening — I4 reconnect backoff', () => {
     jest.advanceTimersByTime(500);
     await new Promise<void>(r => setImmediate(r));
     expect(baileys().default).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BaileysAdapter reconnect socket teardown (no leak)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+  const baileys = () => jest.requireMock('@whiskeysockets/baileys') as { default: jest.Mock };
+
+  const fireRecoverableClose = (): void => {
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+  };
+
+  const initWithRealTimers = async (): Promise<BaileysAdapter> => {
+    fakeSock.user = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks({}));
+    return adapter;
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('ends the previous socket when an internal reconnect replaces it', async () => {
+    const adapter = await initWithRealTimers();
+    jest.useFakeTimers();
+    fakeSock.end.mockClear(); // only count end() calls originating from the reconnect path
+
+    fireRecoverableClose();
+    await jest.runAllTimersAsync(); // reconnect runs connectInner → must tear down the old socket first
+
+    // Before the fix, end() is only called by disconnect/logout/destroy — never on reconnect,
+    // so the prior socket + its listeners leak on every transient drop.
+    expect(fakeSock.end).toHaveBeenCalledTimes(1);
+    expect(adapter.getStatus()).not.toBe(EngineStatus.FAILED);
+  });
+
+  it('tearing down the previous socket does not trigger a spurious second reconnect', async () => {
+    const adapter = await initWithRealTimers();
+    jest.useFakeTimers();
+    baileys().default.mockClear();
+
+    // Real Baileys end() synchronously emits a connection.update {connection:'close'} before it
+    // detaches its own listener. If our handler is still attached when end() runs (wrong teardown
+    // order), that synthetic close re-enters handleConnectionUpdate and schedules a 2nd reconnect.
+    fakeSock.end.mockImplementationOnce(() => {
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+    });
+
+    fireRecoverableClose();
+    await jest.runAllTimersAsync();
+
+    // Exactly one legitimate reconnect — the synthetic close from end() must land on zero listeners.
+    expect(baileys().default).toHaveBeenCalledTimes(1);
+    expect(adapter.getStatus()).not.toBe(EngineStatus.FAILED);
   });
 });
 

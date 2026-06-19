@@ -33,6 +33,12 @@ export class EngineFactory implements OnModuleInit {
   }
 
   private async registerBuiltInEngines(): Promise<void> {
+    // The engine config sub-tree (engine.* from configuration.ts) as an opaque blob. Supplied BOTH
+    // to registerBuiltInPlugin (becomes context.config when onLoad runs) AND to each plugin's
+    // constructor (A fallback so createEngine still has operator config if enablePlugin fails
+    // before onLoad — otherwise sessionDataPath/executablePath/authDir would silently drop to defaults).
+    const engineConfig = this.configService.get('engine') ?? {};
+
     // Register WhatsApp-web.js as built-in plugin
     const wwjsManifest: PluginManifest = {
       id: 'whatsapp-web.js',
@@ -44,10 +50,8 @@ export class EngineFactory implements OnModuleInit {
       provides: ['whatsapp-engine'],
     };
 
-    const wwjsPlugin = new WhatsAppWebJsPlugin();
-    // Supply the engine config sub-tree (engine.* from configuration.ts) as an opaque blob;
-    // the plugin reads its own namespace (puppeteer.*, sessionDataPath) from context.config.
-    this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin, this.configService.get('engine') ?? {});
+    const wwjsPlugin = new WhatsAppWebJsPlugin(engineConfig);
+    this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin, engineConfig);
 
     // Register Baileys as a second built-in engine plugin. Same opaque engine blob; the plugin
     // reads only its own namespace (baileys.authDir) from context.config.
@@ -60,11 +64,7 @@ export class EngineFactory implements OnModuleInit {
       main: 'index.ts',
       provides: ['whatsapp-engine'],
     };
-    this.pluginLoader.registerBuiltInPlugin(
-      baileysManifest,
-      new BaileysPlugin(this.baileysMessageStore),
-      this.configService.get('engine') ?? {},
-    );
+    this.pluginLoader.registerBuiltInPlugin(baileysManifest, new BaileysPlugin(this.baileysMessageStore, engineConfig), engineConfig);
 
     // Auto-enable the configured engine
     try {
