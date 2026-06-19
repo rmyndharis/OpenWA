@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y \
     dumb-init \
     gosu \
     curl \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chrome executable path for Puppeteer
