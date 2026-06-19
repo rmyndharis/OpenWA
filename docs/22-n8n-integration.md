@@ -94,6 +94,8 @@ Start workflows when WhatsApp events occur.
   "event": "message.received",
   "timestamp": "2024-01-15T10:30:00Z",
   "sessionId": "default",
+  "idempotencyKey": "a1b2c3d4e5f6...",
+  "deliveryId": "9f8e7d6c5b4a...",
   "data": {
     "id": "3EB0F5A2B4C...",
     "chatId": "628123456789@c.us",
@@ -104,6 +106,12 @@ Start workflows when WhatsApp events occur.
   }
 }
 ```
+
+> **Deduplication.** Every delivery includes `idempotencyKey` and `deliveryId` in the body **and** as the
+> `X-OpenWA-Idempotency-Key` / `X-OpenWA-Delivery-Id` headers. `idempotencyKey` is **stable across retries**
+> of the same event, while `deliveryId` is unique per HTTP attempt. Because a webhook can be retried, add a
+> dedup step keyed on `idempotencyKey` (e.g. an n8n IF or "Remove Duplicates" node) so a retried delivery
+> isn't processed twice.
 
 ## Example Workflows
 

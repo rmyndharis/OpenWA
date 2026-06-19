@@ -27,6 +27,9 @@ const TTL = {
   SESSIONS_STATS: 15, // 15 sec
 };
 
+/** Max time to await a graceful `redis.quit()` on shutdown before force-disconnecting (see onModuleDestroy). */
+export const CACHE_QUIT_TIMEOUT_MS = 2000;
+
 @Injectable()
 export class CacheService implements OnModuleDestroy {
   private readonly logger = createLogger('CacheService');
@@ -111,8 +114,25 @@ export class CacheService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (this.redis) {
-      await this.redis.quit();
+    if (!this.redis) return;
+    const redis = this.redis;
+
+    // Bound the teardown: redis.quit() waits for the QUIT reply, which never arrives on a half-open /
+    // partitioned socket — leaving app.close() blocked until the orchestrator SIGKILLs the process.
+    // Force-disconnect after a short deadline so shutdown always completes.
+    let timer: NodeJS.Timeout | undefined;
+    const forceDisconnect = new Promise<void>(resolve => {
+      timer = setTimeout(() => {
+        redis.disconnect();
+        resolve();
+      }, CACHE_QUIT_TIMEOUT_MS);
+      timer.unref();
+    });
+
+    try {
+      await Promise.race([redis.quit().catch(() => undefined), forceDisconnect]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

@@ -1,6 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
@@ -24,6 +25,7 @@ export class WebhookProcessor extends WorkerHost {
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
     private readonly hookManager: HookManager,
+    private readonly configService: ConfigService,
   ) {
     super();
   }
@@ -57,7 +59,8 @@ export class WebhookProcessor extends WorkerHost {
         method: 'POST',
         headers: requestHeaders,
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10000),
+        // Honor WEBHOOK_TIMEOUT on the primary (queued) path too — not just the deprecated direct one.
+        signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
         redirect: ssrfProtected ? 'manual' : 'follow',
       });
       if (ssrfProtected) {

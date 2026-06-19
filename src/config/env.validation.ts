@@ -22,6 +22,18 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     errors.push(`DATABASE_TYPE must be "sqlite" or "postgres" (got "${dbType}")`);
   }
 
+  // Whitelist the registered engine/storage ids so a typo fails fast at boot instead of silently
+  // falling back to the default (engine.factory swallows an unknown ENGINE_TYPE → legacy wwebjs;
+  // STORAGE_TYPE → local). Values must match the ids registered in engine.factory / configuration.
+  const checkEnum = (key: string, allowed: string[]): void => {
+    const value = str(key);
+    if (value !== undefined && !allowed.includes(value)) {
+      errors.push(`${key} must be one of ${allowed.map(v => `"${v}"`).join(', ')} (got "${value}")`);
+    }
+  };
+  checkEnum('ENGINE_TYPE', ['whatsapp-web.js', 'baileys']);
+  checkEnum('STORAGE_TYPE', ['local', 's3']);
+
   if (dbType === 'postgres') {
     for (const key of ['DATABASE_HOST', 'DATABASE_USERNAME', 'DATABASE_PASSWORD']) {
       if (!str(key)) {

@@ -87,13 +87,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
 
     try {
+      // validateApiKey THROWS on any failure (it never resolves to a falsy value), so the rejection
+      // path is the catch below — a separate `if (!validKey)` branch here was dead code.
       const validKey = await this.authService.validateApiKey(apiKey);
-      if (!validKey) {
-        this.logger.warn(`Client ${client.id} rejected: Invalid API key`);
-        client.emit('message', this.createError('UNAUTHORIZED', 'Invalid API key'));
-        client.disconnect();
-        return;
-      }
 
       // Store the validated key AND the raw key — the raw key lets handleSubscribe
       // RE-validate on each subscription so a key revoked mid-connection is caught.

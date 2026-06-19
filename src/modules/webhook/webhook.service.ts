@@ -177,7 +177,8 @@ export class WebhookService {
         method: 'POST',
         headers,
         body,
-        signal: AbortSignal.timeout(10000),
+        // Use the configured WEBHOOK_TIMEOUT (single source of truth across queued/test/direct paths).
+        signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
         redirect: ssrfProtected ? 'manual' : 'follow',
       });
       if (ssrfProtected) {

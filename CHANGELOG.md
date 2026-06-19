@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`WEBHOOK_TIMEOUT` is honored on the primary (queued) delivery path and the test endpoint.** The
+  configured timeout was applied only on the deprecated direct path; the BullMQ webhook processor and
+  `POST /webhooks/:id/test` hardcoded 10s, so raising `WEBHOOK_TIMEOUT` had no effect when `QUEUE_ENABLED=true`.
+- **Graceful shutdown is bounded.** `CacheService` awaited `redis.quit()` with no deadline; on a half-open
+  socket that reply never arrives, blocking `app.close()` until the orchestrator `SIGKILL`s the process. It
+  now force-disconnects after a short timeout so shutdown always completes.
+- **Unsupported status/catalog operations return a consistent `501`.** On whatsapp-web.js several stubs threw
+  a raw `Error` (HTTP 500) while Baileys returned 501; both engines now surface 501 uniformly.
+- **A misconfigured `ENGINE_TYPE` / `STORAGE_TYPE` fails fast at boot** instead of silently falling back to the
+  default engine/storage (a typo was previously swallowed).
+
+### Changed
+
+- **The `/api/metrics` scrape is memoized for a few seconds.** Each scrape ran a full session scan plus
+  several aggregate queries; back-to-back scrapes (or multiple Prometheus replicas) now share a short-lived
+  rendered result. Stale-by-a-few-seconds metrics are expected for Prometheus.
+- Internal: removed a dead "invalid key" branch in the WebSocket connect handler (`validateApiKey` always
+  throws on failure, so the surrounding `catch` is the real rejection path).
+
+### Documentation
+
+- Documented the webhook `idempotencyKey` / `deliveryId` fields (in the body and the `X-OpenWA-Idempotency-Key`
+  / `X-OpenWA-Delivery-Id` headers) and the dedup-on-`idempotencyKey` rule in the n8n integration guide.
+- Corrected the `.env.example` rate-limit variables to the names the app actually reads
+  (`RATE_LIMIT_MEDIUM_TTL` / `RATE_LIMIT_MEDIUM_LIMIT`, in milliseconds) — the advertised
+  `RATE_LIMIT_TTL` / `RATE_LIMIT_MAX` were read by nothing.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration
