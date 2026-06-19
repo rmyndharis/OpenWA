@@ -575,6 +575,21 @@ describe('SessionService', () => {
       expect(sent[0][0]).toBe('sess-uuid-1');
     });
 
+    it('does NOT persist an outgoing (message_create) self-message to the messages table', async () => {
+      // Contract lock: message_create also fires for API sends (already persisted by the REST send
+      // path), so a naive save here would double-persist. Phone-composed sends are therefore
+      // webhooked/emitted but not mirrored to local history; safe persistence (unique index + dedup)
+      // is a separate enhancement. This guards against the omission silently changing.
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageCreate!(makeMessage({ id: 'wa-out-2', from: 'me@c.us', to: 'peer@c.us', fromMe: true }));
+      await flush();
+
+      expect(dispatchedEvents('message.sent')).toHaveLength(1); // it IS webhooked/emitted
+      expect(messageRepository.create).not.toHaveBeenCalled(); // but NOT persisted
+      expect(messageRepository.save).not.toHaveBeenCalled();
+    });
+
     it('scopes the ack status UPDATE by sessionId, not just waMessageId', async () => {
       const callbacks = await startAndCaptureCallbacks();
       expect(typeof callbacks.onMessageAck).toBe('function');

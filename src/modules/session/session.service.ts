@@ -591,7 +591,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               return;
             }
 
-            // Dispatch to webhooks with potentially modified message
+            // NOTE: unlike onMessage (incoming), this path intentionally does NOT mirror the message
+            // to the `messages` table. message_create ALSO fires for API-originated sends, which the
+            // REST send path already persists — saving here would double-persist them. Safe
+            // persistence of phone-composed sends needs a unique (sessionId, waMessageId) index +
+            // de-dup and is tracked as a separate enhancement; until then this path only webhooks/
+            // emits. So local message history reflects API sends + all inbound, but not sends
+            // composed on a linked phone.
             void this.webhookService.dispatch(id, 'message.sent', finalMessage);
             // Emit real-time event to WebSocket clients (as message.sent, not message.received)
             this.eventsGateway.emitMessageSent(id, finalMessage);
