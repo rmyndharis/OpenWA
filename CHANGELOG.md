@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The IPv6 SSRF blocklist now catches NAT64 and 6to4 literals.** A `64:ff9b::/96` (NAT64) or `2002::/16`
+  (6to4) URL embedding an internal IPv4 (loopback, RFC1918, link-local/metadata) previously slipped past the
+  guard; the embedded address is now extracted and checked, on hosts where such routing exists. Genuinely
+  public IPv6 — including a 6to4/NAT64 of a public address — is unaffected.
+- **The LibreTranslate plugin client validates its target and refuses redirects.** Its outbound requests
+  carry the configured `api_key`; they now go through the SSRF guard and use `redirect: error`, so a redirect
+  can't replay the key to an internal host. A localhost LibreTranslate sidecar must be added to
+  `SSRF_ALLOWED_HOSTS` when SSRF protection is on.
+- **Per-session `proxyUrl` is validated.** It must parse to an `http(s)`/`socks4`/`socks5` URL (credentialed
+  and SOCKS proxies still accepted); a malformed value is rejected at the API and ignored by the engine
+  instead of breaking the browser launch.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

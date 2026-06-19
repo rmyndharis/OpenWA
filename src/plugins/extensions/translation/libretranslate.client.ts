@@ -1,6 +1,7 @@
 // src/modules/translation/adapters/libretranslate.client.ts
 import { Translator, DetectResult } from './core/ports';
 import { createLogger } from '../../../common/services/logger.service';
+import { assertSafeFetchUrl, isSsrfProtectionEnabled, SsrfBlockedError } from '../../../common/security/ssrf-guard';
 
 export interface LibreTranslateOptions {
   url: string;
@@ -57,15 +58,25 @@ export class LibreTranslateClient implements Translator {
       throw new Error('LibreTranslate circuit open');
     }
 
+    const url = `${this.base}${path}`;
+    const ssrfProtected = isSsrfProtectionEnabled();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
     try {
+      // Validate the target host before sending the api_key-bearing body. Honors SSRF_ALLOWED_HOSTS,
+      // so the documented localhost LibreTranslate sidecar still works once it's allowlisted.
+      if (ssrfProtected) {
+        await assertSafeFetchUrl(url);
+      }
       const body = method === 'POST' ? JSON.stringify({ ...payload, api_key: this.opts.apiKey }) : undefined;
-      const res = await fetch(`${this.base}${path}`, {
+      const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body,
         signal: controller.signal,
+        // Refuse redirects: the guard only validated the original host; a 3xx would re-send the
+        // api_key to a redirect-controlled (possibly internal) target.
+        redirect: ssrfProtected ? 'error' : 'follow',
       });
       if (!res.ok) {
         throw new Error(`LibreTranslate ${path} -> HTTP ${res.status}`);
@@ -73,6 +84,11 @@ export class LibreTranslateClient implements Translator {
       this.consecutiveFailures = 0;
       return await res.json();
     } catch (err) {
+      // A blocked-host SSRF error is a deterministic configuration problem, not a transient upstream
+      // failure — don't let it trip the circuit breaker (which exists to back off a flaky server).
+      if (err instanceof SsrfBlockedError) {
+        throw err;
+      }
       this.consecutiveFailures++;
       if (this.consecutiveFailures >= this.failureThreshold) {
         this.openUntil = Date.now() + this.cooldownMs;

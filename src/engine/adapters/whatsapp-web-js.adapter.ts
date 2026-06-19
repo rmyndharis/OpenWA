@@ -71,6 +71,19 @@ export function wwebjsAckToDeliveryStatus(ack: number): DeliveryStatus {
 }
 
 /**
+ * Whether a per-session proxy URL parses to a supported scheme — defense-in-depth for a stored proxy
+ * that bypassed DTO validation (e.g. loaded from the DB on restart). The host is NOT SSRF-blocked: a
+ * per-session proxy is operator-chosen egress, and a loopback proxy sidecar is a legitimate setup.
+ */
+export function isSupportedProxyUrl(url: string): boolean {
+  try {
+    return ['http:', 'https:', 'socks4:', 'socks5:'].includes(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch remote media for sending, with an SSRF host guard, a byte cap, and a timeout.
  * The guard runs BEFORE any network call, so an internal/reserved URL throws `SsrfBlockedError`
  * and no outbound socket is opened. The byte cap (node-fetch `size`) and `AbortSignal` timeout
@@ -179,12 +192,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         '--disable-gpu',
       ];
 
-      // Add proxy configuration if provided
+      // Add proxy configuration if provided — but only when the URL parses to a supported scheme, so
+      // a malformed/stored proxy value can't break the Chromium launch or smuggle a non-proxy scheme.
       if (this.config.proxy) {
-        puppeteerArgs.push(`--proxy-server=${this.config.proxy.url}`);
-        this.logger.log(
-          `Using proxy: ${this.config.proxy.type}://${this.config.proxy.url.replace(/:[^:@]*@/, ':***@')}`,
-        );
+        if (isSupportedProxyUrl(this.config.proxy.url)) {
+          puppeteerArgs.push(`--proxy-server=${this.config.proxy.url}`);
+          this.logger.log(
+            `Using proxy: ${this.config.proxy.type}://${this.config.proxy.url.replace(/:[^:@]*@/, ':***@')}`,
+          );
+        } else {
+          this.logger.warn(`Ignoring invalid proxy URL for session ${this.config.sessionId}`);
+        }
       }
 
       // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
