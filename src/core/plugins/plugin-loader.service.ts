@@ -121,18 +121,21 @@ export class PluginLoaderService implements OnModuleInit {
       throw new Error(`Plugin ${manifest.id} is already loaded`);
     }
 
-    // Load stored config
-    const storedConfig = this.pluginStorage.getPluginConfig(manifest.id);
+    // Load any persisted config so an operator's settings survive a restart.
+    const storedConfig = this.pluginStorage.getPluginConfig(manifest.id) ?? {};
 
     const pluginInstance: PluginInstance = {
       manifest,
       status: PluginStatus.INSTALLED,
-      config: storedConfig ?? {},
+      config: storedConfig,
       instance: null,
       loadedAt: new Date(),
     };
 
     this.plugins.set(manifest.id, pluginInstance);
+
+    // Ensure a registry entry exists so later enable/disable/config writes persist.
+    this.ensureRegistryEntry(manifest, false);
 
     this.logger.log(`Plugin loaded: ${manifest.name} v${manifest.version}`, {
       pluginId: manifest.id,
@@ -141,6 +144,34 @@ export class PluginLoaderService implements OnModuleInit {
     });
 
     return pluginInstance;
+  }
+
+  /**
+   * Ensure a freshly-loaded plugin has a persisted registry entry, so later enable/disable/config
+   * writes (which only update an EXISTING entry) actually persist instead of silently no-op'ing.
+   * Creates a complete INSTALLED entry when none exists; an existing entry's persisted status/config
+   * is left untouched. Best-effort (saveRegistry swallows fs errors, so a disk failure never turns a
+   * load into a 500). Does NOT enable or run the plugin — boot never auto-executes plugin code.
+   */
+  private ensureRegistryEntry(manifest: PluginManifest, builtIn: boolean): void {
+    // Reconcile the persisted entry with the freshly-loaded runtime: the runtime always loads
+    // INSTALLED and is never auto-enabled on boot (enabling must stay an explicit ADMIN action that
+    // runs the lifecycle), so the entry's status is (re)set to INSTALLED to match — a previously
+    // enabled plugin must be re-enabled after a restart. The operator's persisted config is preserved
+    // so secrets/settings survive. Best-effort: saveRegistry swallows fs errors, so a disk failure
+    // never turns a load into a 500.
+    const existing = this.pluginStorage.getPluginEntry(manifest.id);
+    this.pluginStorage.setPluginEntry({
+      id: manifest.id,
+      type: manifest.type,
+      name: manifest.name,
+      version: manifest.version,
+      status: PluginStatus.INSTALLED,
+      config: existing?.config ?? {},
+      builtIn,
+      installedAt: existing?.installedAt ?? new Date(),
+      updatedAt: new Date(),
+    });
   }
 
   async enablePlugin(pluginId: string): Promise<void> {
@@ -411,15 +442,23 @@ export class PluginLoaderService implements OnModuleInit {
   // ============================================================================
 
   registerBuiltInPlugin(manifest: PluginManifest, instance: IPlugin, config: Record<string, unknown> = {}): void {
+    // Merge: env-derived defaults stay live each boot (so a changed .env wins), while an operator's
+    // persisted overrides win for the keys they actually set. Engine config is wholly env-derived
+    // (no persisted overrides), so it is never frozen to a first-boot snapshot.
+    const effectiveConfig = { ...config, ...(this.pluginStorage.getPluginConfig(manifest.id) ?? {}) };
+
     const pluginInstance: PluginInstance = {
       manifest,
       status: PluginStatus.INSTALLED,
-      config,
+      config: effectiveConfig,
       instance,
       loadedAt: new Date(),
     };
 
     this.plugins.set(manifest.id, pluginInstance);
+
+    // Ensure a registry entry exists so later enable/disable/config writes persist.
+    this.ensureRegistryEntry(manifest, true);
 
     this.logger.debug(`Built-in plugin registered: ${manifest.name}`, {
       pluginId: manifest.id,
