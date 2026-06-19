@@ -62,6 +62,7 @@
 | Example | Description |
 | ------- | ----------- |
 | [Session Phone-Number Pairing](./examples/session-phone-number-pairing.md) | Link an existing WhatsApp account by phone number instead of scanning QR |
+| [Chat History Limits](./examples/chat-history-limits.md) | Understand local message history vs bounded live WhatsApp history |
 | [Webhook Signature Verification](./examples/webhook-signature-verification.md) | Verify signed OpenWA webhook deliveries in Node.js and Python |
 | [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md) | Build an appointment-booking flow with OpenWA and n8n |
 
