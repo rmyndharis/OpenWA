@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-19
+
+Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration
+correctness, and a PostgreSQL analytics fix. No breaking changes — existing deployments and the default
+(ADMIN) dashboard key are unaffected.
+
+### Security
+
+- **The well-known development API key is refused in production.** With `ALLOW_DEV_API_KEY=true` (and no
+  `API_MASTER_KEY`), the server seeded the documented `dev-admin-key` as an ADMIN credential in any
+  environment. Production now fails fast when `ALLOW_DEV_API_KEY=true`, and `dev-admin-key` is rejected as an
+  `API_MASTER_KEY`. Development behaviour is unchanged.
+- **Webhook by-id operations and the webhook list are scoped to their session.** `GET`/`PUT`/`DELETE`
+  `/sessions/:sessionId/webhooks/:id` and the test endpoint now verify the webhook belongs to the URL's
+  session (a mismatch returns 404), and `GET /webhooks` is scoped to the calling key's allowed sessions —
+  closing cross-session access to another session's webhook configuration.
+- **`GET /sessions` is scoped to the API key's allowed sessions.** A session-restricted key no longer lists
+  every session.
+- **The audit log and global statistics require ADMIN.** `GET /audit`, `GET /stats/overview` and
+  `GET /stats/messages` (cross-session, unscoped reads) now require an ADMIN key. The per-session stats route
+  is unchanged (already scoped by its session parameter).
+- **Plugin secrets are redacted on read.** `GET /plugins` and `GET /plugins/:id` now mask config fields a
+  plugin marks `secret` (e.g. API keys); updating config preserves the stored secret when the masked value is
+  submitted back unchanged.
+
+### Fixed
+
+- **Baileys: inbound and sent messages no longer fail to persist for a recreated session** (#319). An
+  orphaned adapter writing under a stale session id raised a foreign-key error on every message and left the
+  message store empty (breaking reply/forward/react/delete by id). The store now skips the write for an absent
+  parent session, logging once instead of erroring per message.
+- **`import-data` no longer silently loses message history.** The restore targeted non-existent columns for
+  the `messages` and `message_batches` tables, so every row failed while the endpoint still reported success —
+  after the destructive delete. Column mapping is corrected for both SQLite and PostgreSQL, and a partial
+  restore now rolls back and reports `imported: false` instead of committing a half-wiped database.
+- **Statistics work on a PostgreSQL data database.** The time-series and hourly-activity queries used a
+  SQLite-only date function and returned 500 on PostgreSQL; the date bucketing is now dialect-correct.
+- **Concurrent session start no longer orphans an engine.** Two near-simultaneous `POST /sessions/:id/start`
+  for the same session could both create an engine, leaking a Chromium process the lifecycle could never
+  clean up. The second start is now rejected with a clear error.
+- **A stuck engine teardown no longer wedges a session.** `delete()` and `stop()` now time-bound and isolate
+  the engine teardown, so a hanging Chromium can't prevent the session row from being removed or its status
+  from being updated. A genuine database failure on delete still surfaces as an error.
+- **Reconnect backoff is bounded.** An unvalidated `reconnectBaseDelay` / `maxReconnectAttempts` in a
+  session's config could drive an immediate-relaunch storm or an unbounded reconnect loop; the values are now
+  coerced and clamped (the defaults are unchanged).
+- **Inbound media is size-capped.** Media on an inbound message is bounded by `MEDIA_DOWNLOAD_MAX_BYTES`
+  (default 50 MiB; previously this cap applied only to outbound URL sends). Oversized media is dropped — the
+  message envelope is preserved — instead of being base64-encoded into memory, persisted, and broadcast.
+- **`reply` / `forward` / `react` / `delete` on a missing message return 404** instead of a generic 500.
+- **Swagger now reports the current API version** (it was pinned to an old value).
+
+### Documentation
+
+- Added an n8n appointment-booking workflow example and webhook signature-verification examples, and corrected
+  the `message.received` webhook payload field reference.
+
 ## [0.4.1] - 2026-06-18
 
 Bug-fix release found while verifying v0.4.0 on both engines (whatsapp-web.js and Baileys): the Baileys QR
