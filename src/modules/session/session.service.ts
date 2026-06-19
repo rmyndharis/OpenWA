@@ -38,6 +38,40 @@ interface ReconnectState {
   baseDelay: number;
 }
 
+// Reconnect-backoff bounds. An OPERATOR-supplied session.config feeds this math, so the values
+// are coerced + clamped: a non-numeric value would otherwise make the delay NaN (setTimeout fires
+// at 0 — relaunch storm) and the terminal guard `attempts >= NaN` always false (unbounded loop).
+const RECONNECT_BASE_DELAY_MIN_MS = 1000;
+const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
+const RECONNECT_MAX_ATTEMPTS_CAP = 20;
+const RECONNECT_DELAY_CAP_MS = 3_600_000;
+
+const clampNumber = (n: number, min: number, max: number): number => Math.min(Math.max(n, min), max);
+
+/** Coerce + clamp the untyped session.config reconnect knobs to finite, bounded values. Defaults
+ *  (5000ms / 5 attempts) are preserved; a legitimate `maxReconnectAttempts: 0` (disable) is kept. */
+export function resolveReconnectConfig(
+  config: { maxReconnectAttempts?: unknown; reconnectBaseDelay?: unknown } | null,
+): { maxAttempts: number; baseDelay: number } {
+  const baseRaw = Number(config?.reconnectBaseDelay);
+  const baseDelay = clampNumber(
+    Number.isFinite(baseRaw) ? baseRaw : 5000,
+    RECONNECT_BASE_DELAY_MIN_MS,
+    RECONNECT_BASE_DELAY_MAX_MS,
+  );
+  const attemptsRaw = Number(config?.maxReconnectAttempts);
+  const maxAttempts = Math.floor(
+    clampNumber(Number.isFinite(attemptsRaw) ? attemptsRaw : 5, 0, RECONNECT_MAX_ATTEMPTS_CAP),
+  );
+  return { maxAttempts, baseDelay };
+}
+
+/** Clamp a computed backoff delay finite and within setTimeout's safe range (a huge value would
+ *  overflow its 32-bit ms field and fire immediately). */
+export function clampReconnectDelay(rawDelay: number, baseDelay: number): number {
+  return clampNumber(Number.isFinite(rawDelay) ? rawDelay : baseDelay, 0, RECONNECT_DELAY_CAP_MS);
+}
+
 @Injectable()
 export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicationBootstrap {
   private readonly logger = createLogger('SessionService');
@@ -303,17 +337,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       },
     );
 
-    // Initialize reconnect state
-    const config = session.config as {
-      maxReconnectAttempts?: number;
-      reconnectBaseDelay?: number;
-    } | null;
-    this.reconnectStates.set(id, {
-      attempts: 0,
-      timer: null,
-      maxAttempts: config?.maxReconnectAttempts ?? 5,
-      baseDelay: config?.reconnectBaseDelay ?? 5000,
-    });
+    // Initialize reconnect state from the (untrusted) opaque session.config — coerced + clamped
+    // so a poisoned value can't drive a NaN/immediate-relaunch storm or an unbounded loop (F-03).
+    const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
+    this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
     await this.initializeEngine(id, session);
     return this.findOne(id);
@@ -698,8 +725,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
 
-    // Exponential backoff: baseDelay * 2^attempts (with jitter)
-    const delay = state.baseDelay * Math.pow(2, state.attempts) + Math.random() * 1000;
+    // Exponential backoff: baseDelay * 2^attempts (with jitter), clamped finite + within
+    // setTimeout's safe range so the timer can't overflow and fire immediately.
+    const delay = clampReconnectDelay(
+      state.baseDelay * Math.pow(2, state.attempts) + Math.random() * 1000,
+      state.baseDelay,
+    );
     state.attempts++;
 
     this.logger.log(
