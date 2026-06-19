@@ -1,5 +1,6 @@
 import { Job } from 'bullmq';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { WebhookProcessor } from './webhook.processor';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
@@ -21,6 +22,7 @@ describe('WebhookProcessor', () => {
   let processor: WebhookProcessor;
   let repo: { update: jest.Mock };
   let hookManager: { execute: jest.Mock };
+  let configService: { get: jest.Mock };
   let mockFetch: jest.Mock;
   const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
 
@@ -51,7 +53,13 @@ describe('WebhookProcessor', () => {
   beforeEach(() => {
     repo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
     hookManager = { execute: jest.fn().mockResolvedValue({ continue: true, data: {} }) };
-    processor = new WebhookProcessor(repo as unknown as Repository<Webhook>, hookManager as unknown as HookManager);
+    configService = { get: jest.fn((key: string, def?: unknown) => (key === 'webhook.timeout' ? 25000 : def)) };
+    processor = new WebhookProcessor(
+      repo as unknown as Repository<Webhook>,
+      hookManager as unknown as HookManager,
+      configService as unknown as ConfigService,
+    );
+    // The merged delivery path uses withSafeFetch (undici), so mock undici's fetch, not global.fetch.
     mockFetch = undiciFetch as jest.Mock;
     process.env.WEBHOOK_SSRF_PROTECT = 'false'; // delivery-logic tests; redirect test flips it on
   });
@@ -60,6 +68,17 @@ describe('WebhookProcessor', () => {
     mockFetch.mockReset();
     if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
     else process.env.WEBHOOK_SSRF_PROTECT = origProtect;
+  });
+
+  it('uses the configured WEBHOOK_TIMEOUT for the request abort signal (not a hardcoded 10s)', async () => {
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await processor.process(makeJob());
+
+    expect(configService.get).toHaveBeenCalledWith('webhook.timeout', 10000);
+    expect(timeoutSpy).toHaveBeenCalledWith(25000);
+    timeoutSpy.mockRestore();
   });
 
   it('on success updates lastTriggeredAt and fires webhook:delivered', async () => {

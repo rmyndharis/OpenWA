@@ -63,7 +63,8 @@ describe('WebhookService', () => {
       get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
         if (key === 'queue.enabled') return false;
         if (key === 'webhook.retryDelay') return 100;
-        if (key === 'webhook.timeout') return 10000;
+        // Distinct from the hardcoded 10000 fallback so a regression to a literal timeout is caught.
+        if (key === 'webhook.timeout') return 25000;
         return def as T;
       }),
     };
@@ -278,12 +279,28 @@ describe('WebhookService', () => {
         },
       });
 
+      const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
       await service.dispatch('sess-1', 'message.received', { from: '628123456789@c.us' });
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://example.com/webhook',
         expect.objectContaining({ method: 'POST' }),
       );
+      // Direct delivery path honors the configured WEBHOOK_TIMEOUT, not a literal 10s.
+      expect(timeoutSpy).toHaveBeenCalledWith(25000);
+      timeoutSpy.mockRestore();
+    });
+
+    it('test() probes the receiver using the configured WEBHOOK_TIMEOUT', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+      const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+
+      await service.test('sess-1', webhook.id);
+
+      expect(mockFetch).toHaveBeenCalled();
+      expect(timeoutSpy).toHaveBeenCalledWith(25000);
+      timeoutSpy.mockRestore();
     });
 
     it('should NOT dispatch to webhooks that do not match the event', async () => {

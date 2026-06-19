@@ -171,7 +171,13 @@ export class WebhookService {
     try {
       return await withSafeFetch(
         webhook.url,
-        { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) },
+        {
+          method: 'POST',
+          headers,
+          body,
+          // Use the configured WEBHOOK_TIMEOUT (single source of truth across queued/test/direct paths).
+          signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
+        },
         response => ({ success: response.ok, statusCode: response.status }),
         { guard: isSsrfProtectionEnabled() },
       );

@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { EventsGateway, isSessionSubscriptionAllowed } from './events.gateway';
 import { AuthService } from '../auth/auth.service';
@@ -65,8 +66,8 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(authService.validateApiKey).not.toHaveBeenCalled();
   });
 
-  it('rejects a connection with an invalid API key', async () => {
-    authService.validateApiKey.mockResolvedValue(null);
+  it('rejects a connection when validateApiKey throws (the real auth-failure contract)', async () => {
+    authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
     const sock = makeSocket({ apiKey: 'bad' });
     await gateway.handleConnection(asSocket(sock));
     expect(sock.disconnect).toHaveBeenCalled();

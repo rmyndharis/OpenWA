@@ -12,8 +12,17 @@ import { StatsService } from '../stats/stats.service';
  * is required. This keeps operational internals (session counts, failure totals) from
  * being exposed publicly by default on a self-hosted box.
  */
+/**
+ * How long a rendered scrape is reused before recomputing. getOverview() runs a full session scan plus
+ * several aggregate queries, so back-to-back scrapes (or several Prometheus replicas) would otherwise
+ * each pay the full DB cost. Stale-by-a-few-seconds metrics are fine for Prometheus.
+ */
+export const METRICS_RENDER_TTL_MS = 5000;
+
 @Injectable()
 export class MetricsService {
+  private cachedRender: { at: number; text: string } | null = null;
+
   constructor(
     private readonly config: ConfigService,
     private readonly statsService: StatsService,
@@ -47,8 +56,13 @@ export class MetricsService {
     return timingSafeEqual(ab, bb);
   }
 
-  /** Render the current metrics in Prometheus text exposition format. */
+  /** Render the current metrics in Prometheus text exposition format (memoized for a short TTL). */
   async render(): Promise<string> {
+    const now = Date.now();
+    if (this.cachedRender && now - this.cachedRender.at < METRICS_RENDER_TTL_MS) {
+      return this.cachedRender.text;
+    }
+
     const overview = await this.statsService.getOverview();
     const mem = process.memoryUsage();
     const lines: string[] = [];
@@ -83,7 +97,9 @@ export class MetricsService {
     lines.push('# TYPE openwa_messages_failed_total counter');
     lines.push(`openwa_messages_failed_total ${overview.messages.failed}`);
 
-    return lines.join('\n') + '\n';
+    const text = lines.join('\n') + '\n';
+    this.cachedRender = { at: now, text };
+    return text;
   }
 
   private escapeLabel(value: string): string {
