@@ -491,7 +491,7 @@ v0.1.0 Release Package:
 ## 15.6 Future Roadmap (v0.3.0+)
 
 > **Note:** Version 0.1.0 is the initial stable release including all features from Phases 1-3.
-> Versions 0.1.7 through 0.4.3 have since shipped (see the CHANGELOG); v1.0.0
+> Versions 0.1.7 through 0.4.4 have since shipped (see the CHANGELOG); v1.0.0
 > onward is forward-looking.
 
 ```mermaid

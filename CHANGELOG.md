@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-06-20
+
+A reliability and correctness patch. Engine: Baileys reconnect no longer leaks its socket, and a session
+keeps its operator config even if the engine plugin fails to enable before `onLoad`. Templates: names are now
+unique per session (deterministic resolve, `409` on duplicate, with a lossless de-duplicating migration).
+Tooling: the migration CLI can manage the main (auth/audit) connection, and the Docker image ships `procps`
+so a missing-`ps` cleanup path can't crash the container. **One behavior change to note:** `PUT /settings`
+now returns `501` — settings are environment-derived and read-only at runtime — instead of a misleading `200`
+(no dashboard flow uses the write).
+
 ### Added
 
 - **CLI migration commands for the main (auth/audit) connection.** The app runs the main connection as a separate

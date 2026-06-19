@@ -105,7 +105,7 @@ version: '3.8'
 
 services:
   openwa:
-    image: ghcr.io/rmyndharis/openwa:0.4.3
+    image: ghcr.io/rmyndharis/openwa:0.4.4
     deploy:
       replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth (H1/H11)
       update_config:
@@ -263,7 +263,7 @@ spec:
     spec:
       containers:
         - name: openwa
-          image: ghcr.io/rmyndharis/openwa:0.4.3
+          image: ghcr.io/rmyndharis/openwa:0.4.4
           ports:
             - containerPort: 2785
               name: http
