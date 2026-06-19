@@ -37,7 +37,7 @@ export class EngineFactory implements OnModuleInit {
     // to registerBuiltInPlugin (becomes context.config when onLoad runs) AND to each plugin's
     // constructor (A fallback so createEngine still has operator config if enablePlugin fails
     // before onLoad — otherwise sessionDataPath/executablePath/authDir would silently drop to defaults).
-    const engineConfig = this.configService.get('engine') ?? {};
+    const engineConfig = this.configService.get<Record<string, unknown>>('engine') ?? {};
 
     // Register WhatsApp-web.js as built-in plugin
     const wwjsManifest: PluginManifest = {
@@ -64,7 +64,11 @@ export class EngineFactory implements OnModuleInit {
       main: 'index.ts',
       provides: ['whatsapp-engine'],
     };
-    this.pluginLoader.registerBuiltInPlugin(baileysManifest, new BaileysPlugin(this.baileysMessageStore, engineConfig), engineConfig);
+    this.pluginLoader.registerBuiltInPlugin(
+      baileysManifest,
+      new BaileysPlugin(this.baileysMessageStore, engineConfig),
+      engineConfig,
+    );
 
     // Auto-enable the configured engine
     try {

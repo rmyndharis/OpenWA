@@ -23,10 +23,7 @@ const mainDataSource = new DataSource({
   // Hardcoded to match the runtime main path (configuration.ts), so the CLI and the app never target
   // different main databases.
   database: './data/main.sqlite',
-  entities: [
-    __dirname + '/../modules/auth/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/audit/**/*.entity{.ts,.js}',
-  ],
+  entities: [__dirname + '/../modules/auth/**/*.entity{.ts,.js}', __dirname + '/../modules/audit/**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/migrations-main/*{.ts,.js}'],
   synchronize: false,
   logging: process.env.DATABASE_LOGGING === 'true',
