@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Outbound webhook and media fetches are pinned to the SSRF-validated IP.** The host safety check
+  and the actual connection previously resolved DNS independently, leaving a narrow window in which a
+  hostile low-TTL DNS answer could pass validation as a public address and then have the connection
+  re-resolve to an internal one (DNS rebinding). The connection now reuses the exact address vetted by
+  the guard — preserving the original hostname for TLS SNI and the `Host` header, and offering all
+  vetted addresses so A-record failover still works — closing the window across webhook delivery
+  (direct, queued, and test) and server-side media downloads.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

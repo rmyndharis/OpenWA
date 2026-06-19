@@ -7,7 +7,7 @@ import { QUEUE_NAMES } from '../queue-names';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
-import { assertSafeFetchUrl, assertNoRedirect, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
+import { withSafeFetch, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
 
 export interface WebhookJobResult {
   statusCode: number;
@@ -48,27 +48,23 @@ export class WebhookProcessor extends WorkerHost {
       'X-OpenWA-Retry-Count': String(job.attemptsMade),
     };
 
-    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (ssrfProtected) {
-        await assertSafeFetchUrl(url);
-      }
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: requestHeaders,
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10000),
-        redirect: ssrfProtected ? 'manual' : 'follow',
-      });
-      if (ssrfProtected) {
-        assertNoRedirect(response, url);
-      }
+      const { status, statusText, ok } = await withSafeFetch(
+        url,
+        {
+          method: 'POST',
+          headers: requestHeaders,
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10000),
+        },
+        response => ({ status: response.status, statusText: response.statusText, ok: response.ok }),
+        { guard: isSsrfProtectionEnabled() },
+      );
 
       const responseTime = Date.now() - startTime;
-      const success = response.ok;
 
-      if (!success) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!ok) {
+        throw new Error(`HTTP ${status}: ${statusText}`);
       }
 
       // Update lastTriggeredAt on successful delivery
@@ -84,7 +80,7 @@ export class WebhookProcessor extends WorkerHost {
           event,
           webhookId,
           deliveryId: payload.deliveryId,
-          statusCode: response.status,
+          statusCode: status,
           responseTime,
           attempt: job.attemptsMade + 1,
         },
@@ -96,14 +92,14 @@ export class WebhookProcessor extends WorkerHost {
         event,
         deliveryId: payload.deliveryId,
         idempotencyKey: payload.idempotencyKey,
-        statusCode: response.status,
+        statusCode: status,
         responseTime,
         attempt: job.attemptsMade + 1,
         action: 'webhook_delivered',
       });
 
       return {
-        statusCode: response.status,
+        statusCode: status,
         success: true,
         responseTime,
       };

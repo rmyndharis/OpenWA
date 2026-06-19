@@ -4,6 +4,13 @@ import { WebhookProcessor } from './webhook.processor';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
 import { WebhookJobData } from '../../webhook/webhook.service';
+import { fetch as undiciFetch } from 'undici';
+
+// Delivery goes through undici's fetch (via the SSRF-pinning helper), so mock that, not global fetch.
+jest.mock('undici', () => {
+  const actual = jest.requireActual<typeof import('undici')>('undici');
+  return { __esModule: true, ...actual, fetch: jest.fn() };
+});
 
 /**
  * Regression coverage for the production (QUEUE_ENABLED) webhook delivery path, which was
@@ -45,8 +52,7 @@ describe('WebhookProcessor', () => {
     repo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
     hookManager = { execute: jest.fn().mockResolvedValue({ continue: true, data: {} }) };
     processor = new WebhookProcessor(repo as unknown as Repository<Webhook>, hookManager as unknown as HookManager);
-    mockFetch = jest.fn();
-    global.fetch = mockFetch as typeof global.fetch;
+    mockFetch = undiciFetch as jest.Mock;
     process.env.WEBHOOK_SSRF_PROTECT = 'false'; // delivery-logic tests; redirect test flips it on
   });
 

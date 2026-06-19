@@ -4,7 +4,25 @@ import {
   assertNoRedirect,
   SsrfBlockedError,
   isSsrfProtectionEnabled,
+  resolveSafeFetchTarget,
+  pinnedLookup,
+  withSafeFetch,
 } from './ssrf-guard';
+import * as dnsPromises from 'dns/promises';
+import { fetch as undiciFetch } from 'undici';
+
+// Default to the real resolver (so the localhost/real-DNS cases below behave normally); individual
+// tests override a single call with mockResolvedValueOnce to simulate a specific resolution.
+jest.mock('dns/promises', () => {
+  const actual = jest.requireActual<typeof import('dns/promises')>('dns/promises');
+  return { __esModule: true, ...actual, lookup: jest.fn(actual.lookup) };
+});
+
+// Mock undici's fetch (keep the real Agent so withSafeFetch builds a real pinned dispatcher).
+jest.mock('undici', () => {
+  const actual = jest.requireActual<typeof import('undici')>('undici');
+  return { __esModule: true, ...actual, fetch: jest.fn() };
+});
 
 describe('isBlockedAddress', () => {
   it.each([
@@ -56,6 +74,7 @@ describe('assertSafeFetchUrl', () => {
   });
 
   it('rejects a hostname that resolves to loopback (localhost)', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
     await expect(assertSafeFetchUrl('http://localhost:9999/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
@@ -112,6 +131,110 @@ describe('assertNoRedirect (redirect bypass)', () => {
 
   it('passes a normal 2xx response', () => {
     expect(() => assertNoRedirect({ status: 200, type: 'basic' }, 'http://ok.example')).not.toThrow();
+  });
+});
+
+describe('pinnedLookup (DNS-rebind defense)', () => {
+  it('returns the captured addresses and never re-resolves DNS (all: true)', () => {
+    const pinned = [{ address: '93.184.216.34', family: 4 }];
+    const callback = jest.fn();
+    pinnedLookup(pinned)('evil.example', { all: true }, callback);
+    expect(callback).toHaveBeenCalledWith(null, pinned);
+  });
+
+  it('returns the first captured address in single-result form (all: false)', () => {
+    const pinned = [
+      { address: '93.184.216.34', family: 4 },
+      { address: '93.184.216.35', family: 4 },
+    ];
+    const callback = jest.fn();
+    pinnedLookup(pinned)('evil.example', { all: false }, callback);
+    expect(callback).toHaveBeenCalledWith(null, '93.184.216.34', 4);
+  });
+});
+
+describe('resolveSafeFetchTarget', () => {
+  const orig = process.env.SSRF_ALLOWED_HOSTS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.SSRF_ALLOWED_HOSTS;
+    else process.env.SSRF_ALLOWED_HOSTS = orig;
+  });
+
+  it('returns null for a public literal IP (no hostname to rebind)', async () => {
+    await expect(resolveSafeFetchTarget('https://8.8.8.8/hook')).resolves.toBeNull();
+  });
+
+  it('returns null for an allowlisted host (trusted, no pin needed)', async () => {
+    process.env.SSRF_ALLOWED_HOSTS = 'minio';
+    await expect(resolveSafeFetchTarget('http://minio:9000/x.png')).resolves.toBeNull();
+  });
+
+  it('throws for a blocked literal address', async () => {
+    await expect(resolveSafeFetchTarget('http://127.0.0.1/x')).rejects.toThrow(SsrfBlockedError);
+  });
+
+  it('returns the resolved public addresses for a hostname (the IPs to pin to)', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    await expect(resolveSafeFetchTarget('https://example.com/hook')).resolves.toEqual([
+      { address: '93.184.216.34', family: 4 },
+    ]);
+  });
+
+  it('throws when a hostname resolves to a blocked address', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '10.0.0.5', family: 4 }]);
+    await expect(resolveSafeFetchTarget('https://rebind.example/hook')).rejects.toThrow(SsrfBlockedError);
+  });
+});
+
+describe('withSafeFetch (guarded + pinned fetch)', () => {
+  afterEach(() => {
+    (undiciFetch as jest.Mock).mockReset();
+  });
+
+  it('rejects a blocked host before performing any fetch (fail-closed)', async () => {
+    const use = jest.fn();
+    await expect(withSafeFetch('http://127.0.0.1/hook', {}, use, { guard: true })).rejects.toThrow(SsrfBlockedError);
+    expect(use).not.toHaveBeenCalled();
+  });
+
+  it('pins the connection by passing a dispatcher to fetch for a hostname target', async () => {
+    // The security property: for a DNS hostname the connection MUST go through a pinned dispatcher,
+    // else fetch re-resolves DNS independently and the rebind window reopens. Removing the pin
+    // (dispatcher = undefined) makes this fail.
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock).mockResolvedValue({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'used');
+
+    const result = await withSafeFetch('https://example.com/hook', { method: 'POST' }, use, { guard: true });
+
+    expect(result).toBe('used');
+    expect(use).toHaveBeenCalledTimes(1);
+    const [url, init] = (undiciFetch as jest.Mock).mock.calls[0] as [string, { redirect: string; dispatcher: unknown }];
+    expect(url).toBe('https://example.com/hook');
+    expect(init.redirect).toBe('manual');
+    expect(init.dispatcher).toBeDefined();
+  });
+
+  it('refuses a redirect on the pinned path (real undici manual-redirect shape: 302/basic)', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock).mockResolvedValue({ status: 302, type: 'basic' });
+
+    await expect(withSafeFetch('https://example.com/hook', {}, jest.fn(), { guard: true })).rejects.toThrow(
+      SsrfBlockedError,
+    );
+  });
+
+  it('skips validation and pinning entirely when guard is false (SSRF opt-out)', async () => {
+    (undiciFetch as jest.Mock).mockResolvedValue({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'ok');
+
+    // An internal host would normally be blocked — with guard:false it is delivered unpinned.
+    const result = await withSafeFetch('http://127.0.0.1/hook', {}, use, { guard: false });
+
+    expect(result).toBe('ok');
+    const [, init] = (undiciFetch as jest.Mock).mock.calls[0] as [string, { redirect: string; dispatcher: unknown }];
+    expect(init.redirect).toBe('follow');
+    expect(init.dispatcher).toBeUndefined();
   });
 });
 

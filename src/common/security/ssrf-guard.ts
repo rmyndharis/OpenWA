@@ -1,5 +1,7 @@
-import { isIPv4, isIPv6 } from 'net';
+import { isIPv4, isIPv6, type LookupFunction } from 'net';
 import { lookup } from 'dns/promises';
+import { type LookupAddress, type LookupOptions } from 'dns';
+import { Agent, fetch as undiciFetch, type RequestInit, type Response } from 'undici';
 
 /** Thrown when an outbound URL is blocked by the SSRF guard. */
 export class SsrfBlockedError extends Error {
@@ -119,12 +121,18 @@ export function assertNoRedirect(response: { status: number; type?: string }, ur
 }
 
 /**
- * Resolves an outbound URL and throws SsrfBlockedError if its scheme is not
- * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved.
- * Guards both webhook delivery and server-side media fetches. Hosts named in
- * `SSRF_ALLOWED_HOSTS` are allowed through (escape-hatch for trusted internal targets).
+ * Validate an outbound URL and resolve its host ONCE. Throws SsrfBlockedError if the scheme is not
+ * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved. Guards both
+ * webhook delivery and server-side media fetches. Hosts named in `SSRF_ALLOWED_HOSTS` are allowed
+ * through (escape-hatch for trusted internal targets).
+ *
+ * Returns the vetted resolved addresses so a caller can PIN the connection to them — defeating the
+ * DNS-rebinding window where the address validated here differs from the one `fetch` would re-resolve.
+ * Returns null when there is nothing to pin: an allowlisted host (trusted — deliberately left
+ * unpinned, since the operator opts in to whatever its DNS returns) or a literal IP (no DNS, so no
+ * rebind is possible — fetch connects straight to the validated literal).
  */
-export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
+export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddress[] | null> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -139,14 +147,14 @@ export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
   const host = url.hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
 
   if (getAllowedHosts().has(host.toLowerCase())) {
-    return; // explicitly allowlisted internal target
+    return null; // explicitly allowlisted internal target
   }
 
   if (isIPv4(host) || isIPv6(host)) {
     if (isBlockedAddress(host)) {
       throw new SsrfBlockedError(`Blocked internal address: ${host}`);
     }
-    return;
+    return null; // literal IP — fetch connects directly, nothing to rebind
   }
 
   const resolved = await lookup(host, { all: true });
@@ -157,5 +165,67 @@ export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
     if (isBlockedAddress(address)) {
       throw new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${address}`);
     }
+  }
+  return resolved; // vetted addresses — pin the connection to these
+}
+
+/**
+ * Backwards-compatible assertion form: validate the URL (used at webhook registration time, where
+ * only the throw/no-throw outcome matters).
+ */
+export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
+  await resolveSafeFetchTarget(rawUrl);
+}
+
+/**
+ * Build a `net`-style lookup function that always returns the pre-validated addresses and never
+ * consults DNS — so a connection using it cannot be re-resolved to a different (internal) address.
+ */
+export function pinnedLookup(addresses: LookupAddress[]): LookupFunction {
+  // undici always invokes the lookup with an options object; `all: true` expects the address array,
+  // otherwise a single (address, family) pair.
+  const fn = (_hostname: string, options: LookupOptions, callback: (...args: unknown[]) => void): void => {
+    if (options.all) {
+      callback(null, addresses);
+    } else {
+      callback(null, addresses[0].address, addresses[0].family);
+    }
+  };
+  return fn as unknown as LookupFunction;
+}
+
+/**
+ * Perform an SSRF-safe fetch and hand the response to `use`, then tear down the per-request
+ * connection. The host is validated and resolved ONCE; the connection is pinned to the vetted IP(s)
+ * via an undici dispatcher so it cannot be re-resolved to an internal address between check and
+ * connect (DNS-rebinding TOCTOU). The original hostname is preserved for TLS SNI and the Host header,
+ * so virtual hosting and certificate validation are unaffected, and ALL vetted addresses are offered
+ * so A-record failover still works. Redirects are refused (the guard only validated the original host).
+ *
+ * `use` must read everything it needs from the response before returning — the dispatcher (and its
+ * sockets) is destroyed once `use` settles, so a still-streaming body would be cut off.
+ *
+ * @param opts.guard - when false (the WEBHOOK_SSRF_PROTECT opt-out), skips validation/pinning and
+ *   performs a plain redirect-following fetch. Defaults to true (always guard).
+ */
+export async function withSafeFetch<T>(
+  rawUrl: string,
+  init: RequestInit,
+  use: (response: Response) => Promise<T> | T,
+  opts: { guard?: boolean } = {},
+): Promise<T> {
+  const guard = opts.guard ?? true;
+  if (!guard) {
+    return use(await undiciFetch(rawUrl, { ...init, redirect: 'follow' }));
+  }
+
+  const target = await resolveSafeFetchTarget(rawUrl);
+  const dispatcher = target ? new Agent({ connect: { lookup: pinnedLookup(target) } }) : undefined;
+  try {
+    const response = await undiciFetch(rawUrl, { ...init, redirect: 'manual', dispatcher });
+    assertNoRedirect(response, rawUrl);
+    return await use(response);
+  } finally {
+    if (dispatcher) await dispatcher.destroy().catch(() => undefined);
   }
 }
