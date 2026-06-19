@@ -34,6 +34,13 @@ import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
 import { ExtensionsModule } from './plugins/extensions/extensions.module';
 import { LlmModule } from './modules/llm/llm.module';
+import { MediaAiModule } from './modules/media-ai/media-ai.module';
+
+// Only import MediaAiModule if explicitly enabled
+const mediaAiModules: Array<Type | DynamicModule> = [];
+if (process.env.MEDIA_AI_ENABLED === 'true') {
+  mediaAiModules.push(MediaAiModule);
+}
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -116,6 +123,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             __dirname + '/modules/webhook/**/*.entity{.ts,.js}',
             __dirname + '/modules/message/**/*.entity{.ts,.js}',
             __dirname + '/modules/template/**/*.entity{.ts,.js}',
+            __dirname + '/modules/media-ai/**/*.entity{.ts,.js}',
             __dirname + '/engine/**/*.entity{.ts,.js}',
           ],
           migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
@@ -220,6 +228,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API
     ExtensionsModule, // First-party extension plugins (registered disabled)
+    ...mediaAiModules, // Phase 2: Media AI (STT, OCR, Moderation) — enabled via MEDIA_AI_ENABLED
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
   ],
 })

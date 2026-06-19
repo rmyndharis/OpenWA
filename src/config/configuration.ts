@@ -125,4 +125,18 @@ export default () => ({
     model: process.env.LLM_MODEL || '',
     baseUrl: process.env.LLM_BASE_URL || '',
   },
+
+  // Media AI configuration
+  mediaAi: {
+    enabled: process.env.MEDIA_AI_ENABLED === 'true',
+    openAiApiKey: process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || '',
+    sttProvider: process.env.STT_PROVIDER || 'openai',
+    sttModel: process.env.STT_MODEL || 'whisper-1',
+    sttLocalUrl: process.env.STT_LOCAL_URL || 'http://localhost:8080',
+    ocrProvider: process.env.OCR_PROVIDER || 'local',
+    ocrConfidenceThreshold: parseInt(process.env.OCR_CONFIDENCE_THRESHOLD || '60', 10),
+    visionModel: process.env.OCR_VISION_MODEL || 'gpt-4o',
+    moderationProvider: process.env.MODERATION_PROVIDER || 'openai',
+    quarantinePath: process.env.MEDIA_QUARANTINE_PATH || './data/quarantine',
+  },
 });
