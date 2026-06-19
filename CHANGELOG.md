@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Generated secret files are written owner-only (0600).** `data/.env.generated` (which holds S3/DB/Redis
+  credentials) and `data/.api-key` (the raw admin key) were created world-readable; they are now `0600`, and
+  any pre-existing looser file is tightened on startup.
+- **Optional API-key pepper.** Set `API_KEY_PEPPER` to hash API keys with HMAC-SHA256 instead of plain
+  SHA-256, so a leak of the key database alone can't precompute candidates. Off by default — existing keys are
+  unaffected; enabling it is a deploy-time choice that requires re-issuing keys.
+- **`allowedIps` entries are validated as an IP address or CIDR range.** A malformed entry (e.g. a bare
+  hostname or `10.0.0.0/33`) is now rejected when creating/updating a key, instead of being stored silently
+  and never matching any request.
+- **The queue dashboard (Bull Board) auth uses the same trusted-proxy IP model as the API.** It now resolves
+  the client IP via `TRUSTED_PROXIES`, so an `allowedIps`-restricted ADMIN key is enforced consistently behind
+  a reverse proxy (previously it read the socket address directly).
+- **The production startup secret-guard inspects the S3 variables the app actually uses.** It now checks
+  `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (falling back to the legacy `S3_ACCESS_KEY`/`S3_SECRET_KEY`),
+  matching the storage layer — closing a gap where a placeholder in the canonical variable was not caught.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

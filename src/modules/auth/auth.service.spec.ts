@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UnauthorizedException, NotFoundException } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import { AuthService, resolveSeedApiKey } from './auth.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
@@ -405,6 +405,37 @@ describe('AuthService', () => {
       // CIDR match
       const r2 = await service.validateApiKey('mixed', '192.168.50.1');
       expect(r2.id).toBe(key.id);
+    });
+  });
+
+  // ── API_KEY_PEPPER wiring ─────────────────────────────────────────
+  // Proves the service's hashing path actually reads the env var (not just the pure helper). We
+  // assert on the keyHash the service QUERIES findOne with, since the mock returns regardless.
+  describe('hashKey reads API_KEY_PEPPER', () => {
+    const ORIGINAL_ENV = process.env;
+    afterEach(() => {
+      process.env = ORIGINAL_ENV;
+    });
+
+    const queriedHash = async (rawKey: string): Promise<string> => {
+      (repository.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.validateApiKey(rawKey)).rejects.toThrow(UnauthorizedException);
+      const calls = (repository.findOne as jest.Mock).mock.calls as Array<[{ where: { keyHash: string } }]>;
+      return calls[0][0].where.keyHash;
+    };
+
+    it('hashes with HMAC-SHA256 when the pepper is set', async () => {
+      process.env = { ...ORIGINAL_ENV, API_KEY_PEPPER: 'server-pepper' };
+      const queried = await queriedHash('owa_raw_key');
+      expect(queried).toBe(createHmac('sha256', 'server-pepper').update('owa_raw_key').digest('hex'));
+      expect(queried).not.toBe(createHash('sha256').update('owa_raw_key').digest('hex'));
+    });
+
+    it('hashes with plain SHA-256 when the pepper is unset (existing keys keep validating)', async () => {
+      process.env = { ...ORIGINAL_ENV };
+      delete process.env.API_KEY_PEPPER;
+      const queried = await queriedHash('owa_raw_key');
+      expect(queried).toBe(createHash('sha256').update('owa_raw_key').digest('hex'));
     });
   });
 });

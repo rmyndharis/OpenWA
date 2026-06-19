@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
@@ -15,6 +16,7 @@ import {
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
+import { writeSecretFile } from './common/utils/secret-file';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,6 +36,18 @@ const userEnvPath = path.resolve(process.cwd(), '.env');
 const dataDir = path.dirname(generatedEnvPath);
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// Tighten any pre-existing secret files written before per-file 0600 perms (best-effort) — the
+// generated .env holds S3/DB/Redis secrets and .api-key holds the raw admin key.
+for (const secret of [generatedEnvPath, path.resolve(dataDir, '.api-key')]) {
+  if (fs.existsSync(secret)) {
+    try {
+      fs.chmodSync(secret, 0o600);
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 // 2. User-managed .env (does not override real process env)
@@ -70,7 +84,7 @@ STORAGE_PATH=./data/media
 
 # Docker Profiles: none (minimal setup)
 `;
-  fs.writeFileSync(generatedEnvPath, minimalConfig);
+  writeSecretFile(generatedEnvPath, minimalConfig);
   console.log('[Bootstrap] Created default configuration at:', generatedEnvPath);
   dotenv.config({ path: generatedEnvPath, override: false });
 }
@@ -96,8 +110,10 @@ async function bootstrap() {
     databaseType: process.env.DATABASE_TYPE,
     databasePassword: process.env.DATABASE_PASSWORD,
     storageType: process.env.STORAGE_TYPE,
-    s3AccessKey: process.env.S3_ACCESS_KEY,
-    s3SecretKey: process.env.S3_SECRET_KEY,
+    // Mirror storage.service's canonical-with-legacy fallback so the guard inspects the var the app
+    // actually uses (it reads S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY first).
+    s3AccessKey: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY,
+    s3SecretKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY,
     apiMasterKey: process.env.API_MASTER_KEY,
     allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
   });
@@ -215,7 +231,7 @@ async function bootstrap() {
   // @bull-board/nestjs as raw Express middleware that the global ApiKeyGuard
   // does not cover; registering this before app.listen() ensures it runs ahead
   // of the Bull Board router. Requires a valid ADMIN API key.
-  const bullBoardAuth = new BullBoardAuthMiddleware(app.get(AuthService));
+  const bullBoardAuth = new BullBoardAuthMiddleware(app.get(AuthService), app.get(ConfigService));
   app.use('/api/admin/queues', (req: Request, res: Response, next: NextFunction) => {
     void bullBoardAuth.use(req, res, next);
   });
