@@ -336,6 +336,10 @@ export interface IWhatsAppEngine {
   disconnect(): Promise<void>; // Closes browser but keeps session (can reconnect without QR)
   logout(): Promise<void>; // Logs out and clears session data (requires QR scan again)
   destroy(): Promise<void>;
+  // Force-kill THIS engine's own resources immediately (e.g. SIGKILL a wedged Chromium for a stuck
+  // session), then best-effort graceful teardown — used to recover a session that destroy() can't.
+  // Each adapter kills only its own resources (never a process-wide pkill).
+  forceDestroy(): Promise<void>;
 
   // Status
   getStatus(): EngineStatus;

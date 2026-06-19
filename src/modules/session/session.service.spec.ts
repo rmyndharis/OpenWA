@@ -185,6 +185,37 @@ describe('SessionService', () => {
       await expect(service.delete('sess-uuid-1')).rejects.toThrow('db down');
       expect(stoppingOf().has('sess-uuid-1')).toBe(false); // mark still cleared on failure
     });
+
+    it('forceKill() force-destroys the engine, reconciles the map, and marks the session stopping', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { forceDestroy: jest.fn().mockResolvedValue(undefined) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      const result = await service.forceKill('sess-uuid-1');
+
+      expect(engine.forceDestroy).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // map reconciled
+      // Stop-mark stays set (like stop()): it blocks an in-flight reconnect from resurrecting the
+      // session we just killed; a later start() clears it.
+      expect(stoppingOf().has('sess-uuid-1')).toBe(true);
+      expect(result).toBeDefined();
+    });
+
+    it('forceKill() completes even when forceDestroy() rejects (best-effort recovery)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { forceDestroy: jest.fn().mockRejectedValue(new Error('still wedged')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.forceKill('sess-uuid-1')).resolves.toBeDefined();
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // map reconciled despite the failure
+    });
+
+    it('forceKill() throws NotFoundException for an unknown session', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(null);
+      await expect(service.forceKill('nope')).rejects.toThrow(NotFoundException);
+    });
   });
 
   // ── create ────────────────────────────────────────────────────────

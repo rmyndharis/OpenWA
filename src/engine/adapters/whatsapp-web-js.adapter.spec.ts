@@ -234,6 +234,46 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
   });
 });
 
+describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', () => {
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });
+  const setClient = (adapter: WhatsAppWebJsAdapter, client: unknown): void => {
+    (adapter as unknown as { client: unknown }).client = client;
+  };
+  const getClient = (adapter: WhatsAppWebJsAdapter): unknown => (adapter as unknown as { client: unknown }).client;
+
+  it('SIGKILLs only its own browser process, then best-effort destroys the client', async () => {
+    const kill = jest.fn();
+    const destroy = jest.fn().mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    setClient(adapter, { pupBrowser: { process: () => ({ kill }) }, destroy });
+
+    await adapter.forceDestroy();
+
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(getClient(adapter)).toBeNull();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('still completes when the process handle is gone and destroy() rejects (best-effort)', async () => {
+    const adapter = newAdapter();
+    setClient(adapter, {
+      pupBrowser: { process: () => null },
+      destroy: jest.fn().mockRejectedValue(new Error('wedged')),
+    });
+
+    await expect(adapter.forceDestroy()).resolves.toBeUndefined();
+    expect(getClient(adapter)).toBeNull();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('is a no-op when there is no client', async () => {
+    const adapter = newAdapter();
+    await expect(adapter.forceDestroy()).resolves.toBeUndefined();
+  });
+});
+
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
   // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
   const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {

@@ -145,6 +145,25 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Post(':id/force-kill')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Force-kill a stuck session (SIGKILL its wedged engine, then tear it down)' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session force-killed',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async forceKill(@Param('id') id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.forceKill(id);
+    await this.auditService.logInfo(AuditAction.SESSION_FORCE_KILLED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
   @Get(':id/qr')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Get QR code for session authentication' })

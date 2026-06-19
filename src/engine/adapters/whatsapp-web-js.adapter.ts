@@ -449,6 +449,36 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
   }
 
+  /**
+   * Force-recover a wedged session: SIGKILL THIS client's own Chromium process directly (not a
+   * process-wide `pkill`, which would also kill other sessions), then best-effort `client.destroy()`
+   * for the rest of the cleanup. Both steps are wrapped so a missing process handle or a hung destroy
+   * can't prevent the engine from being torn down and the status reset.
+   */
+  async forceDestroy(): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+
+    try {
+      // pupBrowser is the Puppeteer Browser; .process() is the Chromium ChildProcess (null if already gone).
+      const proc = (
+        client as unknown as { pupBrowser?: { process?: () => { kill?: (sig: string) => void } | null } }
+      ).pupBrowser?.process?.();
+      proc?.kill?.('SIGKILL');
+    } catch (err) {
+      this.logger.warn('forceDestroy: failed to kill the browser process', { error: String(err) });
+    }
+
+    try {
+      await client.destroy();
+    } catch (err) {
+      this.logger.warn('forceDestroy: client.destroy() failed after the kill (continuing)', { error: String(err) });
+    }
+
+    this.client = null;
+    this.setStatus(EngineStatus.DISCONNECTED);
+  }
+
   getStatus(): EngineStatus {
     return this.status;
   }
