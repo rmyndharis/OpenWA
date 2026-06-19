@@ -58,6 +58,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "sessions": "Sessions",
+    "sessionPools": "Session Pools",
     "chats": "Chats",
     "webhooks": "Webhooks",
     "templates": "Templates",

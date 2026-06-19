@@ -35,6 +35,9 @@ import { PluginsApiModule } from './modules/plugins/plugins.module';
 import { ExtensionsModule } from './plugins/extensions/extensions.module';
 import { LlmModule } from './modules/llm/llm.module';
 import { MediaAiModule } from './modules/media-ai/media-ai.module';
+import { LoadBalancerModule } from './modules/load-balancer/load-balancer.module';
+import { HealthScoreModule } from './modules/health-score/health-score.module';
+import { SessionPoolModule } from './modules/session-pool/session-pool.module';
 
 // Only import MediaAiModule if explicitly enabled
 const mediaAiModules: Array<Type | DynamicModule> = [];
@@ -124,6 +127,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             __dirname + '/modules/message/**/*.entity{.ts,.js}',
             __dirname + '/modules/template/**/*.entity{.ts,.js}',
             __dirname + '/modules/media-ai/**/*.entity{.ts,.js}',
+            __dirname + '/modules/session-pool/**/*.entity{.ts,.js}',
             __dirname + '/engine/**/*.entity{.ts,.js}',
           ],
           migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
@@ -229,6 +233,9 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     PluginsApiModule, // Phase 5: Plugins API
     ExtensionsModule, // First-party extension plugins (registered disabled)
     ...mediaAiModules, // Phase 2: Media AI (STT, OCR, Moderation) — enabled via MEDIA_AI_ENABLED
+    LoadBalancerModule, // Phase 3: Multi-Session AI Load Balancer (Thompson Sampling)
+    HealthScoreModule, // Phase 3: Predictive Session Health Monitor (trend analysis)
+    SessionPoolModule, // Phase 3: Session Pool Manager (hot-standby failover)
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
   ],
 })

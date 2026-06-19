@@ -269,4 +269,90 @@ export class CacheService implements OnModuleDestroy {
       this.logger.warn(`Cache invalidation failed: ${String(error)}`);
     }
   }
+
+  // ========== Raw Redis Operations (for internal modules) ==========
+
+  async rawGet(key: string): Promise<string | null> {
+    if (!(await this.isAvailable())) return null;
+    try {
+      return await this.redis!.get(key);
+    } catch (error) {
+      this.logger.warn(`rawGet failed (${key}): ${String(error)}`);
+      return null;
+    }
+  }
+
+  async rawSet(key: string, ttl: number, value: string): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.setex(key, ttl, value);
+    } catch (error) {
+      this.logger.warn(`rawSet failed (${key}): ${String(error)}`);
+    }
+  }
+
+  async rawDel(key: string): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.del(key);
+    } catch (error) {
+      this.logger.warn(`rawDel failed (${key}): ${String(error)}`);
+    }
+  }
+
+  async rawHGetAll(hash: string): Promise<Record<string, string>> {
+    if (!(await this.isAvailable())) return {};
+    try {
+      return await this.redis!.hgetall(hash) ?? {};
+    } catch (error) {
+      this.logger.warn(`rawHGetAll failed (${hash}): ${String(error)}`);
+      return {};
+    }
+  }
+
+  async rawHSet(hash: string, field: string, value: string): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.hset(hash, field, value);
+    } catch (error) {
+      this.logger.warn(`rawHSet failed (${hash}:${field}): ${String(error)}`);
+    }
+  }
+
+  async rawHDel(hash: string, ...fields: string[]): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.hdel(hash, ...fields);
+    } catch (error) {
+      this.logger.warn(`rawHDel failed (${hash}): ${String(error)}`);
+    }
+  }
+
+  async rawLPush(key: string, value: string): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.lpush(key, value);
+    } catch (error) {
+      this.logger.warn(`rawLPush failed (${key}): ${String(error)}`);
+    }
+  }
+
+  async rawLTrim(key: string, start: number, stop: number): Promise<void> {
+    if (!(await this.isAvailable())) return;
+    try {
+      await this.redis!.ltrim(key, start, stop);
+    } catch (error) {
+      this.logger.warn(`rawLTrim failed (${key}): ${String(error)}`);
+    }
+  }
+
+  async rawLRange(key: string, start: number, stop: number): Promise<string[]> {
+    if (!(await this.isAvailable())) return [];
+    try {
+      return await this.redis!.lrange(key, start, stop);
+    } catch (error) {
+      this.logger.warn(`rawLRange failed (${key}): ${String(error)}`);
+      return [];
+    }
+  }
 }

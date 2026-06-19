@@ -624,3 +624,85 @@ export const pluginsApi = {
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
 };
+
+// =============================================================================
+// Load Balancer API
+// =============================================================================
+
+export interface LbScores {
+  scores: Record<string, { alpha: number; beta: number; estimatedRate: number }>;
+  daily: Record<string, number>;
+  enabled: boolean;
+}
+
+export const loadBalancerApi = {
+  getScores: () => request<LbScores>('/sessions/load-balancer/scores'),
+  reset: () => request<{ success: boolean }>('/sessions/load-balancer/reset', { method: 'POST' }),
+  setEnabled: (enabled: boolean) =>
+    request<{ enabled: boolean }>('/sessions/load-balancer/enabled', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+};
+
+// =============================================================================
+// Health Score API
+// =============================================================================
+
+export interface HealthPrediction {
+  sessionId: string;
+  currentScore: number;
+  trend: 'improving' | 'stable' | 'declining' | 'critical';
+  slopePerHour: number;
+  predictedScore1h: number;
+  recommendAction: 'none' | 'watch' | 'reconnect' | 'alert';
+}
+
+export const healthScoreApi = {
+  getPredictions: () => request<HealthPrediction[]>('/sessions/health/predictions'),
+  getSessionHealth: (sessionId: string) =>
+    request<{ snapshots: Array<{ score: number; timestamp: string }>; prediction: HealthPrediction }>(
+      `/sessions/health/${sessionId}/snapshots`,
+    ),
+};
+
+// =============================================================================
+// Session Pool API
+// =============================================================================
+
+export interface SessionPoolItem {
+  id: string;
+  name: string;
+  targetStandbyCount: number;
+  productionSessionIds: string[];
+  standbySessionIds: string[];
+  autoFailover: boolean;
+  standbyWarmupSeconds: number;
+  createdAt: string;
+}
+
+export interface PoolStatus {
+  pool: SessionPoolItem;
+  production: Array<{ id: string; name: string; status: string }>;
+  standby: Array<{ id: string; name: string; status: string }>;
+  failoverHistory: Array<{ poolId: string; failedSessionId: string; promotedSessionId: string; timestamp: string }>;
+}
+
+export const sessionPoolApi = {
+  list: () => request<SessionPoolItem[]>('/session-pools'),
+  create: (data: Partial<SessionPoolItem>) =>
+    request<SessionPoolItem>('/session-pools', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: Partial<SessionPoolItem>) =>
+    request<SessionPoolItem>(`/session-pools/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  remove: (id: string) => request<{ success: boolean }>(`/session-pools/${id}`, { method: 'DELETE' }),
+  getStatus: (id: string) => request<PoolStatus>(`/session-pools/${id}/status`),
+  testFailover: (id: string, sessionId: string) =>
+    request<{ success: boolean; promotedSessionId: string }>(`/session-pools/${id}/failover-test`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
+  getHistory: () =>
+    request<Array<{ poolId: string; failedSessionId: string; promotedSessionId: string; timestamp: string }>>(
+      '/session-pools/failover-history',
+    ),
+};

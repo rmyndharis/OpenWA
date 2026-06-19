@@ -740,3 +740,36 @@
 .btn-sm:hover {
   background: var(--primary-hover);
 }
+
+/* ── Load Balancer Panel ────────────────────────────────────────────────────── */
+.lb-panel { margin-top: 2rem; padding: 1.25rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.lb-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.lb-panel-header h3 { font-size: 1rem; font-weight: 600; margin: 0; }
+.lb-algo { font-size: 0.75rem; font-weight: 400; color: var(--text-muted); margin-left: 0.4rem; }
+.lb-panel-controls { display: flex; align-items: center; gap: 0.5rem; }
+.lb-toggle-label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; cursor: pointer; }
+.lb-empty { color: var(--text-muted); font-size: 0.85rem; }
+.lb-bars { display: flex; flex-direction: column; gap: 0.6rem; }
+.lb-bar-row { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; }
+.lb-bar-name { width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.lb-bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.lb-bar-fill { height: 100%; background: var(--primary, #3b82f6); border-radius: 4px; transition: width 0.4s; }
+.lb-bar-pct { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+.lb-bar-today { color: var(--text-muted); font-size: 0.75rem; width: 60px; text-align: right; }
+
+/* ── Health Trend Panel ─────────────────────────────────────────────────────── */
+.ht-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
+.ht-card { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-alt, var(--surface)); }
+.ht-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+.ht-name { font-size: 0.85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.ht-scores { display: flex; flex-direction: column; gap: 0.25rem; }
+.ht-score-bar { position: relative; height: 8px; background: var(--border); border-radius: 4px; overflow: visible; }
+.ht-score-fill { position: absolute; left: 0; top: 0; height: 100%; background: var(--primary, #3b82f6); border-radius: 4px; }
+.ht-score-predicted { position: absolute; left: 0; top: 0; height: 100%; background: rgba(59,130,246,0.25); border-radius: 4px; border: 1px dashed var(--primary, #3b82f6); }
+.ht-score-labels { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+.ht-predicted { opacity: 0.7; }
+.ht-badge { display: block; margin-top: 0.5rem; font-size: 0.7rem; padding: 0.2rem 0.4rem; border-radius: 4px; }
+.ht-badge-warn { background: rgba(245,158,11,0.15); color: #b45309; }
+.ht-badge-error { background: rgba(239,68,68,0.12); color: #dc2626; }
+.btn-ghost { background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.5rem; cursor: pointer; color: var(--text); display: inline-flex; align-items: center; gap: 0.25rem; }
+.btn-ghost:hover { background: var(--surface-hover, rgba(0,0,0,0.05)); }

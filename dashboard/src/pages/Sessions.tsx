@@ -1,13 +1,147 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter } from 'lucide-react';
-import { sessionApi, type Session } from '../services/api';
+import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, TrendingUp, TrendingDown, Minus, AlertTriangle } from 'lucide-react';
+import { sessionApi, loadBalancerApi, healthScoreApi, type Session, type LbScores, type HealthPrediction } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
 import { PageHeader } from '../components/PageHeader';
 import './Sessions.css';
+
+// ── Load Balancer Panel ───────────────────────────────────────────────────────
+
+function LoadBalancerPanel({ sessions }: { sessions: Session[] }) {
+  const toast = useToast();
+  const [data, setData] = useState<LbScores | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try { setData(await loadBalancerApi.getScores()); } catch { /* Redis may be off */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const handleToggle = async () => {
+    if (!data) return;
+    try {
+      await loadBalancerApi.setEnabled(!data.enabled);
+      toast.success(!data.enabled ? 'Load balancing enabled' : 'Load balancing disabled', '');
+      void refresh();
+    } catch { toast.error('Failed to update load balancer', ''); }
+  };
+
+  const handleReset = async () => {
+    try {
+      await loadBalancerApi.reset();
+      toast.success('Scores reset', '');
+      void refresh();
+    } catch { toast.error('Reset failed', ''); }
+  };
+
+  const scoreEntries = data ? Object.entries(data.scores).sort(([, a], [, b]) => b.estimatedRate - a.estimatedRate) : [];
+
+  return (
+    <section className="lb-panel">
+      <div className="lb-panel-header">
+        <h3>Load Balancer <span className="lb-algo">(Thompson Sampling)</span></h3>
+        <div className="lb-panel-controls">
+          {loading && <Loader2 size={14} className="animate-spin" />}
+          <button className="btn-sm btn-ghost" onClick={() => void refresh()}>
+            <RefreshCw size={13} />
+          </button>
+          <button className="btn-sm btn-ghost" onClick={() => void handleReset()} title="Reset scores">
+            Reset
+          </button>
+          <label className="lb-toggle-label">
+            <input type="checkbox" checked={data?.enabled ?? true} onChange={() => void handleToggle()} />
+            {data?.enabled ? 'Enabled' : 'Disabled'}
+          </label>
+        </div>
+      </div>
+
+      {scoreEntries.length === 0 ? (
+        <p className="lb-empty">No bandit data yet — data populates after the first load-balanced send.</p>
+      ) : (
+        <div className="lb-bars">
+          {scoreEntries.map(([sessionId, score]) => {
+            const session = sessions.find(s => s.id === sessionId);
+            const pct = Math.round(score.estimatedRate * 100);
+            const today = data?.daily?.[sessionId] ?? 0;
+            return (
+              <div key={sessionId} className="lb-bar-row">
+                <span className="lb-bar-name">{session?.name ?? sessionId.slice(0, 8)}</span>
+                <div className="lb-bar-track">
+                  <div className="lb-bar-fill" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="lb-bar-pct">{pct}%</span>
+                <span className="lb-bar-today">{today} today</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Health Trend Panel ────────────────────────────────────────────────────────
+
+function TrendIcon({ trend }: { trend: HealthPrediction['trend'] }) {
+  if (trend === 'improving') return <TrendingUp size={14} style={{ color: '#22c55e' }} />;
+  if (trend === 'declining') return <TrendingDown size={14} style={{ color: '#f59e0b' }} />;
+  if (trend === 'critical') return <AlertTriangle size={14} style={{ color: '#ef4444' }} />;
+  return <Minus size={14} style={{ color: '#6b7280' }} />;
+}
+
+function HealthTrendPanel({ sessions }: { sessions: Session[] }) {
+  const [predictions, setPredictions] = useState<HealthPrediction[]>([]);
+
+  useEffect(() => {
+    healthScoreApi.getPredictions().then(setPredictions).catch(() => {});
+  }, [sessions.length]);
+
+  if (predictions.length === 0) return null;
+
+  return (
+    <section className="lb-panel">
+      <div className="lb-panel-header">
+        <h3>Predictive Health</h3>
+      </div>
+      <div className="ht-grid">
+        {predictions.map(p => {
+          const session = sessions.find(s => s.id === p.sessionId);
+          return (
+            <div key={p.sessionId} className="ht-card">
+              <div className="ht-card-header">
+                <span className="ht-name">{session?.name ?? p.sessionId.slice(0, 8)}</span>
+                <TrendIcon trend={p.trend} />
+              </div>
+              <div className="ht-scores">
+                <div className="ht-score-bar">
+                  <div className="ht-score-fill" style={{ width: `${p.currentScore}%` }} />
+                  <div className="ht-score-predicted" style={{ width: `${p.predictedScore1h}%` }} />
+                </div>
+                <div className="ht-score-labels">
+                  <span>Now: {p.currentScore}</span>
+                  <span className="ht-predicted">1h: {Math.round(p.predictedScore1h)}</span>
+                </div>
+              </div>
+              {p.recommendAction === 'reconnect' && (
+                <span className="ht-badge ht-badge-warn">Preemptive reconnect queued</span>
+              )}
+              {p.recommendAction === 'alert' && (
+                <span className="ht-badge ht-badge-error">Critical — check session</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 export function Sessions() {
   const { t } = useTranslation();
@@ -547,6 +681,9 @@ export function Sessions() {
           ))
         )}
       </div>
+
+      <LoadBalancerPanel sessions={sessions} />
+      <HealthTrendPanel sessions={sessions} />
     </div>
   );
 }
