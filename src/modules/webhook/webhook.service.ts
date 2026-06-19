@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Optional, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindManyOptions, In, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -93,22 +93,28 @@ export class WebhookService {
     });
   }
 
-  async findAll(): Promise<Webhook[]> {
-    return this.webhookRepository.find({
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(allowedSessions?: string[] | null): Promise<Webhook[]> {
+    // A session-restricted key only sees its own sessions' webhooks; an unrestricted key
+    // (null/empty allowlist, e.g. ADMIN) sees all — mirroring the ApiKeyGuard allowedSessions model.
+    const options: FindManyOptions<Webhook> = { order: { createdAt: 'DESC' } };
+    if (allowedSessions && allowedSessions.length > 0) {
+      options.where = { sessionId: In(allowedSessions) };
+    }
+    return this.webhookRepository.find(options);
   }
 
-  async findOne(id: string): Promise<Webhook> {
-    const webhook = await this.webhookRepository.findOne({ where: { id } });
+  async findOne(sessionId: string, id: string): Promise<Webhook> {
+    // Scope by the URL's sessionId so one session cannot read/act on another's webhook by id.
+    // A wrong-session id resolves to not-found (no cross-session existence oracle).
+    const webhook = await this.webhookRepository.findOne({ where: { id, sessionId } });
     if (!webhook) {
       throw new NotFoundException(`Webhook with id '${id}' not found`);
     }
     return webhook;
   }
 
-  async update(id: string, dto: UpdateWebhookDto): Promise<Webhook> {
-    const webhook = await this.findOne(id);
+  async update(sessionId: string, id: string, dto: UpdateWebhookDto): Promise<Webhook> {
+    const webhook = await this.findOne(sessionId, id);
 
     if (dto.url !== undefined) {
       await this.validateWebhookUrl(dto.url);
@@ -125,13 +131,13 @@ export class WebhookService {
     return this.webhookRepository.save(webhook);
   }
 
-  async delete(id: string): Promise<void> {
-    const webhook = await this.findOne(id);
+  async delete(sessionId: string, id: string): Promise<void> {
+    const webhook = await this.findOne(sessionId, id);
     await this.webhookRepository.remove(webhook);
   }
 
   async test(sessionId: string, webhookId: string): Promise<{ success: boolean; statusCode?: number; error?: string }> {
-    const webhook = await this.findOne(webhookId);
+    const webhook = await this.findOne(sessionId, webhookId);
 
     const testPayload: WebhookPayload = {
       event: 'test',

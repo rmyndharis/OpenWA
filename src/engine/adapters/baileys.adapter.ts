@@ -36,9 +36,11 @@ import {
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
+import { capInboundMedia } from './inbound-media-cap';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). */
 const BAILEYS_BROWSER: [string, string, string] = ['OpenWA', 'Chrome', '120.0.0'];
@@ -796,7 +798,20 @@ export class BaileysAdapter implements IWhatsAppEngine {
           normalizedContent.stickerMessage;
         const mimetype = subMessage?.mimetype ?? '';
         const filename = normalizedContent.documentMessage?.fileName ?? undefined;
-        media = { mimetype, data: buf.toString('base64'), filename };
+        // Cap inbound media (lazy base64) so an oversized blob from an untrusted sender is never
+        // encoded/persisted/webhooked/broadcast — preventing heap blow-up. Envelope is kept.
+        media = capInboundMedia({
+          mimetype,
+          filename,
+          sizeBytes: buf.byteLength,
+          toBase64: () => buf.toString('base64'),
+        });
+        if (media.omitted) {
+          this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
+            msgId: msg.key.id,
+            sizeBytes: media.sizeBytes,
+          });
+        }
       } catch (err) {
         this.logger.debug('Failed to download inbound media; emitting message without media', {
           error: err instanceof Error ? err.message : String(err),
@@ -919,7 +934,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private async requireStored(messageId: string): Promise<WAMessage> {
     const found = await this.config.messageStore?.getMessage(this.config.sessionId, messageId);
     if (!found?.key) {
-      throw new Error(`Message ${messageId} not found`);
+      throw new MessageNotFoundError(messageId);
     }
     return found;
   }

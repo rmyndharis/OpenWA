@@ -2,6 +2,8 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { AuditService, AuditQueryOptions } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
+import { RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('audit')
 @Controller('audit')
@@ -9,6 +11,7 @@ export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
   @Get()
+  @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List audit logs with optional filters' })
   @ApiQuery({ name: 'action', required: false, enum: AuditAction })
   @ApiQuery({ name: 'severity', required: false, enum: AuditSeverity })

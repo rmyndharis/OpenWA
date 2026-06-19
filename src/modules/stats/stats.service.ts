@@ -5,6 +5,29 @@ import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { CacheService } from '../../common/cache';
 
+/**
+ * SQL for the time-series timestamp bucket, per DB dialect. SQLite has strftime(); Postgres has
+ * neither strftime nor a case-insensitive bare `m.createdAt` (unquoted it folds to lowercase and
+ * misses the quoted "createdAt" column) — so it needs to_char() with a quoted column. The hour
+ * format yields an identical zero-padded, chronologically-sortable label on both engines, so the
+ * GROUP BY/ORDER BY on the alias and the downstream map() are unchanged.
+ */
+export function timeSeriesTimestampSql(dbType: string, interval: 'hour' | 'day'): string {
+  if (dbType === 'postgres') {
+    const fmt = interval === 'hour' ? 'YYYY-MM-DD HH24:00:00' : 'YYYY-MM-DD';
+    return `to_char(m."createdAt", '${fmt}')`;
+  }
+  const fmt = interval === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d';
+  return `strftime('${fmt}', m.createdAt)`;
+}
+
+/** SQL for the integer hour-of-day (0-23) bucket, per DB dialect. */
+export function hourBucketSql(dbType: string): string {
+  return dbType === 'postgres'
+    ? `CAST(EXTRACT(HOUR FROM m."createdAt") AS INTEGER)`
+    : `CAST(strftime('%H', m.createdAt) AS INTEGER)`;
+}
+
 export interface OverviewStats {
   sessions: {
     active: number;
@@ -48,6 +71,11 @@ export class StatsService {
     private readonly messageRepo: Repository<Message>,
     private readonly cacheService: CacheService,
   ) {}
+
+  /** The data-connection dialect ('sqlite' | 'postgres'), used to pick portable date SQL. */
+  private get dataDbType(): string {
+    return this.messageRepo.manager.connection.options.type;
+  }
 
   async getOverview(): Promise<OverviewStats> {
     // Get session stats
@@ -256,12 +284,9 @@ export class StatsService {
   }
 
   private async getTimeSeries(since: Date, interval: 'hour' | 'day'): Promise<TimeSeriesPoint[]> {
-    // SQLite-compatible time series query
-    const formatStr = interval === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d';
-
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(`strftime('${formatStr}', m.createdAt)`, 'timestamp')
+      .select(timeSeriesTimestampSql(this.dataDbType, interval), 'timestamp')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.createdAt >= :since', { since })
@@ -281,7 +306,7 @@ export class StatsService {
 
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(`CAST(strftime('%H', m.createdAt) AS INTEGER)`, 'hour')
+      .select(hourBucketSql(this.dataDbType), 'hour')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.sessionId = :sessionId', { sessionId })
