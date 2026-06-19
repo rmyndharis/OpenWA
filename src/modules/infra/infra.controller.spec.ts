@@ -1,4 +1,7 @@
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { Readable } from 'stream';
 import { Reflector } from '@nestjs/core';
 import { BadRequestException } from '@nestjs/common';
 
@@ -370,5 +373,64 @@ describe('InfraController.getConfig (#226)', () => {
     // Secrets are never present on the returned object.
     expect(JSON.stringify(cfg)).not.toContain('secret');
     expect(JSON.stringify(cfg)).not.toContain('"ak"');
+  });
+});
+
+describe('InfraController.exportStorage keeps the export import-able and sweeps it', () => {
+  function buildController(storage: Partial<{ createExportStream: jest.Mock }>) {
+    return new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      storage as never,
+      {} as never,
+    );
+  }
+
+  // fs.existsSync is globally mocked in this file, so probe the real filesystem via fs.promises.access.
+  const exists = (p: string): Promise<boolean> =>
+    fs.promises
+      .access(p)
+      .then(() => true)
+      .catch(() => false);
+
+  // Poll (don't sleep a fixed time) so the sweep assertion isn't flaky under CI load.
+  const waitForGone = async (p: string, timeoutMs = 3000): Promise<void> => {
+    const start = Date.now();
+    while (await exists(p)) {
+      if (Date.now() - start > timeoutMs) throw new Error(`file was not swept in time: ${p}`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
+
+  let cwdSpy: jest.SpyInstance | undefined;
+  let cwd: string | undefined;
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    if (cwd) fs.rmSync(cwd, { recursive: true, force: true });
+    cwdSpy = undefined;
+    cwd = undefined;
+    delete process.env.STORAGE_EXPORT_TTL_MS;
+  });
+
+  it('writes under data/exports (so it stays import-able + survives restart) and TTL-sweeps it', async () => {
+    cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-cwd-'));
+    cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
+    process.env.STORAGE_EXPORT_TTL_MS = '30';
+    const createExportStream = jest.fn().mockResolvedValue(Readable.from([Buffer.from('archive-bytes')]));
+    const controller = buildController({ createExportStream });
+
+    const result = await controller.exportStorage();
+
+    // Import-able: under <data>/exports — the import handler only accepts paths inside data/.
+    expect(result.download.startsWith(path.join(cwd, 'data', 'exports'))).toBe(true);
+    expect(await exists(result.download)).toBe(true);
+
+    await waitForGone(result.download);
+    expect(await exists(result.download)).toBe(false);
   });
 });

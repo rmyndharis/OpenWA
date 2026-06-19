@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
+import { isPathWithin } from '../../common/utils/path-safety';
 import { PluginStatus, PluginStorage, PluginRegistryEntry } from './plugin.interfaces';
 
 @Injectable()
@@ -131,9 +132,19 @@ export class PluginStorageService {
 
     const logger = this.logger;
 
+    // Containment: a plugin storage key must resolve INSIDE its own sandbox dir. path.join normalizes
+    // `..`, so a key like `../../x` would otherwise escape and clobber another plugin's data, the
+    // registry, or .env.generated. Reject anything that escapes; JID chars (`:`,`@`,`.`,`-`) are fine.
+    const resolveKeyPath = (key: string): string | null =>
+      isPathWithin(pluginDataDir, `${key}.json`) ? path.join(pluginDataDir, `${key}.json`) : null;
+
     return {
       get: <T = unknown>(key: string): Promise<T | null> => {
-        const filePath = path.join(pluginDataDir, `${key}.json`);
+        const filePath = resolveKeyPath(key);
+        if (!filePath) {
+          logger.warn(`Refusing to read plugin data with an unsafe key: ${pluginId}/${key}`);
+          return Promise.resolve(null);
+        }
         try {
           if (fs.existsSync(filePath)) {
             const content = fs.readFileSync(filePath, 'utf-8');
@@ -146,7 +157,10 @@ export class PluginStorageService {
       },
 
       set: <T = unknown>(key: string, value: T): Promise<void> => {
-        const filePath = path.join(pluginDataDir, `${key}.json`);
+        const filePath = resolveKeyPath(key);
+        if (!filePath) {
+          return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
+        }
         try {
           fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
           return Promise.resolve();
@@ -157,7 +171,10 @@ export class PluginStorageService {
       },
 
       delete: (key: string): Promise<void> => {
-        const filePath = path.join(pluginDataDir, `${key}.json`);
+        const filePath = resolveKeyPath(key);
+        if (!filePath) {
+          return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
+        }
         try {
           if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);

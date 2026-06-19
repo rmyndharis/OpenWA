@@ -14,6 +14,7 @@ import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import * as dotenv from 'dotenv';
 
 interface InfraStatus {
@@ -858,7 +859,16 @@ export class InfraController {
     // Note: In production, this would return a StreamableFile
     // For simplicity, we'll save to a temp file and return the path
     const stream = await this.storageService.createExportStream();
-    const exportPath = path.join(process.cwd(), 'data', `storage-export-${Date.now()}.tar.gz`);
+    // Keep the export INSIDE data/ (under data/exports/): the import handler only accepts paths under
+    // data/, and the documented backend-migration flow re-imports this file AFTER a container restart,
+    // so it must live on the persistent volume — the OS temp dir is wiped on restart. The original
+    // unbounded-accumulation leak is addressed by the TTL sweep below + a collision-proof filename
+    // (a per-call UUID), not by relocating off the volume.
+    const exportDir = path.join(process.cwd(), 'data', 'exports');
+    if (!fs.existsSync(exportDir)) {
+      fs.mkdirSync(exportDir, { recursive: true });
+    }
+    const exportPath = path.join(exportDir, `storage-export-${Date.now()}-${randomUUID()}.tar.gz`);
 
     const writeStream = fs.createWriteStream(exportPath);
     stream.pipe(writeStream);
@@ -867,6 +877,13 @@ export class InfraController {
       writeStream.on('finish', resolve);
       writeStream.on('error', reject);
     });
+
+    // Sweep the throwaway archive so repeated exports don't accumulate on the data volume.
+    const ttlRaw = Number.parseInt(process.env.STORAGE_EXPORT_TTL_MS ?? '', 10);
+    const ttlMs = Number.isInteger(ttlRaw) && ttlRaw > 0 ? ttlRaw : 60 * 60 * 1000; // default 1h
+    setTimeout(() => {
+      fs.promises.unlink(exportPath).catch(() => undefined);
+    }, ttlMs).unref();
 
     return {
       message: 'Storage export completed',
