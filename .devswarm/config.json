@@ -1,0 +1,13 @@
+{
+  "portVars": [
+    "PORT",
+    "DASHBOARD_PORT"
+  ],
+  "worktreeInclude": [
+    ".env",
+    ".env.local"
+  ],
+  "scripts": {
+    "setup": "npm install"
+  }
+}
