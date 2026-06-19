@@ -24,11 +24,17 @@ function hashData(data: Record<string, unknown>): string {
  * Same event with same data will produce the same key (deterministic).
  *
  * @remarks
- * Keys are content-based and do NOT include timestamps.
- * This ensures that replayed/retried events with identical payloads
- * produce the same key for proper deduplication.
+ * Message keys are content-based (keyed on the unique message id), so two deliveries of the same
+ * logical message dedupe. Lifecycle events (session.status/authenticated/disconnected) recur with
+ * identical content — the same phone on every reconnect, a constant disconnect reason — so they are
+ * salted with `occurredAt` (captured ONCE per dispatch and reused across retries): distinct
+ * occurrences get distinct keys while retries of the same occurrence stay stable.
+ *
+ * @param occurredAt - ISO timestamp captured once per dispatch; salts recurring lifecycle keys.
  */
-export function generateIdempotencyKey(event: string, data: Record<string, unknown>): string {
+export function generateIdempotencyKey(event: string, data: Record<string, unknown>, occurredAt?: string): string {
+  // Salt applied only to the recurring lifecycle keys below; message/qr keys ignore it.
+  const occurrence = occurredAt ? `_${occurredAt}` : '';
   switch (event) {
     case 'message.received':
     case 'message.sent':
@@ -51,20 +57,22 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       return `rev_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
 
     case 'session.status':
-      // Session + status combo (same status emitted once per transition)
-      return `sess_${toStr(data.sessionId)}_${toStr(data.status)}`;
+      // Salted so repeated transitions to the same status (e.g. across disconnect/reconnect cycles)
+      // stay distinct instead of collapsing onto one key.
+      return `sess_${toStr(data.sessionId)}_${toStr(data.status)}${occurrence}`;
 
     case 'session.qr':
       // QR changes each time, use the QR data hash for uniqueness
       return `qr_${toStr(data.sessionId)}_${hashData({ qr: data.qr })}`;
 
     case 'session.authenticated':
-      // Auth only happens once per session lifecycle
-      return `auth_${toStr(data.sessionId)}_${hashData(data)}`;
+      // Salted so each (re)authentication is a distinct event — phone/pushName repeat across reconnects.
+      return `auth_${toStr(data.sessionId)}_${hashData(data)}${occurrence}`;
 
     case 'session.disconnected':
-      // Disconnect with reason for uniqueness
-      return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}`;
+      // Salted so repeat disconnects stay distinct — `reason` alone can be a constant (Baileys
+      // always sends 'logged out'), which would otherwise collapse every disconnect onto one key.
+      return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}${occurrence}`;
 
     case 'group.join':
       return `grp_${toStr(data.groupId)}_${toStr(data.participantId)}_join`;

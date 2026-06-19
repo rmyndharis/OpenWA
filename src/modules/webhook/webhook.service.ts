@@ -214,8 +214,11 @@ export class WebhookService {
 
     const matchingWebhooks = webhooks.filter(w => w.events.includes(event) || w.events.includes('*'));
 
-    // Generate idempotency key (same for all webhooks receiving this event)
-    const idempotencyKey = generateIdempotencyKey(event, { ...data, sessionId });
+    // Generate idempotency key (same for all webhooks receiving this event). occurredAt is captured
+    // once here and reused for every retry of this dispatch, so recurring lifecycle events get a
+    // distinct-per-occurrence key while retries of the same event stay stable.
+    const occurredAt = new Date().toISOString();
+    const idempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
     // Dispatch to all matching webhooks
     for (const webhook of matchingWebhooks) {

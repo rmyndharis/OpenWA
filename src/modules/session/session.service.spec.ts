@@ -9,7 +9,7 @@ import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
-import { IncomingMessage, EngineEventCallbacks } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IncomingMessage, EngineEventCallbacks, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 
 function createMockSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -759,6 +759,75 @@ describe('SessionService', () => {
 
       expect(dispatchedEvents('message.revoked')).toHaveLength(1);
       expect(eventsGateway.emitMessageRevoked as jest.Mock).toHaveBeenCalledWith('sess-uuid-1', expect.anything());
+    });
+
+    // ── session lifecycle events ──────────────────────────────────────
+
+    it('dispatches session.qr with the QR payload when the engine emits a QR code', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onQRCode).toBe('function');
+
+      callbacks.onQRCode!('qr-data-abc');
+      await flush();
+
+      const qr = dispatchedEvents('session.qr');
+      expect(qr).toHaveLength(1);
+      expect(qr[0][0]).toBe('sess-uuid-1');
+      expect(qr[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', qr: 'qr-data-abc' });
+    });
+
+    it('dispatches session.authenticated with phone/pushName when the engine reports ready', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onReady).toBe('function');
+
+      callbacks.onReady!('628123', 'Alice');
+      await flush();
+
+      const auth = dispatchedEvents('session.authenticated');
+      expect(auth).toHaveLength(1);
+      expect(auth[0][0]).toBe('sess-uuid-1');
+      expect(auth[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', phone: '628123', pushName: 'Alice' });
+    });
+
+    it('dispatches session.disconnected with the reason when the engine disconnects', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      expect(typeof callbacks.onDisconnected).toBe('function');
+      // Isolate the dispatch from the reconnect scheduler, which would otherwise leave a live timer.
+      jest
+        .spyOn(service as unknown as { scheduleReconnect: (id: string, s: unknown) => void }, 'scheduleReconnect')
+        .mockImplementation(() => undefined);
+
+      callbacks.onDisconnected!('logged out');
+      await flush();
+
+      const disc = dispatchedEvents('session.disconnected');
+      expect(disc).toHaveLength(1);
+      expect(disc[0][0]).toBe('sess-uuid-1');
+      expect(disc[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', reason: 'logged out' });
+    });
+
+    it('dispatches session.status on a session status transition', async () => {
+      await startAndCaptureCallbacks();
+      await flush();
+
+      // start() transitions the session to INITIALIZING via updateStatus().
+      const status = dispatchedEvents('session.status');
+      expect(status.length).toBeGreaterThanOrEqual(1);
+      expect(status[0][0]).toBe('sess-uuid-1');
+      expect(status[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', status: SessionStatus.INITIALIZING });
+    });
+
+    it('does not double-dispatch session.status when onStateChanged and a dedicated callback report the same status', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      // wwebjs signals a QR transition via BOTH onStateChanged(QR_READY) and onQRCode → updateStatus(QR_READY) twice.
+      callbacks.onStateChanged!(EngineStatus.QR_READY);
+      callbacks.onQRCode!('qr-data-abc');
+      await flush();
+
+      const qrStatus = dispatchedEvents('session.status').filter(
+        c => (c[2] as { status?: string }).status === SessionStatus.QR_READY,
+      );
+      expect(qrStatus).toHaveLength(1);
     });
   });
 
