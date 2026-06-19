@@ -7,15 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-19
+
+A security-hardening and reliability release: outbound-request and storage hardening, plugin/message persistence
+fixes, delivery-status and concurrency correctness, and lifecycle robustness — including a **force-kill recovery
+for stuck sessions** and its dashboard button. **No breaking changes** for a correctly-configured deployment; the
+only behavior change to note is that a misconfigured `ENGINE_TYPE`/`STORAGE_TYPE` now fails fast at boot instead
+of silently falling back to the default.
+
+### Added
+
+- **Force-kill a stuck session.** `POST /sessions/:id/force-kill` (OPERATOR) recovers a session whose engine is
+  wedged and won't respond to a normal stop/delete: the whatsapp-web.js engine **SIGKILLs its own Chromium
+  process directly** (never a process-wide kill that could take down other sessions), then best-effort tears the
+  client down; the Baileys engine ends its socket. The teardown is time-bounded and isolated, and the session is
+  left `DISCONNECTED` and restartable. (#352)
+- **Dashboard "Kill Stuck" button.** Session cards in a `failed` state get a Kill Stuck action that confirms,
+  then calls the force-kill endpoint above. (#351)
+
+### Security
+
+- **Outbound webhook and media fetches are pinned to the SSRF-validated IP.** The host check and the actual
+  connection previously resolved DNS independently, leaving a DNS-rebinding window; the connection now reuses
+  the exact vetted address (preserving the hostname for TLS SNI/`Host`, with A-record failover) across webhook
+  delivery (direct/queued/test) and server-side media downloads. (#338)
+- **IPv6 SSRF blocklist closes embedded-IPv4 gaps** (6to4 `2002::/16`, NAT64 `64:ff9b::/96`, IPv4-compatible
+  `::/96`); the LibreTranslate plugin client is SSRF-guarded; per-session `proxyUrl` is validated as an
+  `http(s)`/`socks4`/`socks5` URL. (#344)
+- **Secret/auth hardening.** Generated secret files (`data/.env.generated`, `data/.api-key`) are written `0600`;
+  an opt-in `API_KEY_PEPPER` hashes API keys with HMAC-SHA256; `allowedIps` entries are validated as IPv4/CIDR;
+  the queue dashboard (Bull Board) auth uses the same trusted-proxy IP model as the API; the production
+  secret-guard inspects the canonical S3 variables. (#345)
+- **Storage import/key hardening.** A `tar.gz` import is bounded against decompression bombs (per-entry byte cap
+  + entry-count cap); storage-key containment is enforced at the backend-agnostic boundary so the S3 path
+  inherits it; a plugin's `ctx.storage` is sandbox-contained against `..` traversal. (#346)
+
 ### Fixed
 
 - **Webhook subscriptions for session lifecycle events now deliver.** `session.status`, `session.qr`,
-  `session.authenticated` and `session.disconnected` were accepted on subscribe but were never dispatched, so
-  consumers (including the n8n trigger node) waited indefinitely. They now fire from the engine lifecycle. The
-  n8n integration docs are corrected to the real event names (`session.authenticated`, `session.qr` —
-  previously documented as the non-existent `session.connected`/`session.qr_ready`, which were rejected at
-  registration). `group.*` events remain accepted on subscribe but are documented as reserved (not emitted
-  yet).
+  `session.authenticated`, `session.disconnected` were accepted on subscribe but never dispatched; they now fire
+  from the engine lifecycle (the n8n docs are corrected to the real event names). (#335)
+- **Plugin enable/disable and configuration now persist** across restarts (they previously updated only
+  in-memory state while the API reported success). Plugins are not auto-enabled on boot for safety; their saved
+  configuration is preserved. (#339)
+- **Bulk-sent messages are recorded, their errors no longer leak internal addresses, and a running batch can be
+  cancelled across instances.** (#340)
+- **Forwarded messages on the whatsapp-web.js engine report a real WhatsApp message id**, so their delivery
+  status advances (the synthetic `fwd_<id>` could never match an ack). (#341)
+- **A late delivery/read receipt is no longer lost** (the ack retries once when it arrives before the send's id
+  is committed); **concurrent reactions no longer overwrite each other** (serialized per message); a plugin hook
+  that reports an error no longer has its partial output applied; a failed ack write is logged with context. (#348)
+- **Storage export no longer accumulates copies on the data volume** — it writes under `data/exports/` with a
+  TTL sweep and an async read (instead of a synchronous read that blocked the event loop). (#346)
+- **`WEBHOOK_TIMEOUT` is honored on the queued and test delivery paths** (not just the deprecated direct one);
+  graceful shutdown is bounded (a half-open Redis socket can't block `app.close()`); unsupported status/catalog
+  operations return a consistent `501`; a misconfigured `ENGINE_TYPE`/`STORAGE_TYPE` fails fast at boot. (#350)
+
+### Changed
+
+- **The `/api/metrics` scrape is memoized for a few seconds** so back-to-back scrapes don't each run a full
+  session scan plus aggregates; removed a dead branch in the WebSocket connect handler. (#350)
+
+### Documentation
+
+- Added a **phone-number pairing** example. (#343)
+- Documented the webhook `idempotencyKey`/`deliveryId` fields (body + `X-OpenWA-*` headers) and the dedup rule;
+  corrected the `.env.example` rate-limit variable names (`RATE_LIMIT_MEDIUM_TTL`/`_LIMIT`, in milliseconds). (#350)
 
 ## [0.4.2] - 2026-06-19
 

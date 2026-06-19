@@ -71,7 +71,7 @@ curl -H "X-API-Key: $API_KEY" \
 ```json
 {
   "status": "ok",
-  "version": "0.4.0",
+  "version": "0.4.3",
   "uptime": 86400,
   "timestamp": "2026-02-02T10:30:00Z",
   "checks": {

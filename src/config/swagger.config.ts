@@ -14,7 +14,7 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
     new DocumentBuilder()
       .setTitle('OpenWA API')
       .setDescription('Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API')
-      .setVersion('0.4.2')
+      .setVersion('0.4.3')
       .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, API_KEY_SECURITY_SCHEME)
       // Apply the scheme globally so Swagger UI sends the key with every request
       // (mirrors the global ApiKeyGuard). Without this, "Authorize" is cosmetic.
