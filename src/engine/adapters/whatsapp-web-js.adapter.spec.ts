@@ -9,6 +9,14 @@ import {
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { fetch as undiciFetch } from 'undici';
+
+// loadRemoteMedia now fetches bytes through the SSRF-pinned path (undici fetch), then builds the
+// MessageMedia locally — so mock undici fetch, not MessageMedia.fromUrl.
+jest.mock('undici', () => {
+  const actual = jest.requireActual<typeof import('undici')>('undici');
+  return { __esModule: true, ...actual, fetch: jest.fn() };
+});
 
 describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
   // Regression-locks the integer boundary the decoupling moved behaviour into, incl. the
@@ -62,22 +70,57 @@ describe('extractLinkedParentJID (#201)', () => {
   });
 });
 
-describe('loadRemoteMedia — media-fetch SSRF guard + cap + timeout', () => {
+describe('loadRemoteMedia — routes through the SSRF-pinned media fetch', () => {
   let fromUrlSpy: jest.SpyInstance;
 
+  // A Response-like with a single-chunk body stream (mirrors load-remote-media.spec).
+  const fakeResponse = (bytes: number[], headers: Record<string, string>) => ({
+    ok: true,
+    status: 200,
+    headers: { get: (k: string) => headers[k.toLowerCase()] ?? null },
+    body: {
+      getReader: () => {
+        let done = false;
+        return {
+          read: () =>
+            done
+              ? Promise.resolve({ done: true, value: undefined })
+              : ((done = true), Promise.resolve({ done: false, value: new Uint8Array(bytes) })),
+          cancel: () => Promise.resolve(),
+        };
+      },
+    },
+  });
+
   beforeEach(() => {
-    fromUrlSpy = jest
-      .spyOn(MessageMedia, 'fromUrl')
-      .mockResolvedValue(new MessageMedia('image/png', 'ZmFrZQ==', 'x.png'));
+    // Spied only to assert the vulnerable fromUrl path is NEVER taken.
+    fromUrlSpy = jest.spyOn(MessageMedia, 'fromUrl');
+    (undiciFetch as jest.Mock).mockReset();
   });
 
   afterEach(() => {
     fromUrlSpy.mockRestore();
+    (undiciFetch as jest.Mock).mockReset();
     delete process.env.SSRF_ALLOWED_HOSTS;
+  });
+
+  it('builds MessageMedia from the pinned fetch bytes, never via MessageMedia.fromUrl', async () => {
+    (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([104, 105], { 'content-type': 'image/png' }));
+
+    const media = await loadRemoteMedia('https://8.8.8.8/x.png');
+
+    expect(fromUrlSpy).not.toHaveBeenCalled(); // the unpinned node-fetch path is gone
+    expect(media.mimetype).toBe('image/png');
+    expect(media.data).toBe(Buffer.from([104, 105]).toString('base64'));
+    expect(undiciFetch).toHaveBeenCalledWith(
+      'https://8.8.8.8/x.png',
+      expect.objectContaining({ redirect: 'manual' }), // pinned + redirects refused
+    );
   });
 
   it('blocks an internal/loopback URL BEFORE any fetch (no outbound socket)', async () => {
     await expect(loadRemoteMedia('http://127.0.0.1/x.png')).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(undiciFetch).not.toHaveBeenCalled();
     expect(fromUrlSpy).not.toHaveBeenCalled();
   });
 
@@ -85,28 +128,17 @@ describe('loadRemoteMedia — media-fetch SSRF guard + cap + timeout', () => {
     await expect(loadRemoteMedia('http://169.254.169.254/latest/meta-data/x.png')).rejects.toBeInstanceOf(
       SsrfBlockedError,
     );
-    expect(fromUrlSpy).not.toHaveBeenCalled();
-  });
-
-  it('fetches a public URL with a byte cap and an abort-timeout signal', async () => {
-    await loadRemoteMedia('https://8.8.8.8/x.png');
-
-    expect(fromUrlSpy).toHaveBeenCalledTimes(1);
-    const [url, options] = fromUrlSpy.mock.calls[0] as [
-      string,
-      { reqOptions: { size: number; signal: unknown; redirect: string } },
-    ];
-    expect(url).toBe('https://8.8.8.8/x.png');
-    expect(typeof options.reqOptions.size).toBe('number');
-    expect(options.reqOptions.size).toBeGreaterThan(0);
-    expect(options.reqOptions.signal).toBeInstanceOf(AbortSignal);
-    expect(options.reqOptions.redirect).toBe('error'); // never follow redirects
+    expect(undiciFetch).not.toHaveBeenCalled();
   });
 
   it('honors the SSRF_ALLOWED_HOSTS escape-hatch for trusted internal media stores', async () => {
     process.env.SSRF_ALLOWED_HOSTS = 'minio';
-    await loadRemoteMedia('http://minio:9000/bucket/x.png');
-    expect(fromUrlSpy).toHaveBeenCalledTimes(1);
+    (undiciFetch as jest.Mock).mockResolvedValue(fakeResponse([1], { 'content-type': 'image/png' }));
+
+    const media = await loadRemoteMedia('http://minio:9000/bucket/x.png');
+
+    expect(media.mimetype).toBe('image/png');
+    expect(fromUrlSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -12,7 +12,7 @@ import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import {
   assertSafeFetchUrl,
-  assertNoRedirect,
+  withSafeFetch,
   isSsrfProtectionEnabled,
   SsrfBlockedError,
 } from '../../common/security/ssrf-guard';
@@ -168,26 +168,13 @@ export class WebhookService {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
-    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (ssrfProtected) {
-        await assertSafeFetchUrl(webhook.url);
-      }
-      const response = await fetch(webhook.url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: AbortSignal.timeout(10000),
-        redirect: ssrfProtected ? 'manual' : 'follow',
-      });
-      if (ssrfProtected) {
-        assertNoRedirect(response, webhook.url);
-      }
-
-      return {
-        success: response.ok,
-        statusCode: response.status,
-      };
+      return await withSafeFetch(
+        webhook.url,
+        { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) },
+        response => ({ success: response.ok, statusCode: response.status }),
+        { guard: isSsrfProtectionEnabled() },
+      );
     } catch (error) {
       return {
         success: false,
@@ -372,24 +359,21 @@ export class WebhookService {
       headers['X-OpenWA-Signature'] = this.generateSignature(body, webhook.secret);
     }
 
-    const ssrfProtected = isSsrfProtectionEnabled();
     try {
-      if (ssrfProtected) {
-        await assertSafeFetchUrl(webhook.url);
-      }
-      const response = await fetch(webhook.url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
-        redirect: ssrfProtected ? 'manual' : 'follow',
-      });
-      if (ssrfProtected) {
-        assertNoRedirect(response, webhook.url);
-      }
+      const { ok, status, statusText } = await withSafeFetch(
+        webhook.url,
+        {
+          method: 'POST',
+          headers,
+          body,
+          signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
+        },
+        response => ({ ok: response.ok, status: response.status, statusText: response.statusText }),
+        { guard: isSsrfProtectionEnabled() },
+      );
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!ok) {
+        throw new Error(`HTTP ${status}: ${statusText}`);
       }
 
       // Update last triggered timestamp

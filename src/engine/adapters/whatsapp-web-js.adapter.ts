@@ -35,7 +35,7 @@ import {
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
-import { assertSafeFetchUrl } from '../../common/security/ssrf-guard';
+import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   GroupChat,
   GroupMetadataRaw,
@@ -46,16 +46,6 @@ import {
 } from '../types/whatsapp-web-js.types';
 import { buildIncomingMessageBase } from './message-mapper';
 import { capInboundMedia } from './inbound-media-cap';
-
-/** Default cap on a server-side media download: 50 MiB (overridable via MEDIA_DOWNLOAD_MAX_BYTES). */
-const DEFAULT_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
-/** Default timeout for a server-side media download: 30s (overridable via MEDIA_DOWNLOAD_TIMEOUT_MS). */
-const DEFAULT_MEDIA_TIMEOUT_MS = 30_000;
-
-function positiveIntFromEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
@@ -78,16 +68,13 @@ export function wwebjsAckToDeliveryStatus(ack: number): DeliveryStatus {
  * existing MIME-detection behavior.
  */
 export async function loadRemoteMedia(url: string): Promise<MessageMedia> {
-  await assertSafeFetchUrl(url);
-  return MessageMedia.fromUrl(url, {
-    reqOptions: {
-      size: positiveIntFromEnv('MEDIA_DOWNLOAD_MAX_BYTES', DEFAULT_MEDIA_MAX_BYTES),
-      signal: AbortSignal.timeout(positiveIntFromEnv('MEDIA_DOWNLOAD_TIMEOUT_MS', DEFAULT_MEDIA_TIMEOUT_MS)),
-      // Never follow redirects: the SSRF guard only validated the original host, so a
-      // followed 3xx could reach an internal target. node-fetch rejects on redirect.
-      redirect: 'error',
-    },
-  });
+  // Fetch through the SSRF-pinned path: it validates the host, pins the connection to the vetted IP
+  // (so a DNS rebind can't redirect it to an internal target between check and connect), caps bytes,
+  // and refuses redirects. We then build the MessageMedia from the returned bytes — NOT via
+  // MessageMedia.fromUrl, whose bundled node-fetch performs its own unpinned DNS re-resolution.
+  const { data, mimetype } = await loadRemoteMediaBuffer(url);
+  const filename = new URL(url).pathname.split('/').pop() || undefined;
+  return new MessageMedia(mimetype || 'application/octet-stream', data.toString('base64'), filename);
 }
 
 export interface WhatsAppWebJsConfig {
