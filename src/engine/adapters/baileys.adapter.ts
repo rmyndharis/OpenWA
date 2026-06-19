@@ -36,6 +36,7 @@ import {
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
@@ -919,7 +920,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private async requireStored(messageId: string): Promise<WAMessage> {
     const found = await this.config.messageStore?.getMessage(this.config.sessionId, messageId);
     if (!found?.key) {
-      throw new Error(`Message ${messageId} not found`);
+      throw new MessageNotFoundError(messageId);
     }
     return found;
   }
