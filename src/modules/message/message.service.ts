@@ -219,7 +219,7 @@ export class MessageService {
     // Save message as pending BEFORE sending
     const message = await this.saveOutgoingMessage(sessionId, {
       chatId: dto.chatId,
-      body: dto.filename || '',
+      body: dto.caption || dto.filename || '',
       type: 'document',
       metadata: {
         media: { mimetype: dto.mimetype, filename: dto.filename, data: dto.base64 || dto.url },

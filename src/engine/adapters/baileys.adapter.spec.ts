@@ -852,12 +852,14 @@ describe('BaileysAdapter media sends', () => {
       mimetype: 'application/pdf',
       data: Buffer.from('PDFDATA').toString('base64'),
       filename: 'doc.pdf',
+      caption: 'a document',
     });
     expect(loadRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
       document: Buffer.from('PDFDATA'),
       mimetype: 'application/pdf',
       fileName: 'doc.pdf',
+      caption: 'a document',
     });
   });
 
