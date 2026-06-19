@@ -5,14 +5,38 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WAMessage } from '@whiskeysockets/baileys';
 import { BaileysStoredMessage } from './baileys-stored-message.entity';
 import { BaileysMessageStore } from '../types/baileys.types';
+import { createLogger } from '../../common/services/logger.service';
 
 function positiveIntFromEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * True when a write failed because the parent `sessions` row is absent (a foreign-key violation),
+ * as opposed to any other persistence error. Covers SQLite (`SQLITE_CONSTRAINT[_FOREIGNKEY]`) and
+ * Postgres (`23503`). TypeORM wraps the driver error in a QueryFailedError, so check both the
+ * wrapper and `driverError`.
+ */
+function isMissingParentSessionError(err: unknown): boolean {
+  const e = err as { code?: string; driverError?: { code?: string }; message?: string };
+  const code = e?.driverError?.code ?? e?.code;
+  if (code === '23503') {
+    return true; // Postgres foreign_key_violation
+  }
+  const message = e?.message ?? '';
+  if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+    return code === 'SQLITE_CONSTRAINT_FOREIGNKEY' || /FOREIGN KEY/i.test(message);
+  }
+  return /FOREIGN KEY constraint failed/i.test(message);
+}
+
 @Injectable()
 export class BaileysMessageStoreService implements BaileysMessageStore {
+  private readonly logger = createLogger('BaileysMessageStore');
+  /** Sessions already warned about a missing parent row — keeps the orphan log to once per session. */
+  private readonly orphanWarnedSessions = new Set<string>();
+
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first use, not at boot). */
   private baileysLib?: typeof BaileysLib;
 
@@ -38,10 +62,28 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
     // second-precision (e.g. '…:11') while the JS Date bound serializes as '…:11.000', and SQLite
     // string-compares '…:11' < '…:11.000' = TRUE, causing every same-second row to be over-evicted
     // and the store to be wiped to ~0 (C1).
-    await this.repo.upsert({ sessionId, waMessageId, serializedMessage, createdAt: new Date() }, [
-      'sessionId',
-      'waMessageId',
-    ]);
+    try {
+      await this.repo.upsert({ sessionId, waMessageId, serializedMessage, createdAt: new Date() }, [
+        'sessionId',
+        'waMessageId',
+      ]);
+    } catch (err) {
+      if (isMissingParentSessionError(err)) {
+        // Orphaned adapter: the sessions row was deleted/recreated (reconnect churn) while this
+        // adapter kept emitting messages.upsert. There is no valid parent to store under, so drop
+        // the write instead of throwing the FK error on every message (#319). Warn once per session
+        // so the orphan stays visible without per-message log noise.
+        if (!this.orphanWarnedSessions.has(sessionId)) {
+          this.orphanWarnedSessions.add(sessionId);
+          this.logger.warn(
+            `No parent session row for "${sessionId}" — skipping Baileys message store (orphaned/recreated session). ` +
+              `reply/forward/react/delete-by-id will be unavailable for messages received under this id.`,
+          );
+        }
+        return;
+      }
+      throw err; // a genuine persistence failure — let the adapter's catch surface it
+    }
     await this.enforceLimit(sessionId);
   }
 
