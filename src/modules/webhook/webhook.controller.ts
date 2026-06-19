@@ -47,8 +47,8 @@ export class WebhookController {
     type: WebhookResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Webhook not found' })
-  async findOne(@Param('id') id: string): Promise<WebhookResponseDto> {
-    return WebhookResponseDto.fromEntity(await this.webhookService.findOne(id));
+  async findOne(@Param('sessionId') sessionId: string, @Param('id') id: string): Promise<WebhookResponseDto> {
+    return WebhookResponseDto.fromEntity(await this.webhookService.findOne(sessionId, id));
   }
 
   @Put(':id')
@@ -62,8 +62,12 @@ export class WebhookController {
     type: WebhookResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Webhook not found' })
-  async update(@Param('id') id: string, @Body() dto: UpdateWebhookDto): Promise<WebhookResponseDto> {
-    return WebhookResponseDto.fromEntity(await this.webhookService.update(id, dto));
+  async update(
+    @Param('sessionId') sessionId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateWebhookDto,
+  ): Promise<WebhookResponseDto> {
+    return WebhookResponseDto.fromEntity(await this.webhookService.update(sessionId, id, dto));
   }
 
   @Post(':id/test')
@@ -88,7 +92,7 @@ export class WebhookController {
   @ApiParam({ name: 'id', description: 'Webhook ID' })
   @ApiResponse({ status: 204, description: 'Webhook deleted' })
   @ApiResponse({ status: 404, description: 'Webhook not found' })
-  async delete(@Param('id') id: string): Promise<void> {
-    return this.webhookService.delete(id);
+  async delete(@Param('sessionId') sessionId: string, @Param('id') id: string): Promise<void> {
+    return this.webhookService.delete(sessionId, id);
   }
 }

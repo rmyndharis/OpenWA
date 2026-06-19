@@ -99,6 +99,7 @@ async function bootstrap() {
     s3AccessKey: process.env.S3_ACCESS_KEY,
     s3SecretKey: process.env.S3_SECRET_KEY,
     apiMasterKey: process.env.API_MASTER_KEY,
+    allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
   });
 
   // Disable Nest's default body parser so we can set an explicit size cap below.

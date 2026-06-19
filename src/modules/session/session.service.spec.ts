@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -184,6 +184,28 @@ describe('SessionService', () => {
 
       expect(result).toHaveLength(2);
       expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+    });
+
+    it('scopes results to a session-restricted key (F-02)', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1', 'sess-2']);
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { id: In(['sess-1', 'sess-2']) },
+        order: { createdAt: 'DESC' },
+      });
+    });
+
+    it('returns all sessions for an unrestricted key (null/empty allowlist)', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(null);
+      await service.findAll([]);
+
+      expect(repository.find).toHaveBeenCalledTimes(2);
+      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' } });
     });
   });
 
