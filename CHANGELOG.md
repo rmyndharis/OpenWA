@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A delivery/read receipt that arrives before the send is fully recorded is no longer lost.** A fast
+  `delivered`/`read`/`failed` ack could reach the server before the just-sent message's id (`waMessageId`)
+  was committed, so the status update matched no row and the message stayed stuck at "sent" indefinitely.
+  The ack now retries once after a short delay (still forward-only and session-scoped, so it can't
+  downgrade a higher status), reconciling the stored status.
+- **Concurrent reactions on the same message no longer overwrite each other.** Two reactions arriving
+  together both read the same stored snapshot and the last save won, silently dropping a reaction.
+  Reaction writes are now serialized per message, so every reaction is preserved.
+- **A failed delivery-status database write is logged with per-message context** instead of escaping to the
+  global unhandled-rejection backstop (the ack update was the one message handler missing its `.catch`).
+- **A plugin hook that reports an error no longer has its partial output applied.** A hook returning both
+  mutated data and an error had the (possibly half-transformed) data propagated to persistence, webhooks,
+  and the WebSocket as if it succeeded; an errored hook's data mutation is now discarded.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

@@ -130,7 +130,9 @@ export class HookManager {
         ctx.data = currentData;
         const result = await registration.handler(ctx);
 
-        if (result.data !== undefined) {
+        // A handler that reports an error discards its output: do NOT apply its (possibly partial or
+        // corrupted) data mutation, even though HookResult allows returning data and error together.
+        if (result.error === undefined && result.data !== undefined) {
           currentData = result.data as T;
         }
 

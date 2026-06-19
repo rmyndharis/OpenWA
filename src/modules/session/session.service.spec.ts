@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
-import { SessionService } from './session.service';
+import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -639,6 +639,128 @@ describe('SessionService', () => {
 
       expect(messageRepository.update as jest.Mock).not.toHaveBeenCalled();
       expect(dispatchedEvents('message.failed')).toHaveLength(0);
+    });
+
+    it('retries the ack update once after a delay when the row is not yet matchable (ack before commit)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.update as jest.Mock)
+        .mockClear()
+        .mockResolvedValueOnce({ affected: 0 }) // send's 2nd save (waMessageId) not committed yet
+        .mockResolvedValueOnce({ affected: 1 }); // retry now matches the row
+
+      jest.useFakeTimers();
+      try {
+        callbacks.onMessageAck!('wa-out-1', 'delivered');
+        await jest.advanceTimersByTimeAsync(0); // flush the first update's microtasks
+        expect(messageRepository.update as jest.Mock).toHaveBeenCalledTimes(1);
+
+        await jest.advanceTimersByTimeAsync(ACK_RECONCILE_DELAY_MS);
+        expect(messageRepository.update as jest.Mock).toHaveBeenCalledTimes(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not schedule a retry when the first ack update advances a row', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.update as jest.Mock).mockClear().mockResolvedValue({ affected: 1 });
+
+      jest.useFakeTimers();
+      try {
+        callbacks.onMessageAck!('wa-out-1', 'delivered');
+        await jest.advanceTimersByTimeAsync(ACK_RECONCILE_DELAY_MS);
+        expect(messageRepository.update as jest.Mock).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('handles a rejected ack update without an unhandled rejection', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.update as jest.Mock).mockClear().mockRejectedValue(new Error('data DB down'));
+
+      // Must not throw synchronously; the .catch keeps the rejection from escaping to the global backstop
+      // (a missing .catch here would surface as an unhandled rejection and fail the suite).
+      callbacks.onMessageAck!('wa-out-1', 'delivered');
+      await flush();
+      await flush();
+
+      expect(messageRepository.update as jest.Mock).toHaveBeenCalled();
+    });
+
+    it('serializes concurrent reactions on the same message so neither sender is clobbered', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      // Simulate a real DB: each findOne returns a FRESH snapshot of the persisted row, and save
+      // writes it back. Without per-message serialization the two handlers read the same empty
+      // snapshot and the second save clobbers the first sender's reaction.
+      type Row = { metadata?: Record<string, unknown> };
+      const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
+      let stored: Row = { metadata: {} };
+      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
+        stored = clone(m);
+        return Promise.resolve(m);
+      });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'bob', reaction: '🎉' });
+
+      for (let i = 0; i < 5; i++) await flush();
+
+      expect(stored.metadata?.reactions).toEqual({ alice: '👍', bob: '🎉' });
+    });
+
+    it('removes a sender reaction on a cleared reaction event (delete branch)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      type Row = { metadata?: Record<string, unknown> };
+      const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
+      let stored: Row = { metadata: { reactions: { alice: '👍', bob: '🎉' } } };
+      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
+        stored = clone(m);
+        return Promise.resolve(m);
+      });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '' });
+
+      for (let i = 0; i < 3; i++) await flush();
+
+      expect(stored.metadata?.reactions).toEqual({ bob: '🎉' }); // alice removed, bob preserved
+    });
+
+    it('a failed reaction write does not block a later reaction on the same message', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      type Row = { metadata?: Record<string, unknown> };
+      const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
+      let stored: Row = { metadata: {} };
+      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.save as jest.Mock)
+        .mockRejectedValueOnce(new Error('write blip')) // alice's write fails
+        .mockImplementation((m: Row) => {
+          stored = clone(m);
+          return Promise.resolve(m);
+        });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'bob', reaction: '🎉' });
+
+      for (let i = 0; i < 5; i++) await flush();
+
+      expect(stored.metadata?.reactions).toEqual({ bob: '🎉' }); // bob applied despite alice's failure
+    });
+
+    it('cleans up the per-message serialization entry after the chain drains (no leak)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ metadata: {} });
+      (messageRepository.save as jest.Mock).mockResolvedValue(undefined);
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
+
+      for (let i = 0; i < 3; i++) await flush();
+
+      const chains = (service as unknown as { reactionChains: Map<string, unknown> }).reactionChains;
+      expect(chains.size).toBe(0);
     });
 
     it('dispatches message.received (not message.sent) on an incoming message event', async () => {
