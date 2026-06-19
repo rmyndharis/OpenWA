@@ -8,7 +8,7 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, Not, IsNull, DataSource } from 'typeorm';
+import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
@@ -211,10 +211,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return saved;
   }
 
-  async findAll(): Promise<Session[]> {
-    const sessions = await this.sessionRepository.find({
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(allowedSessions?: string[] | null): Promise<Session[]> {
+    // A session-restricted key only lists its own sessions; an unrestricted key (null/empty
+    // allowlist) lists all — mirroring the ApiKeyGuard allowedSessions model so a scoped key
+    // cannot enumerate every session through this aggregate route.
+    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' } };
+    if (allowedSessions && allowedSessions.length > 0) {
+      options.where = { id: In(allowedSessions) };
+    }
+    const sessions = await this.sessionRepository.find(options);
     return sessions.map(session => this.attachLastError(session));
   }
 

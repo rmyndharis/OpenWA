@@ -15,8 +15,8 @@ import { Session } from './entities/session.entity';
 import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('sessions')
 @Controller('sessions')
@@ -67,8 +67,10 @@ export class SessionController {
     description: 'List of sessions',
     type: [SessionResponseDto],
   })
-  async findAll(): Promise<SessionResponseDto[]> {
-    const sessions = await this.sessionService.findAll();
+  async findAll(@CurrentApiKey() apiKey?: ApiKey): Promise<SessionResponseDto[]> {
+    // Scope to the key's allowedSessions so a session-restricted key cannot enumerate every
+    // session. A null/empty allowlist (e.g. ADMIN) still lists all.
+    const sessions = await this.sessionService.findAll(apiKey?.allowedSessions);
     return sessions.map(s => this.transformSession(s));
   }
 
