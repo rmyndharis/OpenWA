@@ -15,3 +15,19 @@ export function isPathWithin(root: string, target: string): boolean {
   const resolvedTarget = path.resolve(resolvedRoot, target);
   return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
 }
+
+/**
+ * Returns true if `key` is a safe, contained relative storage key: a non-empty relative path with no
+ * `..` traversal segment. Used to validate untrusted archive entry names / object keys at the
+ * backend-agnostic `putFile`/`getFile` boundary so an S3 key (which has no host filesystem root to
+ * check against `isPathWithin`) still can't escape the intended `media/` prefix. Ordinary keys —
+ * including plugin/JID-style ones with `:`, `@`, `.`, `-` — are preserved.
+ */
+export function isSafeStorageKey(key: string): boolean {
+  if (typeof key !== 'string' || key.length === 0) return false;
+  // Reject NUL / control chars: harmless on the local FS but a NUL would reach the raw S3 object Key.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(key)) return false;
+  if (path.isAbsolute(key)) return false;
+  return !key.split(/[/\\]/).includes('..');
+}

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Storage import is bounded against decompression bombs.** A `tar.gz` import buffered each entry in
+  memory with no size or entry-count limit, so a crafted archive could exhaust process memory. Imports
+  now enforce a per-entry byte cap (`STORAGE_IMPORT_MAX_BYTES`, default 200 MiB) and a maximum entry
+  count (`STORAGE_IMPORT_MAX_ENTRIES`, default 100000), aborting the whole import on breach.
+- **Storage-key containment is enforced for the S3 backend too.** The local backend already rejected
+  tar entry names that traversed the storage root; the S3 path did not. Containment is now checked at the
+  backend-agnostic `putFile` boundary, so an object key can't escape the intended `media/` prefix.
+- **Plugin storage keys are sandbox-contained.** A plugin's `ctx.storage` get/set/delete built a file
+  path from the raw key, so a key containing `..` could read/write/delete outside the plugin's own data
+  directory. Keys that escape the sandbox are now rejected (ordinary JID-style keys are preserved).
+
+### Fixed
+
+- **Storage export no longer accumulates copies on the data volume.** `GET /infra/storage/export` wrote
+  a timestamped `tar.gz` of all media into `data/` (alongside the live databases and session state) and
+  never deleted it, so repeated exports could fill the disk and destabilize the gateway. The export now
+  writes to the OS temp directory and is removed after a TTL (`STORAGE_EXPORT_TTL_MS`, default 1h), and the
+  export read yields the event loop per file instead of blocking it with a synchronous read.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration
