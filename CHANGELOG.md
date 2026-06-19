@@ -7,8 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CLI migration commands for the main (auth/audit) connection.** The app runs the main connection as a separate
+  always-SQLite connection, but the migration CLI only managed the data connection. New `migration:run:main`,
+  `migration:generate:main`, `migration:show:main`, and `migration:revert:main` scripts (plus `:prod` variants) manage
+  it — needed when `MAIN_DATABASE_SYNCHRONIZE=false` disables boot auto-migration. Purely additive. (#364)
+
+### Changed
+
+- **`PUT /settings` now returns `501 Not Implemented` instead of a misleading `200`.** Settings are derived from
+  environment variables and consumed at boot (and `ConfigService` is immutable at runtime), so the previous handler
+  mutated an in-memory copy and reported success while persisting and applying nothing. The endpoint is now honest
+  about being read-only; `GET /settings` and the ADMIN guard are unchanged, and no dashboard flow uses the write. (#364)
+
 ### Fixed
 
+- **Baileys reconnect no longer leaks the previous socket.** An internal (transient-drop) reconnect overwrote the live
+  socket without tearing the old one down, leaking its WebSocket and event listeners on every reconnect. The previous
+  socket is now detached and ended before its replacement is created. (#364)
+- **Engine sessions keep operator config when the engine plugin fails to enable.** The engine config blob is now also
+  supplied at plugin construction, so `sessionDataPath`/`executablePath`/`authDir` still apply if a plugin fails to
+  enable before its `onLoad` runs (they previously dropped silently to defaults). The healthy path is unchanged. (#364)
+- **Template names are unique per session.** A composite unique index makes resolve-by-name deterministic and rejects
+  duplicate names with `409 Conflict`; a migration losslessly de-duplicates any pre-existing collisions (keeps the
+  earliest, renames the rest) before adding the index. The `{{var}}`/`{var}` template-syntax split is unchanged and
+  still tracked in #69. (#364)
 - **Container no longer crashes on browser-cleanup paths when `ps` is missing.** The production image is based on
   `node:22-slim`, which omits the `ps` binary; cleanup code that shells out to `ps` (e.g. process-tree kills) fails
   with `spawn ps ENOENT`, and that unhandled child-process error can take down the whole Node runtime. The image now
