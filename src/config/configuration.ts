@@ -24,7 +24,10 @@ export default () => ({
     database: './data/main.sqlite',
     // Schema management for the auth/audit DB. Default ON (zero-config first boot).
     // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
-    // instead (migrationsRun then creates api_keys/audit_logs).
+    // instead (migrationsRun then creates api_keys/audit_logs). When disabled, run the
+    // main-connection migrations explicitly with `npm run migration:run:main` (or
+    // `migration:run:main:prod` for the compiled image) — the plain `migration:run` only
+    // manages the data connection.
     synchronize: process.env.MAIN_DATABASE_SYNCHRONIZE !== 'false',
     logging: process.env.DATABASE_LOGGING === 'true',
   },

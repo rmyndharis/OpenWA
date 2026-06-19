@@ -36,7 +36,14 @@
     "migration:revert": "npm run typeorm -- migration:revert -d src/database/data-source.ts",
     "migration:revert:prod": "npm run typeorm:prod -- migration:revert -d dist/database/data-source.js",
     "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
-    "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js"
+    "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js",
+    "migration:generate:main": "npm run typeorm -- migration:generate src/database/migrations-main/$npm_config_name -d src/database/data-source-main.ts",
+    "migration:run:main": "npm run typeorm -- migration:run -d src/database/data-source-main.ts",
+    "migration:run:main:prod": "npm run typeorm:prod -- migration:run -d dist/database/data-source-main.js",
+    "migration:revert:main": "npm run typeorm -- migration:revert -d src/database/data-source-main.ts",
+    "migration:revert:main:prod": "npm run typeorm:prod -- migration:revert -d dist/database/data-source-main.js",
+    "migration:show:main": "npm run typeorm -- migration:show -d src/database/data-source-main.ts",
+    "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
