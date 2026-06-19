@@ -39,6 +39,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
+import { capInboundMedia } from './inbound-media-cap';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). */
 const BAILEYS_BROWSER: [string, string, string] = ['OpenWA', 'Chrome', '120.0.0'];
@@ -796,7 +797,20 @@ export class BaileysAdapter implements IWhatsAppEngine {
           normalizedContent.stickerMessage;
         const mimetype = subMessage?.mimetype ?? '';
         const filename = normalizedContent.documentMessage?.fileName ?? undefined;
-        media = { mimetype, data: buf.toString('base64'), filename };
+        // Cap inbound media (lazy base64) so an oversized blob from an untrusted sender is never
+        // encoded/persisted/webhooked/broadcast — preventing heap blow-up. Envelope is kept.
+        media = capInboundMedia({
+          mimetype,
+          filename,
+          sizeBytes: buf.byteLength,
+          toBase64: () => buf.toString('base64'),
+        });
+        if (media.omitted) {
+          this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
+            msgId: msg.key.id,
+            sizeBytes: media.sizeBytes,
+          });
+        }
       } catch (err) {
         this.logger.debug('Failed to download inbound media; emitting message without media', {
           error: err instanceof Error ? err.message : String(err),
