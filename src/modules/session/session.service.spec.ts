@@ -147,7 +147,7 @@ describe('SessionService', () => {
   });
 
   // ── delete/stop teardown resilience ───────────────────────────────
-  describe('teardown resilience (F-10)', () => {
+  describe('teardown resilience', () => {
     const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
     const stoppingOf = () => (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
 
@@ -227,7 +227,7 @@ describe('SessionService', () => {
       expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
     });
 
-    it('scopes results to a session-restricted key (F-02)', async () => {
+    it('scopes results to a session-restricted key', async () => {
       (repository.find as jest.Mock).mockResolvedValue([]);
 
       await service.findAll(['sess-1', 'sess-2']);
@@ -267,7 +267,7 @@ describe('SessionService', () => {
   });
 
   // ── start (concurrency) ───────────────────────────────────────────
-  describe('start concurrency (F-04)', () => {
+  describe('start concurrency', () => {
     it('rejects a concurrent second start for the same id, creating only one engine (no orphan)', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

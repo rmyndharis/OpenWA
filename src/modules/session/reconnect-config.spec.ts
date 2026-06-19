@@ -1,10 +1,10 @@
 import { resolveReconnectConfig, clampReconnectDelay } from './session.service';
 
-// F-03 — an OPERATOR-supplied session.config flows into the reconnect backoff math unchecked.
+// an OPERATOR-supplied session.config flows into the reconnect backoff math unchecked.
 // config:{reconnectBaseDelay:'x'} makes the delay NaN -> setTimeout(fn, NaN) fires at 0 (relaunch
 // storm); config:{maxReconnectAttempts:'x'} makes the terminal guard `n >= NaN` always false, so the
 // loop never caps. These helpers coerce + clamp the config so the math is always finite and bounded.
-describe('resolveReconnectConfig (F-03)', () => {
+describe('resolveReconnectConfig', () => {
   it('uses the 5000ms / 5-attempt defaults for absent or empty config', () => {
     expect(resolveReconnectConfig(null)).toEqual({ baseDelay: 5000, maxAttempts: 5 });
     expect(resolveReconnectConfig({})).toEqual({ baseDelay: 5000, maxAttempts: 5 });
@@ -37,7 +37,7 @@ describe('resolveReconnectConfig (F-03)', () => {
   });
 });
 
-describe('clampReconnectDelay (F-03)', () => {
+describe('clampReconnectDelay', () => {
   it('passes a finite delay through, flooring at 0', () => {
     expect(clampReconnectDelay(8000, 5000)).toBe(8000);
     expect(clampReconnectDelay(-1, 5000)).toBe(0);

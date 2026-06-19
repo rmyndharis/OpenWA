@@ -3,11 +3,11 @@ import { StatsController } from './stats.controller';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
-// F-09 — the global stats routes aggregate across EVERY session and carry no scope param, so the
+// the global stats routes aggregate across EVERY session and carry no scope param, so the
 // ApiKeyGuard's allowedSessions fence doesn't apply. They must require ADMIN so a VIEWER / a
 // session-restricted key can't read cross-tenant activity. The per-session route is left ungated:
 // it carries :sessionId, so the guard already scopes a restricted key to its own sessions.
-describe('StatsController access control (F-09)', () => {
+describe('StatsController access control', () => {
   const reflector = new Reflector();
   // Opaque-object view of the prototype so the lint unbound-method rule doesn't fire on a
   // metadata-only handler lookup.

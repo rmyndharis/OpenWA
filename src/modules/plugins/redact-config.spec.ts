@@ -1,7 +1,7 @@
 import { SECRET_SENTINEL, redactSecretConfig, restoreSecretConfig } from './redact-config';
 import type { PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 
-// F-13 — plugin config (incl. fields a plugin marks `secret`, e.g. an API key) was returned
+// plugin config (incl. fields a plugin marks `secret`, e.g. an API key) was returned
 // verbatim by the GET routes, readable by any key. Redact on read; restore on write so the
 // dashboard PUTting the masked value back doesn't overwrite the real secret.
 const schema: PluginConfigSchema = {
@@ -12,7 +12,7 @@ const schema: PluginConfigSchema = {
   },
 };
 
-describe('redactSecretConfig (F-13)', () => {
+describe('redactSecretConfig', () => {
   it('masks secret-flagged non-empty values, leaves non-secret fields intact', () => {
     expect(redactSecretConfig({ apiKey: 's3cr3t', endpoint: 'https://x' }, schema)).toEqual({
       apiKey: SECRET_SENTINEL,
@@ -36,7 +36,7 @@ describe('redactSecretConfig (F-13)', () => {
   });
 });
 
-describe('restoreSecretConfig (F-13)', () => {
+describe('restoreSecretConfig', () => {
   it('keeps the existing stored secret when the incoming value is the sentinel (unchanged round-trip)', () => {
     const merged = restoreSecretConfig(
       { apiKey: SECRET_SENTINEL, endpoint: 'https://new' },

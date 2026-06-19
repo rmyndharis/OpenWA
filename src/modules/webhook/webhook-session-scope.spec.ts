@@ -1,4 +1,4 @@
-// F-05 — webhook by-id operations (findOne/update/delete/test) must be scoped to the URL
+// webhook by-id operations (findOne/update/delete/test) must be scoped to the URL
 // :sessionId, and GET /webhooks must be scoped to the key's allowedSessions. Without it, an
 // OPERATOR key for one session can read/edit/delete/redirect/fire another session's webhook,
 // and enumerate every session's webhook URLs. These run against a real in-memory DB so the
@@ -9,7 +9,7 @@ import { WebhookService } from './webhook.service';
 import { Webhook } from './entities/webhook.entity';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 
-describe('WebhookService session-scoped access (F-05)', () => {
+describe('WebhookService session-scoped access', () => {
   let ds: DataSource;
   let service: WebhookService;
   let whA: Webhook;

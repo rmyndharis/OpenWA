@@ -1,10 +1,10 @@
 import { NotFoundException } from '@nestjs/common';
 import { MessageNotFoundError } from './message-not-found.error';
 
-// F-16 — reply/forward/react/delete on a message outside the adapter's fetch/store window threw a
+// reply/forward/react/delete on a message outside the adapter's fetch/store window threw a
 // raw Error -> HTTP 500. MessageNotFoundError extends NotFoundException so NestJS maps it to 404
 // through the built-in handler (no global filter), surviving the message.service passthrough.
-describe('MessageNotFoundError (F-16)', () => {
+describe('MessageNotFoundError', () => {
   it('is a NotFoundException -> HTTP 404 without a custom global filter', () => {
     const err = new MessageNotFoundError('ABC');
     expect(err).toBeInstanceOf(NotFoundException);

@@ -1,6 +1,6 @@
 import { capInboundMedia, inboundMediaMaxBytes } from './inbound-media-cap';
 
-describe('inbound media cap (F-08)', () => {
+describe('inbound media cap', () => {
   const ENV = 'MEDIA_DOWNLOAD_MAX_BYTES';
   const orig = process.env[ENV];
   afterEach(() => {
