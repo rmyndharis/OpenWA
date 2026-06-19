@@ -146,6 +146,47 @@ describe('SessionService', () => {
     });
   });
 
+  // ── delete/stop teardown resilience ───────────────────────────────
+  describe('teardown resilience (F-10)', () => {
+    const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
+    const stoppingOf = () => (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
+
+    it('delete() completes when engine.destroy() rejects — map reconciled, row removed, stop-mark cleared', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      const engine = { destroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+
+      expect(engine.destroy).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // Map reconciled despite the failure
+      expect(stoppingOf().has('sess-uuid-1')).toBe(false); // stop-mark cleared (no wedge)
+      expect(hookManager.execute).toHaveBeenCalledWith('session:deleted', expect.anything(), expect.anything());
+      expect(dataSource.transaction).toHaveBeenCalled(); // DB removal still ran
+    });
+
+    it('stop() completes when engine.disconnect() rejects — map reconciled, status updated', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { disconnect: jest.fn().mockRejectedValue(new Error('stuck socket')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.stop('sess-uuid-1')).resolves.toBeDefined();
+
+      expect(engine.disconnect).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+    });
+
+    it('delete() still surfaces a real DB-removal failure (engine teardown is best-effort, DB is not)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (dataSource.transaction as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+      enginesOf().set('sess-uuid-1', { destroy: jest.fn().mockResolvedValue(undefined) });
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow('db down');
+      expect(stoppingOf().has('sess-uuid-1')).toBe(false); // mark still cleared on failure
+    });
+  });
+
   // ── create ────────────────────────────────────────────────────────
 
   describe('create', () => {
