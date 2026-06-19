@@ -39,6 +39,7 @@
     "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
     "@aws-sdk/client-s3": "^3.1068.0",
     "@bull-board/api": "^8.0.0",
     "@bull-board/express": "^8.0.0",
@@ -62,6 +63,7 @@
     "dockerode": "^5.0.0",
     "helmet": "^8.2.0",
     "ioredis": "^5.11.1",
+    "openai": "^6.44.0",
     "pg": "^8.21.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",

@@ -33,6 +33,7 @@ import { HooksModule } from './core/hooks';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
 import { ExtensionsModule } from './plugins/extensions/extensions.module';
+import { LlmModule } from './modules/llm/llm.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -191,6 +192,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     }),
 
     // Core modules
+    LlmModule, // Global LLM provider abstraction layer
     HooksModule, // Global hook system for plugin integration
     PluginsModule, // Global plugin system
     LoggerModule,

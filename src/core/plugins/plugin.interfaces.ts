@@ -6,6 +6,7 @@
 import { HookManager, HookEvent, HookHandler } from '../hooks';
 import type { MessageResponseDto } from '../../modules/message/dto';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { LlmService } from '../../modules/llm/llm.service';
 
 // ============================================================================
 // Plugin Types
@@ -141,6 +142,9 @@ export interface PluginContext {
 
   // Read-only, scoped engine queries.
   engine: PluginEngineReadCapability;
+
+  // LLM provider for AI-powered plugin features.
+  llm: LlmService;
 }
 
 export interface PluginLogger {

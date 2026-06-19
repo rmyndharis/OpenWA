@@ -21,6 +21,7 @@ import { PluginStorageService } from './plugin-storage.service';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { LlmService } from '../../modules/llm/llm.service';
 
 /**
  * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
@@ -50,6 +51,7 @@ export class PluginLoaderService implements OnModuleInit {
     // instead of constructor injection to avoid the provider cycle
     // PluginLoaderService -> SessionService -> EngineFactory -> PluginLoaderService.
     private readonly moduleRef: ModuleRef,
+    private readonly llmService: LlmService,
   ) {
     this.pluginsDir = this.configService.get<string>('plugins.dir') ?? './plugins';
   }
@@ -378,6 +380,7 @@ export class PluginLoaderService implements OnModuleInit {
           this.resolveEngine(plugin.manifest, sessionId).checkNumberExists(phone),
         getChats: async sessionId => this.resolveEngine(plugin.manifest, sessionId).getChats(),
       } satisfies PluginEngineReadCapability,
+      llm: this.llmService,
     };
   }
 
