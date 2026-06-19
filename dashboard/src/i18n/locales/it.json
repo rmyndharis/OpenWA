@@ -65,7 +65,9 @@
     "messageTester": "Tester Messaggi",
     "infrastructure": "Infrastruttura",
     "plugins": "Plugin",
-    "logs": "Log"
+    "logs": "Log",
+    "aiCatalog": "AI Catalog",
+    "campaigns": "Campaigns"
   },
   "chats": {
     "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",

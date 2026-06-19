@@ -33,4 +33,8 @@ export class AnthropicProvider implements ILlmProvider {
       },
     };
   }
+
+  async embed(_text: string): Promise<number[]> {
+    throw new Error('Anthropic does not support embeddings. Use OpenAI or Ollama for semantic search.');
+  }
 }

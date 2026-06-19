@@ -20,4 +20,5 @@ export interface LlmResponse {
 
 export interface ILlmProvider {
   complete(messages: LlmMessage[], options?: LlmOptions): Promise<LlmResponse>;
+  embed(text: string): Promise<number[]>;
 }

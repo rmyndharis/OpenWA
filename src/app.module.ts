@@ -38,6 +38,8 @@ import { MediaAiModule } from './modules/media-ai/media-ai.module';
 import { LoadBalancerModule } from './modules/load-balancer/load-balancer.module';
 import { HealthScoreModule } from './modules/health-score/health-score.module';
 import { SessionPoolModule } from './modules/session-pool/session-pool.module';
+import { AiCatalogModule } from './modules/ai-catalog/ai-catalog.module';
+import { CampaignOptimizerModule } from './modules/campaign-optimizer/campaign-optimizer.module';
 
 // Only import MediaAiModule if explicitly enabled
 const mediaAiModules: Array<Type | DynamicModule> = [];
@@ -128,6 +130,8 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             __dirname + '/modules/template/**/*.entity{.ts,.js}',
             __dirname + '/modules/media-ai/**/*.entity{.ts,.js}',
             __dirname + '/modules/session-pool/**/*.entity{.ts,.js}',
+            __dirname + '/modules/ai-catalog/**/*.entity{.ts,.js}',
+            __dirname + '/modules/campaign-optimizer/**/*.entity{.ts,.js}',
             __dirname + '/engine/**/*.entity{.ts,.js}',
           ],
           migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
@@ -236,6 +240,8 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     LoadBalancerModule, // Phase 3: Multi-Session AI Load Balancer (Thompson Sampling)
     HealthScoreModule, // Phase 3: Predictive Session Health Monitor (trend analysis)
     SessionPoolModule, // Phase 3: Session Pool Manager (hot-standby failover)
+    AiCatalogModule, // Phase 4: AI Catalog Q&A Assistant (CSV/JSON import + semantic search)
+    CampaignOptimizerModule, // Phase 4: Proactive Campaign Optimizer (LLM insights + A/B suggestions)
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
   ],
 })

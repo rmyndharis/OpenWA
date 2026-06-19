@@ -15,15 +15,9 @@ function StatusDot({ status }: { status: string }) {
   return <span className="sp-dot" style={{ background: color }} title={status} />;
 }
 
-function TrendArrow({ trend }: { trend: string }) {
-  if (trend === 'improving') return <span title="Improving">↑</span>;
-  if (trend === 'declining') return <span title="Declining">↓</span>;
-  if (trend === 'critical') return <span title="Critical">⚠</span>;
-  return <span title="Stable">→</span>;
-}
 
 export function SessionPools() {
-  const { t } = useTranslation();
+  const { t: _t } = useTranslation();
   useDocumentTitle('Session Pools');
   const toast = useToast();
 

@@ -1,6 +1,8 @@
 import OpenAI from 'openai';
 import { ILlmProvider, LlmMessage, LlmOptions, LlmResponse } from '../interfaces/llm-provider.interface';
 
+const EMBED_MODEL = 'text-embedding-3-small';
+
 export class OpenAIProvider implements ILlmProvider {
   private readonly client: OpenAI;
 
@@ -30,5 +32,10 @@ export class OpenAIProvider implements ILlmProvider {
           }
         : undefined,
     };
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const response = await this.client.embeddings.create({ model: EMBED_MODEL, input: text });
+    return response.data[0].embedding;
   }
 }

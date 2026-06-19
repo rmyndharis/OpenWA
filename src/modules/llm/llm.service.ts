@@ -57,4 +57,11 @@ export class LlmService {
     }
     return this.provider.complete(messages, options);
   }
+
+  async embed(text: string): Promise<number[]> {
+    if (!this.provider) {
+      throw new Error('LLM provider not configured. Set LLM_PROVIDER and LLM_API_KEY environment variables.');
+    }
+    return this.provider.embed(text);
+  }
 }

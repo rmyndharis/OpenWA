@@ -270,8 +270,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   // Get API key from sessionStorage for authentication
   const apiKey = sessionStorage.getItem('openwa_api_key');
 
+  const isFormData = options.body instanceof FormData;
   const headers: HeadersInit = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...options.headers,
   };
@@ -704,5 +705,126 @@ export const sessionPoolApi = {
   getHistory: () =>
     request<Array<{ poolId: string; failedSessionId: string; promotedSessionId: string; timestamp: string }>>(
       '/session-pools/failover-history',
+    ),
+};
+
+// =============================================================================
+// AI Catalog API
+// =============================================================================
+
+export interface CatalogItem {
+  id: string;
+  sessionId: string;
+  sku: string;
+  name: string;
+  description: string;
+  price?: number;
+  currency?: string;
+  category?: string;
+  stock?: string;
+  attributes?: string;
+  available: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CatalogAnswer {
+  answer: string;
+  matchedItems: CatalogItem[];
+  confidence: 'high' | 'medium' | 'low' | 'no-match';
+}
+
+export interface CatalogStats {
+  total: number;
+  embedded: number;
+  available: number;
+}
+
+export interface ImportResult {
+  created: number;
+  updated: number;
+  errors: string[];
+}
+
+export const aiCatalogApi = {
+  list: (sessionId: string) => request<CatalogItem[]>(`/sessions/${sessionId}/ai-catalog`),
+  stats: (sessionId: string) => request<CatalogStats>(`/sessions/${sessionId}/ai-catalog/stats`),
+  importCsv: (sessionId: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<ImportResult>(`/sessions/${sessionId}/ai-catalog/import-csv`, { method: 'POST', body: form });
+  },
+  importJson: (sessionId: string, items: Partial<CatalogItem>[]) =>
+    request<ImportResult>(`/sessions/${sessionId}/ai-catalog/import-json`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
+  update: (sessionId: string, itemId: string, data: Partial<CatalogItem>) =>
+    request<CatalogItem>(`/sessions/${sessionId}/ai-catalog/${itemId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  delete: (sessionId: string, itemId: string) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/ai-catalog/${itemId}`, { method: 'DELETE' }),
+  reEmbed: (sessionId: string) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/ai-catalog/re-embed`, { method: 'POST' }),
+  search: (sessionId: string, q: string, topK = 5) =>
+    request<CatalogItem[]>(`/sessions/${sessionId}/ai-catalog/search?q=${encodeURIComponent(q)}&topK=${topK}`),
+  ask: (sessionId: string, question: string) =>
+    request<CatalogAnswer>(`/sessions/${sessionId}/ai-catalog/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+};
+
+// =============================================================================
+// Campaign Optimizer API
+// =============================================================================
+
+export interface Campaign {
+  id: string;
+  sessionId: string;
+  name: string;
+  enrollmentCount: number;
+  completionRate?: number;
+  unsubscribeRate?: number;
+  replyRate?: number;
+  stepFunnel?: string;
+  steps?: string;
+  lastOptimizedEnrollmentCount: number;
+  performanceScore?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CampaignOptimization {
+  id: string;
+  campaignId: string;
+  insights: Array<{ issue: string; metric: string; severity: 'high' | 'medium' | 'low' }>;
+  recommendations: Array<{ action: string; rationale: string; expectedImpact: string; priority: number }>;
+  abtestSuggestion: { stepIndex: number; variantA: string; variantB: string; hypothesis: string } | null;
+  completionRate?: number;
+  unsubscribeRate?: number;
+  replyRate?: number;
+  generatedAt: string;
+}
+
+export const campaignOptimizerApi = {
+  listCampaigns: (sessionId: string) => request<Campaign[]>(`/sessions/${sessionId}/campaigns`),
+  createCampaign: (sessionId: string, name: string) =>
+    request<Campaign>(`/sessions/${sessionId}/campaigns`, { method: 'POST', body: JSON.stringify({ name }) }),
+  updateStats: (sessionId: string, cId: string, stats: Partial<Campaign>) =>
+    request<Campaign>(`/sessions/${sessionId}/campaigns/${cId}`, {
+      method: 'PUT',
+      body: JSON.stringify(stats),
+    }),
+  getOptimization: (sessionId: string, cId: string) =>
+    request<CampaignOptimization | null>(`/sessions/${sessionId}/campaigns/${cId}/optimizations`),
+  optimize: (sessionId: string, cId: string) =>
+    request<CampaignOptimization>(`/sessions/${sessionId}/campaigns/${cId}/optimize`, { method: 'POST' }),
+  applyRecommendation: (sessionId: string, cId: string, index: number) =>
+    request<{ action: string; rationale: string; expectedImpact: string; priority: number } | null>(
+      `/sessions/${sessionId}/campaigns/${cId}/apply-suggestion/${index}`,
+      { method: 'POST' },
     ),
 };

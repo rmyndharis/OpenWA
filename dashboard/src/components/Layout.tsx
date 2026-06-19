@@ -22,6 +22,8 @@ import {
   ChevronRight,
   Languages,
   Layers,
+  ShoppingBag,
+  BarChart2,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
@@ -45,6 +47,8 @@ const allNavItems = [
   // Backend /infra/* is ADMIN-only; hide the nav item from non-admins (UX + defense-in-depth).
   { to: '/infrastructure', icon: Server, key: 'infrastructure' as const, adminOnly: true },
   { to: '/plugins', icon: Puzzle, key: 'plugins' as const, adminOnly: true },
+  { to: '/ai-catalog', icon: ShoppingBag, key: 'aiCatalog' as const, adminOnly: false },
+  { to: '/campaigns', icon: BarChart2, key: 'campaigns' as const, adminOnly: false },
   { to: '/logs', icon: FileText, key: 'logs' as const, adminOnly: false },
 ];
 

@@ -21,6 +21,8 @@ const MessageTester = lazy(() => import('./pages/MessageTester').then(m => ({ de
 const Infrastructure = lazy(() => import('./pages/Infrastructure').then(m => ({ default: m.Infrastructure })));
 const Plugins = lazy(() => import('./pages/Plugins'));
 const SessionPools = lazy(() => import('./pages/SessionPools').then(m => ({ default: m.SessionPools })));
+const AiCatalog = lazy(() => import('./pages/AiCatalog').then(m => ({ default: m.AiCatalog })));
+const Campaigns = lazy(() => import('./pages/Campaigns').then(m => ({ default: m.Campaigns })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -114,6 +116,8 @@ function AppContent() {
             <Route path="message-tester" element={<MessageTester />} />
             <Route path="infrastructure" element={<Infrastructure />} />
             {role === 'admin' && <Route path="plugins" element={<Plugins />} />}
+            <Route path="ai-catalog" element={<AiCatalog />} />
+            <Route path="campaigns" element={<Campaigns />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

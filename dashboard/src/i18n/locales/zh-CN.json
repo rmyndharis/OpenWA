@@ -65,7 +65,9 @@
     "messageTester": "消息测试器",
     "infrastructure": "基础设施",
     "plugins": "插件",
-    "logs": "日志"
+    "logs": "日志",
+    "aiCatalog": "AI Catalog",
+    "campaigns": "Campaigns"
   },
   "chats": {
     "subtitle": "实时发送和回复 WhatsApp 消息",
