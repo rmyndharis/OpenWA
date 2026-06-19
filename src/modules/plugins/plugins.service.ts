@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PluginLoaderService, PluginStatus } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
+import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 
 @Injectable()
 export class PluginsService {
@@ -17,7 +18,7 @@ export class PluginsService {
       description: plugin.manifest.description,
       author: plugin.manifest.author,
       status: plugin.status,
-      config: plugin.config,
+      config: redactSecretConfig(plugin.config, plugin.manifest.configSchema),
       builtIn: plugin.manifest.id === 'whatsapp-web.js', // Built-in engines
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
@@ -42,7 +43,7 @@ export class PluginsService {
       description: plugin.manifest.description,
       author: plugin.manifest.author,
       status: plugin.status,
-      config: plugin.config,
+      config: redactSecretConfig(plugin.config, plugin.manifest.configSchema),
       builtIn: plugin.manifest.id === 'whatsapp-web.js',
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
@@ -104,7 +105,10 @@ export class PluginsService {
     }
 
     try {
-      this.pluginLoader.updatePluginConfig(id, config);
+      // The dashboard PUTs the whole (redacted) config back, so a sentinel secret means "unchanged":
+      // restore the stored value instead of overwriting the real secret with the mask.
+      const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema);
+      this.pluginLoader.updatePluginConfig(id, merged);
       return { success: true, message: `Plugin ${id} configuration updated` };
     } catch (error) {
       return {

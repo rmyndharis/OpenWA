@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -146,6 +146,47 @@ describe('SessionService', () => {
     });
   });
 
+  // ── delete/stop teardown resilience ───────────────────────────────
+  describe('teardown resilience (F-10)', () => {
+    const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
+    const stoppingOf = () => (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
+
+    it('delete() completes when engine.destroy() rejects — map reconciled, row removed, stop-mark cleared', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      const engine = { destroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+
+      expect(engine.destroy).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // Map reconciled despite the failure
+      expect(stoppingOf().has('sess-uuid-1')).toBe(false); // stop-mark cleared (no wedge)
+      expect(hookManager.execute).toHaveBeenCalledWith('session:deleted', expect.anything(), expect.anything());
+      expect(dataSource.transaction).toHaveBeenCalled(); // DB removal still ran
+    });
+
+    it('stop() completes when engine.disconnect() rejects — map reconciled, status updated', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { disconnect: jest.fn().mockRejectedValue(new Error('stuck socket')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.stop('sess-uuid-1')).resolves.toBeDefined();
+
+      expect(engine.disconnect).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+    });
+
+    it('delete() still surfaces a real DB-removal failure (engine teardown is best-effort, DB is not)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (dataSource.transaction as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+      enginesOf().set('sess-uuid-1', { destroy: jest.fn().mockResolvedValue(undefined) });
+
+      await expect(service.delete('sess-uuid-1')).rejects.toThrow('db down');
+      expect(stoppingOf().has('sess-uuid-1')).toBe(false); // mark still cleared on failure
+    });
+  });
+
   // ── create ────────────────────────────────────────────────────────
 
   describe('create', () => {
@@ -184,6 +225,28 @@ describe('SessionService', () => {
 
       expect(result).toHaveLength(2);
       expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+    });
+
+    it('scopes results to a session-restricted key (F-02)', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1', 'sess-2']);
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { id: In(['sess-1', 'sess-2']) },
+        order: { createdAt: 'DESC' },
+      });
+    });
+
+    it('returns all sessions for an unrestricted key (null/empty allowlist)', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(null);
+      await service.findAll([]);
+
+      expect(repository.find).toHaveBeenCalledTimes(2);
+      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' } });
     });
   });
 

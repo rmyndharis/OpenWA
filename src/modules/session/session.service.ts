@@ -8,7 +8,7 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, In, Not, IsNull, DataSource } from 'typeorm';
+import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
@@ -192,18 +192,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /** Destroy one engine, isolating + time-bounding failures so shutdown can't be stalled or aborted. */
   private async destroyEngineSafely(sessionId: string, engine: IWhatsAppEngine): Promise<void> {
     this.logger.log(`Destroying engine for session ${sessionId}`, { sessionId, action: 'shutdown' });
+    await this.teardownEngineSafely(sessionId, engine, e => e.destroy(), 'destroy');
+  }
+
+  /**
+   * Run an engine teardown (destroy/disconnect), isolating + time-bounding failures so a stuck
+   * Chromium/socket can neither hang nor abort the caller. Always resolves — the caller is then free
+   * to reconcile the engines Map and proceed with DB cleanup regardless of teardown outcome.
+   */
+  private async teardownEngineSafely(
+    sessionId: string,
+    engine: IWhatsAppEngine,
+    teardown: (e: IWhatsAppEngine) => Promise<void>,
+    label: 'destroy' | 'disconnect',
+  ): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        engine.destroy(),
+        teardown(engine),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('engine.destroy() timed out')), 10_000);
+          timer = setTimeout(() => reject(new Error(`engine.${label}() timed out`)), 10_000);
         }),
       ]);
     } catch (err) {
-      this.logger.error(`Failed to destroy engine for session ${sessionId} during shutdown`, String(err), {
+      this.logger.error(`Failed to ${label} engine for session ${sessionId}`, String(err), {
         sessionId,
-        action: 'shutdown_destroy_failed',
+        action: `engine_${label}_failed`,
       });
     } finally {
       if (timer) clearTimeout(timer);
@@ -245,10 +259,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return saved;
   }
 
-  async findAll(): Promise<Session[]> {
-    const sessions = await this.sessionRepository.find({
-      order: { createdAt: 'DESC' },
-    });
+  async findAll(allowedSessions?: string[] | null): Promise<Session[]> {
+    // A session-restricted key only lists its own sessions; an unrestricted key (null/empty
+    // allowlist) lists all — mirroring the ApiKeyGuard allowedSessions model so a scoped key
+    // cannot enumerate every session through this aggregate route.
+    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' } };
+    if (allowedSessions && allowedSessions.length > 0) {
+      options.where = { id: In(allowedSessions) };
+    }
+    const sessions = await this.sessionRepository.find(options);
     return sessions.map(session => this.attachLastError(session));
   }
 
@@ -286,35 +305,42 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 
-    // Stop engine if running
-    const engine = this.engines.get(id);
-    if (engine) {
-      await engine.destroy();
-      this.engines.delete(id);
-    }
+    try {
+      // Stop engine if running — time-bounded + isolated so a stuck Chromium destroy() can't wedge
+      // the delete; the Map is reconciled and the DB removal proceeds regardless of the outcome.
+      const engine = this.engines.get(id);
+      if (engine) {
+        await this.teardownEngineSafely(id, engine, e => e.destroy(), 'destroy');
+        this.engines.delete(id);
+      }
 
-    // Execute hook BEFORE delete so plugins can access session data
-    await this.hookManager.execute(
-      'session:deleted',
-      {
-        id: session.id,
-        name: session.name,
-        phone: session.phone,
-        pushName: session.pushName,
-      },
-      {
+      // Execute hook BEFORE delete so plugins can access session data
+      await this.hookManager.execute(
+        'session:deleted',
+        {
+          id: session.id,
+          name: session.name,
+          phone: session.phone,
+          pushName: session.pushName,
+        },
+        {
+          sessionId: id,
+          source: 'SessionService',
+        },
+      );
+
+      // DB removal is NOT best-effort: a genuine failure must surface (500) rather than be swallowed.
+      await this.dataSource.transaction(async manager => {
+        await manager.remove(session);
+      });
+      this.logger.log(`Session deleted: ${session.name}`, {
         sessionId: id,
-        source: 'SessionService',
-      },
-    );
-
-    await this.dataSource.transaction(async manager => {
-      await manager.remove(session);
-    });
-    this.logger.log(`Session deleted: ${session.name}`, {
-      sessionId: id,
-      action: 'delete',
-    });
+        action: 'delete',
+      });
+    } finally {
+      // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.
+      this.stoppingSessions.delete(id);
+    }
   }
 
   async start(id: string): Promise<Session> {
@@ -802,10 +828,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 
+    // Disconnect the engine — time-bounded + isolated so a stuck socket can't wedge the stop; the
+    // Map is reconciled regardless. (The stop mark is intentionally left set, matching the prior
+    // behaviour: a later start() clears it; it guards against a late reconnect resurrecting the id.)
     const engine = this.engines.get(id);
-
     if (engine) {
-      await engine.disconnect();
+      await this.teardownEngineSafely(id, engine, e => e.disconnect(), 'disconnect');
       this.engines.delete(id);
     }
 
