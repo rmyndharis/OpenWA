@@ -91,6 +91,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
 
+  // Last session.status value dispatched to webhooks per session. Some engines signal one transition
+  // via BOTH onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards the
+  // webhook POST against firing the same status twice. Cleared on delete().
+  private readonly lastDispatchedStatus = new Map<string, SessionStatus>();
+
   // Sessions currently being stopped/deleted. An in-flight executeReconnect awaits
   // engine init, so a stop/delete during that window could re-register an engine AFTER
   // teardown (orphan). stop()/delete() add the id here; executeReconnect checks it after its
@@ -345,6 +350,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     } finally {
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.
       this.stoppingSessions.delete(id);
+      this.lastDispatchedStatus.delete(id);
     }
   }
 
@@ -411,11 +417,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.updateStatus(id, SessionStatus.INITIALIZING);
 
     await engine.initialize({
-      onQRCode: (): void => {
+      onQRCode: (qr: string): void => {
         this.logger.log('QR code generated', {
           sessionId: id,
           action: 'qr_generated',
         });
+
+        void this.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
 
         // Execute hook for QR event
         void this.hookManager.execute(
@@ -436,6 +444,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           pushName,
           action: 'ready',
         });
+
+        void this.webhookService.dispatch(id, 'session.authenticated', { sessionId: id, phone, pushName });
 
         // Execute hook for ready event
         void this.hookManager.execute(
@@ -695,6 +705,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           reason,
           action: 'disconnected',
         });
+
+        void this.webhookService.dispatch(id, 'session.disconnected', { sessionId: id, reason });
 
         // Execute hook for disconnected event
         void this.hookManager.execute(
@@ -1005,6 +1017,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     });
     // Emit real-time event to connected WebSocket clients
     this.eventsGateway.emitSessionStatus(id, status);
+    // Mirror the status change to subscribed webhooks. Some engines signal one transition via both
+    // onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which would POST the same
+    // status twice — dispatch only when the status actually changed from the last one we sent.
+    if (this.lastDispatchedStatus.get(id) !== status) {
+      this.lastDispatchedStatus.set(id, status);
+      void this.webhookService.dispatch(id, 'session.status', { sessionId: id, status });
+    }
   }
 
   /**

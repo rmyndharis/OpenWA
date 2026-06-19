@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Webhook subscriptions for session lifecycle events now deliver.** `session.status`, `session.qr`,
+  `session.authenticated` and `session.disconnected` were accepted on subscribe but were never dispatched, so
+  consumers (including the n8n trigger node) waited indefinitely. They now fire from the engine lifecycle. The
+  n8n integration docs are corrected to the real event names (`session.authenticated`, `session.qr` —
+  previously documented as the non-existent `session.connected`/`session.qr_ready`, which were rejected at
+  registration). `group.*` events remain accepted on subscribe but are documented as reserved (not emitted
+  yet).
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

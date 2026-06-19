@@ -26,6 +26,7 @@ export const WEBHOOK_EVENTS = [
   'session.qr',
   'session.authenticated',
   'session.disconnected',
+  // Reserved: accepted on subscribe but not dispatched yet (no engine emit source).
   'group.join',
   'group.leave',
   'group.update',

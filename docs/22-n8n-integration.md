@@ -73,13 +73,21 @@ Start workflows when WhatsApp events occur.
 
 #### Supported Events
 
-| Event                  | Description               | Use Case                 |
-| ---------------------- | ------------------------- | ------------------------ |
-| `message.received`     | New incoming message      | Auto-reply, lead capture |
-| `message.sent`         | Message sent successfully | Delivery confirmation    |
-| `session.connected`    | Session authenticated     | Startup notifications    |
-| `session.disconnected` | Session lost connection   | Alert monitoring         |
-| `session.qr_ready`     | QR code generated         | Reconnection alerts      |
+| Event                   | Description                         | Use Case                  |
+| ----------------------- | ----------------------------------- | ------------------------- |
+| `message.received`      | New incoming message                | Auto-reply, lead capture  |
+| `message.sent`          | Message sent successfully           | Delivery confirmation     |
+| `message.ack`           | Delivery/read status advanced       | Read receipts             |
+| `message.failed`        | Outgoing message failed             | Failure alerting          |
+| `message.revoked`       | Message deleted for everyone        | Deletion tracking         |
+| `session.status`        | Session status changed              | Lifecycle tracking        |
+| `session.qr`            | QR code generated                   | Reconnection alerts       |
+| `session.authenticated` | Session logged in (phone available) | Startup notifications     |
+| `session.disconnected`  | Session lost connection             | Alert monitoring          |
+
+> **Reserved:** `group.join`, `group.leave`, and `group.update` are accepted by the
+> subscription API but are not emitted yet — don't depend on them until a release notes
+> them as live.
 
 #### How It Works
 
