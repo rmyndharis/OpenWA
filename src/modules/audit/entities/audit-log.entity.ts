@@ -12,6 +12,7 @@ export enum AuditAction {
   SESSION_CREATED = 'session_created',
   SESSION_STARTED = 'session_started',
   SESSION_STOPPED = 'session_stopped',
+  SESSION_FORCE_KILLED = 'session_force_killed',
   SESSION_DELETED = 'session_deleted',
   SESSION_QR_GENERATED = 'session_qr_generated',
   SESSION_CONNECTED = 'session_connected',

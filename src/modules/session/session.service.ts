@@ -209,7 +209,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     sessionId: string,
     engine: IWhatsAppEngine,
     teardown: (e: IWhatsAppEngine) => Promise<void>,
-    label: 'destroy' | 'disconnect',
+    label: 'destroy' | 'disconnect' | 'force-destroy',
   ): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -857,6 +857,33 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.logger.log(`Session stopped: ${session.name}`, {
       sessionId: id,
       action: 'stop',
+    });
+    await this.updateStatus(id, SessionStatus.DISCONNECTED);
+    return this.findOne(id);
+  }
+
+  /**
+   * Force-recover a stuck session: SIGKILL its engine's own resources (a wedged Chromium for the
+   * whatsapp-web.js engine) and tear it down, even when a normal stop()/delete() can't because the
+   * engine is hung. Mirrors stop()'s lifecycle (stop-mark + cancel-reconnect + bounded, isolated
+   * teardown + Map reconciliation) but uses the engine's forceDestroy().
+   */
+  async forceKill(id: string): Promise<Session> {
+    const session = await this.findOne(id);
+
+    // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
+    this.stoppingSessions.add(id);
+    this.cancelReconnect(id);
+
+    const engine = this.engines.get(id);
+    if (engine) {
+      await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
+      this.engines.delete(id);
+    }
+
+    this.logger.warn(`Session force-killed: ${session.name}`, {
+      sessionId: id,
+      action: 'force_kill',
     });
     await this.updateStatus(id, SessionStatus.DISCONNECTED);
     return this.findOne(id);

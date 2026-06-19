@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Force-kill a stuck session.** `POST /sessions/:id/force-kill` (OPERATOR) recovers a session whose engine
+  is wedged and won't respond to a normal stop/delete: the whatsapp-web.js engine **SIGKILLs its own Chromium
+  process directly** (never a process-wide kill that could take down other sessions), then best-effort tears
+  the client down; the Baileys engine ends its socket. The teardown is time-bounded and isolated, the session
+  is left `DISCONNECTED`, and it can be started again. Backs the dashboard's "Kill Stuck" button.
+
 ## [0.4.2] - 2026-06-19
 
 Bug-fix and hardening release: access-control tightening, session-lifecycle resilience, data-migration

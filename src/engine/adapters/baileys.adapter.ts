@@ -293,6 +293,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return Promise.resolve();
   }
 
+  // Baileys has no separate Chromium process to SIGKILL (destroy() already ends the socket
+  // synchronously), so a force-destroy is just a destroy.
+  forceDestroy(): Promise<void> {
+    return this.destroy();
+  }
+
   // ----- Status -----
 
   getStatus(): EngineStatus {
