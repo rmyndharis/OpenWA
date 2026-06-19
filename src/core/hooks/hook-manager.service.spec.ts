@@ -95,6 +95,36 @@ describe('HookManager', () => {
     expect(res.continue).toBe(true);
   });
 
+  it('discards the mutated data of a handler that also returns an error (error means discard output)', async () => {
+    // A handler that signals an error must NOT have its (possibly partial/corrupted) mutation applied —
+    // otherwise a half-transformed payload reaches persistence/webhooks/WS presented as success.
+    hm.register(
+      'bad',
+      'message:received',
+      async () => ({ continue: true, data: 'CORRUPTED', error: new Error('partial failure') }),
+      10,
+    );
+
+    const res = await hm.execute('message:received', 'original', { source: 'test' });
+
+    expect(res.continue).toBe(true);
+    expect(res.data).toBe('original'); // the errored handler's mutation is dropped
+  });
+
+  it('discards an errored handler mutation even on the stop path (continue:false + error)', async () => {
+    hm.register(
+      'bad',
+      'message:received',
+      async () => ({ continue: false, data: 'CORRUPTED', error: new Error('x') }),
+      10,
+    );
+
+    const res = await hm.execute('message:received', 'original', { source: 'test' });
+
+    expect(res.continue).toBe(false); // the chain still stops
+    expect(res.data).toBe('original'); // but the errored mutation is not carried out on stop
+  });
+
   it('register/unregister/hasHooks/getHookCount track registrations', () => {
     expect(hm.hasHooks('session:created')).toBe(false);
     const id = hm.register('p', 'session:created', async ctx => ({ continue: true, data: ctx.data }));

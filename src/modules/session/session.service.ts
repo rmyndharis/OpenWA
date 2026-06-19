@@ -20,6 +20,7 @@ import {
   ChatState,
   DeliveryStatus,
   IncomingMessage,
+  ReactionEvent,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -45,6 +46,12 @@ const RECONNECT_BASE_DELAY_MIN_MS = 1000;
 const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
 const RECONNECT_DELAY_CAP_MS = 3_600_000;
+/**
+ * Delay before retrying an ack UPDATE that matched 0 rows. A fast delivered/read ack can arrive before
+ * the send's 2nd save (which writes waMessageId) has committed, so the first UPDATE finds no row. One
+ * retry after this delay closes that race; the forward-only transition guard keeps it idempotent.
+ */
+export const ACK_RECONCILE_DELAY_MS = 750;
 
 const clampNumber = (n: number, min: number, max: number): number => Math.min(Math.max(n, min), max);
 
@@ -106,6 +113,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // in start() so a near-simultaneous second start() can't pass the engines.has() check during the
   // awaited hook and orphan an engine the lifecycle could never destroy.
   private initializingSessions: Set<string> = new Set();
+
+  // Serializes the read-modify-write of a message's reactions map per `${sessionId}:${waMessageId}`,
+  // so two concurrent reaction events on the same message don't clobber each other (both read the
+  // same snapshot, both full-row save, last writer wins). Entries are deleted once their chain drains.
+  private reactionChains: Map<string, Promise<void>> = new Map();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -601,25 +613,44 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // fire-and-forget writes race-safe at the DB level.
         const messageStatus = deliveryStatusToMessageStatus(status);
         if (messageStatus) {
-          void this.messageRepository
-            // Scope by sessionId: waMessageId is unique per account/chat, not global —
-            // an ack on one session must never advance a same-id row in another session.
-            .update(
-              { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
-              { status: messageStatus },
-            )
-            .then(result => {
-              // affected:0 — the row was not advanced: either the send's 2nd save (which sets
-              // waMessageId) hasn't committed yet, or the status is already at/above the target.
-              if (result.affected === 0) {
-                this.logger.debug(`Message ack ${messageId}: no status row advanced to ${messageStatus} (${status})`, {
-                  sessionId: id,
-                  messageId,
-                  status,
-                  action: 'message_ack_noop',
-                });
-              }
+          // Scope by sessionId: waMessageId is unique per account/chat, not global — an ack on one
+          // session must never advance a same-id row in another session. The In() guard makes the
+          // UPDATE forward-only (a late/out-of-order ack can't downgrade) and idempotent on retry.
+          const advanceAck = (): Promise<number> =>
+            this.messageRepository
+              .update(
+                { sessionId: id, waMessageId: messageId, status: In(ackStatusTransitionFrom(messageStatus)) },
+                { status: messageStatus },
+              )
+              .then(result => result.affected ?? 0);
+
+          const logNoop = (): void =>
+            this.logger.debug(`Message ack ${messageId}: no status row advanced to ${messageStatus} (${status})`, {
+              sessionId: id,
+              messageId,
+              status,
+              action: 'message_ack_noop',
             });
+
+          const onAckError = (err: unknown): void =>
+            this.logger.error(`Failed to advance ack for ${messageId}`, String(err));
+
+          void advanceAck()
+            .then(affected => {
+              if (affected > 0) return;
+              // affected:0 — most likely the send's 2nd save (which writes waMessageId) hasn't committed
+              // yet, so the row isn't matchable. Each ack is one-shot (WhatsApp won't necessarily resend),
+              // so retry ONCE after a short delay to close that race rather than leave it stuck at SENT.
+              const timer = setTimeout(() => {
+                void advanceAck()
+                  .then(retried => {
+                    if (retried === 0) logNoop();
+                  })
+                  .catch(onAckError);
+              }, ACK_RECONCILE_DELAY_MS);
+              timer.unref?.();
+            })
+            .catch(onAckError);
         }
 
         // Push the live delivery/read tick to the dashboard over the websocket (neutral status).
@@ -676,28 +707,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'message_reaction_received',
         });
 
-        void this.messageRepository
-          .findOne({ where: { sessionId: id, waMessageId: event.messageId } })
-          .then(async msg => {
-            if (!msg) return;
-            const metadata = msg.metadata || {};
-            const reactions = (metadata.reactions as Record<string, string>) || {};
-
-            if (!event.reaction) {
-              delete reactions[event.senderId];
-            } else {
-              reactions[event.senderId] = event.reaction;
-            }
-
-            metadata.reactions = reactions;
-            msg.metadata = metadata;
-            await this.messageRepository.save(msg);
-
-            this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
-          })
-          .catch(err => {
-            this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
-          });
+        // Serialize per message so two concurrent reactions don't read the same snapshot and clobber
+        // each other on the full-row save. A prior chain's failure must not block later reactions.
+        const key = `${id}:${event.messageId}`;
+        const prior = this.reactionChains.get(key) ?? Promise.resolve();
+        const next = prior.catch(() => undefined).then(() => this.applyReaction(id, event));
+        this.reactionChains.set(key, next);
+        void next.finally(() => {
+          // Clean up only if no newer reaction chained after us, so the map can't leak per message.
+          if (this.reactionChains.get(key) === next) {
+            this.reactionChains.delete(key);
+          }
+        });
       },
       onDisconnected: (reason: string): void => {
         this.logger.warn(`Session disconnected: ${reason}`, {
@@ -761,6 +782,33 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         void this.updateStatus(id, SessionStatus.FAILED);
       },
     });
+  }
+
+  /**
+   * Apply one reaction event to the stored message's reactions map (read-modify-write of the JSON
+   * column). Invoked through the per-message serialization chain in onMessageReaction, so concurrent
+   * reactions on the same message run sequentially and don't clobber each other.
+   */
+  private async applyReaction(id: string, event: ReactionEvent): Promise<void> {
+    try {
+      const msg = await this.messageRepository.findOne({ where: { sessionId: id, waMessageId: event.messageId } });
+      if (!msg) return;
+
+      const metadata = msg.metadata || {};
+      const reactions = (metadata.reactions as Record<string, string>) || {};
+      if (!event.reaction) {
+        delete reactions[event.senderId];
+      } else {
+        reactions[event.senderId] = event.reaction;
+      }
+      metadata.reactions = reactions;
+      msg.metadata = metadata;
+      await this.messageRepository.save(msg);
+
+      this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
+    } catch (err) {
+      this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
+    }
   }
 
   private scheduleReconnect(id: string, session: Session): void {
