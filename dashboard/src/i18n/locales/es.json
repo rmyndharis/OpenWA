@@ -226,7 +226,8 @@
       "start": "Iniciar",
       "stop": "Detener",
       "reconnect": "Reconectar",
-      "delete": "Eliminar"
+      "delete": "Eliminar",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "Sesión lista",
@@ -241,6 +242,12 @@
       "sessionId": "ID de sesión",
       "lastActive": "Última actividad",
       "error": "Error"
+    },
+    "forceKill": {
+      "successTitle": "Session Killed",
+      "successDesc": "Orphaned Chromium processes terminated for \"{{name}}\"",
+      "errorTitle": "Kill Failed",
+      "errorDefault": "Failed to kill orphaned processes"
     }
   },
   "webhooks": {

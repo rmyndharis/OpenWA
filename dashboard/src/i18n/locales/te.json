@@ -226,7 +226,8 @@
       "start": "ప్రారంభించు",
       "stop": "ఆపివేయి",
       "reconnect": "మళ్లీ కనెక్ట్ చేయి",
-      "delete": "తొలగించు"
+      "delete": "తొలగించు",
+      "killStuck": "Kill Stuck"
     },
     "toasts": {
       "readyTitle": "సెషన్ సిద్ధంగా ఉంది",
@@ -241,6 +242,12 @@
       "sessionId": "సెషన్ ID",
       "lastActive": "చివరిసారి యాక్టివ్",
       "error": "లోపం"
+    },
+    "forceKill": {
+      "successTitle": "Session Killed",
+      "successDesc": "Orphaned Chromium processes terminated for \"{{name}}\"",
+      "errorTitle": "Kill Failed",
+      "errorDefault": "Failed to kill orphaned processes"
     }
   },
   "webhooks": {
