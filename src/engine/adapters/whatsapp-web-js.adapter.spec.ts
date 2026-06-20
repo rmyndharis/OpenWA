@@ -4,6 +4,7 @@ import {
   extractLinkedParentJID,
   isSupportedProxyUrl,
   loadRemoteMedia,
+  resolveAuthTimeoutMs,
   resolveWebVersionPin,
   wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
@@ -335,5 +336,30 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
     process.env.WWEBJS_WEB_VERSION = '2.9999.0';
     process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = 'https://cdn.example.com/wa/{version}.html';
     expect(resolveWebVersionPin()?.webVersionCache.remotePath).toBe('https://cdn.example.com/wa/2.9999.0.html');
+  });
+});
+
+describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', () => {
+  const orig = process.env.WWEBJS_AUTH_TIMEOUT_MS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
+    else process.env.WWEBJS_AUTH_TIMEOUT_MS = orig;
+  });
+
+  it('returns undefined (wwebjs default) when unset', () => {
+    delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
+    expect(resolveAuthTimeoutMs()).toBeUndefined();
+  });
+
+  it('parses a positive integer milliseconds value', () => {
+    process.env.WWEBJS_AUTH_TIMEOUT_MS = '120000';
+    expect(resolveAuthTimeoutMs()).toBe(120000);
+  });
+
+  it('ignores non-positive-integer values (falls back to the default)', () => {
+    for (const bad of ['', '  ', '0', '-5', '1.5', 'abc', '60s']) {
+      process.env.WWEBJS_AUTH_TIMEOUT_MS = bad;
+      expect(resolveAuthTimeoutMs()).toBeUndefined();
+    }
   });
 });

@@ -220,6 +220,25 @@ Restart the container after setting it. Browse newer versions at
 [wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder).
 Set `WWEBJS_WEB_VERSION=latest` (or leave it unset) to restore the default auto-version behavior.
 
+### Issue: QR generation times out on slow first boot (WSL2 / low-resource)
+
+> **Engine:** This issue applies to the `whatsapp-web.js` engine only. If you are using `ENGINE_TYPE=baileys`, skip this section.
+
+**Symptoms:** On the first launch the session never produces a QR code and fails after ~30 seconds,
+often inside WSL2 or a resource-constrained container while WhatsApp Web is still loading.
+
+**Cause:** whatsapp-web.js waits a fixed 30000ms for WhatsApp Web to finish its initial load before
+generating the QR. On a slow first boot that window can expire before the page is ready.
+
+**Fix:** raise the boot/inject wait (milliseconds) with `WWEBJS_AUTH_TIMEOUT_MS`:
+
+```bash
+# Allow up to 2 minutes for the first-boot init wait:
+WWEBJS_AUTH_TIMEOUT_MS=120000
+```
+
+Restart the container after setting it. Leave it unset to keep the default (30000ms).
+
 ### Issue: Session fails to launch with `chrome_crashpad_handler: --database is required`
 
 > **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.

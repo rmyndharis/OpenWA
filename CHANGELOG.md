@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable first-boot init timeout for the whatsapp-web.js engine (`WWEBJS_AUTH_TIMEOUT_MS`).**
+  On slow first boots (e.g. WSL2 or low-resource containers) the engine's fixed 30s wait for WhatsApp
+  Web to finish loading could expire before the QR code was generated, aborting startup. Set
+  `WWEBJS_AUTH_TIMEOUT_MS` to a larger value in milliseconds (e.g. `120000`) to extend it; unset keeps
+  the previous 30000ms default, so existing deployments are unchanged. (#353)
+
 ### Changed
 
 - **Dashboard collapses connection-error spam into a single toast.** When the backend is unreachable

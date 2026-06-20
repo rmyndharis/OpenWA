@@ -131,6 +131,22 @@ export function resolveWebVersionPin():
 }
 
 /**
+ * Optional override for whatsapp-web.js's initial boot/inject wait (#353). On slow first boots
+ * (e.g. WSL2 or low-resource containers) the default 30s `authTimeoutMs` can expire before WhatsApp
+ * Web finishes loading, aborting QR generation. Set WWEBJS_AUTH_TIMEOUT_MS to a larger value in
+ * milliseconds (e.g. 120000) to extend it. Unset or a non-positive-integer value keeps the
+ * whatsapp-web.js default (30000ms).
+ */
+export function resolveAuthTimeoutMs(): number | undefined {
+  const raw = process.env.WWEBJS_AUTH_TIMEOUT_MS?.trim();
+  if (!raw || !/^\d+$/.test(raw)) {
+    return undefined;
+  }
+  const ms = Number(raw);
+  return ms > 0 ? ms : undefined;
+}
+
+/**
  * Extracts the JID of the parent community a group is linked to, if any.
  * The field name has varied across whatsapp-web.js/WA Web versions, so
  * known candidates are checked in order.
@@ -200,6 +216,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.logger.log(`Pinning WhatsApp Web version ${versionPin.webVersion}`);
       }
 
+      // Extend the first-boot init wait on slow setups (WSL2/low-resource), #353. Opt-in:
+      // unset keeps whatsapp-web.js's 30000ms default.
+      const authTimeoutMs = resolveAuthTimeoutMs();
+      if (authTimeoutMs) {
+        this.logger.log(`Using auth timeout ${authTimeoutMs}ms`);
+      }
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
@@ -212,6 +235,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
           ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
         },
+        ...(authTimeoutMs !== undefined ? { authTimeoutMs } : {}),
         ...(versionPin ?? {}),
       });
 
