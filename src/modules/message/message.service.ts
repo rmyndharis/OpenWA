@@ -530,20 +530,24 @@ export class MessageService {
   /** Maximum messages a single getChatHistory call may request from the engine. */
   private static readonly MAX_CHAT_HISTORY_LIMIT = 100;
 
+  /** Higher ceiling for opt-in deep history (`deep=true`). Bounded so a caller still can't ask unbounded. */
+  private static readonly MAX_DEEP_CHAT_HISTORY_LIMIT = 2000;
+
   /**
    * Fetch chat history live from WhatsApp (bypasses local DB).
    * Returns the most recent `limit` messages for the given chat.
    * When `includeMedia` is true, downloads media (base64) for messages that have it.
    *
-   * `limit` is clamped to [1, 100] (and falls back to 50 for non-finite input) so a
-   * caller cannot ask the engine to fetch an unbounded number of messages.
+   * `limit` is clamped to [1, 100] (and falls back to 50 for non-finite input) so a caller cannot ask the
+   * engine to fetch an unbounded number of messages. When `deep` is true the ceiling is raised to 2000
+   * (for reaching weeks/months back on whatsapp-web.js, which can load earlier messages on demand) and
+   * media is forced off — downloading base64 for up to 2000 messages would be an enormous, slow payload.
    */
-  async getChatHistory(sessionId: string, chatId: string, limit = 50, includeMedia = false) {
+  async getChatHistory(sessionId: string, chatId: string, limit = 50, includeMedia = false, deep = false) {
     const engine = this.getEngine(sessionId);
-    const safeLimit = Number.isFinite(limit)
-      ? Math.min(Math.max(Math.trunc(limit), 1), MessageService.MAX_CHAT_HISTORY_LIMIT)
-      : 50;
-    return engine.getChatHistory(chatId, safeLimit, includeMedia);
+    const ceiling = deep ? MessageService.MAX_DEEP_CHAT_HISTORY_LIMIT : MessageService.MAX_CHAT_HISTORY_LIMIT;
+    const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), ceiling) : 50;
+    return engine.getChatHistory(chatId, safeLimit, deep ? false : includeMedia);
   }
 
   // ========== Delete Message ==========

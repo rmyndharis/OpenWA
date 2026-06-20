@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in deep chat history (`deep=true`).** `GET /sessions/:id/messages/:chatId/history` was capped at
+  100 messages per request — OpenWA's own bound, not a WhatsApp limit, since whatsapp-web.js can load
+  earlier messages on demand. A new `deep=true` query raises the ceiling to 2000 so callers can reach
+  weeks/months back. Deep mode is metadata-only (it ignores `includeMedia`, since base64 for up to 2000
+  messages would be an enormous payload). The default path is unchanged (default 50, max 100). The Baileys
+  engine has no history sync, so the endpoint still returns `501` there regardless of `deep`. (#347)
+
 ### Fixed
 
 - **Baileys engine: inbound message ids are now engine-neutral (`@c.us`).** The Baileys adapter emitted

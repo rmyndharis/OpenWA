@@ -23,17 +23,32 @@ This endpoint asks the active WhatsApp engine for recent messages in a chat. It 
 The endpoint is intentionally bounded:
 
 - `limit` defaults to `50`.
-- `limit` is clamped to the range `1`–`100`.
+- `limit` is clamped to the range `1`–`100` (or `1`–`2000` with `deep=true`, see below).
 - Values such as `limit=999` do not request unbounded history; they are reduced to the maximum allowed limit.
 - `includeMedia=true` downloads media data and is slower than metadata-only history.
+- `deep=true` raises the ceiling to `2000` for reaching further back, and forces metadata-only.
 
 ## How Deep It Can Reach
 
-The live history endpoint returns at most the **100 most recent** messages per request (the `limit` clamp
-above). The `whatsapp-web.js` engine *can* load older messages on demand — internally it drives WhatsApp
-Web's "load earlier messages" mechanism — so reaching further back is bounded by **OpenWA's current cap**,
-not by what WhatsApp Web is willing to expose. To go back weeks or months you would need a much larger
-window than 100; a deeper-history mode is tracked in [#347](https://github.com/rmyndharis/OpenWA/issues/347).
+By default the live history endpoint returns at most the **100 most recent** messages per request (the
+`limit` clamp above). The `whatsapp-web.js` engine *can* load older messages on demand — internally it
+drives WhatsApp Web's "load earlier messages" mechanism — so reaching further back is bounded by
+**OpenWA's cap**, not by what WhatsApp Web is willing to expose.
+
+To go back weeks or months, set `deep=true`. This raises the ceiling to **2000** messages per request:
+
+```http
+GET /api/sessions/{sessionId}/messages/{chatId}/history?limit=2000&deep=true
+```
+
+Deep mode is **metadata-only** — `includeMedia` is ignored, because downloading base64 media for up to
+2000 messages would produce an enormous, slow response. Fetch media separately for the specific messages
+you need. Note that a very large, rapid history pull is heavier on the linked session and can increase the
+risk of WhatsApp rate-limiting; use the smallest window that meets your need.
+
+Deep mode applies to the `whatsapp-web.js` engine. The Baileys engine does not expose on-demand history
+(it has no message-history sync), so the history endpoint returns `501 Not Implemented` there regardless
+of `deep`; consume Baileys history through local storage / webhooks / WebSocket as it arrives instead.
 
 There is still an ultimate ceiling: once WhatsApp's servers stop returning older messages for the linked
 session, no further history is retrievable through the web engine, regardless of `limit`. So the endpoint

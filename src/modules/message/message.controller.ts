@@ -272,21 +272,32 @@ export class MessageController {
     type: Boolean,
     description: 'When true, downloads media (base64) for messages that have it. Slower; default false.',
   })
+  @ApiQuery({
+    name: 'deep',
+    required: false,
+    type: Boolean,
+    description:
+      'When true, raises the limit ceiling from 100 to 2000 for reaching further back in history ' +
+      '(whatsapp-web.js only; loads earlier messages on demand). Forces metadata-only (includeMedia ' +
+      'is ignored). Large/slow requests may increase WhatsApp rate-limiting risk; default false.',
+  })
   @ApiResponse({ status: 200, description: 'Chat history (most recent messages)' })
   async getChatHistory(
     @Param('sessionId') sessionId: string,
     @Param('chatId') chatId: string,
     @Query('limit') limit?: string,
     @Query('includeMedia') includeMedia?: string,
+    @Query('deep') deep?: string,
   ) {
     // Parse the limit defensively: a non-numeric query value (?limit=abc) yields NaN,
-    // so fall back to undefined and let the service apply its default + [1,100] clamp.
+    // so fall back to undefined and let the service apply its default + clamp.
     const parsedLimit = limit ? parseInt(limit, 10) : undefined;
     return this.messageService.getChatHistory(
       sessionId,
       chatId,
       parsedLimit !== undefined && !Number.isNaN(parsedLimit) ? parsedLimit : undefined,
       includeMedia === 'true' || includeMedia === '1',
+      deep === 'true' || deep === '1',
     );
   }
 

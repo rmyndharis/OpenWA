@@ -555,6 +555,28 @@ describe('MessageService', () => {
       const result = await service.getChatHistory('sess-1', 'test@c.us');
       expect(result).toBe(fake);
     });
+
+    describe('deep mode (#347)', () => {
+      it('allows a limit above the standard 100 cap when deep=true', async () => {
+        await service.getChatHistory('sess-1', 'test@c.us', 500, false, true);
+        expect(mockEngine.getChatHistory).toHaveBeenLastCalledWith('test@c.us', 500, false);
+      });
+
+      it('clamps a deep limit to the 2000 ceiling', async () => {
+        await service.getChatHistory('sess-1', 'test@c.us', 5000, false, true);
+        expect(mockEngine.getChatHistory).toHaveBeenLastCalledWith('test@c.us', 2000, false);
+      });
+
+      it('forces includeMedia off in deep mode (metadata-only)', async () => {
+        await service.getChatHistory('sess-1', 'test@c.us', 300, true, true);
+        expect(mockEngine.getChatHistory).toHaveBeenLastCalledWith('test@c.us', 300, false);
+      });
+
+      it('still clamps to 100 when deep is not set (regression guard)', async () => {
+        await service.getChatHistory('sess-1', 'test@c.us', 500, false, false);
+        expect(mockEngine.getChatHistory).toHaveBeenLastCalledWith('test@c.us', 100, false);
+      });
+    });
   });
 
   describe('deleteMessage', () => {
