@@ -1,7 +1,7 @@
 // src/modules/translation/adapters/libretranslate.client.ts
 import { Translator, DetectResult } from './core/ports';
 import { createLogger } from '../../../common/services/logger.service';
-import { assertSafeFetchUrl, isSsrfProtectionEnabled, SsrfBlockedError } from '../../../common/security/ssrf-guard';
+import { isSsrfProtectionEnabled, SsrfBlockedError, withSafeFetch } from '../../../common/security/ssrf-guard';
 
 export interface LibreTranslateOptions {
   url: string;
@@ -59,30 +59,28 @@ export class LibreTranslateClient implements Translator {
     }
 
     const url = `${this.base}${path}`;
-    const ssrfProtected = isSsrfProtectionEnabled();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
     try {
-      // Validate the target host before sending the api_key-bearing body. Honors SSRF_ALLOWED_HOSTS,
-      // so the documented localhost LibreTranslate sidecar still works once it's allowlisted.
-      if (ssrfProtected) {
-        await assertSafeFetchUrl(url);
-      }
       const body = method === 'POST' ? JSON.stringify({ ...payload, api_key: this.opts.apiKey }) : undefined;
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        signal: controller.signal,
-        // Refuse redirects: the guard only validated the original host; a 3xx would re-send the
-        // api_key to a redirect-controlled (possibly internal) target.
-        redirect: ssrfProtected ? 'error' : 'follow',
-      });
-      if (!res.ok) {
-        throw new Error(`LibreTranslate ${path} -> HTTP ${res.status}`);
-      }
+      // Route through the IP-pinned fetch: the host is validated once and the connection is pinned to the
+      // vetted address(es), closing the DNS-rebinding window between check and connect (the api_key
+      // travels in the body, so a rebind to an internal listener would otherwise exfiltrate it). Honors
+      // SSRF_ALLOWED_HOSTS for the documented localhost sidecar, and refuses redirects. When SSRF
+      // protection is disabled this degrades to a plain redirect-following fetch.
+      const data = await withSafeFetch(
+        url,
+        { method, headers: { 'Content-Type': 'application/json' }, body, signal: controller.signal },
+        async res => {
+          if (!res.ok) {
+            throw new Error(`LibreTranslate ${path} -> HTTP ${res.status}`);
+          }
+          return res.json();
+        },
+        { guard: isSsrfProtectionEnabled() },
+      );
       this.consecutiveFailures = 0;
-      return await res.json();
+      return data;
     } catch (err) {
       // A blocked-host SSRF error is a deterministic configuration problem, not a transient upstream
       // failure — don't let it trip the circuit breaker (which exists to back off a flaky server).
