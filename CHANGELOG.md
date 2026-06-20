@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-06-20
+
+A Baileys engine quality-and-correctness release, plus a chat-history enhancement. **Identity:** inbound
+Baileys message ids are now engine-neutral (`@c.us`, matching whatsapp-web.js), the dashboard Chats list
+shows saved/contact names instead of raw JIDs, and `@lid` (privacy-id) senders resolve to a phone number.
+**Messaging:** an opt-in `deep=true` mode lets the live chat-history endpoint reach up to 2000 messages
+back on whatsapp-web.js, and Baileys can now send captions with document messages. **One behavior change
+to note:** `message.received` / `revoked` / `reaction` webhook and WebSocket payloads from a Baileys
+session now carry `@c.us` ids where they previously carried `@s.whatsapp.net` (or a resolved `@lid`) — a
+consumer that stored or compared the old ids will see the new value.
+
 ### Added
 
 - **Opt-in deep chat history (`deep=true`).** `GET /sessions/:id/messages/:chatId/history` was capped at
@@ -47,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payloads from a Baileys session now carry `@c.us` ids where they previously carried
   `@s.whatsapp.net` (or a resolved `@lid`); a consumer that stored or compared the old ids will see the
   new value. Outbound sending and contact/chat list ids are unchanged for now.
+
+- **Baileys engine: documents can now be sent with a caption.** `sendDocumentMessage` dropped
+  `media.caption` on the Baileys engine, while whatsapp-web.js already forwarded it. Baileys now sends the
+  caption too (parity across engines); the document stores the caption as its message body, falling back
+  to the filename when absent. (#363)
 
 ## [0.4.4] - 2026-06-20
 
