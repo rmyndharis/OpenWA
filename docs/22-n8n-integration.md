@@ -80,6 +80,7 @@ Start workflows when WhatsApp events occur.
 | `message.ack`           | Delivery/read status advanced       | Read receipts             |
 | `message.failed`        | Outgoing message failed             | Failure alerting          |
 | `message.revoked`       | Message deleted for everyone        | Deletion tracking         |
+| `message.reaction`      | Reaction added / changed / removed  | Reaction tracking         |
 | `session.status`        | Session status changed              | Lifecycle tracking        |
 | `session.qr`            | QR code generated                   | Reconnection alerts       |
 | `session.authenticated` | Session logged in (phone available) | Startup notifications     |

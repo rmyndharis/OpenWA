@@ -784,6 +784,7 @@ available_events:
   - message.sent         # Message sent
   - message.ack          # Message status update (sent, delivered, read)
   - message.revoked      # Message deleted
+  - message.reaction     # Reaction added, changed, or removed
 
   # Session
   - session.status       # Session status change

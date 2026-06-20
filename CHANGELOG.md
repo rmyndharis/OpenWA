@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-06-20
+
+A reliability, correctness, and dashboard release. **Identity & engine:** Baileys gains a persistent,
+cross-session `lid -> phone` table (shared resolution that survives restarts) plus a new `from` message
+filter, and its contact/chat *listing* ids are now engine-neutral (`@c.us`). **Webhooks:** message
+reactions now also fire as a `message.reaction` webhook (previously WebSocket-only). **Dashboard:**
+selectable appearance palettes with light/dark/system mode, and a redesigned Templates workspace.
+**Hardening:** the LibreTranslate client pins its outbound connection, and Baileys group-participant
+operations address participants in the engine wire dialect. **Two consumer-visible notes:** Baileys
+contact/chat-list ids flip `@s.whatsapp.net` -> `@c.us` (whatsapp-web.js already used `@c.us`), and
+webhooks subscribed with `*` now also receive `message.reaction`.
+
 ### Added
 
 - **Persistent, cross-session `lid -> phone` resolution + a `from` filter on message history.** A new
@@ -20,11 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Baileys engine observes (inbound message `senderPn`/`participantPn`, the `chats.phoneNumberShare`
   event, contacts, and history sync), so it fills continuously without re-auth. Internally these ids are
   now carried by a typed `WaId` value object; it is in-memory only and serializes to the exact same
-  neutral string, so **no webhook / WebSocket / REST response shape changes**.
+  neutral string, so **no webhook / WebSocket / REST response shape changes**. (#374)
+
+- **Webhook parity for message reactions (`message.reaction`).** Reactions were broadcast over the
+  WebSocket only; they are now also delivered as a `message.reaction` webhook with the same payload (the
+  reaction plus the post-apply reactions snapshot) and are selectable in the dashboard event picker.
+  Idempotency is salted per dispatch, so a re-reaction is a distinct delivery while retries dedupe.
+  **Consumer-visible:** webhooks subscribed with `*` now also receive this event. (#380)
+
+- **Dashboard appearance palettes + redesigned Templates workspace.** A new Appearance menu switches
+  light / dark / system mode and selectable accent palettes (persisted and applied across the UI). The
+  Templates page is redesigned into a searchable workspace with a saved-template library, editor, live
+  preview, and placeholder inputs. (#361)
 
 - **`BAILEYS_LOG_LEVEL`** (trace|debug|info|warn|error, silent by default) surfaces the Baileys library's
   own diagnostics; `trace` dumps the decoded WhatsApp wire frames to stdout (context "baileys-wire") for
-  analysis.
+  analysis. (#375)
 
 ### Fixed
 
@@ -34,12 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, recent messages, or `lid -> phone` mappings ever arrived. The adapter now passes
   `shouldSyncHistoryMessage: () => true`, enabling the sync while keeping the full-archive download
   opt-in via `BAILEYS_SYNC_FULL_HISTORY` (WhatsApp sends the recent window + contact snapshot, not the
-  entire message history).
+  entire message history). (#375)
 
 - **Message history `chatId` filter now matches across dialects.** A chat addressed as `<phone>@c.us` (the
   neutral list id) now also returns messages stored under `<phone>@s.whatsapp.net` (e.g. an outbound send
   addressed by a raw engine id), so the conversation view is no longer empty when the stored and queried
-  dialects differ - the same resolution the `from` filter uses.
+  dialects differ - the same resolution the `from` filter uses. (#375)
 
 - **Baileys engine: contact and chat *listing* ids are now engine-neutral (`@c.us`).** `getContacts` /
   `getChats` / `getContactById` previously returned the raw `<phone>@s.whatsapp.net` id (visible in the
@@ -47,7 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@c.us` dialect like the message payloads; the read-back paths (`sendSeen` / `deleteChat` / contact
   lookup) accept the neutral id and fold it back internally, so sending and marking-read still round-trip.
   **Consumer-visible:** Baileys contact/chat-list ids flip `@s.whatsapp.net` -> `@c.us` (whatsapp-web.js
-  already used `@c.us`).
+  already used `@c.us`). (#374)
+
+- **Hardened the LibreTranslate translation client against DNS rebinding.** The client validated the
+  target host and then issued a separate request that re-resolved DNS at connect time. It now pins the
+  connection to the pre-validated address (the same SSRF-safe path webhook and media delivery use) and
+  refuses redirects, so the API key (sent in the request body) cannot be redirected to an internal target
+  between the host check and the connection. (#377)
+
+- **Baileys group-participant operations now address participants in the engine wire dialect.** Add /
+  remove / promote / demote and group creation passed neutral `<phone>@c.us` participant ids straight to
+  the wire, where they encode as an unknown server suffix instead of the `s.whatsapp.net` protocol token.
+  They now fold to the engine dialect before the call (matching how 1:1 sends already round-trip); `@lid`
+  and the `@g.us` group id are untouched, and the returned group info stays neutral `@c.us`. (#378)
+
+- **Italian translation corrections.** Updated and corrected the Italian (`it`) dashboard locale. (#376)
 
 ## [0.4.5] - 2026-06-20
 

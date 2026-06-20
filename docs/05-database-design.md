@@ -349,6 +349,7 @@ CREATE INDEX idx_webhooks_active ON webhooks(active);
   "message.sent",
   "message.ack",
   "message.revoked",
+  "message.reaction",
   "session.status",
   "session.qr",
   "session.authenticated",

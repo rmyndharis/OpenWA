@@ -71,7 +71,7 @@ curl -H "X-API-Key: $API_KEY" \
 ```json
 {
   "status": "ok",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "uptime": 86400,
   "timestamp": "2026-02-02T10:30:00Z",
   "checks": {
@@ -826,6 +826,7 @@ message.received       - New incoming message
 message.sent           - Message sent
 message.ack            - Message status (sent, delivered, read)
 message.revoked        - Message deleted
+message.reaction       - Reaction added, changed, or removed
 session.status         - Session status change
 session.qr             - QR code generated
 session.authenticated  - Session authenticated
