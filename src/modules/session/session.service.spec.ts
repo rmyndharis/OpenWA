@@ -810,6 +810,32 @@ describe('SessionService', () => {
       expect(chains.size).toBe(0);
     });
 
+    it('dispatches message.reaction to the webhook with the post-apply reactions snapshot', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      type Row = { metadata?: Record<string, unknown> };
+      const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
+      let stored: Row = { metadata: {} };
+      (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
+      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
+        stored = clone(m);
+        return Promise.resolve(m);
+      });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
+      for (let i = 0; i < 3; i++) await flush();
+
+      const dispatched = dispatchedEvents('message.reaction');
+      expect(dispatched).toHaveLength(1);
+      // Webhook payload mirrors the WS payload: the event plus the post-apply reactions snapshot.
+      expect(dispatched[0][2]).toMatchObject({
+        messageId: 'wa-1',
+        chatId: 'c',
+        senderId: 'alice',
+        reaction: '👍',
+        reactions: { alice: '👍' },
+      });
+    });
+
     it('dispatches message.received (not message.sent) on an incoming message event', async () => {
       const callbacks = await startAndCaptureCallbacks();
 

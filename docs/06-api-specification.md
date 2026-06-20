@@ -1324,6 +1324,7 @@ Examples:
 - message.sent: msg_{sessionId}_{messageId}
 - message.ack: ack_{sessionId}_{messageId}_{status}
 - message.failed: failed_{sessionId}_{messageId}_{status}
+- message.reaction: react_{sessionId}_{messageId}_{senderId}
 - session.status: sess_{sessionId}_{status}
 - group.join: grp_{groupId}_{participantId}_join
 ```
@@ -1663,6 +1664,7 @@ ws.send(JSON.stringify({
 | `message.sent` | Message sent successfully |
 | `message.ack` | Message acknowledgment (delivered, read) |
 | `message.revoked` | Message was deleted |
+| `message.reaction` | A reaction was added, changed, or removed on a message |
 | `group.join` | Group join event |
 | `group.leave` | Group leave event |
 | `group.update` | Group info updated |

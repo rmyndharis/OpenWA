@@ -111,6 +111,37 @@ describe('Idempotency Utils', () => {
       expect(a).toBe('ack_A_X_read');
     });
 
+    it('salts message.reaction keys so a re-reaction (same sender/emoji, later time) is a distinct event', () => {
+      // A reaction has no unique id and is a read-modify-write: the same sender can go 👍 → remove → 👍.
+      // Keying on (sender, message, emoji) alone would collapse the re-reaction onto the earlier one.
+      const a = generateIdempotencyKey(
+        'message.reaction',
+        { sessionId: 'A', messageId: 'MSG1', senderId: '628111@c.us', reaction: '👍' },
+        '2026-06-20T00:00:00.000Z',
+      );
+      const b = generateIdempotencyKey(
+        'message.reaction',
+        { sessionId: 'A', messageId: 'MSG1', senderId: '628111@c.us', reaction: '👍' },
+        '2026-06-20T00:05:00.000Z',
+      );
+      expect(a).not.toBe(b);
+    });
+
+    it('is retry-stable for message.reaction: the same occurrence regenerates the same key', () => {
+      const at = '2026-06-20T00:00:00.000Z';
+      const data = { sessionId: 'A', messageId: 'MSG1', senderId: '628111@c.us', reaction: '👍' };
+      expect(generateIdempotencyKey('message.reaction', data, at)).toBe(
+        generateIdempotencyKey('message.reaction', data, at),
+      );
+    });
+
+    it('gives two senders reacting to the same message DISTINCT message.reaction keys', () => {
+      const at = '2026-06-20T00:00:00.000Z';
+      const a = generateIdempotencyKey('message.reaction', { sessionId: 'A', messageId: 'M', senderId: 'S1' }, at);
+      const b = generateIdempotencyKey('message.reaction', { sessionId: 'A', messageId: 'M', senderId: 'S2' }, at);
+      expect(a).not.toBe(b);
+    });
+
     it('should generate key for group.join', () => {
       const key = generateIdempotencyKey('group.join', {
         groupId: 'grp_1',

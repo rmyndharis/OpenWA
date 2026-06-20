@@ -812,6 +812,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       await this.messageRepository.save(msg);
 
       this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
+      // Webhook parity with the WebSocket broadcast: same payload (event + post-apply snapshot), so a
+      // webhook-only consumer observes reactions too. Idempotency for this event is salted per dispatch.
+      void this.webhookService.dispatch(id, 'message.reaction', { ...event, reactions });
     } catch (err) {
       this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
     }
