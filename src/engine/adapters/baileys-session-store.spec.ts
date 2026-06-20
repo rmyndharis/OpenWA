@@ -96,6 +96,38 @@ describe('BaileysSessionStore', () => {
     expect(store.resolvePhone('111:7@lid')).toBe('628999');
   });
 
+  describe('toNeutralChat contact-name resolution (#369)', () => {
+    it('keeps the chat title when Baileys supplies one (it wins over the contact)', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Chat Title' }]);
+      store.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'Saved Name' }]);
+      expect(store.listChats()[0].name).toBe('Chat Title');
+    });
+
+    it('falls back to the saved contact name for a titleless bare-number chat', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net' }]); // no chat title
+      store.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'Alice' }]);
+      expect(store.listChats()[0].name).toBe('Alice');
+    });
+
+    it('resolves a saved name for a @lid chat via the lid->pn mapping', () => {
+      store.upsertChats([{ id: '111@lid' }]); // titleless, lid-keyed
+      store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
+      store.upsertContacts([{ id: '628999@s.whatsapp.net', name: 'Carol' }]);
+      expect(store.listChats()[0].name).toBe('Carol');
+    });
+
+    it('uses pushName (notify) when no saved/verified name exists', () => {
+      store.upsertChats([{ id: '628222@s.whatsapp.net' }]);
+      store.upsertContacts([{ id: '628222@s.whatsapp.net', notify: 'Dave' }]);
+      expect(store.listChats()[0].name).toBe('Dave');
+    });
+
+    it('falls back to the raw user-part when nothing is known (last resort)', () => {
+      store.upsertChats([{ id: '628333@s.whatsapp.net' }]);
+      expect(store.listChats()[0].name).toBe('628333');
+    });
+  });
+
   describe('toNeutralJid', () => {
     it('maps @s.whatsapp.net to @c.us and strips the device suffix', () => {
       expect(store.toNeutralJid('628111@s.whatsapp.net')).toBe('628111@c.us');

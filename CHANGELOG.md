@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Baileys engine: the Chats list now shows saved/contact names instead of a raw number or `@lid`.** When
+  Baileys supplied a chat without a title, the dashboard Chats list fell back to the raw JID user-part (a
+  bare number, or a privacy-id for `@lid` contacts). The session store now resolves a best-known display
+  name from the synced contacts — preferring the saved name, then the business `verifiedName`, then the
+  pushName (`notify`) — and for a `@lid` chat it also looks up the contact behind the resolved phone. The
+  raw user-part remains the last resort, so a name is shown whenever WhatsApp has delivered one. No API
+  shape change (`ChatSummary.name` is simply better populated). (#369)
+
 - **Baileys engine: inbound message ids are now engine-neutral (`@c.us`).** The Baileys adapter emitted
   its native `<phone>@s.whatsapp.net` / `<lid>@lid` ids in message payloads (`from` / `to` / `chatId` /
   `author`, plus revoked and reaction events), while the whatsapp-web.js engine and the rest of the

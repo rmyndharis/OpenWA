@@ -135,12 +135,47 @@ export class BaileysSessionStore {
     const last = this.lastMessages.get(c.id);
     return {
       id: c.id,
-      name: c.name ?? userPart(c.id),
+      name: c.name ?? this.resolveContactName(c.id),
       isGroup: c.id.endsWith('@g.us'),
       unreadCount: c.unreadCount ?? 0,
       timestamp: last?.timestamp ?? this.toUnixSeconds(c.conversationTimestamp),
       lastMessage: last?.text,
     };
+  }
+
+  /**
+   * Best-known display name for a chat id when Baileys gave the chat no title (#369). Prefers the saved
+   * contact name, then verifiedName, then pushName (`notify`); for a @lid chat it also tries the contact
+   * behind the resolved phone. Falls back to the raw user-part so a number/lid is never shown as a JID.
+   */
+  private resolveContactName(id: string): string {
+    const direct = this.contactDisplayName(id);
+    if (direct) {
+      return direct;
+    }
+    const parsed = parseWaId(id);
+    if (parsed.kind === 'lid') {
+      const lidJid = `${parsed.userPart}@lid`;
+      const pn =
+        this.lidToPn.get(lidJid) ??
+        this.lidToPn.get(id) ??
+        (this.contacts.get(lidJid) ?? this.contacts.get(id))?.phoneNumber;
+      if (pn) {
+        const viaPhone =
+          this.contactDisplayName(pn) ??
+          this.contactDisplayName(`${userPart(pn)}@s.whatsapp.net`) ??
+          this.contactDisplayName(`${userPart(pn)}@c.us`);
+        if (viaPhone) {
+          return viaPhone;
+        }
+      }
+    }
+    return userPart(id);
+  }
+
+  private contactDisplayName(id: string): string | undefined {
+    const c = this.contacts.get(id);
+    return c ? (c.name ?? c.verifiedName ?? c.notify ?? undefined) : undefined;
   }
 
   private toUnixSeconds(ts: number | { toNumber(): number } | null | undefined): number {
