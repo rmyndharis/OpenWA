@@ -58,6 +58,20 @@ export class BaileysSessionStore {
     }
   }
 
+  /**
+   * Learn lid->pn mappings from an inbound message key (#362). Baileys attaches the sender's phone JID
+   * (`senderPn` / `participantPn`) next to its privacy id (`senderLid` / `participantLid`) on the message
+   * key — the only place a fresh `@lid` sender's number is revealed in @whiskeysockets/baileys@6.7.23
+   * (there is no `getPNForLID` lookup and `contacts.*` / `messaging-history.set` don't fire for it). This
+   * lets `resolvePhone` (senderPhone, `GET /contacts/:id/phone`) and lid canonicalization succeed.
+   */
+  recordKeyLidMappings(key: Pick<WAMessageKey, 'senderLid' | 'senderPn' | 'participantLid' | 'participantPn'>): void {
+    this.addLidMappings([
+      { lid: key.senderLid ?? undefined, pn: key.senderPn ?? undefined },
+      { lid: key.participantLid ?? undefined, pn: key.participantPn ?? undefined },
+    ]);
+  }
+
   recordMessage(msg: WAMessage): void {
     const chatId = msg.key?.remoteJid;
     if (!chatId || !msg.key) {

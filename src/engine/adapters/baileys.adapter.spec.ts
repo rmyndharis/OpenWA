@@ -610,6 +610,35 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg.isLidSender).toBe(true); // still flagged: the raw sender was a lid
   });
 
+  it('resolves an @lid sender via the lid/pn pair carried on the inbound message key (#362)', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    // No history-sync mapping this time; the inbound key itself carries senderLid + senderPn,
+    // which is the only place a fresh @lid sender's number is revealed in baileys@6.7.23.
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: {
+            remoteJid: '111@lid',
+            fromMe: false,
+            id: 'IN_LID_KEY',
+            senderLid: '111@lid',
+            senderPn: '628111@s.whatsapp.net',
+          },
+          message: { conversation: 'hi from lid' },
+          messageTimestamp: 1700000005,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { from: string; isLidSender?: boolean };
+    expect(msg.from).toBe('628111@c.us'); // resolved from the key's senderPn, neutral dialect
+    expect(msg.isLidSender).toBe(true);
+  });
+
   it('keeps an unresolved @lid sender as @lid end-to-end (no mapping known)', async () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();

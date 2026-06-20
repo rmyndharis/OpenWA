@@ -706,6 +706,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
     try {
       const b = await this.loadLib();
       const remoteJid = msg.key.remoteJid!;
+      // Learn any lid->pn pair the key carries BEFORE canonicalizing ids below, so a fresh @lid
+      // sender resolves to its phone in this message and for later contact lookups (#362).
+      this.sessionStore.recordKeyLidMappings(msg.key);
       const contentType = b.getContentType(msg.message ?? undefined);
 
       // --- protocolMessage REVOKE: don't emit onMessage ---

@@ -128,6 +128,30 @@ describe('BaileysSessionStore', () => {
     });
   });
 
+  describe('recordKeyLidMappings (#362)', () => {
+    it('learns a lid->pn mapping from an inbound message key (senderLid/senderPn)', () => {
+      store.recordKeyLidMappings({ senderLid: '111@lid', senderPn: '628999@s.whatsapp.net' });
+      expect(store.resolvePhone('111@lid')).toBe('628999');
+    });
+
+    it('learns a group participant lid->pn mapping (participantLid/participantPn)', () => {
+      store.recordKeyLidMappings({ participantLid: '222@lid', participantPn: '628222@s.whatsapp.net' });
+      expect(store.resolvePhone('222@lid')).toBe('628222');
+    });
+
+    it('canonicalizes a @lid to <phone>@c.us once the key mapping is learned', () => {
+      expect(store.toNeutralJid('111@lid')).toBe('111@lid'); // unknown yet
+      store.recordKeyLidMappings({ senderLid: '111@lid', senderPn: '628111@s.whatsapp.net' });
+      expect(store.toNeutralJid('111@lid')).toBe('628111@c.us');
+    });
+
+    it('ignores a key with no lid/pn pair', () => {
+      store.recordKeyLidMappings({});
+      store.recordKeyLidMappings({ senderLid: '333@lid' }); // lid without pn
+      expect(store.resolvePhone('333@lid')).toBeNull();
+    });
+  });
+
   describe('toNeutralJid', () => {
     it('maps @s.whatsapp.net to @c.us and strips the device suffix', () => {
       expect(store.toNeutralJid('628111@s.whatsapp.net')).toBe('628111@c.us');

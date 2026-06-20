@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw user-part remains the last resort, so a name is shown whenever WhatsApp has delivered one. No API
   shape change (`ChatSummary.name` is simply better populated). (#369)
 
+- **Baileys engine: `@lid` senders now resolve to a phone number.** `senderPhone` and
+  `GET /sessions/:id/contacts/:id/phone` always returned `null` for privacy-id (`@lid`) contacts on
+  Baileys: the resolver only consulted mappings from `contacts.*` / `messaging-history.set`, which don't
+  fire for a fresh inbound `@lid` sender, and baileys@6.7.23 has no `getPNForLID` lookup. The adapter now
+  learns the `lid -> phone` pair that Baileys attaches to the inbound message key (`senderPn` /
+  `participantPn`), so the sender of an incoming message resolves to its number and later contact lookups
+  succeed. Still best-effort by design — a number is only revealed once WhatsApp delivers the mapping
+  (e.g. an inbound message from that contact). (#362)
+
 - **Baileys engine: inbound message ids are now engine-neutral (`@c.us`).** The Baileys adapter emitted
   its native `<phone>@s.whatsapp.net` / `<lid>@lid` ids in message payloads (`from` / `to` / `chatId` /
   `author`, plus revoked and reaction events), while the whatsapp-web.js engine and the rest of the
