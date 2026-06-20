@@ -254,39 +254,4 @@ export class CacheService implements OnModuleDestroy {
       this.logger.warn(`Cache write failed (sessions:stats): ${String(error)}`);
     }
   }
-
-  // ========== Invalidation ==========
-
-  async invalidateSession(id: string): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.del(`session:${id}:status`, `session:${id}:info`, `session:${id}:qr`);
-      // Also invalidate list since a session changed
-      await this.redis!.del('sessions:list', 'sessions:stats');
-    } catch (error) {
-      this.logger.warn(`Cache invalidation failed: ${String(error)}`);
-    }
-  }
-
-  async invalidateSessionsList(): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      await this.redis!.del('sessions:list', 'sessions:stats');
-    } catch (error) {
-      this.logger.warn(`Cache invalidation failed: ${String(error)}`);
-    }
-  }
-
-  async invalidateAll(): Promise<void> {
-    if (!(await this.isAvailable())) return;
-    try {
-      const keys = await this.redis!.keys('session:*');
-      keys.push('sessions:list', 'sessions:stats');
-      if (keys.length > 0) {
-        await this.redis!.del(...keys);
-      }
-    } catch (error) {
-      this.logger.warn(`Cache invalidation failed: ${String(error)}`);
-    }
-  }
 }
