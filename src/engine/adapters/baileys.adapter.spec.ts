@@ -1253,6 +1253,35 @@ describe('BaileysAdapter group management', () => {
     expect(fakeSock.groupParticipantsUpdate).toHaveBeenCalledWith('123-456@g.us', ['628111@s.whatsapp.net'], action);
   });
 
+  // A neutral `<phone>@c.us` participant id must reach Baileys as `<phone>@s.whatsapp.net` — only the
+  // latter encodes to the single-byte protocol token; a raw `c.us` server suffix goes on the wire as an
+  // unknown 4-byte string. The group id (`@g.us`) and `@lid` (a first-class addressing mode) are untouched.
+  it.each([
+    ['addParticipants', 'add'],
+    ['removeParticipants', 'remove'],
+    ['promoteParticipants', 'promote'],
+    ['demoteParticipants', 'demote'],
+  ])('%s folds a neutral @c.us participant id to the engine dialect on the wire', async (method, action) => {
+    const adapter = await ready();
+    await (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<void>>)[method]('123-456@g.us', [
+      '628111@c.us',
+    ]);
+    expect(fakeSock.groupParticipantsUpdate).toHaveBeenCalledWith('123-456@g.us', ['628111@s.whatsapp.net'], action);
+  });
+
+  it('participant ops pass @lid ids through unchanged (lid addressing mode)', async () => {
+    const adapter = await ready();
+    await adapter.addParticipants('123-456@g.us', ['111@lid']);
+    expect(fakeSock.groupParticipantsUpdate).toHaveBeenCalledWith('123-456@g.us', ['111@lid'], 'add');
+  });
+
+  it('createGroup folds neutral @c.us participants to the engine dialect, keeping @lid raw', async () => {
+    fakeSock.groupCreate.mockResolvedValue(META);
+    const adapter = await ready();
+    await adapter.createGroup('G', ['628111@c.us', '222@lid']);
+    expect(fakeSock.groupCreate).toHaveBeenCalledWith('G', ['628111@s.whatsapp.net', '222@lid']);
+  });
+
   it('leaveGroup / setGroupSubject / setGroupDescription delegate to the socket', async () => {
     const adapter = await ready();
     await adapter.leaveGroup('123-456@g.us');

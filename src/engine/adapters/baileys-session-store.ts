@@ -161,12 +161,14 @@ export class BaileysSessionStore {
   }
 
   /**
-   * Fold an app-facing neutral id back to the engine's raw dialect for map lookups. The contacts /
-   * chats / lastMessages maps are keyed by Baileys' raw `@s.whatsapp.net`, but the app now hands us the
-   * neutral `@c.us` (contact/chat ids are emitted neutral). Groups/lids/others share the dialect, so
-   * pass them through unchanged.
+   * Fold an app-facing neutral id back to the engine's raw dialect. The contacts / chats / lastMessages
+   * maps are keyed by Baileys' raw `@s.whatsapp.net`, but the app now hands us the neutral `@c.us`
+   * (contact/chat ids are emitted neutral), so map lookups must fold first. The outbound group-participant
+   * ops fold for the same reason: only `@s.whatsapp.net` encodes to the single-byte protocol token, whereas
+   * a raw `c.us` server suffix would go on the wire as an unknown string. Groups/lids/others share the
+   * dialect, so pass them through unchanged.
    */
-  private toEngineJid(jid: string): string {
+  toEngineJid(jid: string): string {
     const parsed = parseWaId(jid);
     return parsed.kind === 'user' ? `${parsed.userPart}@s.whatsapp.net` : jid;
   }

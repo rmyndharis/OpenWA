@@ -572,28 +572,36 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async createGroup(name: string, participants: string[]): Promise<Group> {
     this.ensureReady();
-    const metadata = await this.sock!.groupCreate(name, participants);
+    const metadata = await this.sock!.groupCreate(name, this.toEngineParticipants(participants));
     return mapBaileysGroup(metadata, this.normalizedSelfJid(), jid => this.sessionStore.toNeutralJid(jid));
   }
 
   async addParticipants(groupId: string, participants: string[]): Promise<void> {
     this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, participants, 'add');
+    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'add');
   }
 
   async removeParticipants(groupId: string, participants: string[]): Promise<void> {
     this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, participants, 'remove');
+    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'remove');
   }
 
   async promoteParticipants(groupId: string, participants: string[]): Promise<void> {
     this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, participants, 'promote');
+    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'promote');
   }
 
   async demoteParticipants(groupId: string, participants: string[]): Promise<void> {
     this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, participants, 'demote');
+    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'demote');
+  }
+
+  /**
+   * Fold neutral `<phone>@c.us` participant ids back to the engine wire dialect (`@s.whatsapp.net`) before
+   * a group write. `@lid` (a first-class addressing mode) and the group id itself are left untouched.
+   */
+  private toEngineParticipants(participants: string[]): string[] {
+    return participants.map(p => this.sessionStore.toEngineJid(p));
   }
 
   async leaveGroup(groupId: string): Promise<void> {
