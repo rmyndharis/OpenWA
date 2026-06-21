@@ -362,4 +362,19 @@ describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', ()
       expect(resolveAuthTimeoutMs()).toBeUndefined();
     }
   });
+
+  it('ignores all-digit values that are not finite safe integers (falls back to the default)', () => {
+    // A huge digit string coerces to Infinity; MAX_SAFE_INTEGER + 1 is a finite but unsafe integer.
+    // Both pass the /^\d+$/ shape check, so without a numeric guard they would reach whatsapp-web.js
+    // as an effectively unbounded inject wait.
+    for (const bad of ['9'.repeat(352), String(Number.MAX_SAFE_INTEGER + 1)]) {
+      process.env.WWEBJS_AUTH_TIMEOUT_MS = bad;
+      expect(resolveAuthTimeoutMs()).toBeUndefined();
+    }
+  });
+
+  it('accepts large but safe integer millisecond values', () => {
+    process.env.WWEBJS_AUTH_TIMEOUT_MS = '600000';
+    expect(resolveAuthTimeoutMs()).toBe(600000);
+  });
 });

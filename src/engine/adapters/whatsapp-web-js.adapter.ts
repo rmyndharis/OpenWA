@@ -134,8 +134,8 @@ export function resolveWebVersionPin():
  * Optional override for whatsapp-web.js's initial boot/inject wait (#353). On slow first boots
  * (e.g. WSL2 or low-resource containers) the default 30s `authTimeoutMs` can expire before WhatsApp
  * Web finishes loading, aborting QR generation. Set WWEBJS_AUTH_TIMEOUT_MS to a larger value in
- * milliseconds (e.g. 120000) to extend it. Unset or a non-positive-integer value keeps the
- * whatsapp-web.js default (30000ms).
+ * milliseconds (e.g. 120000) to extend it. Unset, or a value that is not a positive safe integer,
+ * keeps the whatsapp-web.js default (30000ms).
  */
 export function resolveAuthTimeoutMs(): number | undefined {
   const raw = process.env.WWEBJS_AUTH_TIMEOUT_MS?.trim();
@@ -143,7 +143,9 @@ export function resolveAuthTimeoutMs(): number | undefined {
     return undefined;
   }
   const ms = Number(raw);
-  return ms > 0 ? ms : undefined;
+  // Number.isSafeInteger rejects Infinity (from huge digit strings) and >2^53 unsafe integers — both
+  // pass the /^\d+$/ shape check but would make whatsapp-web.js's inject loop wait effectively forever.
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined;
 }
 
 /**

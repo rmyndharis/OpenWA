@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dashboard now folds the repeated request failures into a single connection-lost toast instead of
   stacking ordinary error toasts. The thrown error now always carries the HTTP status code (which the
   toast de-duplication matches on), rather than a status text that is empty over HTTP/2. (#388)
+- **`WWEBJS_AUTH_TIMEOUT_MS` now takes effect in Docker, and is validated as a safe integer.** The
+  configurable first-boot init timeout added in 0.4.7 was never forwarded into the container by Docker
+  Compose, so setting it in `.env` had no effect on the recommended deployment path — the engine kept
+  the 30000ms default. Both compose files now pass it through (unset still means the default). The
+  value is also validated as a positive safe integer, so an accidental huge or overflowing value falls
+  back to the default instead of making the engine's first-boot wait run effectively unbounded. (#393)
 
 ## [0.4.7] - 2026-06-21
 
