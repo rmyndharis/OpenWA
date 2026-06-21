@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the data-connection baseline migration also created them (with a stale `keyPrefix` width), leaving
   dead, unused tables on the data database. New installs are now clean. Existing installs are
   unaffected — an already-applied migration is never re-run, so their harmless leftover tables remain
-  and no destructive drop is performed.
+  and no destructive drop is performed. (#400)
 
 ### Fixed
 
