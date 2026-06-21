@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "సర్వర్ కనెక్షన్ తెగిపోయింది",
+      "message": "బ్యాకెండ్ సర్వర్‌ను చేరుకోలేకపోయాం. సర్వర్ నడుస్తుందో లేదో తనిఖీ చేయండి."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",

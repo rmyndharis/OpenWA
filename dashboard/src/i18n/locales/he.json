@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "החיבור לשרת אבד",
+      "message": "לא ניתן להגיע לשרת העורפי. אנא בדקו אם השרת פועל."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "ממשק WhatsApp API",

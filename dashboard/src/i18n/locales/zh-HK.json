@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "伺服器連線已中斷",
+      "message": "無法連接到後端伺服器。請檢查伺服器是否正在執行。"
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",

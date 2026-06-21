@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "Connessione al server persa",
+      "message": "Il server backend non è raggiungibile. Verifica che il server sia in esecuzione."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",
