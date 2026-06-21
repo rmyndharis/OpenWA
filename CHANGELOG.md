@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard collapses duplicate connection-lost toasts during a reverse-proxy outage.** When the
+  backend is unreachable behind a reverse proxy that returns a non-JSON `502`/`503` page, the
+  dashboard now folds the repeated request failures into a single connection-lost toast instead of
+  stacking ordinary error toasts. The thrown error now always carries the HTTP status code (which the
+  toast de-duplication matches on), rather than a status text that is empty over HTTP/2. (#388)
+
 ## [0.4.7] - 2026-06-21
 
 A webhooks, reliability, and dashboard release — no breaking changes; everything is additive or a
