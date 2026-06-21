@@ -39,7 +39,10 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [test]
+    # Gate the public Release on a successfully built+pushed image, so a tag never produces a GitHub
+    # Release without a matching container image (the docker job also builds the dashboard, which the
+    # test gate above does not). Trades a few minutes of buildx latency for release/image consistency.
+    needs: [test, docker]
     steps:
       - uses: actions/checkout@v6
         with:

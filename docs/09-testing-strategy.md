@@ -142,8 +142,9 @@ CI is defined in `.github/workflows/ci.yml`.
 | `build` | backend build after lint/test/dashboard jobs pass |
 | `docker` | multi-arch Docker build and push on branch pushes |
 
-Release tags run `.github/workflows/release.yml`, which gates release and Docker publishing behind tests
-and build.
+Release tags run `.github/workflows/release.yml`, which gates Docker publishing behind tests and build,
+and publishes the GitHub Release only after the image build succeeds — so a tag never ends up with
+release notes but no matching multi-arch image.
 
 ## 09.7 Testing Guidelines
 

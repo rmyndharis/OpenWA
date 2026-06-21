@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A published GitHub Release now waits for the container image build.** The release workflow's
+  GitHub Release job now depends on the Docker image job, so a `v*` tag can no longer publish release
+  notes without a matching multi-arch image on GHCR. A failed image build leaves the tag without a
+  Release until the workflow is re-run. (#389)
+
 ### Fixed
 
 - **Dashboard collapses duplicate connection-lost toasts during a reverse-proxy outage.** When the
