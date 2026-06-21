@@ -6,6 +6,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { Public, RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
+import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
 import { DockerService } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
@@ -450,8 +451,9 @@ export class InfraController {
         '',
       ].join('\n');
 
-      // Write to data/ so it persists across container restarts.
-      fs.writeFileSync(envPath, contents, 'utf8');
+      // Write to data/ so it persists across container restarts. Owner-only (0600): this file holds
+      // the DB/S3/Redis credentials, so it must not be world-readable between save and next restart.
+      writeSecretFile(envPath, contents);
       this.logger.log('Configuration saved', { envPath });
 
       const profileMsg = profiles.length > 0 ? ` Docker profiles required: ${profiles.join(', ')}.` : '';

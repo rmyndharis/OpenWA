@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Browser launch flags saved from the dashboard are now applied correctly.** The Infrastructure
+  form persists the Puppeteer/Chromium arguments space-separated, but the engine config parser only
+  split on commas — collapsing every flag into a single malformed argv token, so `--no-sandbox` (and
+  any other flag) was silently never applied. In a hardened/containerized environment that can wedge
+  session startup. The parser now accepts either delimiter, and an already-saved space-separated value
+  is repaired on the next boot.
+
+### Security
+
+- **The dashboard-generated env file is now written owner-only (`0600`).** Saving Infrastructure
+  configuration wrote `data/.env.generated` — which can hold the database, S3, and Redis credentials —
+  with default permissions (world-readable `0644`) until the next restart re-tightened it. It is now
+  written `0600` at save time through the same owner-only helper used for the generated env at first
+  boot, closing the exposure window on shared or bind-mounted hosts.
+
 ## [0.4.8] - 2026-06-21
 
 A maintenance release — no breaking changes; everything is a fix or internal hardening.

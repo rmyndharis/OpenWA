@@ -18,6 +18,9 @@ jest.mock('fs', () => {
   return {
     ...actual,
     writeFileSync: jest.fn(),
+    // saveConfig now writes the generated env via writeSecretFile, which chmods 0600 — mock it
+    // so the secret-hygiene path never touches the real filesystem.
+    chmodSync: jest.fn(),
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
   };
@@ -118,6 +121,29 @@ describe('InfraController.saveConfig SSL reject-unauthorized', () => {
   it('omits DATABASE_SSL_REJECT_UNAUTHORIZED when SSL is disabled', () => {
     const env = writtenEnv({ database: { type: 'postgres', sslEnabled: false } });
     expect(env).not.toContain('DATABASE_SSL_REJECT_UNAUTHORIZED');
+  });
+});
+
+describe('InfraController.saveConfig writes the generated env owner-only', () => {
+  // data/.env.generated holds DB/S3/Redis credentials, so it must be written 0600 — not the
+  // default 0644 (world-readable). The write must go through the same owner-only path the
+  // first-run boot uses, closing the gap between a dashboard save and the next restart.
+  it('persists data/.env.generated with mode 0600, not world-readable', () => {
+    const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+    const controller = new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    controller.saveConfig({ database: { type: 'postgres', sslEnabled: true, password: 'pw' } } as never);
+    const opts = writeSpy.mock.calls[0][2];
+    expect(opts).toEqual({ mode: 0o600 });
+    writeSpy.mockRestore();
   });
 });
 

@@ -35,3 +35,29 @@ describe('configuration — Postgres database name', () => {
     expect(configuration().dataDatabase.name).toBe('prod_db');
   });
 });
+
+describe('configuration — Puppeteer args delimiter', () => {
+  const orig = process.env.PUPPETEER_ARGS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.PUPPETEER_ARGS;
+    else process.env.PUPPETEER_ARGS = orig;
+  });
+
+  // The dashboard Infrastructure form persists browser args space-separated, while .env/compose
+  // use commas. The parser must accept both so each flag reaches Chromium as a discrete argv token
+  // (a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox).
+  it('splits space-separated PUPPETEER_ARGS into discrete flags (dashboard-written form)', () => {
+    process.env.PUPPETEER_ARGS = '--no-sandbox --disable-gpu';
+    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-gpu']);
+  });
+
+  it('still splits comma-separated PUPPETEER_ARGS (.env / docker-compose form)', () => {
+    process.env.PUPPETEER_ARGS = '--no-sandbox,--disable-setuid-sandbox';
+    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
+  });
+
+  it('defaults to discrete sandbox flags when unset', () => {
+    delete process.env.PUPPETEER_ARGS;
+    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
+  });
+});
