@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard no longer crashes ("Something went wrong") when a webhook exists on PostgreSQL.** JSON
+  columns (`webhooks.events`/`headers`, `sessions.config`, `messages.metadata`, `message_batches.*`)
+  were declared `jsonb` in their entities but created as `text` by the baseline migration, so on
+  Postgres the driver returned them as raw JSON strings and the dashboard's `events.map()` threw an
+  uncaught error. `jsonColumnType()` now resolves to `simple-json` on both dialects (parsed in JS on
+  read) — no schema migration or data conversion, since the write format was already identical. This
+  also corrects the same latent string-instead-of-object behavior for session reconnect config,
+  message-reaction persistence, and bulk-send batches on Postgres. The dashboard additionally
+  normalizes webhook `events` to an array at the query boundary as defense-in-depth. (#385)
+
 ## [0.4.6] - 2026-06-20
 
 A reliability, correctness, and dashboard release. **Identity & engine:** Baileys gains a persistent,
