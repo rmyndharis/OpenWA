@@ -170,6 +170,35 @@ export function assertNoRedirect(response: { status: number; type?: string }, ur
   }
 }
 
+/** Default DNS resolution deadline (ms) — generous for healthy resolvers; bounds a hang. */
+const DEFAULT_DNS_TIMEOUT_MS = 10000;
+
+function resolveDnsTimeoutMs(): number {
+  const raw = process.env.SSRF_DNS_TIMEOUT_MS;
+  const n = raw !== undefined ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DNS_TIMEOUT_MS;
+}
+
+/**
+ * Resolve a host with `{ all: true }`, bounded by a deadline so a hanging/slow DNS resolver cannot
+ * pin a worker indefinitely (the lookup is otherwise unbounded). The default deadline is generous
+ * and overridable via SSRF_DNS_TIMEOUT_MS. On expiry it throws SsrfBlockedError; the in-flight lookup
+ * is left to settle with its late result swallowed (no unhandledRejection).
+ */
+async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
+  const lookupPromise = lookup(host, { all: true });
+  lookupPromise.catch(() => undefined); // swallow a late rejection if the deadline already fired
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SsrfBlockedError(`Timed out resolving host: ${host}`)), resolveDnsTimeoutMs());
+  });
+  try {
+    return await Promise.race([lookupPromise, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Validate an outbound URL and resolve its host ONCE. Throws SsrfBlockedError if the scheme is not
  * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved. Guards both
@@ -207,7 +236,7 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
     return null; // literal IP — fetch connects directly, nothing to rebind
   }
 
-  const resolved = await lookup(host, { all: true });
+  const resolved = await lookupWithDeadline(host);
   if (resolved.length === 0) {
     throw new SsrfBlockedError(`Could not resolve host: ${host}`);
   }

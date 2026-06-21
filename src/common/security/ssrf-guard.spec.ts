@@ -197,6 +197,18 @@ describe('resolveSafeFetchTarget', () => {
     (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '10.0.0.5', family: 4 }]);
     await expect(resolveSafeFetchTarget('https://rebind.example/hook')).rejects.toThrow(SsrfBlockedError);
   });
+
+  it('rejects when DNS resolution exceeds the deadline (a hanging resolver cannot pin a worker)', async () => {
+    const prev = process.env.SSRF_DNS_TIMEOUT_MS;
+    process.env.SSRF_DNS_TIMEOUT_MS = '30';
+    (dnsPromises.lookup as jest.Mock).mockReturnValueOnce(new Promise(() => undefined)); // never resolves
+    try {
+      await expect(resolveSafeFetchTarget('https://slow.example/hook')).rejects.toThrow(/timed out resolving/i);
+    } finally {
+      if (prev === undefined) delete process.env.SSRF_DNS_TIMEOUT_MS;
+      else process.env.SSRF_DNS_TIMEOUT_MS = prev;
+    }
+  }, 1000);
 });
 
 describe('withSafeFetch (guarded + pinned fetch)', () => {

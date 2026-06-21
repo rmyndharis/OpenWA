@@ -75,6 +75,15 @@ export function isSupportedProxyUrl(url: string): boolean {
 }
 
 /**
+ * Whether a MediaInput's string `data` is an http(s) URL (to be fetched through the SSRF-guarded
+ * loadRemoteMedia) rather than base64. Case-insensitive, matching the Baileys adapter — a mixed-case
+ * scheme like `HTTPS://` must still route through the guarded fetch, not be treated as base64.
+ */
+export function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+/**
  * Fetch remote media for sending, with an SSRF host guard, a byte cap, and a timeout.
  * The guard runs BEFORE any network call, so an internal/reserved URL throws `SsrfBlockedError`
  * and no outbound socket is opened. The byte cap (node-fetch `size`) and `AbortSignal` timeout
@@ -564,7 +573,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     let messageMedia: MessageMedia;
 
     if (typeof media.data === 'string') {
-      if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
+      if (isHttpUrl(media.data)) {
         // URL
         messageMedia = await loadRemoteMedia(media.data);
       } else {
@@ -715,7 +724,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     let messageMedia: MessageMedia;
 
     if (typeof media.data === 'string') {
-      if (media.data.startsWith('http://') || media.data.startsWith('https://')) {
+      if (isHttpUrl(media.data)) {
         messageMedia = await loadRemoteMedia(media.data);
       } else {
         messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);

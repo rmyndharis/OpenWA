@@ -48,9 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-integer value (e.g. `RATE_LIMIT_SHORT_LIMIT=abc`) became `NaN` and silently disabled the
   corresponding limit. Startup now rejects a non-negative-integer violation with a clear message,
   consistent with the existing port validation. (#402)
+- **The whatsapp-web.js engine now detects remote media URLs case-insensitively.** A media `data`
+  string was treated as a URL only with a lowercase `http://`/`https://` prefix, so a mixed-case
+  scheme (e.g. `HTTPS://…`) was mistaken for base64 instead of being fetched through the SSRF-guarded
+  path — diverging from the Baileys engine. Both engines now use the same case-insensitive check. (#404)
 
 ### Security
 
+- **DNS resolution in the SSRF guard is now bounded by a deadline.** The guard resolved a hostname
+  with an unbounded lookup, so a hanging or very slow resolver could pin a worker indefinitely. The
+  lookup now races a deadline (default 10s, overridable via `SSRF_DNS_TIMEOUT_MS`) and fails closed
+  with a clear error on expiry. Healthy resolvers are unaffected. (#404)
 - **Custom webhook headers are now validated as a flat, control-character-free string map.** The
   `headers` field accepted any object shape with no per-value checks, so a value containing `CR`/`LF`
   could attempt header injection into the outbound webhook request, and non-string values silently

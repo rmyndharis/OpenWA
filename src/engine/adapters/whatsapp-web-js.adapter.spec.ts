@@ -2,6 +2,7 @@ import { MessageMedia } from 'whatsapp-web.js';
 import {
   WhatsAppWebJsAdapter,
   extractLinkedParentJID,
+  isHttpUrl,
   isSupportedProxyUrl,
   loadRemoteMedia,
   resolveAuthTimeoutMs,
@@ -34,6 +35,22 @@ describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus bo
   ])('maps wwebjs ack %i -> %s', (ack, expected) => {
     expect(wwebjsAckToDeliveryStatus(ack)).toBe(expected);
   });
+});
+
+describe('isHttpUrl (remote-media detection, case-insensitive like Baileys)', () => {
+  it.each(['http://x/y.png', 'https://x/y.png', 'HTTP://X/Y.PNG', 'Https://x/y.png', 'hTtPs://x'])(
+    'treats %s as a remote URL',
+    url => {
+      expect(isHttpUrl(url)).toBe(true);
+    },
+  );
+
+  it.each(['data:image/png;base64,iVBOR', 'iVBORw0KGgoAAAANSU', 'ftp://x/y', 'httpserver-not-a-url'])(
+    'treats %s as non-URL (base64 / other)',
+    s => {
+      expect(isHttpUrl(s)).toBe(false);
+    },
+  );
 });
 
 describe('isSupportedProxyUrl', () => {
