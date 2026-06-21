@@ -302,6 +302,22 @@ describe('MessageService', () => {
         service.sendImage('sess-1', { chatId: '628123456789@c.us', url: 'http://127.0.0.1/x.png' }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it('rejects a base64 image over the media cap before sending or persisting', async () => {
+      process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1024';
+      try {
+        await expect(
+          service.sendImage('sess-1', {
+            chatId: '628123456789@c.us',
+            base64: Buffer.alloc(1025).toString('base64'),
+            mimetype: 'image/png',
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(mockEngine.sendImageMessage).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      }
+    });
   });
 
   // ── getMessages pagination guard ──────────────────────────────────

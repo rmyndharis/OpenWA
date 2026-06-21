@@ -13,6 +13,7 @@ import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
+import { assertBase64WithinMediaCap } from './media-cap.util';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -91,6 +92,16 @@ export class BulkMessageService implements OnApplicationBootstrap {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {
       throw new BadRequestException(`Session '${sessionId}' is not active`);
+    }
+
+    // Bound every outbound base64 blob to the media byte cap before the whole messages array (with
+    // its base64 payloads) is persisted into the batch row. Mirrors the single-send cap in
+    // MessageService.buildMediaInput.
+    for (const { content } of dto.messages) {
+      assertBase64WithinMediaCap(content?.image?.base64);
+      assertBase64WithinMediaCap(content?.video?.base64);
+      assertBase64WithinMediaCap(content?.audio?.base64);
+      assertBase64WithinMediaCap(content?.document?.base64);
     }
 
     const batchId = dto.batchId || `batch_${randomUUID().split('-')[0]}`;
