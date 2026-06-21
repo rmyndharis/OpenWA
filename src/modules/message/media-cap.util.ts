@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { PayloadTooLargeException } from '@nestjs/common';
 import { inboundMediaMaxBytes } from '../../engine/adapters/inbound-media-cap';
 
 /**
@@ -16,6 +16,8 @@ export function assertBase64WithinMediaCap(base64: string | null | undefined): v
   }
   const maxBytes = inboundMediaMaxBytes();
   if (Buffer.byteLength(base64, 'base64') > maxBytes) {
-    throw new BadRequestException(`Base64 media exceeds the maximum allowed size of ${maxBytes} bytes`);
+    // 413 Payload Too Large, matching the documented MESSAGE_MEDIA_TOO_LARGE error code — distinct
+    // from a generic 400 so clients can handle an oversized media payload specifically.
+    throw new PayloadTooLargeException(`Base64 media exceeds the maximum allowed size of ${maxBytes} bytes`);
   }
 }

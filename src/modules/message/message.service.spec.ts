@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { MessageService } from './message.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
@@ -312,7 +312,7 @@ describe('MessageService', () => {
             base64: Buffer.alloc(1025).toString('base64'),
             mimetype: 'image/png',
           }),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(PayloadTooLargeException);
         expect(mockEngine.sendImageMessage).not.toHaveBeenCalled();
       } finally {
         delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;

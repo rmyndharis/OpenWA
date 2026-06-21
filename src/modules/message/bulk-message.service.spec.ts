@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { PayloadTooLargeException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BulkMessageService, resolveFinalBatchStatus, sanitizeBatchError } from './bulk-message.service';
 import { MessageBatch, BatchStatus } from './entities/message-batch.entity';
@@ -207,7 +207,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
             },
           ],
         } as unknown as SendBulkMessageDto),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
       expect(repo.save).not.toHaveBeenCalled();
     } finally {
       delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;

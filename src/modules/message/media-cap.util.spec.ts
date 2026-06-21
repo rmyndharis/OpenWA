@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { PayloadTooLargeException } from '@nestjs/common';
 import { assertBase64WithinMediaCap } from './media-cap.util';
 
 describe('assertBase64WithinMediaCap', () => {
@@ -24,12 +24,12 @@ describe('assertBase64WithinMediaCap', () => {
 
   it('rejects a base64 payload over the cap with a 400', () => {
     process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1024';
-    expect(() => assertBase64WithinMediaCap(base64OfBytes(1025))).toThrow(BadRequestException);
+    expect(() => assertBase64WithinMediaCap(base64OfBytes(1025))).toThrow(PayloadTooLargeException);
   });
 
   it('honors the MEDIA_DOWNLOAD_MAX_BYTES override (shared with the URL/inbound caps)', () => {
     process.env.MEDIA_DOWNLOAD_MAX_BYTES = '2048';
     expect(() => assertBase64WithinMediaCap(base64OfBytes(2000))).not.toThrow();
-    expect(() => assertBase64WithinMediaCap(base64OfBytes(4096))).toThrow(BadRequestException);
+    expect(() => assertBase64WithinMediaCap(base64OfBytes(4096))).toThrow(PayloadTooLargeException);
   });
 });

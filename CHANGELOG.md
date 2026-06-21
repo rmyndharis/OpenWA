@@ -37,9 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sends) was bounded only by the coarse whole-request `BODY_SIZE_LIMIT`, unlike remote-URL and inbound
   media which already enforce `MEDIA_DOWNLOAD_MAX_BYTES`. The decoded size of an outbound base64 blob
   is now checked against the same `MEDIA_DOWNLOAD_MAX_BYTES` cap (default 50 MiB) before it is sent or
-  persisted; an oversized blob is rejected with `400`. The bulk-send nested media payloads are now
-  validated as typed objects, so unknown or malformed media fields are rejected rather than silently
-  persisted — bulk requests carrying junk inside a media object will now get a `400`. (#394)
+  persisted; an oversized blob is rejected with `413 Payload Too Large` (the documented
+  `MESSAGE_MEDIA_TOO_LARGE`). The bulk-send nested media payloads are now validated as typed objects,
+  so unknown or malformed media fields are rejected rather than silently persisted — bulk requests
+  carrying junk inside a media object will now get a `400`. (#394, #395)
 
 ## [0.4.7] - 2026-06-21
 
