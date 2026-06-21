@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/rmyndharis/OpenWA/actions/workflows/ci.yml"><img src="https://github.com/rmyndharis/OpenWA/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"/></a>
-  <img src="https://img.shields.io/badge/version-0.4.6-blue.svg" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-0.4.7-blue.svg" alt="Version"/>
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"/>
   <img src="https://img.shields.io/badge/node-22_LTS-brightgreen.svg" alt="Node"/>
   <img src="https://img.shields.io/badge/NestJS-11.x-red.svg" alt="NestJS"/>
@@ -53,7 +53,7 @@ Built on a **pluggable architecture**, OpenWA lets you swap database engines (SQ
 | ------------- | ------ | ------------------------------------ |
 | REST API      | ✅     | Full WhatsApp API via HTTP endpoints |
 | Multi-Session | ✅     | Manage multiple WhatsApp accounts    |
-| Webhooks      | ✅     | Real-time events with HMAC signature |
+| Webhooks      | ✅     | Real-time events with HMAC signature and optional smart pre-dispatch filters |
 | Web Dashboard | ✅     | Visual management interface          |
 | API Key Auth  | ✅     | Secure API authentication            |
 | Swagger Docs  | ✅     | Interactive API documentation        |
@@ -269,6 +269,11 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/webhooks \
     "secret": "your-hmac-secret"
   }'
 ```
+
+> **Smart filters (optional):** add a `filters` object to fire the webhook only when conditions match
+> (AND), e.g. `{ "conditions": [{ "field": "sender", "operator": "is", "value": ["1234567890@c.us"] }] }`.
+> Fields: `sender` / `recipient` / `body` / `type` / `mentions` / `fromMe` / `hasMedia` / `isGroup`. A
+> webhook with no filters behaves exactly as before. See the API specification for the full schema.
 
 ---
 

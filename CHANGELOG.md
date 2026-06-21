@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-06-21
+
+A webhooks, reliability, and dashboard release — no breaking changes; everything is additive or a
+fix. **Webhooks** gain optional smart pre-dispatch filters: a trigger can carry AND-ed conditions
+(sender/recipient/body/type/mentions/fromMe/hasMedia/isGroup) and fires only when they all match,
+with engine-neutral `WaId` contact matching and a FilterBuilder UI — a webhook with no filters
+behaves exactly as before. The whatsapp-web.js engine's first-boot init timeout is now configurable
+(`WWEBJS_AUTH_TIMEOUT_MS`) for slow environments. **Fixed:** the dashboard no longer crashes on
+PostgreSQL when a webhook exists (a JSON column type mismatch). **Dashboard:** a downed backend no
+longer floods the screen with error toasts.
+
 ### Added
 
 - **Smart webhook filters (optional, additive).** A webhook trigger can now carry an optional set of

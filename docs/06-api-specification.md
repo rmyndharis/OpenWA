@@ -1214,9 +1214,26 @@ POST /api/sessions/:sessionId/webhooks
   "secret": "your-webhook-secret",
   "headers": {
     "X-Custom-Header": "value"
+  },
+  "filters": {
+    "conditions": [
+      { "field": "sender", "operator": "is", "value": ["1234567890@c.us"] },
+      { "field": "body", "operator": "contains", "value": "invoice" }
+    ]
   }
 }
 ```
+
+**Smart filters (optional).** When `filters` is present, the webhook fires only if **all** conditions
+match (logical AND); a webhook with no filters behaves exactly as before. Conditions are evaluated per
+event before delivery and message-only fields are skipped for non-message events.
+
+| Field | Kind | Operators | Notes |
+|-------|------|-----------|-------|
+| `sender`, `recipient`, `mentions` | id | `is`, `isNot` | Matched by engine-neutral `WaId`; a plain number or any dialect (`@c.us` / `@s.whatsapp.net` / `@lid`) matches the same contact. `value` is an array. |
+| `body` | text | `contains`, `equals` | Optional `caseSensitive` (default `false`). |
+| `type` | enum | `is`, `isNot` | `text` / `image` / `video` / `audio` / `voice` / `document` / `sticker` / `location` / `contact` / `revoked` / `unknown`. |
+| `fromMe`, `hasMedia`, `isGroup` | boolean | `is` | `value` is a boolean. |
 
 **Response (201 Created):**
 ```json
