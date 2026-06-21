@@ -72,6 +72,10 @@ export function useWebhooksQuery() {
     queryKey: queryKeys.webhooks,
     queryFn: webhookApi.listAll,
     staleTime: 30_000,
+    // Normalize `events` to an array at the data boundary so every consumer (list render + edit
+    // modal) can trust the declared string[] shape. A malformed payload then renders as no tags
+    // instead of taking down the whole SPA via events.map() in the ErrorBoundary.
+    select: webhooks => webhooks.map(w => ({ ...w, events: Array.isArray(w.events) ? w.events : [] })),
   });
 }
 
