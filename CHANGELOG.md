@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-21
+
+A security & reliability hardening release. **One behavior change** (the reason for the minor bump):
+the contact / group / chat list endpoints now paginate with a default cap of 1000 items — opt into
+`limit`/`offset`; accounts with fewer than 1000 items are unaffected. Everything else is hardening and
+correctness: time-bounded SSRF DNS resolution, validated webhook custom headers (blocks CR/LF
+injection), Swagger off by default in production, boot-time validation of numeric env vars and of a
+SQLite data/main path collision, plugin reads gated to ADMIN, a session-scoped key no longer denied on
+non-session routes, no resurrection of a session stopped mid-startup, a hardened dashboard config-save
+path (browser-flag parsing + `0600` secret file), and cleaner fresh-install schema.
+
 ### Changed
 
 - **The contact, group, and chat list endpoints are now paginated (default cap 1000).** ⚠️ Behavior
