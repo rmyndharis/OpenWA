@@ -11,12 +11,12 @@ import {
   MaxLength,
   ArrayMinSize,
   IsIn,
-  IsObject,
 } from 'class-validator';
 import { Expose, plainToInstance } from 'class-transformer';
 import { Webhook } from '../entities/webhook.entity';
 import { WebhookFilters } from '../filters/filter-types';
 import { IsValidWebhookFilters } from '../filters/filter-validation';
+import { IsHeaderMap } from './is-header-map.validator';
 
 const FILTERS_API_DESCRIPTION =
   'Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.';
@@ -82,7 +82,7 @@ export class CreateWebhookDto {
     example: { 'X-Custom-Header': 'value' },
   })
   @IsOptional()
-  @IsObject()
+  @IsHeaderMap()
   headers?: Record<string, string>;
 
   @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE })
@@ -124,7 +124,7 @@ export class UpdateWebhookDto {
 
   @ApiPropertyOptional({ description: 'Custom headers' })
   @IsOptional()
-  @IsObject()
+  @IsHeaderMap()
   headers?: Record<string, string>;
 
   @ApiPropertyOptional({ description: FILTERS_API_DESCRIPTION, example: FILTERS_API_EXAMPLE })

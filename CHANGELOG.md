@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Custom webhook headers are now validated as a flat, control-character-free string map.** The
+  `headers` field accepted any object shape with no per-value checks, so a value containing `CR`/`LF`
+  could attempt header injection into the outbound webhook request, and non-string values silently
+  broke delivery. Creation/update now reject invalid header names, non-string or control-character
+  values, and over-large maps (max 50 entries, value max 1024 chars). The delivery-time reserved-name
+  filter is unchanged. (#403)
 - **Swagger UI (`/api/docs`) now defaults OFF in production.** The interactive API schema was served
   unauthenticated by default everywhere; it is reconnaissance surface. It remains on outside
   production and can be re-enabled in production with `ENABLE_SWAGGER=true` (and is still disabled

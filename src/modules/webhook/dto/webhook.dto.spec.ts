@@ -34,6 +34,45 @@ describe('webhook DTO event validation', () => {
   });
 });
 
+describe('webhook DTO custom-header validation', () => {
+  it('accepts a flat string->string header map', async () => {
+    const errs = await errorsFor(CreateWebhookDto, {
+      url: 'https://x.example/hook',
+      headers: { 'X-Custom-Header': 'value', Authorization: 'Bearer abc' },
+    });
+    expect(errs.some(e => e.property === 'headers')).toBe(false);
+  });
+
+  it('rejects a header value containing CR/LF (header injection)', async () => {
+    const errs = await errorsFor(CreateWebhookDto, {
+      url: 'https://x.example/hook',
+      headers: { 'X-Evil': 'a\r\nX-Injected: 1' },
+    });
+    expect(errs.some(e => e.property === 'headers')).toBe(true);
+  });
+
+  it('rejects a non-string header value', async () => {
+    const errs = await errorsFor(CreateWebhookDto, {
+      url: 'https://x.example/hook',
+      headers: { 'X-Num': 123 as unknown as string },
+    });
+    expect(errs.some(e => e.property === 'headers')).toBe(true);
+  });
+
+  it('rejects an invalid header name', async () => {
+    const errs = await errorsFor(CreateWebhookDto, {
+      url: 'https://x.example/hook',
+      headers: { 'Bad Header!': 'v' },
+    });
+    expect(errs.some(e => e.property === 'headers')).toBe(true);
+  });
+
+  it('UpdateWebhookDto applies the same header validation', async () => {
+    const errs = await errorsFor(UpdateWebhookDto, { headers: { 'X-Evil': 'a\nb' } });
+    expect(errs.some(e => e.property === 'headers')).toBe(true);
+  });
+});
+
 describe('webhook DTO filter validation', () => {
   const withFilters = (conditions: unknown) => ({ url: 'https://x.example/hook', filters: { conditions } });
 
