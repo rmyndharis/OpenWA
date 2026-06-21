@@ -198,6 +198,11 @@ describe('resolveSafeFetchTarget', () => {
     await expect(resolveSafeFetchTarget('https://rebind.example/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
+  it('propagates a DNS lookup failure (rejection) rather than hanging', async () => {
+    (dnsPromises.lookup as jest.Mock).mockRejectedValueOnce(new Error('ENOTFOUND'));
+    await expect(resolveSafeFetchTarget('https://nxdomain.example/hook')).rejects.toThrow(/ENOTFOUND/);
+  });
+
   it('rejects when DNS resolution exceeds the deadline (a hanging resolver cannot pin a worker)', async () => {
     const prev = process.env.SSRF_DNS_TIMEOUT_MS;
     process.env.SSRF_DNS_TIMEOUT_MS = '30';
