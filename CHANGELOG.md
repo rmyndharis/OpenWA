@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived the session for a key's `allowedSessions` scope from the `:id` route param, but `:id` is
   also the resource id on unrelated routes (e.g. `auth/api-keys/:id`, `plugins/:id`) — so a
   session-scoped key got a spurious `401` there. Session scoping is now applied only where `:id`
-  actually denotes a session; enforcement on the real `sessions/:id/...` routes is unchanged.
+  actually denotes a session; enforcement on the real `sessions/:id/...` routes is unchanged. (#398)
 
 ### Security
 
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /plugins/:id`, and `GET /plugins/:id/health` were readable by any authenticated key (including
   the read-only VIEWER role), exposing installed plugin versions, non-secret configuration, and
   health/error text. They now require ADMIN, matching the plugin write routes and the infrastructure
-  endpoints. (Secret config values were — and remain — redacted regardless.)
+  endpoints. (Secret config values were — and remain — redacted regardless.) (#398)
 - **The dashboard-generated env file is now written owner-only (`0600`).** Saving Infrastructure
   configuration wrote `data/.env.generated` — which can hold the database, S3, and Redis credentials —
   with default permissions (world-readable `0644`) until the next restart re-tightened it. It is now
