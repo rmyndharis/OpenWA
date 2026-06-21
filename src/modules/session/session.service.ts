@@ -13,6 +13,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { paginate, ListOptions } from '../../common/utils/paginate';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -1032,7 +1033,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return phone;
   }
 
-  async getGroups(id: string): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
+  async getGroups(
+    id: string,
+    opts: ListOptions = {},
+  ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1041,14 +1045,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     const groups = await engine.getGroups();
-    return groups.map(g => ({
+    const mapped = groups.map(g => ({
       id: g.id,
       name: g.name,
       linkedParentJID: g.linkedParentJID,
     }));
+    return paginate(mapped, opts.limit, opts.offset);
   }
 
-  async getChats(id: string): Promise<ChatSummary[]> {
+  async getChats(id: string, opts: ListOptions = {}): Promise<ChatSummary[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1056,7 +1061,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new BadRequestException('Session is not started');
     }
 
-    return engine.getChats();
+    // Most-recent first, then bound the response window. Sorting before the cap means a capped
+    // response is the N newest chats (what clients show first) rather than an arbitrary slice.
+    const chats = [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return paginate(chats, opts.limit, opts.offset);
   }
 
   async sendSeen(id: string, chatId: string): Promise<boolean> {

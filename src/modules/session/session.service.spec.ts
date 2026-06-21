@@ -1149,11 +1149,67 @@ describe('SessionService', () => {
       expect(result).toEqual(chats);
     });
 
+    it('caps an unbounded chat list at the default limit (1000), most-recent first', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const chats = Array.from({ length: 1500 }, (_, i) => ({
+        id: `${i}@c.us`,
+        name: `c${i}`,
+        isGroup: false,
+        unreadCount: 0,
+        timestamp: i,
+      }));
+      mockEngine.getChats.mockResolvedValue(chats);
+
+      const result = await service.getChats('sess-uuid-1');
+      expect(result).toHaveLength(1000);
+      expect(result[0].timestamp).toBe(1499); // sorted timestamp DESC before capping
+      expect(result[999].timestamp).toBe(500);
+    });
+
+    it('applies limit/offset to the chat list', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const chats = Array.from({ length: 50 }, (_, i) => ({
+        id: `${i}@c.us`,
+        name: `c${i}`,
+        isGroup: false,
+        unreadCount: 0,
+        timestamp: i,
+      }));
+      mockEngine.getChats.mockResolvedValue(chats);
+
+      const result = await service.getChats('sess-uuid-1', { limit: 5, offset: 0 });
+      expect(result).toHaveLength(5);
+      expect(result[0].timestamp).toBe(49); // most-recent first
+    });
+
     it('should throw BadRequestException when session is not started', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.getChats('sess-uuid-1')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('getGroups pagination', () => {
+    it('caps an unbounded group list at the default limit (1000)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+
+      const groups = Array.from({ length: 1500 }, (_, i) => ({ id: `g${i}`, name: `G${i}` }));
+      mockEngine.getGroups.mockResolvedValue(groups);
+
+      const result = await service.getGroups('sess-uuid-1');
+      expect(result).toHaveLength(1000);
     });
   });
 

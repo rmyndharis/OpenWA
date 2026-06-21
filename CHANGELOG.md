@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The contact, group, and chat list endpoints are now paginated (default cap 1000).** ⚠️ Behavior
+  change. `GET /sessions/:id/contacts`, `/groups`, and `/chats` previously serialized the operator's
+  *entire* address book / group / chat set into one response — a heap/GC hazard for very large
+  accounts. They now accept optional `limit` (clamped `[1, 1000]`) and `offset` query params, and
+  default to returning at most **1000** items when no `limit` is given. Accounts under 1000 items are
+  unaffected; larger accounts page with `offset`. Chats are returned **most-recent first**, so a
+  capped response is the newest chats rather than an arbitrary slice. In-process callers (plugins
+  using the engine directly) still receive the full set. (#401)
 - **Fresh databases no longer create the unused `api_keys`/`audit_logs` tables on the data
   connection.** Those auth/audit tables belong solely to the separate "main" SQLite connection, but
   the data-connection baseline migration also created them (with a stale `keyPrefix` width), leaving

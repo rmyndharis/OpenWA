@@ -1049,6 +1049,8 @@ DELETE /api/sessions/:sessionId/templates/:id
 GET /api/sessions/:sessionId/contacts
 ```
 
+**Query parameters (optional):** `limit` — max items to return, clamped to `[1, 1000]` (default `1000`); `offset` — items to skip, for paging.
+
 **Response (200 OK):**
 ```json
 [
@@ -1132,6 +1134,8 @@ To get this resolved automatically on each incoming message instead of calling t
 ```http
 GET /api/sessions/:sessionId/groups
 ```
+
+**Query parameters (optional):** `limit` — max items to return, clamped to `[1, 1000]` (default `1000`); `offset` — items to skip, for paging.
 
 **Response (200 OK):**
 ```json
