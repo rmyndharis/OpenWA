@@ -35,4 +35,28 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ STORAGE_TYPE: 'local' })).not.toThrow();
     expect(() => validateEnv({ STORAGE_TYPE: 's3' })).not.toThrow();
   });
+
+  it('rejects a sqlite data DB path that collides with the internal main database file', () => {
+    // The 'main' (auth/audit) and 'data' connections must be separate SQLite files; sharing one
+    // file means two migration ledgers + synchronize policies on the same tables.
+    expect(() => validateEnv({ DATABASE_TYPE: 'sqlite', DATABASE_NAME: './data/main.sqlite' })).toThrow(
+      /DATABASE_NAME/,
+    );
+    // Relative spellings of the same file are caught (path normalization).
+    expect(() => validateEnv({ DATABASE_TYPE: 'sqlite', DATABASE_NAME: './data/../data/main.sqlite' })).toThrow(
+      /DATABASE_NAME/,
+    );
+    // The default data path is fine.
+    expect(() => validateEnv({ DATABASE_TYPE: 'sqlite', DATABASE_NAME: './data/openwa.sqlite' })).not.toThrow();
+    // Postgres uses a bare DB name, never a file path — must not false-positive.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db',
+        DATABASE_USERNAME: 'u',
+        DATABASE_PASSWORD: 'p',
+        DATABASE_NAME: 'main.sqlite',
+      }),
+    ).not.toThrow();
+  });
 });

@@ -1,4 +1,9 @@
+import { resolve } from 'path';
+
 type EnvConfig = Record<string, unknown>;
+
+// The 'main' (auth/audit) connection is always this fixed SQLite file (not env-overridable).
+const MAIN_DB_PATH = './data/main.sqlite';
 
 /**
  * Fail-fast environment validation. Wired as ConfigModule's `validate`
@@ -39,6 +44,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       if (!str(key)) {
         errors.push(`${key} is required when DATABASE_TYPE=postgres`);
       }
+    }
+  } else {
+    // SQLite (explicit or default): DATABASE_NAME is a file path for the 'data' connection. It must
+    // not resolve to the 'main' DB file — two TypeORM connections on one SQLite file run separate
+    // migration ledgers + synchronize policies against the same tables, risking schema divergence and
+    // lock contention. (Postgres DATABASE_NAME is a bare db name, so this never applies there.)
+    const dataDbName = str('DATABASE_NAME');
+    if (dataDbName && resolve(dataDbName) === resolve(MAIN_DB_PATH)) {
+      errors.push(`DATABASE_NAME must not point at the main database file (${MAIN_DB_PATH}); use a separate file`);
     }
   }
 

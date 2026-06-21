@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also the resource id on unrelated routes (e.g. `auth/api-keys/:id`, `plugins/:id`) — so a
   session-scoped key got a spurious `401` there. Session scoping is now applied only where `:id`
   actually denotes a session; enforcement on the real `sessions/:id/...` routes is unchanged. (#398)
+- **Boot is now rejected when the SQLite `DATABASE_NAME` collides with the internal main database
+  file.** The auth/audit ("main") and application ("data") connections must be separate SQLite files;
+  pointing `DATABASE_NAME` at `./data/main.sqlite` ran two connections — each with its own migration
+  ledger and synchronize policy — against one file, risking schema divergence and lock contention.
+  Startup validation now fails fast with a clear message (paths are normalized, so relative spellings
+  of the same file are caught). Postgres is unaffected (its `DATABASE_NAME` is a bare db name).
 
 ### Security
 
