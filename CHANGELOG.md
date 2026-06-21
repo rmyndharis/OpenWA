@@ -43,9 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ledger and synchronize policy — against one file, risking schema divergence and lock contention.
   Startup validation now fails fast with a clear message (paths are normalized, so relative spellings
   of the same file are caught). Postgres is unaffected (its `DATABASE_NAME` is a bare db name). (#399)
+- **Numeric environment variables are validated at boot.** The rate-limit windows/limits, webhook
+  timeout/retry settings, and the database pool size were parsed with an unbounded `parseInt`; a
+  non-integer value (e.g. `RATE_LIMIT_SHORT_LIMIT=abc`) became `NaN` and silently disabled the
+  corresponding limit. Startup now rejects a non-negative-integer violation with a clear message,
+  consistent with the existing port validation. (#402)
 
 ### Security
 
+- **Swagger UI (`/api/docs`) now defaults OFF in production.** The interactive API schema was served
+  unauthenticated by default everywhere; it is reconnaissance surface. It remains on outside
+  production and can be re-enabled in production with `ENABLE_SWAGGER=true` (and is still disabled
+  anywhere with `ENABLE_SWAGGER=false`). The startup banner only advertises the docs URL when it is
+  actually served. (#402)
 - **Plugin inventory, detail, and health reads now require the ADMIN role.** `GET /plugins`,
   `GET /plugins/:id`, and `GET /plugins/:id/health` were readable by any authenticated key (including
   the read-only VIEWER role), exposing installed plugin versions, non-secret configuration, and

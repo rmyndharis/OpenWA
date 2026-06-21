@@ -52,6 +52,14 @@ describe('isSwaggerEnabled', () => {
     expect(isSwaggerEnabled('true')).toBe(true);
     expect(isSwaggerEnabled('')).toBe(true);
   });
+  it('defaults OFF in production unless explicitly enabled (recon hygiene)', () => {
+    expect(isSwaggerEnabled(undefined, 'production')).toBe(false);
+    expect(isSwaggerEnabled('', 'production')).toBe(false);
+    expect(isSwaggerEnabled('true', 'production')).toBe(true); // explicit opt-in still honored
+    expect(isSwaggerEnabled('false', 'production')).toBe(false);
+    // non-production is unchanged (default on)
+    expect(isSwaggerEnabled(undefined, 'development')).toBe(true);
+  });
 });
 
 describe('resolveBodyLimit', () => {

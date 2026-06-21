@@ -220,8 +220,10 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger documentation (gated by ENABLE_SWAGGER; default on)
-  if (isSwaggerEnabled(process.env.ENABLE_SWAGGER)) {
+  // Swagger documentation. ENABLE_SWAGGER wins; otherwise default on outside production, off in
+  // production (the API schema is reconnaissance surface — production opts in with ENABLE_SWAGGER=true).
+  const swaggerEnabled = isSwaggerEnabled(process.env.ENABLE_SWAGGER, process.env.NODE_ENV);
+  if (swaggerEnabled) {
     const config = createSwaggerConfig();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
@@ -240,7 +242,9 @@ async function bootstrap() {
   await app.listen(port);
 
   console.log(`🚀 OpenWA is running on: http://localhost:${port}`);
-  console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  }
 
   // Make the dashboard-serving outcome explicit so a missing build (no UI on `/`)
   // is obvious instead of a silent 404.

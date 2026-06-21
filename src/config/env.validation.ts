@@ -68,6 +68,31 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   checkPort('DATABASE_PORT');
   checkPort('REDIS_PORT');
 
+  // Other numeric knobs: a non-integer (e.g. `RATE_LIMIT_SHORT_LIMIT=abc`) parses to NaN downstream,
+  // which silently disables the corresponding limit/timeout. Reject at boot instead of coercing.
+  const checkNonNegativeInt = (key: string): void => {
+    const raw = str(key);
+    if (raw === undefined) return;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0) {
+      errors.push(`${key} must be a non-negative integer (got "${raw}")`);
+    }
+  };
+  for (const key of [
+    'RATE_LIMIT_SHORT_TTL',
+    'RATE_LIMIT_SHORT_LIMIT',
+    'RATE_LIMIT_MEDIUM_TTL',
+    'RATE_LIMIT_MEDIUM_LIMIT',
+    'RATE_LIMIT_LONG_TTL',
+    'RATE_LIMIT_LONG_LIMIT',
+    'WEBHOOK_TIMEOUT',
+    'WEBHOOK_MAX_RETRIES',
+    'WEBHOOK_RETRY_DELAY',
+    'DATABASE_POOL_SIZE',
+  ]) {
+    checkNonNegativeInt(key);
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);
   }

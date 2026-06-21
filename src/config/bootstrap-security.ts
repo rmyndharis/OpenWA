@@ -33,9 +33,15 @@ export function resolveCorsPolicy(corsOriginsEnv?: string, nodeEnv?: string): Co
   };
 }
 
-/** Swagger UI is served unless ENABLE_SWAGGER=false (default on, backward compatible). */
-export function isSwaggerEnabled(enableSwaggerEnv?: string): boolean {
-  return enableSwaggerEnv !== 'false';
+/**
+ * Whether to serve the Swagger UI (/api/docs). An explicit ENABLE_SWAGGER wins ('true'/'false').
+ * When unset, it defaults ON outside production but OFF in production — the public API schema is
+ * reconnaissance surface, so production must opt in with ENABLE_SWAGGER=true.
+ */
+export function isSwaggerEnabled(enableSwaggerEnv?: string, nodeEnv?: string): boolean {
+  if (enableSwaggerEnv === 'true') return true;
+  if (enableSwaggerEnv === 'false') return false;
+  return nodeEnv !== 'production';
 }
 
 /** Request body-size cap (DoS hardening). Default is media-aware (base64 sends ride in the JSON body). */
