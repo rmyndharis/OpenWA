@@ -15,11 +15,14 @@ import { Session } from './entities/session.entity';
 import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { RequireRole, CurrentApiKey, SessionScoped } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('sessions')
 @Controller('sessions')
+// The `:id` route param here is a WhatsApp session id, so the ApiKeyGuard enforces a key's
+// allowedSessions scope against it (other controllers' `:id` is an unrelated resource id).
+@SessionScoped()
 export class SessionController {
   constructor(
     private readonly sessionService: SessionService,

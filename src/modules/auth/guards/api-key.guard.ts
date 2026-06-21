@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
-import { REQUIRED_ROLE_KEY, PUBLIC_KEY } from '../decorators/auth.decorators';
+import { REQUIRED_ROLE_KEY, PUBLIC_KEY, SESSION_SCOPED_KEY } from '../decorators/auth.decorators';
 import { resolveClientIp } from '../../../common/utils/ip';
 
 @Injectable()
@@ -30,18 +30,26 @@ export class ApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('API key is required');
     }
 
-    // Get session ID from route params if present
-    const sessionId = (request.params['sessionId'] || request.params['id']) as string | undefined;
-    const clientIp = this.getClientIp(request);
-
-    // Validate API key
-    const apiKey = await this.authService.validateApiKey(apiKeyHeader, clientIp, sessionId);
-
-    // Check role permission
     const requiredRole = this.reflector.getAllAndOverride<ApiKeyRole>(REQUIRED_ROLE_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
+
+    // Resolve the session id used for the key's allowedSessions scope. `:sessionId` is always a
+    // session; the bare `:id` param is only a session on controllers marked @SessionScoped (i.e.
+    // SessionController) — on other routes `:id` is an unrelated resource id (API key, plugin, …)
+    // and must NOT be fed to the allowedSessions check, which would spuriously deny a scoped key.
+    const sessionScoped = this.reflector.getAllAndOverride<boolean>(SESSION_SCOPED_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    const sessionId = (request.params['sessionId'] || (sessionScoped ? request.params['id'] : undefined)) as
+      | string
+      | undefined;
+    const clientIp = this.getClientIp(request);
+
+    // Validate API key
+    const apiKey = await this.authService.validateApiKey(apiKeyHeader, clientIp, sessionId);
 
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);

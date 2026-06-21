@@ -11,6 +11,7 @@ export class PluginsController {
   constructor(private readonly pluginsService: PluginsService) {}
 
   @Get()
+  @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List all plugins' })
   @ApiResponse({ status: 200, description: 'List of all plugins' })
   findAll(): PluginDto[] {
@@ -18,6 +19,7 @@ export class PluginsController {
   }
 
   @Get(':id')
+  @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get plugin by ID' })
   @ApiResponse({ status: 200, description: 'Plugin details' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
@@ -52,6 +54,7 @@ export class PluginsController {
   }
 
   @Get(':id/health')
+  @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Check plugin health' })
   @ApiResponse({ status: 200, description: 'Plugin health status' })
   async healthCheck(@Param('id') id: string): Promise<{ healthy: boolean; message?: string }> {

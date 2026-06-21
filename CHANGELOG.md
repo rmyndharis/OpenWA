@@ -15,9 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any other flag) was silently never applied. In a hardened/containerized environment that can wedge
   session startup. The parser now accepts either delimiter, and an already-saved space-separated value
   is repaired on the next boot. (#397)
+- **A session-restricted API key is no longer wrongly denied on non-session routes.** The guard
+  derived the session for a key's `allowedSessions` scope from the `:id` route param, but `:id` is
+  also the resource id on unrelated routes (e.g. `auth/api-keys/:id`, `plugins/:id`) — so a
+  session-scoped key got a spurious `401` there. Session scoping is now applied only where `:id`
+  actually denotes a session; enforcement on the real `sessions/:id/...` routes is unchanged.
 
 ### Security
 
+- **Plugin inventory, detail, and health reads now require the ADMIN role.** `GET /plugins`,
+  `GET /plugins/:id`, and `GET /plugins/:id/health` were readable by any authenticated key (including
+  the read-only VIEWER role), exposing installed plugin versions, non-secret configuration, and
+  health/error text. They now require ADMIN, matching the plugin write routes and the infrastructure
+  endpoints. (Secret config values were — and remain — redacted regardless.)
 - **The dashboard-generated env file is now written owner-only (`0600`).** Saving Infrastructure
   configuration wrote `data/.env.generated` — which can hold the database, S3, and Redis credentials —
   with default permissions (world-readable `0644`) until the next restart re-tightened it. It is now
