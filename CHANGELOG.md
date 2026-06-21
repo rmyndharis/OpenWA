@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pointing `DATABASE_NAME` at `./data/main.sqlite` ran two connections — each with its own migration
   ledger and synchronize policy — against one file, risking schema divergence and lock contention.
   Startup validation now fails fast with a clear message (paths are normalized, so relative spellings
-  of the same file are caught). Postgres is unaffected (its `DATABASE_NAME` is a bare db name).
+  of the same file are caught). Postgres is unaffected (its `DATABASE_NAME` is a bare db name). (#399)
 
 ### Security
 
