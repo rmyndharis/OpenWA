@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string was treated as a URL only with a lowercase `http://`/`https://` prefix, so a mixed-case
   scheme (e.g. `HTTPS://…`) was mistaken for base64 instead of being fetched through the SSRF-guarded
   path — diverging from the Baileys engine. Both engines now use the same case-insensitive check. (#404)
+- **A session stopped or deleted mid-startup is no longer resurrected to `READY`.** If `stop`/`delete`
+  landed while `start()` was awaiting the engine's `initialize()`, the freshly-created engine was left
+  registered and running. `start()` now re-checks the stopping flag after initialization and tears the
+  engine down (mirroring the existing reconnect guard), so a concurrent stop/delete wins. (#405)
 
 ### Security
 

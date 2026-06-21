@@ -1213,6 +1213,26 @@ describe('SessionService', () => {
     });
   });
 
+  describe('start() concurrent stop/delete guard', () => {
+    it('tears down the just-initialized engine if a stop/delete lands during start() (no resurrection to READY)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // Simulate a concurrent stop()/delete() landing WHILE engine.initialize() is in flight.
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions.add('sess-uuid-1');
+        return Promise.resolve();
+      });
+
+      await service.start('sess-uuid-1');
+
+      // The engine registered during init must be torn down + removed, not left READY.
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(service.getEngine('sess-uuid-1')).toBeUndefined();
+    });
+  });
+
   // ── sendSeen (markChatRead) ───────────────────────────────────────
 
   describe('sendSeen', () => {

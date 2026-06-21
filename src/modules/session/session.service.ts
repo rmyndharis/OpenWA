@@ -402,6 +402,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
       await this.initializeEngine(id, session);
+
+      // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
+      // engine we just registered so the session isn't resurrected to READY (mirrors the post-init
+      // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
+      if (this.stoppingSessions.has(id)) {
+        const resurrected = this.engines.get(id);
+        if (resurrected) {
+          await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
+          this.engines.delete(id);
+        }
+      }
       return this.findOne(id);
     } finally {
       this.initializingSessions.delete(id);
