@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-06-21
+
+A maintenance release — no breaking changes; everything is a fix or internal hardening.
+**Reliability:** the configurable whatsapp-web.js first-boot timeout (`WWEBJS_AUTH_TIMEOUT_MS`) now
+actually takes effect in Docker (it was never forwarded into the container) and is validated as a safe
+integer; the dashboard now collapses duplicate connection-lost toasts during a reverse-proxy outage.
+**Resource limits:** outbound base64 media is now size-capped (`413` when too large) on a par with the
+remote-URL and inbound media caps, and bulk-send media payloads are validated as typed objects.
+**Release & tooling:** a published GitHub Release now waits for the container image build, and the data
+migration CLI is scoped to the data-owned tables. Note: bulk-send media validation is now stricter — a
+bulk request carrying unknown or malformed fields inside a media object is now rejected with `400`.
+
 ### Changed
 
 - **A published GitHub Release now waits for the container image build.** The release workflow's
