@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub Release job now depends on the Docker image job, so a `v*` tag can no longer publish release
   notes without a matching multi-arch image on GHCR. A failed image build leaves the tag without a
   Release until the workflow is re-run. (#389)
+- **The data migration CLI is scoped to the data-owned tables.** `data-source.ts` (used by
+  `migration:generate` / `migration:run`) now lists only the data connection's entities
+  (session/webhook/message/template/engine), mirroring the runtime data connection, instead of a
+  broad glob that also pulled in the main-owned `api_keys`/`audit_logs` entities. Generating a data
+  migration no longer emits spurious auth/audit DDL into the data database. No runtime or schema
+  change for existing installs. (#391)
 
 ### Fixed
 
