@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fresh databases no longer create the unused `api_keys`/`audit_logs` tables on the data
+  connection.** Those auth/audit tables belong solely to the separate "main" SQLite connection, but
+  the data-connection baseline migration also created them (with a stale `keyPrefix` width), leaving
+  dead, unused tables on the data database. New installs are now clean. Existing installs are
+  unaffected — an already-applied migration is never re-run, so their harmless leftover tables remain
+  and no destructive drop is performed.
+
 ### Fixed
 
 - **Browser launch flags saved from the dashboard are now applied correctly.** The Infrastructure

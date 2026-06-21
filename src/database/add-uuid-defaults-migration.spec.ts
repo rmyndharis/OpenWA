@@ -4,7 +4,7 @@
 import { QueryRunner } from 'typeorm';
 import { AddUuidDefaultsForPostgres1779235200000 } from './migrations/1779235200000-AddUuidDefaultsForPostgres';
 
-const ALL_TABLES = ['sessions', 'webhooks', 'messages', 'api_keys', 'audit_logs', 'message_batches'];
+const ALL_TABLES = ['sessions', 'webhooks', 'messages', 'message_batches'];
 
 function makeQueryRunner(type: string, existingTables: Set<string>) {
   return {
@@ -46,6 +46,6 @@ describe('AddUuidDefaultsForPostgres migration', () => {
     await migration.down(qr as unknown as QueryRunner);
 
     expect(qr.query).toHaveBeenCalledTimes(ALL_TABLES.length);
-    expect(qr.query).toHaveBeenCalledWith('ALTER TABLE "api_keys" ALTER COLUMN "id" DROP DEFAULT');
+    expect(qr.query).toHaveBeenCalledWith('ALTER TABLE "message_batches" ALTER COLUMN "id" DROP DEFAULT');
   });
 });
