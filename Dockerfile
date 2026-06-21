@@ -24,8 +24,9 @@ COPY . .
 
 # Build the API (dist/) and the dashboard SPA (dashboard/dist/). The root `npm ci` above
 # ran before the dashboard source was copied, so its postinstall hook skipped the dashboard
-# deps - install them explicitly here (npm ci, reproducible from dashboard/package-lock.json).
-RUN npm run build && npm run dashboard:ci && npm run dashboard:build
+# deps — install them explicitly here. We use `npm install` (not ci) so that npm correctly
+# resolves transitive native bindings (e.g. @rolldown/binding-linux-x64-gnu).
+RUN npm run build && cd dashboard && npm install && npm run build
 
 # ===== Stage 2: Production =====
 FROM docker.io/node:22-slim AS production
