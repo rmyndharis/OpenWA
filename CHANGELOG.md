@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart/reconnect — could write a stale status (e.g. flip a stopped session back to `ready`),
   schedule a reconnect for a session meant to be down, or persist a stray message/ack against the
   wrong engine generation. The guard is a no-op for the live engine and for ordinary network-drop
-  reconnects.
+  reconnects. (#410)
 
 ## [0.5.0] - 2026-06-21
 
