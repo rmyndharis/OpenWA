@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import * as fs from 'fs';
@@ -47,7 +47,7 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
 }
 
 @Injectable()
-export class PluginLoaderService implements OnModuleInit {
+export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('PluginLoaderService');
   private readonly plugins = new Map<string, PluginInstance>();
   /** Plugin ids whose enable() is in flight — a synchronous lock so concurrent enables can't double-run. */
@@ -81,6 +81,27 @@ export class PluginLoaderService implements OnModuleInit {
       action: 'plugins_loaded',
       count: this.plugins.size,
     });
+  }
+
+  /**
+   * Graceful shutdown (SIGTERM → app.close()): run onDisable for every enabled plugin so it can flush
+   * buffers, close connections, and persist state. Previously onDisable only ran via the REST disable
+   * and uninstall paths, so a normal restart/deploy/scale-down skipped it and stateful plugins lost
+   * in-flight work. Best-effort and sequential: one plugin's failure must not block the others.
+   */
+  async onModuleDestroy(): Promise<void> {
+    const enabled = this.getAllPlugins().filter(p => p.status === PluginStatus.ENABLED);
+    for (const plugin of enabled) {
+      try {
+        await this.disablePlugin(plugin.manifest.id);
+      } catch (error) {
+        this.logger.error(
+          `Failed to disable plugin ${plugin.manifest.id} during shutdown`,
+          error instanceof Error ? error.message : String(error),
+          { pluginId: plugin.manifest.id, action: 'plugin_shutdown_disable_failed' },
+        );
+      }
+    }
   }
 
   private loadBuiltInPlugins(): void {

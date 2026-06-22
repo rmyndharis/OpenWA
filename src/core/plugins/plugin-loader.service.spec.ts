@@ -254,7 +254,12 @@ describe('PluginLoaderService — enable concurrency', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-enable-'));
     const config = { get: (k: string) => (k === 'dataDir' ? tmpDir : undefined) } as unknown as ConfigService;
-    loader = new PluginLoaderService(config, new HookManager(), new PluginStorageService(config), {} as unknown as ModuleRef);
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
   });
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -279,5 +284,46 @@ describe('PluginLoaderService — enable concurrency', () => {
     expect(rejected).toHaveLength(1);
     expect(String(rejected[0].reason)).toMatch(/already being enabled/i);
     expect(loader.getPlugin('race-plg')?.status).toBe(PluginStatus.ENABLED);
+  });
+});
+
+describe('PluginLoaderService — graceful shutdown (onModuleDestroy)', () => {
+  let tmpDir: string;
+  let loader: PluginLoaderService;
+
+  const ext = (id: string): PluginManifest => ({
+    id,
+    name: id,
+    version: '1.0.0',
+    type: PluginType.EXTENSION,
+    main: 'index.js',
+  });
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-shutdown-'));
+    const config = { get: (k: string) => (k === 'dataDir' ? tmpDir : undefined) } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('runs onDisable for every enabled plugin on shutdown, best-effort past a failure', async () => {
+    const okDisable = jest.fn(() => Promise.resolve());
+    loader.registerBuiltInPlugin(ext('bad-plg'), {
+      onDisable: () => Promise.reject(new Error('flush failed')),
+    });
+    loader.registerBuiltInPlugin(ext('ok-plg'), { onDisable: okDisable });
+    await loader.enablePlugin('bad-plg');
+    await loader.enablePlugin('ok-plg');
+
+    await expect(loader.onModuleDestroy()).resolves.toBeUndefined();
+
+    // The failing plugin's onDisable error didn't block the other from being disabled.
+    expect(okDisable).toHaveBeenCalledTimes(1);
+    expect(loader.getPlugin('ok-plg')?.status).toBe(PluginStatus.DISABLED);
   });
 });
