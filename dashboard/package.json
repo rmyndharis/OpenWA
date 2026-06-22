@@ -15,11 +15,11 @@
     "@tanstack/react-table": "^8.21.3",
     "i18next": "^26.3.1",
     "i18next-browser-languagedetector": "^8.2.1",
-    "lucide-react": "^1.18.0",
+    "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-i18next": "^17.0.8",
-    "react-router-dom": "^7.17.0",
+    "react-router-dom": "^7.18.0",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
@@ -33,7 +33,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.6.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.61.0",
+    "typescript-eslint": "^8.61.1",
     "vite": "^8.0.16"
   }
 }
