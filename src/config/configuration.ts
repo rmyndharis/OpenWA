@@ -21,7 +21,9 @@ export default () => ({
   // Main Database configuration (always SQLite for boot config)
   database: {
     type: 'sqlite' as const,
-    database: './data/main.sqlite',
+    // SQLite file for the auth/audit DB. Overridable (e.g. e2e points it at a temp file) so tests
+    // never write api keys into the developer's ./data/main.sqlite.
+    database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
     // Schema management for the auth/audit DB. Default ON (zero-config first boot).
     // Set MAIN_DATABASE_SYNCHRONIZE=false to manage schema via the main-owned migrations
     // instead (migrationsRun then creates api_keys/audit_logs). When disabled, run the

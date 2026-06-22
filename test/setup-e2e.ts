@@ -12,6 +12,10 @@ process.env.DATABASE_TYPE = 'sqlite';
 const e2eDataDb = join(tmpdir(), `openwa-e2e-${process.pid}.sqlite`);
 rmSync(e2eDataDb, { force: true });
 process.env.DATABASE_NAME = e2eDataDb;
+// Likewise isolate the auth/audit (main) DB, so e2e api-keys don't accumulate in ./data/main.sqlite.
+const e2eMainDb = join(tmpdir(), `openwa-e2e-main-${process.pid}.sqlite`);
+rmSync(e2eMainDb, { force: true });
+process.env.MAIN_DATABASE_NAME = e2eMainDb;
 process.env.QUEUE_ENABLED = 'false';
 process.env.AUTO_START_SESSIONS = 'false';
 // Keep the auth/audit + data schema zero-config for the test boot.
