@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Untrusted (uploaded) plugins now run with a minimal, allowlisted worker environment instead of inheriting the host process environment, so a plugin can no longer read host secrets (database/Redis credentials, the API master key and pepper, `DOCKER_HOST`) out of `process.env`. (#431)
+
 ### Fixed
 
+- A sandboxed plugin whose `load`/`onEnable`/`onDisable` hangs no longer blocks the enable/disable request (and the request behind it) indefinitely — plugin lifecycle calls are now time-bounded, and a disable always tears the worker down even if `onDisable` fails, so a misbehaving plugin can't leak its worker thread. (#431)
 - Sandboxed plugins now receive `onConfigChange` (config updates reach the worker instead of being silently ignored until disable + re-enable) and have their real `healthCheck` run — `GET /plugins/:id/health` previously always returned the default "healthy" for sandboxed plugins. (#430)
 - Plugin `onDisable` now runs on graceful shutdown (`OnModuleDestroy`), so stateful plugins can flush buffers / close connections / persist state instead of losing in-flight work on every restart or deploy. (#430)
 - A concurrent enable of the same plugin no longer double-runs `onEnable` or double-registers its hooks (a synchronous in-progress lock rejects the racing call). (#430)
