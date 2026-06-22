@@ -423,7 +423,9 @@ export class DockerService implements OnModuleInit {
           await container.stop();
           this.logger.log(`Stopped container: ${profile}`);
         }
-        await container.remove({ v: true }); // v: true removes volumes too
+        // v: true removes only the container's ANONYMOUS volumes; named datastore volumes
+        // (redis/postgres/minio data) are preserved, so disable + re-enable keeps the data.
+        await container.remove({ v: true });
         this.logger.log(`Removed container: ${profile}`);
         return true;
       } catch (error) {

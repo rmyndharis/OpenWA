@@ -18,8 +18,15 @@ export class PluginWorkerHost {
   private nextId = 1;
   private ready = false;
   private dead = false;
-  private readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-  private readonly pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+  private readyWaiters: Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer?: ReturnType<typeof setTimeout>;
+  }> = [];
+  private readonly pending = new Map<
+    number,
+    { resolve: () => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout> }
+  >();
   private readonly hookPending = new Map<
     number,
     { resolve: (result: { continue: boolean; data?: unknown }) => void; timer: ReturnType<typeof setTimeout> }
@@ -76,22 +83,51 @@ export class PluginWorkerHost {
     });
   }
 
-  /** Load the plugin module in the worker; resolves once it reports `ready`, rejects if it errors. */
-  load(mainPath: string, context?: SandboxStaticContext): Promise<void> {
+  /**
+   * Load the plugin module in the worker; resolves once it reports `ready`, rejects if it errors.
+   * When `timeoutMs` is given, a worker that never reports ready rejects the call (the caller then
+   * tears the worker down) so a wedged module load can't hang enable forever.
+   */
+  load(mainPath: string, context?: SandboxStaticContext, timeoutMs?: number): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.dead) return reject(new Error('plugin worker is no longer running'));
       if (this.ready) return resolve();
-      this.readyWaiters.push({ resolve, reject });
+      const waiter: { resolve: () => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout> } = {
+        resolve,
+        reject,
+      };
+      if (timeoutMs !== undefined) {
+        waiter.timer = setTimeout(() => {
+          const index = this.readyWaiters.indexOf(waiter);
+          if (index !== -1) this.readyWaiters.splice(index, 1);
+          reject(new Error(`plugin worker load timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+      this.readyWaiters.push(waiter);
       this.channel.postMessage(context ? { kind: 'load', mainPath, context } : { kind: 'load', mainPath });
     });
   }
 
-  /** Invoke a plugin lifecycle method in the worker; resolves/rejects on the correlated result. */
-  runLifecycle(method: PluginLifecycleMethod): Promise<void> {
+  /**
+   * Invoke a plugin lifecycle method in the worker; resolves/rejects on the correlated result.
+   * When `timeoutMs` is given, a method that never replies rejects the call so a wedged
+   * onLoad/onEnable/onDisable can't hang the enable/disable request indefinitely.
+   */
+  runLifecycle(method: PluginLifecycleMethod, timeoutMs?: number): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.dead) return reject(new Error('plugin worker is no longer running'));
       const id = this.nextId++;
-      this.pending.set(id, { resolve, reject });
+      const entry: { resolve: () => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout> } = {
+        resolve,
+        reject,
+      };
+      if (timeoutMs !== undefined) {
+        entry.timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`plugin worker lifecycle '${method}' timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+      this.pending.set(id, entry);
       this.channel.postMessage({ kind: 'lifecycle', id, method });
     });
   }
@@ -128,17 +164,24 @@ export class PluginWorkerHost {
     switch (message.kind) {
       case 'ready':
         this.ready = true;
-        this.drain(this.readyWaiters, w => w.resolve());
+        this.drain(this.readyWaiters, w => {
+          if (w.timer) clearTimeout(w.timer);
+          w.resolve();
+        });
         break;
       case 'error': {
         const error = new Error(message.error);
-        this.drain(this.readyWaiters, w => w.reject(error));
+        this.drain(this.readyWaiters, w => {
+          if (w.timer) clearTimeout(w.timer);
+          w.reject(error);
+        });
         break;
       }
       case 'lifecycle-result': {
         const waiter = this.pending.get(message.id);
         if (!waiter) return;
         this.pending.delete(message.id);
+        if (waiter.timer) clearTimeout(waiter.timer);
         if (message.ok) waiter.resolve();
         else waiter.reject(new Error(message.error));
         break;
@@ -194,8 +237,14 @@ export class PluginWorkerHost {
   private handleExit(code: number): void {
     this.dead = true;
     const error = new Error(`plugin worker exited unexpectedly (code ${code})`);
-    this.drain(this.readyWaiters, w => w.reject(error));
-    this.pending.forEach(waiter => waiter.reject(error));
+    this.drain(this.readyWaiters, w => {
+      if (w.timer) clearTimeout(w.timer);
+      w.reject(error);
+    });
+    this.pending.forEach(waiter => {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.reject(error);
+    });
     this.pending.clear();
     this.healthPending.forEach(({ resolve, timer }) => {
       clearTimeout(timer);

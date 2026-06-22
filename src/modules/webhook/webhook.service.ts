@@ -254,8 +254,9 @@ export class WebhookService {
         continue;
       }
 
-      // Use potentially modified payload
-      const finalPayload = (hookResult as { payload: WebhookPayload }).payload;
+      // Use the plugin-modified payload, falling back to the original if a before-hook returned a
+      // result without a `payload` key — otherwise we'd POST an `undefined` body.
+      const finalPayload = (hookResult as { payload?: WebhookPayload }).payload ?? payload;
 
       // Build headers — custom headers FIRST so the system headers below always win.
       const headers: Record<string, string> = {
