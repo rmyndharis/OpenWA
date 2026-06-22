@@ -419,6 +419,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
   }
 
+  /**
+   * True only while `engine` is still the live engine registered for `id`. Each callback below
+   * captures its own engine instance; once the session is stopped (engine removed from the map) or
+   * restarted/reconnected (engine replaced), a late callback from the superseded engine must not
+   * mutate the session that now belongs to a different — or no — engine. `this.engines` is the
+   * single source of truth for the active engine, so identity comparison closes both the
+   * post-stop and the stale-generation (stop→start / reconnect-replace) windows the one-shot
+   * post-init guard does not cover.
+   */
+  private isLiveEngine(id: string, engine: IWhatsAppEngine): boolean {
+    return this.engines.get(id) === engine;
+  }
+
   private async initializeEngine(id: string, session: Session): Promise<void> {
     this.logger.log(`Initializing engine for session: ${session.name}`, {
       sessionId: id,
@@ -442,6 +455,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     await engine.initialize({
       onQRCode: (qr: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log('QR code generated', {
           sessionId: id,
           action: 'qr_generated',
@@ -462,6 +476,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         void this.updateStatus(id, SessionStatus.QR_READY);
       },
       onReady: (phone: string, pushName: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log(`Session ready: ${phone}`, {
           sessionId: id,
           phone,
@@ -497,6 +512,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onMessage: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // Status/Story posts arrive via the inbound path for some engines; don't persist or webhook them.
         // Mirrors the isStatusBroadcast guard in onMessageCreate below.
         if (message.isStatusBroadcast) {
@@ -569,6 +585,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           .catch(err => this.logger.error(`onMessage handler failed for ${id}`, String(err)));
       },
       onMessageCreate: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // `message_create` fires for every message the account creates, including sends composed on a
         // linked phone — which the `message`/`onMessage` event never delivers. Incoming messages are
         // already handled by `onMessage`, so only outgoing (`fromMe`) ones produce `message.sent` here.
@@ -617,6 +634,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           .catch(err => this.logger.error(`onMessageCreate handler failed for ${id}`, String(err)));
       },
       onMessageAck: (messageId, status: DeliveryStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message ack: ${messageId} -> ${status}`, {
           sessionId: id,
           messageId,
@@ -697,6 +715,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       },
       onMessageRevoked: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message revoked: ${message.id}`, {
           sessionId: id,
           messageId: message.id,
@@ -719,6 +738,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.eventsGateway.emitMessageRevoked(id, revokedPayload);
       },
       onMessageReaction: (event): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message reaction received: ${event.messageId} -> ${event.reaction}`, {
           sessionId: id,
           messageId: event.messageId,
@@ -739,6 +759,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onDisconnected: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,
           reason,
@@ -763,6 +784,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.scheduleReconnect(id, session);
       },
       onStateChanged: (engineState: EngineStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         const statusMap: Record<EngineStatus, SessionStatus> = {
           [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
           [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
@@ -777,6 +799,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       },
       onError: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.error(`Session engine failed: ${reason}`, undefined, {
           sessionId: id,
           reason,

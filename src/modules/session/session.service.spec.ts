@@ -533,6 +533,79 @@ describe('SessionService', () => {
     });
   });
 
+  // ── engine-identity guard: stale-callback isolation ───────────────
+  // A callback can fire after its engine was torn down (post-stop) or after a newer engine
+  // replaced it for the same id (post-restart / reconnect). Such a stale callback must not
+  // mutate the session that now belongs to a different (or no) engine.
+  describe('stale engine callback isolation', () => {
+    const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
+
+    const startAndCapture = async (): Promise<EngineEventCallbacks> => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const calls = mockEngine.initialize.mock.calls as [EngineEventCallbacks][];
+      return calls[0][0];
+    };
+
+    it('lets the live engine drive status (guard is a no-op for the active engine)', async () => {
+      const callbacks = await startAndCapture();
+      (repository.update as jest.Mock).mockClear();
+
+      callbacks.onReady?.('628123', 'Tester');
+
+      expect(repository.update).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ status: SessionStatus.READY }),
+      );
+    });
+
+    it('ignores onReady from an engine that was torn down (post-stop window)', async () => {
+      const callbacks = await startAndCapture();
+      enginesOf().delete('sess-uuid-1'); // stop()/forceKill() removes the engine from the live map
+      (repository.update as jest.Mock).mockClear();
+
+      callbacks.onReady?.('628123', 'Tester');
+
+      expect(repository.update).not.toHaveBeenCalled();
+    });
+
+    it('ignores onDisconnected from a superseded engine after restart (stale generation)', async () => {
+      const callbacks = await startAndCapture(); // engine A captured
+      enginesOf().set('sess-uuid-1', { marker: 'engine-B' }); // a newer engine now owns the id
+      (repository.update as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      callbacks.onDisconnected?.('socket closed');
+
+      expect(repository.update).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('ignores onMessage from a superseded engine (no persist, no webhook)', async () => {
+      const callbacks = await startAndCapture();
+      enginesOf().set('sess-uuid-1', { marker: 'engine-B' });
+      (messageRepository.save as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      callbacks.onMessage?.({
+        id: 'wa-1',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        chatId: 'peer@c.us',
+        body: 'hi',
+        type: 'text',
+        timestamp: 1,
+        fromMe: false,
+        isGroup: false,
+      });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
   // ── engine message-event webhook dispatch ─────────────────────────
 
   describe('engine message-event webhook dispatch', () => {
