@@ -1,6 +1,6 @@
 // Spread the real fs so every method passes through, but as configurable props the test can spy on
 // (the bare `import * as fs` namespace is non-configurable, so jest.spyOn can't redefine its methods).
-jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual('fs') }));
+jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('fs')>('fs') }));
 
 import * as fs from 'fs';
 import * as os from 'os';
