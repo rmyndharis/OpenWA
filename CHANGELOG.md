@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{name}` form is still substituted for backward compatibility but may be removed in a future major
   version. (#69, #411)
 
+### Fixed
+
+- **A session is no longer mutated by callbacks from an engine it has already replaced or torn
+  down.** Each engine's lifecycle/message callbacks (QR, ready, disconnect, state, ack, message,
+  reaction, …) now no-op once that engine is no longer the live one for the session. This closes a
+  race where a late callback from a stopped engine — or from a previous engine after a
+  restart/reconnect — could write a stale status (e.g. flip a stopped session back to `ready`),
+  schedule a reconnect for a session meant to be down, or persist a stray message/ack against the
+  wrong engine generation. The guard is a no-op for the live engine and for ordinary network-drop
+  reconnects. (#410)
+
 ## [0.5.0] - 2026-06-21
 
 A security & reliability hardening release. **One behavior change** (the reason for the minor bump):
