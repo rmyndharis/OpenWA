@@ -179,12 +179,11 @@ export class PluginsService {
       throw new NotFoundException(`Plugin ${id} not found`);
     }
 
-    if (!plugin.instance?.healthCheck) {
-      return { healthy: true, message: 'Plugin does not implement health check' };
-    }
-
     try {
-      return await plugin.instance.healthCheck();
+      // Delegate to the loader so a sandboxed plugin's healthCheck (which runs in the worker, where
+      // plugin.instance is null) is reached too — the old plugin.instance check always returned the
+      // default "healthy" for sandboxed plugins, blinding health monitoring.
+      return await this.pluginLoader.checkPluginHealth(id);
     } catch (error) {
       return {
         healthy: false,

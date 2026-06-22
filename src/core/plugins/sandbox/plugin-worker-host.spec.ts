@@ -249,4 +249,49 @@ describe('PluginWorkerHost', () => {
       expect(onLog).toHaveBeenCalledWith('warn', 'heads up', { x: 1 });
     });
   });
+
+  describe('config change + health check', () => {
+    it('sendConfigChange posts a config-change message to the worker', () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      host.sendConfigChange({ apiKey: 'rotated' });
+
+      expect(ch.last()).toEqual({ kind: 'config-change', config: { apiKey: 'rotated' } });
+    });
+
+    it('healthCheck round-trips and resolves on the worker result', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.healthCheck(1000);
+      const sent = ch.last() as Extract<HostToWorkerMessage, { kind: 'health-check' }>;
+      expect(sent.kind).toBe('health-check');
+
+      ch.reply({ kind: 'health-result', id: sent.id, healthy: false, message: 'missing credentials' });
+      await expect(pending).resolves.toEqual({ healthy: false, message: 'missing credentials' });
+    });
+
+    it('healthCheck resolves unhealthy on timeout so a wedged plugin never hangs the endpoint', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.healthCheck(100);
+      jest.advanceTimersByTime(100);
+
+      const result = await pending;
+      expect(result.healthy).toBe(false);
+      expect(result.message).toMatch(/timed out/i);
+      jest.useRealTimers();
+    });
+
+    it('healthCheck resolves unhealthy when the worker has exited', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+      ch.crash(1);
+
+      await expect(host.healthCheck(1000)).resolves.toMatchObject({ healthy: false });
+    });
+  });
 });

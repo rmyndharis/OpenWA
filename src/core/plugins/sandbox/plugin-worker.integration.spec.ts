@@ -11,6 +11,7 @@ const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs')
 const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
 const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
 const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.cjs');
+const CTX_LIFECYCLE_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-lifecycle-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -148,6 +149,22 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
 
     // The plugin read ctx.pluginId + ctx.config and logged via ctx.logger; all of it crossed the bridge.
     expect(logs).toContainEqual({ level: 'log', message: 'hello from ctx-demo', meta: { greeting: 'hi' } });
+    await host.terminate();
+  });
+
+  it('delivers healthCheck and onConfigChange to a sandboxed plugin (and refreshes ctx.config)', async () => {
+    const host = new PluginWorkerHost(makeChannel());
+    await host.load(CTX_LIFECYCLE_FIXTURE, { pluginId: 'ctx-lc', config: { a: 1 } });
+    await host.runLifecycle('onEnable');
+
+    // healthCheck reaches the worker plugin and returns ITS result (here it reports its current config).
+    await expect(host.healthCheck(3000)).resolves.toEqual({ healthy: true, message: JSON.stringify({ a: 1 }) });
+
+    // A config change refreshes ctx.config in the worker (and would invoke onConfigChange).
+    host.sendConfigChange({ a: 2 });
+    await flushAsync();
+    await expect(host.healthCheck(3000)).resolves.toEqual({ healthy: true, message: JSON.stringify({ a: 2 }) });
+
     await host.terminate();
   });
 });

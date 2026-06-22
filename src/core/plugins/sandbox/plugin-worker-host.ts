@@ -24,6 +24,10 @@ export class PluginWorkerHost {
     number,
     { resolve: (result: { continue: boolean; data?: unknown }) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  private readonly healthPending = new Map<
+    number,
+    { resolve: (result: { healthy: boolean; message?: string }) => void; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     private readonly channel: PluginWorkerChannel,
@@ -92,6 +96,29 @@ export class PluginWorkerHost {
     });
   }
 
+  /** Push a config update to the worker so it refreshes ctx.config and runs onConfigChange. Fire-and-forget. */
+  sendConfigChange(config: Record<string, unknown>): void {
+    if (this.dead) return;
+    this.channel.postMessage({ kind: 'config-change', config });
+  }
+
+  /**
+   * Ask the worker plugin to run healthCheck(). Bounded by `timeoutMs`: a wedged plugin resolves to
+   * unhealthy rather than hanging the health endpoint.
+   */
+  healthCheck(timeoutMs: number): Promise<{ healthy: boolean; message?: string }> {
+    if (this.dead) return Promise.resolve({ healthy: false, message: 'plugin worker is no longer running' });
+    const id = this.nextId++;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        this.healthPending.delete(id);
+        resolve({ healthy: false, message: 'health check timed out' });
+      }, timeoutMs);
+      this.healthPending.set(id, { resolve, timer });
+      this.channel.postMessage({ kind: 'health-check', id });
+    });
+  }
+
   /** Tear the worker down. */
   terminate(): Promise<void> {
     return this.channel.terminate();
@@ -135,6 +162,14 @@ export class PluginWorkerHost {
         waiter.resolve(result);
         break;
       }
+      case 'health-result': {
+        const waiter = this.healthPending.get(message.id);
+        if (!waiter) return;
+        this.healthPending.delete(message.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve({ healthy: message.healthy, message: message.message });
+        break;
+      }
     }
   }
 
@@ -162,6 +197,11 @@ export class PluginWorkerHost {
     this.drain(this.readyWaiters, w => w.reject(error));
     this.pending.forEach(waiter => waiter.reject(error));
     this.pending.clear();
+    this.healthPending.forEach(({ resolve, timer }) => {
+      clearTimeout(timer);
+      resolve({ healthy: false, message: 'plugin worker exited' });
+    });
+    this.healthPending.clear();
   }
 
   private drain<T>(waiters: T[], fn: (w: T) => void): void {

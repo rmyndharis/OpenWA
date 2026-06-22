@@ -31,6 +31,8 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 const SANDBOX_MAX_OLD_GEN_MB = 256;
 /** Time budget for a sandboxed plugin's hook handler before the chain proceeds without it. */
 const SANDBOX_HOOK_TIMEOUT_MS = 5000;
+/** A sandboxed plugin's healthCheck must answer within this, else it's reported unhealthy (not hung). */
+const SANDBOX_HEALTH_TIMEOUT_MS = 5000;
 
 /**
  * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
@@ -383,16 +385,40 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // Persist config
     this.pluginStorage.setPluginConfig(pluginId, plugin.config);
 
-    // Notify plugin of config change (async, fire and forget)
-    if (plugin.instance?.onConfigChange && plugin.status === PluginStatus.ENABLED) {
-      const context = this.createPluginContext(plugin);
-      void plugin.instance.onConfigChange(context, plugin.config);
+    // Notify the running plugin of the config change (fire and forget). A sandboxed plugin's
+    // onConfigChange lives in the worker (plugin.instance is null), so route it through the live worker
+    // host so it refreshes ctx.config too; built-ins go through the in-process instance.
+    if (plugin.status === PluginStatus.ENABLED) {
+      const sandboxHost = this.sandboxHosts.get(pluginId);
+      if (sandboxHost) {
+        sandboxHost.sendConfigChange(plugin.config);
+      } else if (plugin.instance?.onConfigChange) {
+        const context = this.createPluginContext(plugin);
+        void plugin.instance.onConfigChange(context, plugin.config);
+      }
     }
 
     this.logger.debug(`Plugin config updated: ${pluginId}`, {
       pluginId,
       action: 'plugin_config_updated',
     });
+  }
+
+  /**
+   * Run a plugin's healthCheck across both tiers. A sandboxed plugin's healthCheck lives in the worker
+   * (plugin.instance is null), so route to the live worker host (time-bounded); built-ins use the
+   * in-process instance. Returns the default "healthy" when the plugin implements no health check.
+   */
+  async checkPluginHealth(pluginId: string): Promise<{ healthy: boolean; message?: string }> {
+    const sandboxHost = this.sandboxHosts.get(pluginId);
+    if (sandboxHost) {
+      return sandboxHost.healthCheck(SANDBOX_HEALTH_TIMEOUT_MS);
+    }
+    const plugin = this.plugins.get(pluginId);
+    if (plugin?.instance?.healthCheck) {
+      return plugin.instance.healthCheck();
+    }
+    return { healthy: true, message: 'Plugin does not implement health check' };
   }
 
   /**

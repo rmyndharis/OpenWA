@@ -26,7 +26,11 @@ export type HostToWorkerMessage =
   | { kind: 'cap-result'; id: number; ok: true; result: unknown }
   | { kind: 'cap-result'; id: number; ok: false; error: string }
   // Dispatch a subscribed hook to the worker; it runs its handler(s) and replies with hook-result.
-  | { kind: 'hook'; id: number; event: string; data: unknown; sessionId?: string; source: string };
+  | { kind: 'hook'; id: number; event: string; data: unknown; sessionId?: string; source: string }
+  // The plugin's config was updated: refresh ctx.config and invoke onConfigChange (fire-and-forget).
+  | { kind: 'config-change'; config: Record<string, unknown> }
+  // Ask the worker plugin to run its healthCheck(); it replies with health-result.
+  | { kind: 'health-check'; id: number };
 
 export type WorkerToHostMessage =
   | { kind: 'ready' }
@@ -41,6 +45,8 @@ export type WorkerToHostMessage =
   | { kind: 'hook-result'; id: number; continue: boolean; data?: unknown; error?: string }
   // The worker plugin's ctx.logger.* call, routed to the host's per-plugin logger.
   | { kind: 'log'; level: PluginLogLevel; message: string; meta?: Record<string, unknown> }
+  // The worker plugin's healthCheck() result for a host health-check request.
+  | { kind: 'health-result'; id: number; healthy: boolean; message?: string }
   | { kind: 'error'; error: string };
 
 /**

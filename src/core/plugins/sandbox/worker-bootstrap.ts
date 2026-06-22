@@ -15,6 +15,8 @@ interface LifecyclePlugin {
   onEnable?(context: unknown): unknown;
   onDisable?(context: unknown): unknown;
   onUnload?(context: unknown): unknown;
+  onConfigChange?(context: unknown, config: Record<string, unknown>): unknown;
+  healthCheck?(): unknown;
 }
 
 const port = parentPort;
@@ -85,6 +87,28 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
       send({ kind: 'lifecycle-result', id: message.id, ok: true });
     } catch (error) {
       send({ kind: 'lifecycle-result', id: message.id, ok: false, error: errorMessage(error) });
+    }
+    return;
+  }
+
+  if (message.kind === 'config-change') {
+    // Refresh ctx.config so later reads see the new value, then notify the plugin (fire-and-forget —
+    // onConfigChange returns void, and an ack would just race the next operation).
+    if (context) context.config = message.config;
+    void Promise.resolve(plugin?.onConfigChange?.(context, message.config)).catch(error =>
+      logger.error('onConfigChange threw', error),
+    );
+    return;
+  }
+
+  if (message.kind === 'health-check') {
+    try {
+      const result = plugin?.healthCheck
+        ? ((await plugin.healthCheck()) as { healthy: boolean; message?: string })
+        : { healthy: true, message: 'Plugin does not implement health check' };
+      send({ kind: 'health-result', id: message.id, healthy: result.healthy, message: result.message });
+    } catch (error) {
+      send({ kind: 'health-result', id: message.id, healthy: false, message: errorMessage(error) });
     }
   }
 }
