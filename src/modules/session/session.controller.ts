@@ -256,6 +256,18 @@ export class SessionController {
     return { success };
   }
 
+  @Post(':id/chats/unread')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Mark a chat as unread' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async markChatUnread(@Param('id') id: string, @Body() dto: MarkChatReadDto): Promise<{ success: boolean }> {
+    const success = await this.sessionService.markUnread(id, dto.chatId);
+    return { success };
+  }
+
   @Post(':id/chats/delete')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Delete a chat from the chat list (e.g. a group you have left)' })

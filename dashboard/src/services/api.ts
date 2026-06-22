@@ -347,6 +347,11 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
+  markChatUnread: (id: string, chatId: string) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/unread`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId }),
+    }),
   getChatMessages: (id: string, chatId: string, limit = 100) =>
     request<{ messages: ChatMessage[]; total: number }>(
       `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}`,

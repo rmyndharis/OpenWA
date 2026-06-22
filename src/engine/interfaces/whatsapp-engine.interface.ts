@@ -456,6 +456,7 @@ export interface IWhatsAppEngine {
   // Chats
   getChats(): Promise<ChatSummary[]>;
   sendSeen(chatId: string): Promise<boolean>;
+  markUnread(chatId: string): Promise<boolean>;
   deleteChat(chatId: string): Promise<boolean>;
   /**
    * Send a typing/recording presence indicator to a chat, or clear it (`paused`).

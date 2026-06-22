@@ -688,6 +688,19 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return true;
   }
 
+  async markUnread(chatId: string): Promise<boolean> {
+    this.ensureReady();
+    const last = this.sessionStore.lastMessage(chatId);
+    if (!last) {
+      return false; // Baileys' unread toggle needs the last message; can't synthesize it
+    }
+    await this.sock!.chatModify(
+      { markRead: false, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
+      chatId,
+    );
+    return true;
+  }
+
   async deleteChat(chatId: string): Promise<boolean> {
     this.ensureReady();
     const last = this.sessionStore.lastMessage(chatId);

@@ -1409,7 +1409,7 @@ describe('BaileysAdapter contact + chat reads', () => {
   });
 });
 
-describe('BaileysAdapter sendSeen + deleteChat', () => {
+describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
@@ -1449,6 +1449,29 @@ describe('BaileysAdapter sendSeen + deleteChat', () => {
     fakeSock.fire('connection.update', { connection: 'open' });
     expect(await adapter.sendSeen('628999@s.whatsapp.net')).toBe(false);
     expect(fakeSock.readMessages).not.toHaveBeenCalled();
+  });
+
+  it('markUnread marks the chat unread via chatModify with the last message', async () => {
+    const adapter = await readyWithMessage();
+    const ok = await adapter.markUnread('628111@s.whatsapp.net');
+    expect(ok).toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      {
+        markRead: false,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+  });
+
+  it('markUnread returns false when no last message is known', async () => {
+    const adapter = newAdapter();
+    await adapter.initialize({});
+    fakeSock.fire('connection.update', { connection: 'open' });
+    expect(await adapter.markUnread('628999@s.whatsapp.net')).toBe(false);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
   });
 
   it('deleteChat revokes the chat via chatModify with the last message', async () => {

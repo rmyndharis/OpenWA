@@ -463,6 +463,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
         void this.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
 
+        // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
+        // advertised + consumed there, so clients can render it live instead of polling GET /qr).
+        this.eventsGateway.emitQRCode(id, qr);
+
         // Execute hook for QR event
         void this.hookManager.execute(
           'session:qr',
@@ -1121,6 +1125,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     return engine.sendSeen(chatId);
+  }
+
+  async markUnread(id: string, chatId: string): Promise<boolean> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.markUnread(chatId);
   }
 
   async deleteChat(id: string, chatId: string): Promise<boolean> {
