@@ -1319,6 +1319,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
   }
 
+  async markUnread(chatId: string): Promise<boolean> {
+    this.ensureReady();
+    try {
+      const chat = await this.client!.getChatById(chatId);
+      // Chat.markUnread() resolves void, so synthesize the boolean from a clean call.
+      await chat.markUnread();
+      return true;
+    } catch (error) {
+      this.logger.error(`Error marking chat ${chatId} as unread`, String(error));
+      return false;
+    }
+  }
+
   async deleteChat(chatId: string): Promise<boolean> {
     this.ensureReady();
     try {
