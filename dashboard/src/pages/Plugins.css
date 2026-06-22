@@ -105,74 +105,96 @@
 }
 
 .plugin-card-header {
-  padding: 1rem 1.25rem;
+  padding: 1.25rem 1.25rem 1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.plugin-card-header.type-engine {
-  background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
-}
-
-.plugin-card-header.type-storage {
-  background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
-}
-
-.plugin-card-header.type-queue {
-  background: linear-gradient(135deg, #f97316 0%, #f59e0b 100%);
-}
-
-.plugin-card-header.type-auth {
-  background: linear-gradient(135deg, #a855f7 0%, #8b5cf6 100%);
-}
-
-.plugin-card-header.type-extension {
-  background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);
+  gap: 0.5rem;
 }
 
 .plugin-info {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .plugin-icon-wrapper {
-  width: 40px;
-  height: 40px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  width: 42px;
+  height: 42px;
+  background: var(--bg-light);
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .plugin-icon-wrapper svg {
-  color: #fff;
+  color: var(--text-secondary);
+}
+
+/* Calm, low-saturation type tints on the icon only — no loud gradient header, no alarming red. */
+.type-engine .plugin-icon-wrapper {
+  background: rgba(34, 197, 94, 0.12);
+}
+.type-engine .plugin-icon-wrapper svg {
+  color: #16a34a;
+}
+.type-extension .plugin-icon-wrapper {
+  background: rgba(99, 102, 241, 0.12);
+}
+.type-extension .plugin-icon-wrapper svg {
+  color: #6366f1;
+}
+.type-storage .plugin-icon-wrapper {
+  background: rgba(13, 148, 136, 0.12);
+}
+.type-storage .plugin-icon-wrapper svg {
+  color: #0d9488;
+}
+.type-queue .plugin-icon-wrapper {
+  background: rgba(217, 119, 6, 0.12);
+}
+.type-queue .plugin-icon-wrapper svg {
+  color: #d97706;
+}
+.type-auth .plugin-icon-wrapper {
+  background: rgba(147, 51, 234, 0.12);
+}
+.type-auth .plugin-icon-wrapper svg {
+  color: #9333ea;
 }
 
 .plugin-name {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
   margin: 0;
   text-transform: none;
   letter-spacing: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .plugin-version {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--text-muted);
 }
 
 .plugin-builtin-badge {
-  padding: 0.25rem 0.5rem;
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  padding: 0.1875rem 0.5rem;
+  background: var(--bg-light);
+  color: var(--text-muted);
   font-size: 0.625rem;
   font-weight: 600;
-  border-radius: 4px;
+  border-radius: 5px;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .plugin-card-body {
