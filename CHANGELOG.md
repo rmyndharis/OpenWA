@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-22
+
+A small correctness & consistency patch — **no breaking changes**. Session engine callbacks no longer
+mutate a session after it has been stopped or its engine replaced; bulk-message variables now use the
+same `{{name}}` syntax as message templates (single-brace `{name}` deprecated but still honored); and
+a plugin's declared capability permissions are now actually enforced at the capability boundary.
+
 ### Changed
 
 - **Plugin capability permissions are now enforced.** A plugin may use a capability — `ctx.messages.*`
