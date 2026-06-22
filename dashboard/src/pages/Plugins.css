@@ -284,14 +284,17 @@
   transition: all 0.2s;
 }
 
+/* Positive action (Enable / Activate): the one solid brand-green CTA, so an action never reads
+   the same as the passive "Active" state below. */
 .btn-toggle.enable {
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
-  color: #22c55e;
+  background: var(--primary, #25d366);
+  border: 1px solid var(--primary, #25d366);
+  color: #fff;
 }
 
 .btn-toggle.enable:hover {
-  background: rgba(34, 197, 94, 0.2);
+  background: #16a34a;
+  border-color: #16a34a;
 }
 
 .btn-toggle.disable {
@@ -309,6 +312,8 @@
   cursor: not-allowed;
 }
 
+/* Passive states (Active / Required) are NOT actions — render them as quiet neutral chips, with
+   only a small green check as the "it's on" signal, so they're clearly distinct from the green CTA. */
 .btn-required {
   flex: 1;
   display: flex;
@@ -316,13 +321,17 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.625rem 1rem;
-  background: rgba(34, 197, 94, 0.15);
-  border: 1px solid rgba(34, 197, 94, 0.4);
-  color: #16a34a;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
   font-size: 0.875rem;
   font-weight: 600;
   border-radius: 8px;
   cursor: default;
+}
+
+.btn-required svg {
+  color: var(--text-muted);
 }
 
 .btn-active {
@@ -332,13 +341,17 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.625rem 1rem;
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.3);
-  color: #22c55e;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   font-size: 0.875rem;
   font-weight: 500;
   border-radius: 8px;
   cursor: default;
+}
+
+.btn-active svg {
+  color: #16a34a;
 }
 
 .btn-action {
