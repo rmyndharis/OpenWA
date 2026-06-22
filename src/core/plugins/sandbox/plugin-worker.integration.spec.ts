@@ -9,6 +9,7 @@ const FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/echo-plugin.cjs');
 const CAP_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/cap-echo-plugin.cjs');
 const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs');
 const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
+const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -92,6 +93,45 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     });
     expect(result).toEqual({ continue: true });
     expect(onTimeout).toHaveBeenCalled();
+    await host.terminate();
+  });
+
+  it('force-terminates a runaway (infinite-loop) plugin', async () => {
+    const host = makeHost();
+    await host.load(RUNAWAY_FIXTURE);
+
+    // onEnable spins forever and blocks the worker event loop — it can never reply, so cooperative
+    // shutdown is impossible. terminate() must still reclaim the thread.
+    const wedged = host.runLifecycle('onEnable');
+    wedged.catch(() => undefined); // terminate() rejects this pending call; swallow it
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    await expect(host.terminate()).resolves.toBeUndefined();
+  });
+
+  it('preserves a structured-clone-safe hook payload across the worker boundary', async () => {
+    const host = new PluginWorkerHost(makeChannel(), undefined, () => undefined);
+    await host.load(HOOK_FIXTURE); // its handler returns { ...data, seen: true }
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    const payload = {
+      body: 'hi',
+      mentions: ['a@c.us', 'b@c.us'],
+      meta: { ts: new Date('2026-06-22T00:00:00.000Z'), nested: { n: 1 } },
+    };
+    const result = await host.dispatchHook({
+      event: 'message:received',
+      data: payload,
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    const data = result.data as typeof payload & { seen: boolean };
+
+    expect(data.mentions).toEqual(['a@c.us', 'b@c.us']);
+    expect(data.meta.nested).toEqual({ n: 1 });
+    expect(data.meta.ts.getTime()).toBe(new Date('2026-06-22T00:00:00.000Z').getTime());
+    expect(data.seen).toBe(true);
     await host.terminate();
   });
 });
