@@ -10,6 +10,7 @@ const CAP_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/cap-echo-plugin.cj
 const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs');
 const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
 const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
+const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -132,6 +133,21 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     expect(data.meta.nested).toEqual({ n: 1 });
     expect(data.meta.ts.getTime()).toBe(new Date('2026-06-22T00:00:00.000Z').getTime());
     expect(data.seen).toBe(true);
+    await host.terminate();
+  });
+
+  it('bridges ctx.logger and ctx.config into a sandboxed plugin', async () => {
+    const logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }> = [];
+    const host = new PluginWorkerHost(makeChannel(), undefined, undefined, (level, message, meta) =>
+      logs.push({ level, message, meta }),
+    );
+
+    await host.load(CTX_FIXTURE, { pluginId: 'ctx-demo', config: { greeting: 'hi' } });
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    // The plugin read ctx.pluginId + ctx.config and logged via ctx.logger; all of it crossed the bridge.
+    expect(logs).toContainEqual({ level: 'log', message: 'hello from ctx-demo', meta: { greeting: 'hi' } });
     await host.terminate();
   });
 });

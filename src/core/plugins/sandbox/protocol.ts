@@ -11,8 +11,16 @@
 
 export type PluginLifecycleMethod = 'onLoad' | 'onEnable' | 'onDisable' | 'onUnload';
 
+/** Static context fields handed to a sandboxed plugin at load (serializable; no live references). */
+export interface SandboxStaticContext {
+  pluginId: string;
+  config: Record<string, unknown>;
+}
+
+export type PluginLogLevel = 'log' | 'debug' | 'warn' | 'error';
+
 export type HostToWorkerMessage =
-  | { kind: 'load'; mainPath: string }
+  | { kind: 'load'; mainPath: string; context?: SandboxStaticContext }
   | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod }
   // Reply to a worker-initiated capability call.
   | { kind: 'cap-result'; id: number; ok: true; result: unknown }
@@ -31,6 +39,8 @@ export type WorkerToHostMessage =
   | { kind: 'hook-subscribe'; event: string; priority?: number }
   // The worker's handler result for a dispatched hook (continue/modify/error).
   | { kind: 'hook-result'; id: number; continue: boolean; data?: unknown; error?: string }
+  // The worker plugin's ctx.logger.* call, routed to the host's per-plugin logger.
+  | { kind: 'log'; level: PluginLogLevel; message: string; meta?: Record<string, unknown> }
   | { kind: 'error'; error: string };
 
 /**

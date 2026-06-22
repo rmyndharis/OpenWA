@@ -212,4 +212,41 @@ describe('PluginWorkerHost', () => {
       jest.useRealTimers();
     });
   });
+
+  describe('logger + static context', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('load() forwards the static context (pluginId, config) to the worker', () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      void host.load('/p/index.js', { pluginId: 'p', config: { a: 1 } });
+
+      expect(ch.last()).toMatchObject({
+        kind: 'load',
+        mainPath: '/p/index.js',
+        context: { pluginId: 'p', config: { a: 1 } },
+      });
+    });
+
+    it('load() omits context when none is supplied', () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      void host.load('/p/index.js');
+
+      expect(ch.last()).toEqual({ kind: 'load', mainPath: '/p/index.js' });
+    });
+
+    it('routes a worker log message to onLog', async () => {
+      const ch = new FakeChannel();
+      const onLog = jest.fn();
+      new PluginWorkerHost(ch, undefined, undefined, onLog);
+
+      ch.reply({ kind: 'log', level: 'warn', message: 'heads up', meta: { x: 1 } });
+      await flush();
+
+      expect(onLog).toHaveBeenCalledWith('warn', 'heads up', { x: 1 });
+    });
+  });
 });

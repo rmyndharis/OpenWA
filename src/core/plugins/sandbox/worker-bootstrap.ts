@@ -27,6 +27,20 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 const capClient = new WorkerCapabilityClient(send);
 const hookRegistry = new WorkerHookRegistry(send);
+
+// ctx.logger proxy: forwards to the host's per-plugin logger (the same one in-process plugins use).
+const logger = {
+  log: (message: string, meta?: Record<string, unknown>) => send({ kind: 'log', level: 'log', message, meta }),
+  debug: (message: string, meta?: Record<string, unknown>) => send({ kind: 'log', level: 'debug', message, meta }),
+  warn: (message: string, meta?: Record<string, unknown>) => send({ kind: 'log', level: 'warn', message, meta }),
+  error: (message: string, error?: unknown, meta?: Record<string, unknown>) =>
+    send({
+      kind: 'log',
+      level: 'error',
+      message,
+      meta: error !== undefined ? { ...meta, error: errorMessage(error) } : meta,
+    }),
+};
 let plugin: LifecyclePlugin | null = null;
 let context: Record<string, unknown> | null = null;
 
@@ -49,7 +63,11 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
       const mod = require(message.mainPath) as { default?: new () => LifecyclePlugin } & (new () => LifecyclePlugin);
       const PluginCtor = mod.default ?? mod;
       plugin = new PluginCtor();
+      const staticContext = message.context ?? { pluginId: 'unknown', config: {} };
       context = {
+        pluginId: staticContext.pluginId,
+        config: staticContext.config,
+        logger,
         ...buildSandboxContext(capClient),
         registerHook: (event: string, handler: WorkerHookHandler, priority?: number) =>
           hookRegistry.register(event, handler, priority),

@@ -22,6 +22,7 @@ import { PluginStorageService } from './plugin-storage.service';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
+import { PluginLogLevel } from './sandbox/protocol';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -385,12 +386,14 @@ export class PluginLoaderService implements OnModuleInit {
   protected createSandboxHost(
     capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
+    onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
       new WorkerThreadChannel({ workerEntry, maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB }),
       capDispatcher,
       onHookSubscribe,
+      onLog,
     );
   }
 
@@ -461,10 +464,21 @@ export class PluginLoaderService implements OnModuleInit {
       );
     };
 
-    const host = this.createSandboxHost((verb, args) => dispatchCapabilityVerb(context, verb, args), onHookSubscribe);
+    // Route the worker plugin's ctx.logger.* calls to the same per-plugin logger an in-process plugin
+    // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout.
+    const onLog = (level: PluginLogLevel, message: string, meta?: Record<string, unknown>): void => {
+      if (level === 'error') context.logger.error(message, undefined, meta);
+      else context.logger[level](message, meta);
+    };
+
+    const host = this.createSandboxHost(
+      (verb, args) => dispatchCapabilityVerb(context, verb, args),
+      onHookSubscribe,
+      onLog,
+    );
     this.sandboxHosts.set(pluginId, host);
     try {
-      await host.load(mainPath);
+      await host.load(mainPath, { pluginId, config: plugin.config });
       await host.runLifecycle('onLoad');
       await host.runLifecycle('onEnable');
     } catch (error) {

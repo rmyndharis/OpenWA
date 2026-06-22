@@ -1,4 +1,10 @@
-import { PluginWorkerChannel, PluginLifecycleMethod, WorkerToHostMessage } from './protocol';
+import {
+  PluginWorkerChannel,
+  PluginLifecycleMethod,
+  WorkerToHostMessage,
+  SandboxStaticContext,
+  PluginLogLevel,
+} from './protocol';
 
 /**
  * Host-side driver for a single untrusted plugin running in a worker. Owns the request/response
@@ -27,6 +33,8 @@ export class PluginWorkerHost {
     // Called when the worker subscribes a handler to an event, so the host can register a shim with
     // the hook manager that dispatches into the worker.
     private readonly onHookSubscribe?: (event: string, priority?: number) => void,
+    // Routes a worker plugin's ctx.logger.* call to the host's per-plugin logger.
+    private readonly onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
@@ -65,12 +73,12 @@ export class PluginWorkerHost {
   }
 
   /** Load the plugin module in the worker; resolves once it reports `ready`, rejects if it errors. */
-  load(mainPath: string): Promise<void> {
+  load(mainPath: string, context?: SandboxStaticContext): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.dead) return reject(new Error('plugin worker is no longer running'));
       if (this.ready) return resolve();
       this.readyWaiters.push({ resolve, reject });
-      this.channel.postMessage({ kind: 'load', mainPath });
+      this.channel.postMessage(context ? { kind: 'load', mainPath, context } : { kind: 'load', mainPath });
     });
   }
 
@@ -113,6 +121,9 @@ export class PluginWorkerHost {
         break;
       case 'hook-subscribe':
         this.onHookSubscribe?.(message.event, message.priority);
+        break;
+      case 'log':
+        this.onLog?.(message.level, message.message, message.meta);
         break;
       case 'hook-result': {
         const waiter = this.hookPending.get(message.id);
