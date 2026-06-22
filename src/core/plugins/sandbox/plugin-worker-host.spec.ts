@@ -294,4 +294,60 @@ describe('PluginWorkerHost', () => {
       await expect(host.healthCheck(1000)).resolves.toMatchObject({ healthy: false });
     });
   });
+
+  describe('lifecycle timeouts', () => {
+    it('rejects load() when the worker never reports ready within the timeout', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.load('/p/index.js', undefined, 100);
+      jest.advanceTimersByTime(100);
+
+      await expect(pending).rejects.toThrow(/timed out/i);
+      jest.useRealTimers();
+    });
+
+    it('clears the load timer when ready arrives in time (no late rejection)', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.load('/p/index.js', undefined, 100);
+      ch.reply({ kind: 'ready' });
+      await expect(pending).resolves.toBeUndefined();
+
+      jest.advanceTimersByTime(1000); // timer must have been cleared; advancing has no effect
+      jest.useRealTimers();
+    });
+
+    it('rejects runLifecycle() when no result arrives within the timeout', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+      void host.load('/p/index.js');
+      ch.reply({ kind: 'ready' });
+
+      const pending = host.runLifecycle('onEnable', 100);
+      jest.advanceTimersByTime(100);
+
+      await expect(pending).rejects.toThrow(/timed out/i);
+      jest.useRealTimers();
+    });
+
+    it('clears the lifecycle timer when the result arrives in time', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+      void host.load('/p/index.js');
+      ch.reply({ kind: 'ready' });
+
+      const pending = host.runLifecycle('onEnable', 100);
+      ch.reply({ kind: 'lifecycle-result', id: lastLifecycle(ch).id, ok: true });
+      await expect(pending).resolves.toBeUndefined();
+
+      jest.advanceTimersByTime(1000); // no late rejection
+      jest.useRealTimers();
+    });
+  });
 });

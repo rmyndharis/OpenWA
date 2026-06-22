@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { resolvePluginMainPath } from './plugin-loader.service';
+import { resolvePluginMainPath, buildSandboxWorkerEnv } from './plugin-loader.service';
 
 /** Regression lock: a plugin's manifest.main must not escape its plugin directory. */
 describe('resolvePluginMainPath', () => {
@@ -22,6 +22,49 @@ describe('resolvePluginMainPath', () => {
 
   it('rejects climbing into a sibling plugin', () => {
     expect(() => resolvePluginMainPath(dir, 'my-plugin', '../other-plugin/evil.js')).toThrow(/escapes/);
+  });
+});
+
+/**
+ * Untrusted plugins run in a worker thread; the worker must NOT inherit the host's secrets. The
+ * worker env is an allowlist, not a copy of process.env.
+ */
+describe('buildSandboxWorkerEnv', () => {
+  it('forwards only the allowlisted vars and drops host secrets', () => {
+    const env = buildSandboxWorkerEnv({
+      NODE_ENV: 'production',
+      TZ: 'UTC',
+      NODE_EXTRA_CA_CERTS: '/certs/ca.pem',
+      API_MASTER_KEY: 'super-secret',
+      API_KEY_PEPPER: 'pepper',
+      DATABASE_PASSWORD: 'dbpw',
+      DATABASE_URL: 'postgres://u:p@host/db',
+      REDIS_URL: 'redis://u:p@host',
+      DOCKER_HOST: 'tcp://0.0.0.0:2375',
+    });
+
+    expect(env.NODE_ENV).toBe('production');
+    expect(env.TZ).toBe('UTC');
+    expect(env.NODE_EXTRA_CA_CERTS).toBe('/certs/ca.pem');
+
+    // Host secrets must never reach an untrusted plugin.
+    expect(env.API_MASTER_KEY).toBeUndefined();
+    expect(env.API_KEY_PEPPER).toBeUndefined();
+    expect(env.DATABASE_PASSWORD).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.REDIS_URL).toBeUndefined();
+    expect(env.DOCKER_HOST).toBeUndefined();
+  });
+
+  it('omits allowlisted keys that are unset rather than emitting undefined entries', () => {
+    const env = buildSandboxWorkerEnv({ NODE_ENV: 'development' });
+    expect(env.NODE_ENV).toBe('development');
+    expect('TZ' in env).toBe(false);
+    expect('NODE_EXTRA_CA_CERTS' in env).toBe(false);
+  });
+
+  it('defaults NODE_ENV to production when the host has none', () => {
+    expect(buildSandboxWorkerEnv({}).NODE_ENV).toBe('production');
   });
 });
 
