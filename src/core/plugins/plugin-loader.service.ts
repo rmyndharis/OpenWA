@@ -33,6 +33,20 @@ const SANDBOX_MAX_OLD_GEN_MB = 256;
 const SANDBOX_HOOK_TIMEOUT_MS = 5000;
 /** A sandboxed plugin's healthCheck must answer within this, else it's reported unhealthy (not hung). */
 const SANDBOX_HEALTH_TIMEOUT_MS = 5000;
+/**
+ * A sandboxed plugin's load()/onLoad/onEnable/onDisable must complete within this, else the worker is
+ * torn down and the operation fails — a wedged lifecycle can't hang the enable/disable request (and
+ * the ADMIN HTTP call behind it) forever. Generous on purpose: a slow-but-valid onEnable that opens
+ * connections should still finish well under it.
+ */
+const SANDBOX_LIFECYCLE_TIMEOUT_MS = 30000;
+
+/**
+ * Host process.env keys an untrusted plugin worker is allowed to see. Everything else — secrets like
+ * API_MASTER_KEY, API_KEY_PEPPER, the DATABASE_/REDIS_ vars, DOCKER_HOST — is withheld. The worker is
+ * a thread, so it needs no PATH to start and require() resolves via module paths, not env.
+ */
+const SANDBOX_ENV_ALLOWLIST = ['NODE_ENV', 'NODE_EXTRA_CA_CERTS', 'TZ'] as const;
 
 /**
  * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
@@ -46,6 +60,20 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
     throw new Error(`Plugin ${pluginId} main path escapes the plugin directory`);
   }
   return mainPath;
+}
+
+/**
+ * Build the minimal, allowlisted env for an untrusted plugin worker so it never inherits host secrets.
+ * Only {@link SANDBOX_ENV_ALLOWLIST} keys are forwarded (unset keys are omitted, not emitted as
+ * `undefined`), and NODE_ENV defaults to 'production' when the host has none.
+ */
+export function buildSandboxWorkerEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SANDBOX_ENV_ALLOWLIST) {
+    if (source[key] !== undefined) env[key] = source[key];
+  }
+  env.NODE_ENV = source.NODE_ENV ?? 'production';
+  return env;
 }
 
 @Injectable()
@@ -286,8 +314,19 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     try {
       const host = this.sandboxHosts.get(pluginId);
       if (host) {
-        await host.runLifecycle('onDisable');
-        await host.terminate();
+        // Disable is a force-teardown: even if the plugin's onDisable hangs (now bounded) or throws,
+        // we still kill the worker and drop the reference, so a misbehaving plugin can never block a
+        // disable or leak its worker thread.
+        try {
+          await host.runLifecycle('onDisable', SANDBOX_LIFECYCLE_TIMEOUT_MS);
+        } catch (error) {
+          this.logger.warn(`Sandboxed plugin ${pluginId} onDisable failed during disable; terminating anyway`, {
+            pluginId,
+            action: 'sandbox_disable_lifecycle_failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await host.terminate().catch(() => undefined);
         this.sandboxHosts.delete(pluginId);
       } else {
         const context = this.createPluginContext(plugin);
@@ -497,7 +536,12 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
-      new WorkerThreadChannel({ workerEntry, maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB }),
+      new WorkerThreadChannel({
+        workerEntry,
+        maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB,
+        // Withhold host secrets: the worker gets a minimal allowlisted env, not a copy of process.env.
+        env: buildSandboxWorkerEnv(),
+      }),
       capDispatcher,
       onHookSubscribe,
       onLog,
@@ -585,9 +629,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     );
     this.sandboxHosts.set(pluginId, host);
     try {
-      await host.load(mainPath, { pluginId, config: plugin.config });
-      await host.runLifecycle('onLoad');
-      await host.runLifecycle('onEnable');
+      await host.load(mainPath, { pluginId, config: plugin.config }, SANDBOX_LIFECYCLE_TIMEOUT_MS);
+      await host.runLifecycle('onLoad', SANDBOX_LIFECYCLE_TIMEOUT_MS);
+      await host.runLifecycle('onEnable', SANDBOX_LIFECYCLE_TIMEOUT_MS);
     } catch (error) {
       this.sandboxHosts.delete(pluginId);
       await host.terminate().catch(() => undefined);

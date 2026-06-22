@@ -66,7 +66,7 @@ describe('PluginLoaderService — sandbox tier routing', () => {
 
     expect(loader.hosts).toHaveLength(1);
     expect(loader.hosts[0].load).toHaveBeenCalled();
-    expect(loader.hosts[0].runLifecycle).toHaveBeenCalledWith('onEnable');
+    expect(loader.hosts[0].runLifecycle).toHaveBeenCalledWith('onEnable', expect.any(Number));
     const plugin = pluginOf(loader);
     expect(plugin.status).toBe(PluginStatus.ENABLED);
     expect(plugin.instance).toBeNull(); // the instance lives in the worker, never in-process
@@ -80,9 +80,24 @@ describe('PluginLoaderService — sandbox tier routing', () => {
 
     await loader.disablePlugin('p1');
 
-    expect(host.runLifecycle).toHaveBeenCalledWith('onDisable');
+    expect(host.runLifecycle).toHaveBeenCalledWith('onDisable', expect.any(Number));
     expect(host.terminate).toHaveBeenCalled();
     expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
+  });
+
+  it('force-terminates the sandbox worker even when onDisable rejects (e.g. times out)', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const host = loader.hosts[0];
+    host.runLifecycle.mockRejectedValueOnce(new Error("plugin worker lifecycle 'onDisable' timed out after 30000ms"));
+
+    await loader.disablePlugin('p1'); // resolves: disable is a force-teardown, not blocked by onDisable
+
+    expect(host.terminate).toHaveBeenCalled(); // worker killed despite the onDisable failure
+    expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
+    // the host must be dropped so a misbehaving plugin can't leak its worker thread
+    expect((loader as unknown as { sandboxHosts: Map<string, unknown> }).sandboxHosts.has('p1')).toBe(false);
   });
 
   it('enables a built-in plugin in-process (no sandbox worker spawned)', async () => {
