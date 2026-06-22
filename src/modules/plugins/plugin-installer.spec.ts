@@ -57,6 +57,20 @@ describe('parsePluginPackage', () => {
     );
   });
 
+  it('rejects an engine-type package (engines are built-in, not user-installable)', () => {
+    const bad = { ...validManifest, id: 'my-engine', type: 'engine' };
+    expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
+      /extension/i,
+    );
+  });
+
+  it('rejects an unknown plugin type', () => {
+    const bad = { ...validManifest, type: 'wormhole' };
+    expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
+      /type/i,
+    );
+  });
+
   it('rejects a zip-slip path escaping the package root', () => {
     // adm-zip sanitizes names on add, so forge the malicious entry name directly to simulate a
     // hand-crafted archive.

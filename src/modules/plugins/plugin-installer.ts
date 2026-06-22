@@ -1,7 +1,7 @@
 import AdmZip from 'adm-zip';
 import * as path from 'path';
 import { BadRequestException } from '@nestjs/common';
-import { PluginManifest } from '../../core/plugins';
+import { PluginManifest, PluginType } from '../../core/plugins';
 
 export interface PackageLimits {
   /** Max number of files in the archive (cheap zip-bomb / fork-bomb guard). */
@@ -14,6 +14,9 @@ export const DEFAULT_PACKAGE_LIMITS: PackageLimits = { maxEntries: 200, maxTotal
 
 /** Plugin ids that ship built-in and must never be shadowed by an uploaded package. */
 export const RESERVED_PLUGIN_IDS = new Set(['whatsapp-web.js', 'baileys', 'auto-reply', 'translation']);
+
+/** Only extensions are user-installable; engines (and other tiers) are built-in by design. */
+export const INSTALLABLE_TYPES = new Set<string>([PluginType.EXTENSION]);
 
 const SAFE_ID = /^[a-z0-9][a-z0-9._-]*$/i;
 const REQUIRED_FIELDS = ['id', 'name', 'version', 'type', 'main'] as const;
@@ -64,6 +67,11 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   }
   if (RESERVED_PLUGIN_IDS.has(manifest.id)) {
     throw new BadRequestException(`Plugin id "${manifest.id}" is reserved by a built-in plugin`);
+  }
+  if (!INSTALLABLE_TYPES.has(manifest.type)) {
+    throw new BadRequestException(
+      `Plugin type "${manifest.type}" is not installable — only extension plugins can be installed (engines and other tiers are built-in).`,
+    );
   }
 
   // Size guard FIRST, off the declared header sizes, so a zip bomb is rejected before we decompress.
