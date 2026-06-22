@@ -16,6 +16,8 @@ import {
   Shield,
   Zap,
   X,
+  Upload,
+  Trash2,
 } from 'lucide-react';
 import { pluginsApi, infraApi } from '../services/api';
 import type { Plugin } from '../services/api';
@@ -73,6 +75,9 @@ export default function Plugins() {
   const [savingConfig, setSavingConfig] = useState(false);
   // Values for a schema-driven (non-engine) plugin's config form, keyed by configSchema property.
   const [schemaConfig, setSchemaConfig] = useState<Record<string, unknown>>({});
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [installFile, setInstallFile] = useState<File | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   const refetchAll = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
@@ -162,6 +167,43 @@ export default function Plugins() {
     }
   };
 
+  const handleInstall = async () => {
+    if (!installFile) return;
+    if (installFile.size > 5 * 1024 * 1024) {
+      toast.error(
+        t('plugins.toasts.installFailed', 'Install failed'),
+        t('plugins.installModal.tooLarge', 'The file exceeds the 5 MB limit.'),
+      );
+      return;
+    }
+    setInstalling(true);
+    try {
+      const installed = await pluginsApi.install(installFile);
+      refetchAll();
+      toast.success(t('plugins.toasts.installed', 'Plugin installed'), installed.name);
+      setShowInstallModal(false);
+      setInstallFile(null);
+    } catch (err) {
+      toast.error(t('plugins.toasts.installFailed', 'Install failed'), err instanceof Error ? err.message : '');
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const handleUninstall = async (plugin: Plugin) => {
+    if (!window.confirm(t('plugins.uninstallConfirm', `Uninstall "${plugin.name}"? This deletes its files.`))) return;
+    setActionLoading(plugin.id);
+    try {
+      await pluginsApi.uninstall(plugin.id);
+      refetchAll();
+      toast.success(t('plugins.toasts.uninstalled', 'Plugin uninstalled'), plugin.name);
+    } catch (err) {
+      toast.error(t('plugins.toasts.uninstallFailed', 'Uninstall failed'), err instanceof Error ? err.message : '');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   if (loading) {
     return (
       <div
@@ -174,6 +216,8 @@ export default function Plugins() {
   }
 
   const activeEngine = engines.find(e => e.id === currentEngine);
+  const enabledCount = plugins.filter(p => p.status === 'enabled').length;
+  const activePlugins = plugins.filter(p => p.status === 'enabled');
 
   return (
     <div className="plugins-page">
@@ -181,10 +225,16 @@ export default function Plugins() {
         title={t('plugins.title')}
         subtitle={t('plugins.subtitle')}
         actions={
-          <button className="btn-secondary" onClick={refetchAll}>
-            <RefreshCw size={16} />
-            {t('plugins.refresh')}
-          </button>
+          <>
+            <button className="btn-secondary" onClick={refetchAll}>
+              <RefreshCw size={16} />
+              {t('plugins.refresh')}
+            </button>
+            <button className="btn-primary" onClick={() => setShowInstallModal(true)}>
+              <Upload size={16} />
+              {t('plugins.install', 'Install plugin')}
+            </button>
+          </>
         }
       />
 
@@ -195,38 +245,57 @@ export default function Plugins() {
         </div>
       )}
 
-      <div className="engine-card">
-        <div className="engine-header">
-          <div className="engine-info">
-            <div className="engine-icon-wrapper">
-              <Cpu size={24} />
-            </div>
-            <div>
-              <h3 className="engine-title">{t('plugins.engineCard')}</h3>
-              <span className="engine-name">
-                {currentEngine}
-                {activeEngine?.library && ` · ${activeEngine.library.name} ${activeEngine.library.version}`}
-              </span>
-            </div>
-          </div>
-          <span className="status-badge connected">{t('plugins.running')}</span>
-        </div>
-
-        {activeEngine && activeEngine.features.length > 0 && (
-          <div className="engine-features">
-            <p className="features-label">{t('plugins.supportedFeatures')}</p>
-            <div className="features-list">
-              {activeEngine.features.map(feature => (
-                <span key={feature} className="feature-tag">
-                  {feature.replace(/-/g, ' ')}
-                </span>
-              ))}
+      <div className="plugins-layout">
+        <aside className="plugins-rail">
+          <div className="rail-section">
+            <p className="rail-label">{t('plugins.rail.engine', 'Active engine')}</p>
+            <div className="rail-engine">
+              <div className="rail-engine-icon">
+                <Cpu size={18} />
+              </div>
+              <div className="rail-engine-meta">
+                <span className="rail-engine-name">{currentEngine || '—'}</span>
+                {activeEngine?.library && (
+                  <span className="rail-engine-lib">
+                    {activeEngine.library.name} {activeEngine.library.version}
+                  </span>
+                )}
+              </div>
+              <span className="status-badge connected">{t('plugins.running')}</span>
             </div>
           </div>
-        )}
-      </div>
 
-      <div className="plugins-grid">
+          <div className="rail-stats">
+            <div className="rail-stat">
+              <span className="rail-stat-num">{enabledCount}</span>
+              <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
+            </div>
+            <div className="rail-stat">
+              <span className="rail-stat-num">{plugins.length}</span>
+              <span className="rail-stat-label">{t('plugins.rail.installed', 'installed')}</span>
+            </div>
+          </div>
+
+          <div className="rail-section">
+            <p className="rail-label">{t('plugins.rail.active', 'Active plugins')}</p>
+            {activePlugins.length === 0 ? (
+              <p className="rail-empty">{t('plugins.rail.none', 'None enabled yet')}</p>
+            ) : (
+              <ul className="rail-active-list">
+                {activePlugins.map(p => (
+                  <li key={p.id} className="rail-active-item">
+                    <span className="status-dot enabled" />
+                    <span className="rail-active-name">{p.name}</span>
+                    <span className="rail-active-type">{p.type}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </aside>
+
+        <main className="plugins-main">
+          <div className="plugins-grid">
         {plugins.map(plugin => {
           const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
           const isLoading = actionLoading === plugin.id;
@@ -295,21 +364,16 @@ export default function Plugins() {
                           </span>
                         );
                       } else {
+                        // Engines are pinned to engine.type and switched via Settings + restart, not at
+                        // runtime — show "available" instead of a misleading "Activate" that the API rejects.
                         return (
-                          <button
-                            onClick={() => handleToggle(plugin)}
-                            disabled={isLoading}
-                            className="btn-toggle enable"
+                          <span
+                            className="btn-available"
+                            title={t('plugins.engineSwitchHint', 'Set as the active engine in Settings, then restart')}
                           >
-                            {isLoading ? (
-                              <Loader2 size={16} className="animate-spin" />
-                            ) : (
-                              <>
-                                <Power size={16} />
-                                {t('plugins.activate')}
-                              </>
-                            )}
-                          </button>
+                            <Cpu size={16} />
+                            {t('plugins.available', 'Available')}
+                          </span>
                         );
                       }
                     })()
@@ -347,11 +411,24 @@ export default function Plugins() {
                   <button className="btn-action" title={t('plugins.configure')} onClick={() => handleOpenConfig(plugin)}>
                     <Settings size={16} />
                   </button>
+
+                  {!plugin.builtIn && (
+                    <button
+                      className="btn-action btn-action-danger"
+                      title={t('plugins.uninstall', 'Uninstall')}
+                      onClick={() => void handleUninstall(plugin)}
+                      disabled={isLoading}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           );
         })}
+          </div>
+        </main>
       </div>
 
       {plugins.length === 0 && !loading && (
@@ -359,6 +436,45 @@ export default function Plugins() {
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>
           <p>{t('plugins.empty.description')}</p>
+        </div>
+      )}
+
+      {showInstallModal && (
+        <div className="modal-overlay" onClick={() => setShowInstallModal(false)}>
+          <div className="modal install-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{t('plugins.installModal.title', 'Install a plugin')}</h2>
+              <button className="btn-icon" onClick={() => setShowInstallModal(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="install-hint">
+                {t('plugins.installModal.hint', 'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.')}
+              </p>
+              <label className={`install-drop${installFile ? ' has-file' : ''}`}>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  hidden
+                  onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
+                />
+                <Upload size={28} />
+                <span className="install-drop-name">
+                  {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
+                </span>
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
+                {t('common.cancel', 'Cancel')}
+              </button>
+              <button className="btn-primary" onClick={() => void handleInstall()} disabled={!installFile || installing}>
+                {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {t('plugins.install', 'Install plugin')}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

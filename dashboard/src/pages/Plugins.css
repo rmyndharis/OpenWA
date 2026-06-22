@@ -105,74 +105,96 @@
 }
 
 .plugin-card-header {
-  padding: 1rem 1.25rem;
+  padding: 1.25rem 1.25rem 1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.plugin-card-header.type-engine {
-  background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
-}
-
-.plugin-card-header.type-storage {
-  background: linear-gradient(135deg, #22c55e 0%, #10b981 100%);
-}
-
-.plugin-card-header.type-queue {
-  background: linear-gradient(135deg, #f97316 0%, #f59e0b 100%);
-}
-
-.plugin-card-header.type-auth {
-  background: linear-gradient(135deg, #a855f7 0%, #8b5cf6 100%);
-}
-
-.plugin-card-header.type-extension {
-  background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);
+  gap: 0.5rem;
 }
 
 .plugin-info {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .plugin-icon-wrapper {
-  width: 40px;
-  height: 40px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  width: 42px;
+  height: 42px;
+  background: var(--bg-light);
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .plugin-icon-wrapper svg {
-  color: #fff;
+  color: var(--text-secondary);
+}
+
+/* Calm, low-saturation type tints on the icon only — no loud gradient header, no alarming red. */
+.type-engine .plugin-icon-wrapper {
+  background: rgba(34, 197, 94, 0.12);
+}
+.type-engine .plugin-icon-wrapper svg {
+  color: #16a34a;
+}
+.type-extension .plugin-icon-wrapper {
+  background: rgba(99, 102, 241, 0.12);
+}
+.type-extension .plugin-icon-wrapper svg {
+  color: #6366f1;
+}
+.type-storage .plugin-icon-wrapper {
+  background: rgba(13, 148, 136, 0.12);
+}
+.type-storage .plugin-icon-wrapper svg {
+  color: #0d9488;
+}
+.type-queue .plugin-icon-wrapper {
+  background: rgba(217, 119, 6, 0.12);
+}
+.type-queue .plugin-icon-wrapper svg {
+  color: #d97706;
+}
+.type-auth .plugin-icon-wrapper {
+  background: rgba(147, 51, 234, 0.12);
+}
+.type-auth .plugin-icon-wrapper svg {
+  color: #9333ea;
 }
 
 .plugin-name {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
   margin: 0;
   text-transform: none;
   letter-spacing: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .plugin-version {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--text-muted);
 }
 
 .plugin-builtin-badge {
-  padding: 0.25rem 0.5rem;
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  padding: 0.1875rem 0.5rem;
+  background: var(--bg-light);
+  color: var(--text-muted);
   font-size: 0.625rem;
   font-weight: 600;
-  border-radius: 4px;
+  border-radius: 5px;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .plugin-card-body {
@@ -580,5 +602,218 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 1rem;
+  }
+}
+
+/* ── Two-column control layout: status rail + plugin catalog ─────────────── */
+.plugins-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.plugins-rail {
+  flex: 0 0 280px;
+  position: sticky;
+  top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.plugins-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rail-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 0.625rem;
+}
+
+.rail-engine {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.rail-engine-icon {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.rail-engine-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.rail-engine-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.rail-engine-lib {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.rail-stats {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.rail-stat {
+  flex: 1;
+  background: var(--bg-light);
+  border-radius: 8px;
+  padding: 0.625rem 0.75rem;
+  text-align: center;
+}
+
+.rail-stat-num {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.rail-stat-label {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rail-active-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rail-active-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rail-active-name {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-active-type {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rail-empty {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Engine that isn't the active one — non-actionable (switch via Settings + restart) */
+.btn-available {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  background: var(--bg-light);
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: default;
+}
+
+/* Uninstall icon button — neutral, red on hover */
+.btn-action-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.btn-action-danger:hover svg {
+  color: #ef4444;
+}
+
+/* Install modal */
+.install-hint {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+.install-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  padding: 2rem 1rem;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.install-drop:hover {
+  border-color: var(--primary, #25d366);
+  color: var(--text-secondary);
+}
+
+.install-drop.has-file {
+  border-style: solid;
+  border-color: var(--primary, #25d366);
+  color: var(--text-primary);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.install-drop-name {
+  font-size: 0.875rem;
+  word-break: break-all;
+}
+
+@media (max-width: 860px) {
+  .plugins-layout {
+    flex-direction: column;
+  }
+
+  .plugins-rail {
+    flex-basis: auto;
+    width: 100%;
+    position: static;
   }
 }

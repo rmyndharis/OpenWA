@@ -284,8 +284,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   // Get API key from sessionStorage for authentication
   const apiKey = sessionStorage.getItem('openwa_api_key');
 
+  // For FormData (file uploads) let the browser set multipart/form-data + boundary itself.
+  const isFormData = options.body instanceof FormData;
   const headers: HeadersInit = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...options.headers,
   };
@@ -639,6 +641,12 @@ export const pluginsApi = {
       body: JSON.stringify({ config }),
     }),
   healthCheck: (id: string) => request<{ healthy: boolean; message?: string }>(`/plugins/${id}/health`),
+  install: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<Plugin>('/plugins/install', { method: 'POST', body: form });
+  },
+  uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
 };
