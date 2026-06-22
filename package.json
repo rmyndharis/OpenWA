@@ -47,10 +47,10 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1068.0",
-    "@bull-board/api": "^8.0.0",
-    "@bull-board/express": "^8.0.0",
-    "@bull-board/nestjs": "^8.0.0",
+    "@aws-sdk/client-s3": "^3.1073.0",
+    "@bull-board/api": "^8.0.1",
+    "@bull-board/express": "^8.0.1",
+    "@bull-board/nestjs": "^8.0.1",
     "@nestjs-modules/ioredis": "^2.0.2",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.1.27",
@@ -61,16 +61,16 @@
     "@nestjs/serve-static": "^5.0.5",
     "@nestjs/swagger": "^11.4.4",
     "@nestjs/throttler": "^6.5.0",
-    "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/typeorm": "^11.0.2",
     "@whiskeysockets/baileys": "6.7.23",
     "archiver": "^8.0.0",
-    "bullmq": "^5.78.1",
+    "bullmq": "^5.79.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.0",
     "helmet": "^8.2.0",
     "ioredis": "^5.11.1",
-    "pg": "^8.21.0",
+    "pg": "^8.22.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
@@ -79,7 +79,7 @@
     "tar-stream": "^3.2.0",
     "typeorm": "^0.3.29",
     "undici": "^6.27.0",
-    "uuid": "^14.0.0",
+    "uuid": "^14.0.1",
     "whatsapp-web.js": "^1.34.7"
   },
   "devDependencies": {
@@ -107,11 +107,11 @@
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.4.11",
-    "ts-loader": "^9.6.0",
+    "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.61.0"
+    "typescript-eslint": "^8.61.1"
   },
   "jest": {
     "moduleFileExtensions": [
