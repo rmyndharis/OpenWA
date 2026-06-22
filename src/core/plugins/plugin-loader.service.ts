@@ -19,9 +19,14 @@ import {
   PluginLogger,
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
+import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+
+/** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
+const SANDBOX_MAX_OLD_GEN_MB = 256;
 
 /**
  * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
@@ -41,6 +46,8 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
 export class PluginLoaderService implements OnModuleInit {
   private readonly logger = createLogger('PluginLoaderService');
   private readonly plugins = new Map<string, PluginInstance>();
+  // Live worker host per enabled sandboxed (untrusted) plugin. Built-ins are not in here.
+  private readonly sandboxHosts = new Map<string, PluginWorkerHost>();
   private readonly pluginsDir: string;
 
   constructor(
@@ -131,6 +138,7 @@ export class PluginLoaderService implements OnModuleInit {
       config: storedConfig,
       instance: null,
       loadedAt: new Date(),
+      builtIn: false,
     };
 
     this.plugins.set(manifest.id, pluginInstance);
@@ -186,30 +194,10 @@ export class PluginLoaderService implements OnModuleInit {
     }
 
     try {
-      // Create plugin context
-      const context = this.createPluginContext(plugin);
-
-      // Load the plugin instance if not already loaded
-      if (!plugin.instance) {
-        // Containment guard: reject a manifest.main that escapes the plugin dir.
-        const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
-        // Dynamic require for user plugins
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pluginModule = require(mainPath) as { default?: new () => IPlugin };
-        if (pluginModule.default) {
-          plugin.instance = new pluginModule.default();
-        } else {
-          throw new Error(`Plugin ${pluginId} does not export a default class`);
-        }
-      }
-
-      // Call lifecycle hooks
-      if (plugin.instance.onLoad) {
-        await plugin.instance.onLoad(context);
-      }
-
-      if (plugin.instance.onEnable) {
-        await plugin.instance.onEnable(context);
+      if (plugin.builtIn === false) {
+        await this.enableSandboxed(pluginId, plugin);
+      } else {
+        await this.enableInProcess(pluginId, plugin);
       }
 
       plugin.status = PluginStatus.ENABLED;
@@ -244,10 +232,16 @@ export class PluginLoaderService implements OnModuleInit {
     }
 
     try {
-      const context = this.createPluginContext(plugin);
-
-      if (plugin.instance?.onDisable) {
-        await plugin.instance.onDisable(context);
+      const host = this.sandboxHosts.get(pluginId);
+      if (host) {
+        await host.runLifecycle('onDisable');
+        await host.terminate();
+        this.sandboxHosts.delete(pluginId);
+      } else {
+        const context = this.createPluginContext(plugin);
+        if (plugin.instance?.onDisable) {
+          await plugin.instance.onDisable(context);
+        }
       }
 
       // Unregister all hooks for this plugin
@@ -381,6 +375,62 @@ export class PluginLoaderService implements OnModuleInit {
     return this.resolveEngine(manifest, sessionId);
   }
 
+  /**
+   * Build a worker host for a sandboxed (untrusted) plugin. Overridable so tests can inject a fake
+   * instead of spawning a real OS thread. Production loads the compiled worker bootstrap from dist.
+   */
+  protected createSandboxHost(): PluginWorkerHost {
+    const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
+    return new PluginWorkerHost(
+      new WorkerThreadChannel({ workerEntry, maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB }),
+    );
+  }
+
+  /** Built-in (trusted) enable: require + run the lifecycle in-process with the live capability context. */
+  private async enableInProcess(pluginId: string, plugin: PluginInstance): Promise<void> {
+    const context = this.createPluginContext(plugin);
+
+    if (!plugin.instance) {
+      // Containment guard: reject a manifest.main that escapes the plugin dir.
+      const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pluginModule = require(mainPath) as { default?: new () => IPlugin };
+      if (pluginModule.default) {
+        plugin.instance = new pluginModule.default();
+      } else {
+        throw new Error(`Plugin ${pluginId} does not export a default class`);
+      }
+    }
+
+    if (plugin.instance.onLoad) {
+      await plugin.instance.onLoad(context);
+    }
+    if (plugin.instance.onEnable) {
+      await plugin.instance.onEnable(context);
+    }
+  }
+
+  /**
+   * Untrusted enable: load the plugin in an isolated worker and drive its lifecycle there. No
+   * in-process instance or capability context (the capability bridge arrives in a later phase), so
+   * the worker plugin runs isolated and inert until then. A failure tears the worker back down.
+   */
+  private async enableSandboxed(pluginId: string, plugin: PluginInstance): Promise<void> {
+    // Containment guard: reject a manifest.main that escapes the plugin dir.
+    const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
+    const host = this.createSandboxHost();
+    this.sandboxHosts.set(pluginId, host);
+    try {
+      await host.load(mainPath);
+      await host.runLifecycle('onLoad');
+      await host.runLifecycle('onEnable');
+    } catch (error) {
+      this.sandboxHosts.delete(pluginId);
+      await host.terminate().catch(() => undefined);
+      throw error;
+    }
+  }
+
   private createPluginContext(plugin: PluginInstance): PluginContext {
     const pluginLogger: PluginLogger = {
       log: (message, meta) =>
@@ -477,6 +527,7 @@ export class PluginLoaderService implements OnModuleInit {
       config: effectiveConfig,
       instance,
       loadedAt: new Date(),
+      builtIn: true,
     };
 
     this.plugins.set(manifest.id, pluginInstance);

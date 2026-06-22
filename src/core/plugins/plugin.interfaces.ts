@@ -220,6 +220,9 @@ export interface PluginInstance {
   error?: string;
   loadedAt?: Date;
   enabledAt?: Date;
+  // First-party built-ins (engines, bundled extensions) run in-process; plugins loaded from the
+  // plugins directory are untrusted and run sandboxed in a worker. `false` => sandboxed.
+  builtIn?: boolean;
 }
 
 // ============================================================================
