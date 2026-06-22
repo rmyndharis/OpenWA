@@ -169,6 +169,13 @@ export default function Plugins() {
 
   const handleInstall = async () => {
     if (!installFile) return;
+    if (installFile.size > 5 * 1024 * 1024) {
+      toast.error(
+        t('plugins.toasts.installFailed', 'Install failed'),
+        t('plugins.installModal.tooLarge', 'The file exceeds the 5 MB limit.'),
+      );
+      return;
+    }
     setInstalling(true);
     try {
       const installed = await pluginsApi.install(installFile);

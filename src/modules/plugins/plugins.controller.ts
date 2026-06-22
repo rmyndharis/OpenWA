@@ -14,12 +14,12 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { PluginsService } from './plugins.service';
-
-/** Max accepted upload size for a plugin package (compressed). */
-const MAX_PLUGIN_UPLOAD_BYTES = 5 * 1024 * 1024;
 import { PluginDto, PluginConfigDto } from './dto/plugin.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
+
+/** Max accepted upload size for a plugin package (compressed). */
+const MAX_PLUGIN_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 @ApiTags('plugins')
 @Controller('plugins')
