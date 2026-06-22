@@ -115,21 +115,23 @@ export interface WhatsAppWebJsConfig {
   };
 }
 
+export const DEFAULT_WWEBJS_WEB_VERSION = '2.3000.1040641150-alpha';
+const READY_RECONCILE_INTERVAL_MS = 2000;
+const READY_RECONCILE_TIMEOUT_MS = 90_000;
+
 /**
- * Optional pin for the WhatsApp Web client version. whatsapp-web.js 1.34.x can get stuck at
- * "authenticating" (the post-link sync never completes) when the auto-fetched WA-Web version is
- * incompatible (#251). Set WWEBJS_WEB_VERSION to a known-good version string (browse
- * https://github.com/wppconnect-team/wa-version) to pin it; WWEBJS_WEB_VERSION_REMOTE_PATH
- * overrides the URL template (use `{version}` as the placeholder) if you self-host the HTML.
- * Unset (or `latest`/`off`) keeps whatsapp-web.js's default auto-version behavior.
+ * WhatsApp Web client version pin. whatsapp-web.js 1.34.x can get stuck at "authenticating" when the
+ * auto-fetched WA-Web version is incompatible (#251/#273). Default to the currently validated cached
+ * build so first-run sessions work; set WWEBJS_WEB_VERSION=latest|off|auto to restore auto-selection.
  */
 export function resolveWebVersionPin():
   | { webVersion: string; webVersionCache: { type: 'remote'; remotePath: string } }
   | undefined {
-  const version = process.env.WWEBJS_WEB_VERSION?.trim();
-  if (!version || version.toLowerCase() === 'off' || version.toLowerCase() === 'latest') {
+  const rawVersion = process.env.WWEBJS_WEB_VERSION?.trim();
+  if (rawVersion && ['off', 'latest', 'auto'].includes(rawVersion.toLowerCase())) {
     return undefined;
   }
+  const version = rawVersion || DEFAULT_WWEBJS_WEB_VERSION;
   const template =
     process.env.WWEBJS_WEB_VERSION_REMOTE_PATH?.trim() ||
     'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html';
@@ -184,6 +186,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private phoneNumber: string | null = null;
   private pushName: string | null = null;
   private callbacks: EngineEventCallbacks = {};
+  private readyReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyReconcileStartedAt = 0;
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -277,20 +281,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('authenticated', () => {
       this.setStatus(EngineStatus.AUTHENTICATING);
       this.qrCode = null;
+      this.scheduleReadyReconcile();
     });
 
     this.client.on('ready', () => {
-      try {
-        const info = this.client?.info;
-        this.phoneNumber = info?.wid?.user || null;
-        this.pushName = info?.pushname || null;
-        this.setStatus(EngineStatus.READY);
-        this.callbacks.onReady?.(this.phoneNumber || '', this.pushName || '');
-      } catch (error) {
-        this.logger.error('Error getting client info', String(error));
-        this.setStatus(EngineStatus.READY);
-        this.callbacks.onReady?.('', '');
-      }
+      this.markReadyFromClientInfo();
     });
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
@@ -423,17 +418,93 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('disconnected', reason => {
+      this.clearReadyReconcile();
       this.setStatus(EngineStatus.DISCONNECTED);
       this.callbacks.onDisconnected?.(reason);
     });
 
     this.client.on('auth_failure', (message?: string) => {
+      this.clearReadyReconcile();
       this.setStatus(EngineStatus.FAILED);
       // Authentication failure is terminal: the stored credentials are invalid and
       // reconnecting will not help — the operator must re-scan the QR code. Route it
       // through onError (FAILED, no reconnect) rather than onDisconnected (reconnect).
       this.callbacks.onError?.(message ? `Authentication failed: ${message}` : 'Authentication failed');
     });
+  }
+
+  private markReadyFromClientInfo(): void {
+    if (this.status === EngineStatus.READY) return;
+    this.clearReadyReconcile();
+    try {
+      const info = this.client?.info;
+      this.phoneNumber = info?.wid?.user || null;
+      this.pushName = info?.pushname || null;
+      this.setStatus(EngineStatus.READY);
+      this.callbacks.onReady?.(this.phoneNumber || '', this.pushName || '');
+    } catch (error) {
+      this.logger.error('Error getting client info', String(error));
+      this.setStatus(EngineStatus.READY);
+      this.callbacks.onReady?.('', '');
+    }
+  }
+
+  private scheduleReadyReconcile(): void {
+    this.clearReadyReconcile();
+    this.readyReconcileStartedAt = Date.now();
+
+    const tick = async (): Promise<void> => {
+      if (!this.client || this.status !== EngineStatus.AUTHENTICATING) {
+        this.clearReadyReconcile();
+        return;
+      }
+
+      try {
+        if (await this.isClientRuntimeReady()) {
+          this.logger.warn('WhatsApp Web ready event was missed; reconciling from connected runtime state');
+          this.markReadyFromClientInfo();
+          return;
+        }
+      } catch (error) {
+        this.logger.debug('Ready reconciliation probe failed', { error: String(error) });
+      }
+
+      if (Date.now() - this.readyReconcileStartedAt >= READY_RECONCILE_TIMEOUT_MS) {
+        this.logger.warn('Timed out waiting for WhatsApp Web runtime readiness after authentication');
+        this.clearReadyReconcile();
+        return;
+      }
+
+      this.readyReconcileTimer = setTimeout(() => {
+        void tick();
+      }, READY_RECONCILE_INTERVAL_MS);
+      this.readyReconcileTimer.unref?.();
+    };
+
+    this.readyReconcileTimer = setTimeout(() => {
+      void tick();
+    }, READY_RECONCILE_INTERVAL_MS);
+    this.readyReconcileTimer.unref?.();
+  }
+
+  private clearReadyReconcile(): void {
+    if (this.readyReconcileTimer) {
+      clearTimeout(this.readyReconcileTimer);
+      this.readyReconcileTimer = null;
+    }
+    this.readyReconcileStartedAt = 0;
+  }
+
+  private async isClientRuntimeReady(): Promise<boolean> {
+    if (!this.client) return false;
+    const state = await this.client.getState();
+    if (state !== 'CONNECTED') return false;
+
+    const page = (this.client as unknown as { pupPage?: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
+    const hasWWebJS = await page?.evaluate(
+      () => typeof (window as unknown as { WWebJS?: unknown }).WWebJS !== 'undefined',
+    );
+    return hasWWebJS === true;
   }
 
   private setStatus(status: EngineStatus): void {
@@ -453,6 +524,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         // Already destroyed or not initialized - ignore
       }
       this.client = null;
+      this.clearReadyReconcile();
       this.setStatus(EngineStatus.DISCONNECTED);
     }
   }
@@ -472,6 +544,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         }
       }
       this.client = null;
+      this.clearReadyReconcile();
       this.setStatus(EngineStatus.DISCONNECTED);
     }
   }
@@ -480,6 +553,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (this.client) {
       await this.client.destroy();
       this.client = null;
+      this.clearReadyReconcile();
       this.setStatus(EngineStatus.DISCONNECTED);
     }
   }
@@ -511,6 +585,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
 
     this.client = null;
+    this.clearReadyReconcile();
     this.setStatus(EngineStatus.DISCONNECTED);
   }
 

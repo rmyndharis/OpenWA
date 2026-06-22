@@ -209,16 +209,18 @@ stuck. Often seen on ARM64 (e.g. Raspberry Pi) after upgrading to v0.2.x.
 stalls the post-link sync. (If you also see `chrome_crashpad_handler: --database is required` *and the
 session never starts at all*, that is a different problem — see "Session fails to launch …" below.)
 
-**Fix:** pin a known-good WhatsApp Web version with `WWEBJS_WEB_VERSION`:
+**Default behavior:** OpenWA pins a validated WhatsApp Web version for `whatsapp-web.js` by default
+because auto-selecting the latest web client can break the post-link injection step. To override the
+default, set `WWEBJS_WEB_VERSION`:
 
 ```bash
-# Confirmed to reach "ready" (incl. ARM64 / Raspberry Pi 5):
-WWEBJS_WEB_VERSION=2.3000.1023204257
+# Current default, confirmed to reach "ready":
+WWEBJS_WEB_VERSION=2.3000.1040641150-alpha
 ```
 
-Restart the container after setting it. Browse newer versions at
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder).
-Set `WWEBJS_WEB_VERSION=latest` (or leave it unset) to restore the default auto-version behavior.
+Restart the container after changing it. Browse newer versions at
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder). Set
+`WWEBJS_WEB_VERSION=latest`, `auto`, or `off` to restore whatsapp-web.js auto-version behavior.
 
 ### Issue: QR generation times out on slow first boot (WSL2 / low-resource)
 

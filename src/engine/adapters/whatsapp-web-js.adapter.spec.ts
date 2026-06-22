@@ -1,5 +1,7 @@
 import { MessageMedia } from 'whatsapp-web.js';
+import { EventEmitter } from 'events';
 import {
+  DEFAULT_WWEBJS_WEB_VERSION,
   WhatsAppWebJsAdapter,
   extractLinkedParentJID,
   isHttpUrl,
@@ -292,6 +294,43 @@ describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', (
   });
 });
 
+describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('marks the adapter ready when authenticated runtime is connected but the ready event is missed', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const fakeClient = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue('CONNECTED'),
+      pupPage: {
+        evaluate: jest.fn().mockResolvedValue(true),
+      },
+    });
+    const onReady = jest.fn();
+    const onStateChanged = jest.fn();
+
+    (adapter as unknown as { client: unknown }).client = fakeClient;
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onReady, onStateChanged };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    fakeClient.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(onReady).toHaveBeenCalledWith('628123', 'Tester');
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
   // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
   const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {
@@ -319,7 +358,7 @@ describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () =>
   });
 });
 
-describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
+describe('resolveWebVersionPin (#251 — default WA-Web version pin)', () => {
   const orig = { v: process.env.WWEBJS_WEB_VERSION, p: process.env.WWEBJS_WEB_VERSION_REMOTE_PATH };
   afterEach(() => {
     if (orig.v === undefined) delete process.env.WWEBJS_WEB_VERSION;
@@ -328,23 +367,34 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
     else process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = orig.p;
   });
 
-  it('returns undefined (default auto-version) when unset / "latest" / "off"', () => {
+  it('pins the validated cached WA-Web version by default', () => {
     delete process.env.WWEBJS_WEB_VERSION;
-    expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'latest';
-    expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'off';
-    expect(resolveWebVersionPin()).toBeUndefined();
+    delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
+    expect(resolveWebVersionPin()).toEqual({
+      webVersion: DEFAULT_WWEBJS_WEB_VERSION,
+      webVersionCache: {
+        type: 'remote',
+        remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/${DEFAULT_WWEBJS_WEB_VERSION}.html`,
+      },
+    });
+  });
+
+  it('returns undefined for explicit auto-version opt-outs', () => {
+    for (const value of ['latest', 'off', 'auto']) {
+      process.env.WWEBJS_WEB_VERSION = value;
+      expect(resolveWebVersionPin()).toBeUndefined();
+    }
   });
 
   it('pins a remote webVersionCache from the version when set', () => {
     delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
-    process.env.WWEBJS_WEB_VERSION = '2.3000.1023204257';
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
     expect(resolveWebVersionPin()).toEqual({
-      webVersion: '2.3000.1023204257',
+      webVersion: '2.3000.1041203030-alpha',
       webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023204257.html',
+        remotePath:
+          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041203030-alpha.html',
       },
     });
   });
