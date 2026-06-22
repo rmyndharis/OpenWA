@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was advisory and unenforced. The built-in extensions declare exactly what they use (auto-reply:
   `messages:send`; translation: `messages:send` + `engine:read`) and are unaffected; custom plugins
   must declare the permissions for the capabilities they call. (#412)
+- **Bulk-message variable substitution now uses the same `{{name}}` syntax as message templates.**
+  `POST /sessions/:id/messages/send-bulk` previously substituted `messages[].variables` with a
+  single-brace `{name}` convention, inconsistent with the double-brace `{{name}}` used everywhere
+  else in the gateway. Bulk content is now rendered by the shared template helper, so the canonical
+  `{{name}}` placeholders work in bulk content. Existing single-brace `{name}` content keeps working
+  unchanged. (#69, #411)
+
+### Deprecated
+
+- **Single-brace `{name}` placeholders in bulk-message content.** Prefer `{{name}}`; the legacy
+  `{name}` form is still substituted for backward compatibility but may be removed in a future major
+  version. (#69, #411)
 
 ### Fixed
 

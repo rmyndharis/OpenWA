@@ -172,6 +172,28 @@ describe('BulkMessageService.processBatch', () => {
     const savedStatuses = (repo.save.mock.calls as [MessageBatch][]).map(c => c[0].status);
     expect(savedStatuses[savedStatuses.length - 1]).toBe(BatchStatus.CANCELLED);
   });
+
+  it('substitutes canonical {{name}} placeholders in bulk content', async () => {
+    const batch = makeBatch(1);
+    batch.messages[0].content = { text: 'Hi {{name}}' };
+    batch.messages[0].variables = { name: 'Sam' };
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('c0@c.us', 'Hi Sam');
+  });
+
+  it('still substitutes legacy single-brace {name} placeholders (backward compatible)', async () => {
+    const batch = makeBatch(1);
+    batch.messages[0].content = { text: 'Hi {name}' };
+    batch.messages[0].variables = { name: 'Sam' };
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('c0@c.us', 'Hi Sam');
+  });
 });
 
 describe('BulkMessageService.createBatch base64 media cap', () => {
