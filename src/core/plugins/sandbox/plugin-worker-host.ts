@@ -1,0 +1,82 @@
+import { PluginWorkerChannel, PluginLifecycleMethod, WorkerToHostMessage } from './protocol';
+
+/**
+ * Host-side driver for a single untrusted plugin running in a worker. Owns the request/response
+ * correlation over a {@link PluginWorkerChannel}: it posts `load`/`lifecycle` messages and resolves
+ * the matching promise when the worker replies, and fails every outstanding call if the worker dies.
+ *
+ * Phase B1 covers lifecycle only. The capability bridge (B2) and hook bridge (B3) extend this with
+ * their own correlated message kinds, all over the same channel.
+ */
+export class PluginWorkerHost {
+  private nextId = 1;
+  private ready = false;
+  private dead = false;
+  private readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+  private readonly pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+
+  constructor(private readonly channel: PluginWorkerChannel) {
+    this.channel.onMessage(message => this.handleMessage(message));
+    this.channel.onExit(code => this.handleExit(code));
+  }
+
+  /** Load the plugin module in the worker; resolves once it reports `ready`, rejects if it errors. */
+  load(mainPath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.dead) return reject(new Error('plugin worker is no longer running'));
+      if (this.ready) return resolve();
+      this.readyWaiters.push({ resolve, reject });
+      this.channel.postMessage({ kind: 'load', mainPath });
+    });
+  }
+
+  /** Invoke a plugin lifecycle method in the worker; resolves/rejects on the correlated result. */
+  runLifecycle(method: PluginLifecycleMethod): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.dead) return reject(new Error('plugin worker is no longer running'));
+      const id = this.nextId++;
+      this.pending.set(id, { resolve, reject });
+      this.channel.postMessage({ kind: 'lifecycle', id, method });
+    });
+  }
+
+  /** Tear the worker down. */
+  terminate(): Promise<void> {
+    return this.channel.terminate();
+  }
+
+  private handleMessage(message: WorkerToHostMessage): void {
+    switch (message.kind) {
+      case 'ready':
+        this.ready = true;
+        this.drain(this.readyWaiters, w => w.resolve());
+        break;
+      case 'error': {
+        const error = new Error(message.error);
+        this.drain(this.readyWaiters, w => w.reject(error));
+        break;
+      }
+      case 'lifecycle-result': {
+        const waiter = this.pending.get(message.id);
+        if (!waiter) return;
+        this.pending.delete(message.id);
+        if (message.ok) waiter.resolve();
+        else waiter.reject(new Error(message.error));
+        break;
+      }
+    }
+  }
+
+  private handleExit(code: number): void {
+    this.dead = true;
+    const error = new Error(`plugin worker exited unexpectedly (code ${code})`);
+    this.drain(this.readyWaiters, w => w.reject(error));
+    this.pending.forEach(waiter => waiter.reject(error));
+    this.pending.clear();
+  }
+
+  private drain<T>(waiters: T[], fn: (w: T) => void): void {
+    const current = waiters.splice(0, waiters.length);
+    current.forEach(fn);
+  }
+}
