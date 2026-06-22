@@ -79,4 +79,25 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
   it('uninstalling an unknown plugin throws NotFound', async () => {
     await expect(service.uninstall('nope')).rejects.toThrow(/not found/i);
   });
+
+  it('updatePackage swaps to the new version and preserves operator config', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    service.updateConfig('svc-plg', { apiKey: 'secret-123' });
+
+    const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+
+    expect(dto.version).toBe('2.0.0');
+    expect(dto.config).toEqual({ apiKey: 'secret-123' }); // config survived the in-place update
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg', 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg.bak'))).toBe(false); // backup cleaned up
+  });
+
+  it('updatePackage rejects a package whose id does not match', async () => {
+    service.install({ buffer: pkg() });
+    await expect(service.updatePackage('svc-plg', pkg({ id: 'other-plg' }))).rejects.toThrow(/does not match/i);
+  });
+
+  it('updatePackage on an unknown plugin throws NotFound', async () => {
+    await expect(service.updatePackage('nope', pkg())).rejects.toThrow(/not found/i);
+  });
 });

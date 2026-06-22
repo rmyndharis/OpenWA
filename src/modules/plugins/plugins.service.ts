@@ -216,6 +216,82 @@ export class PluginsService {
     return annotateCatalog(entries, installed);
   }
 
+  /**
+   * Update an installed plugin in place from a validated package buffer, preserving operator config and
+   * the enabled state. The package id must match the installed id. Config survives because `unloadPlugin`
+   * drops the plugin from memory but keeps its registry entry (config); `loadPlugin` re-reads it. The old
+   * directory is backed up and restored if the swap or reload of the new version fails, so a bad update
+   * never leaves the plugin broken.
+   */
+  async updatePackage(id: string, buffer: Buffer): Promise<PluginDto> {
+    const plugin = this.pluginLoader.getPlugin(id);
+    if (!plugin) {
+      throw new NotFoundException(`Plugin ${id} not found`);
+    }
+    if (this.pluginLoader.isBuiltIn(id)) {
+      throw new BadRequestException(`Cannot update built-in plugin ${id}`);
+    }
+
+    // Validate the new package BEFORE touching the running plugin. An update must be the same plugin.
+    const { manifest, entries } = parsePluginPackage(buffer);
+    if (manifest.id !== id) {
+      throw new BadRequestException(`Package id "${manifest.id}" does not match the plugin being updated ("${id}")`);
+    }
+
+    const wasEnabled = plugin.status === PluginStatus.ENABLED;
+    const dir = path.join(this.pluginLoader.getPluginsDir(), id);
+    const backup = `${dir}.bak`;
+
+    // Stop the running plugin (terminates its sandbox worker) but keep its registry entry so config survives.
+    await this.pluginLoader.unloadPlugin(id);
+
+    fs.rmSync(backup, { recursive: true, force: true });
+    fs.renameSync(dir, backup);
+
+    try {
+      for (const entry of entries) {
+        const dest = path.join(dir, entry.relPath);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.data);
+      }
+      this.pluginLoader.loadPlugin(dir);
+      if (wasEnabled) {
+        await this.pluginLoader.enablePlugin(id);
+      }
+      fs.rmSync(backup, { recursive: true, force: true });
+    } catch (error) {
+      // Roll back to the previous version: restore the backed-up directory and reload it.
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.renameSync(backup, dir);
+      try {
+        this.pluginLoader.loadPlugin(dir);
+        if (wasEnabled) await this.pluginLoader.enablePlugin(id);
+      } catch {
+        /* best-effort restore; surface the original failure below */
+      }
+      if (error instanceof HttpException) throw error;
+      throw new BadRequestException(
+        `Failed to update plugin: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    return this.findOne(id);
+  }
+
+  /** Update an installed plugin by downloading the new package from a URL (SSRF-guarded), then in place. */
+  async updateFromUrl(id: string, url: string): Promise<PluginDto> {
+    const maxBytes = this.configService.get<number>('plugins.downloadMaxBytes') ?? 5 * 1024 * 1024;
+    let buffer: Buffer;
+    try {
+      buffer = await fetchSafeBuffer(url, { maxBytes });
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to download plugin from URL: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.updatePackage(id, buffer);
+  }
+
   /** Uninstall an installed user plugin: disable, unload, and delete its files. Built-ins are protected. */
   async uninstall(id: string): Promise<{ success: boolean; message: string }> {
     const plugin = this.pluginLoader.getPlugin(id);

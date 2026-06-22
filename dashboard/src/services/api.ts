@@ -668,6 +668,8 @@ export const pluginsApi = {
   },
   installFromUrl: (url: string) =>
     request<Plugin>('/plugins/install-url', { method: 'POST', body: JSON.stringify({ url }) }),
+  updateFromUrl: (id: string, url: string) =>
+    request<Plugin>(`/plugins/${id}/update`, { method: 'POST', body: JSON.stringify({ url }) }),
   catalog: () => request<CatalogPlugin[]>('/plugins/catalog'),
   uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),

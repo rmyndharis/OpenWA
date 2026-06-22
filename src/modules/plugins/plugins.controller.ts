@@ -102,6 +102,16 @@ export class PluginsController {
     return this.pluginsService.updateConfig(id, configDto.config);
   }
 
+  @Post(':id/update')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'Update an installed plugin in place from a URL (preserves config + enabled state)' })
+  @ApiResponse({ status: 201, description: 'Plugin updated' })
+  @ApiResponse({ status: 400, description: 'Invalid URL/package, id mismatch, or built-in' })
+  @ApiResponse({ status: 404, description: 'Plugin not found' })
+  async update(@Param('id') id: string, @Body() dto: InstallFromUrlDto): Promise<PluginDto> {
+    return await this.pluginsService.updateFromUrl(id, dto.url);
+  }
+
   @Delete(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Uninstall a plugin (removes its files; built-ins are protected)' })

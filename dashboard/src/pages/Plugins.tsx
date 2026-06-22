@@ -238,6 +238,27 @@ export default function Plugins() {
     }
   };
 
+  const handleUpdateFromCatalog = async (entry: CatalogPlugin) => {
+    if (!entry.download) {
+      toast.error(
+        t('plugins.toasts.updateFailed', 'Update failed'),
+        t('plugins.catalog.noDownload', 'This catalog entry has no download URL.'),
+      );
+      return;
+    }
+    setInstallingId(entry.id);
+    try {
+      const updated = await pluginsApi.updateFromUrl(entry.id, entry.download);
+      refetchAll();
+      await loadCatalog();
+      toast.success(t('plugins.catalog.updated', 'Plugin updated'), `${updated.name} v${updated.version}`);
+    } catch (err) {
+      toast.error(t('plugins.toasts.updateFailed', 'Update failed'), err instanceof Error ? err.message : '');
+    } finally {
+      setInstallingId(null);
+    }
+  };
+
   const handleUninstall = async (plugin: Plugin) => {
     if (!window.confirm(t('plugins.uninstallConfirm', { name: plugin.name }))) return;
     setActionLoading(plugin.id);
@@ -579,9 +600,24 @@ export default function Plugins() {
                           </div>
                           <div className="catalog-row-action">
                             {entry.installed ? (
-                              <span className="catalog-installed">
-                                <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
-                              </span>
+                              entry.updateAvailable ? (
+                                <button
+                                  className="btn-primary"
+                                  disabled={installingId !== null || !entry.download}
+                                  onClick={() => void handleUpdateFromCatalog(entry)}
+                                >
+                                  {installingId === entry.id ? (
+                                    <Loader2 size={15} className="animate-spin" />
+                                  ) : (
+                                    <Download size={15} />
+                                  )}
+                                  {t('plugins.catalog.update', 'Update')}
+                                </button>
+                              ) : (
+                                <span className="catalog-installed">
+                                  <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
+                                </span>
+                              )
                             ) : (
                               <button
                                 className="btn-primary"
