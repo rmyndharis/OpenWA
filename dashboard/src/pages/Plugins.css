@@ -817,3 +817,107 @@
     position: static;
   }
 }
+
+/* ── Install modal: Upload / Catalog tabs + catalog list ─────────────────── */
+.install-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.install-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.install-tab.active {
+  color: var(--text, #111827);
+  border-bottom-color: var(--primary, #25d366);
+}
+
+.catalog-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 12px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.875rem;
+}
+
+.catalog-error {
+  flex-wrap: wrap;
+  color: var(--danger, #dc2626);
+}
+
+.catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.catalog-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+}
+
+.catalog-row-info {
+  min-width: 0;
+}
+
+.catalog-row-name {
+  font-weight: 600;
+}
+
+.catalog-row-version {
+  color: var(--text-secondary, #6b7280);
+  font-weight: 400;
+  font-size: 0.85em;
+}
+
+.catalog-row-desc {
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+
+.catalog-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.catalog-badge.update {
+  color: var(--primary, #25d366);
+}
+
+.catalog-row-action {
+  flex-shrink: 0;
+}
+
+.catalog-installed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.85rem;
+}

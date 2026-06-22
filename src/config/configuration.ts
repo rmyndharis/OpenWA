@@ -113,6 +113,18 @@ export default () => ({
       .filter(Boolean),
   },
 
+  // Plugin platform configuration
+  plugins: {
+    // Where installed plugins live on disk (matches the plugin loader's default).
+    dir: process.env.PLUGINS_DIR || './plugins',
+    // Remote catalog of installable plugins (JSON array; the OpenWA-plugins repo's plugins.json).
+    // Fetched through the SSRF guard — add its host to SSRF_ALLOWED_HOSTS if it is not publicly resolvable.
+    catalogUrl:
+      process.env.PLUGIN_CATALOG_URL || 'https://raw.githubusercontent.com/rmyndharis/OpenWA-plugins/main/plugins.json',
+    // Cap on a plugin .zip downloaded by install-from-URL (matches the 5 MB upload limit).
+    downloadMaxBytes: parseInt(process.env.PLUGIN_DOWNLOAD_MAX_BYTES || String(5 * 1024 * 1024), 10),
+  },
+
   // Storage configuration
   storage: {
     type: process.env.STORAGE_TYPE || 'local',

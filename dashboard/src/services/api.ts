@@ -620,6 +620,26 @@ export interface Engine {
   library?: { name: string; version: string };
 }
 
+/** A remote catalog entry annotated with this instance's install state. */
+export interface CatalogPlugin {
+  id: string;
+  name: string;
+  version: string;
+  type?: string;
+  status?: string;
+  description?: string;
+  author?: string;
+  license?: string;
+  keywords?: string[];
+  minOpenWAVersion?: string;
+  testedOpenWAVersion?: string;
+  homepage?: string;
+  download?: string;
+  installed: boolean;
+  installedVersion: string | null;
+  updateAvailable: boolean;
+}
+
 // =============================================================================
 // Plugins API
 // =============================================================================
@@ -646,6 +666,9 @@ export const pluginsApi = {
     form.append('file', file);
     return request<Plugin>('/plugins/install', { method: 'POST', body: form });
   },
+  installFromUrl: (url: string) =>
+    request<Plugin>('/plugins/install-url', { method: 'POST', body: JSON.stringify({ url }) }),
+  catalog: () => request<CatalogPlugin[]>('/plugins/catalog'),
   uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),

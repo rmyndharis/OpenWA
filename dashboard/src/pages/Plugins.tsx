@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,9 +18,11 @@ import {
   X,
   Upload,
   Trash2,
+  Globe,
+  Download,
 } from 'lucide-react';
 import { pluginsApi, infraApi } from '../services/api';
-import type { Plugin } from '../services/api';
+import type { Plugin, CatalogPlugin } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   usePluginsQuery,
@@ -78,6 +80,11 @@ export default function Plugins() {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [installFile, setInstallFile] = useState<File | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [installMode, setInstallMode] = useState<'upload' | 'catalog'>('upload');
+  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [installingId, setInstallingId] = useState<string | null>(null);
 
   const refetchAll = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
@@ -187,6 +194,47 @@ export default function Plugins() {
       toast.error(t('plugins.toasts.installFailed', 'Install failed'), err instanceof Error ? err.message : '');
     } finally {
       setInstalling(false);
+    }
+  };
+
+  const loadCatalog = async () => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      setCatalog(await pluginsApi.catalog());
+    } catch (err) {
+      setCatalogError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  // Lazy-load the catalog the first time the Catalog tab is opened.
+  useEffect(() => {
+    if (showInstallModal && installMode === 'catalog' && catalog.length === 0 && !catalogLoading && !catalogError) {
+      void loadCatalog();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showInstallModal, installMode]);
+
+  const handleInstallFromCatalog = async (entry: CatalogPlugin) => {
+    if (!entry.download) {
+      toast.error(
+        t('plugins.toasts.installFailed', 'Install failed'),
+        t('plugins.catalog.noDownload', 'This catalog entry has no download URL.'),
+      );
+      return;
+    }
+    setInstallingId(entry.id);
+    try {
+      const installed = await pluginsApi.installFromUrl(entry.download);
+      refetchAll();
+      await loadCatalog();
+      toast.success(t('plugins.toasts.installed', 'Plugin installed'), installed.name);
+    } catch (err) {
+      toast.error(t('plugins.toasts.installFailed', 'Install failed'), err instanceof Error ? err.message : '');
+    } finally {
+      setInstallingId(null);
     }
   };
 
@@ -448,32 +496,119 @@ export default function Plugins() {
                 <X size={20} />
               </button>
             </div>
-            <div className="modal-body">
-              <p className="install-hint">
-                {t('plugins.installModal.hint', 'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.')}
-              </p>
-              <label className={`install-drop${installFile ? ' has-file' : ''}`}>
-                <input
-                  type="file"
-                  accept=".zip,application/zip"
-                  hidden
-                  onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
-                />
-                <Upload size={28} />
-                <span className="install-drop-name">
-                  {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
-                </span>
-              </label>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
-                {t('common.cancel', 'Cancel')}
+            <div className="install-tabs">
+              <button
+                className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
+                onClick={() => setInstallMode('upload')}
+              >
+                <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
               </button>
-              <button className="btn-primary" onClick={() => void handleInstall()} disabled={!installFile || installing}>
-                {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                {t('plugins.install', 'Install plugin')}
+              <button
+                className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
+                onClick={() => setInstallMode('catalog')}
+              >
+                <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
               </button>
             </div>
+
+            {installMode === 'upload' ? (
+              <>
+                <div className="modal-body">
+                  <p className="install-hint">
+                    {t('plugins.installModal.hint', 'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.')}
+                  </p>
+                  <label className={`install-drop${installFile ? ' has-file' : ''}`}>
+                    <input
+                      type="file"
+                      accept=".zip,application/zip"
+                      hidden
+                      onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
+                    />
+                    <Upload size={28} />
+                    <span className="install-drop-name">
+                      {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
+                    </span>
+                  </label>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
+                    {t('common.cancel', 'Cancel')}
+                  </button>
+                  <button className="btn-primary" onClick={() => void handleInstall()} disabled={!installFile || installing}>
+                    {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                    {t('plugins.install', 'Install plugin')}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="modal-body">
+                  <p className="install-hint">
+                    {t('plugins.installModal.catalogHint', 'Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.')}
+                  </p>
+                  {catalogLoading ? (
+                    <div className="catalog-empty">
+                      <Loader2 size={20} className="animate-spin" />
+                    </div>
+                  ) : catalogError ? (
+                    <div className="catalog-empty catalog-error">
+                      <AlertCircle size={16} /> {catalogError}
+                      <button className="btn-secondary" onClick={() => void loadCatalog()}>
+                        {t('plugins.refresh', 'Refresh')}
+                      </button>
+                    </div>
+                  ) : catalog.length === 0 ? (
+                    <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
+                  ) : (
+                    <div className="catalog-list">
+                      {catalog.map(entry => (
+                        <div className="catalog-row" key={entry.id}>
+                          <div className="catalog-row-info">
+                            <div className="catalog-row-name">
+                              {entry.name} <span className="catalog-row-version">v{entry.version}</span>
+                            </div>
+                            {entry.description && <div className="catalog-row-desc">{entry.description}</div>}
+                            <div className="catalog-row-meta">
+                              {entry.author && <span className="catalog-row-author">{entry.author}</span>}
+                              {entry.updateAvailable && (
+                                <span className="catalog-badge update">
+                                  {t('plugins.catalog.updateAvailable', 'Update available')} (v{entry.installedVersion} → v{entry.version})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="catalog-row-action">
+                            {entry.installed ? (
+                              <span className="catalog-installed">
+                                <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
+                              </span>
+                            ) : (
+                              <button
+                                className="btn-primary"
+                                disabled={installingId !== null || !entry.download}
+                                onClick={() => void handleInstallFromCatalog(entry)}
+                              >
+                                {installingId === entry.id ? (
+                                  <Loader2 size={15} className="animate-spin" />
+                                ) : (
+                                  <Download size={15} />
+                                )}
+                                {t('plugins.catalog.install', 'Install')}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  <button className="btn-secondary" onClick={() => setShowInstallModal(false)}>
+                    {t('common.close', 'Close')}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

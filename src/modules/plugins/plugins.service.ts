@@ -1,14 +1,23 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, HttpException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PluginLoaderService, PluginStatus } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
+import { fetchSafeBuffer } from './plugin-download';
+import { annotateCatalog, CatalogEntry, CatalogPlugin } from './catalog';
+
+/** Cap on the catalog JSON download (the catalog is small; this bounds a hostile response). */
+const CATALOG_MAX_BYTES = 1 * 1024 * 1024;
 
 @Injectable()
 export class PluginsService {
-  constructor(private readonly pluginLoader: PluginLoaderService) {}
+  constructor(
+    private readonly pluginLoader: PluginLoaderService,
+    private readonly configService: ConfigService,
+  ) {}
 
   findAll(): PluginDto[] {
     const plugins = this.pluginLoader.getAllPlugins();
@@ -155,6 +164,56 @@ export class PluginsService {
     }
 
     return this.findOne(manifest.id);
+  }
+
+  /**
+   * Install a plugin from an HTTP(S) URL: download the .zip through the SSRF guard (host validated,
+   * connection pinned, redirects refused, size-capped), then run the exact same validate-write-load
+   * pipeline as an uploaded package. The downloaded buffer is treated as untrusted, identical to an upload.
+   */
+  async installFromUrl(url: string): Promise<PluginDto> {
+    const maxBytes = this.configService.get<number>('plugins.downloadMaxBytes') ?? 5 * 1024 * 1024;
+    let buffer: Buffer;
+    try {
+      buffer = await fetchSafeBuffer(url, { maxBytes });
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to download plugin from URL: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.install({ buffer });
+  }
+
+  /**
+   * Fetch the configured remote catalog (a plugins.json array) through the SSRF guard and annotate each
+   * entry with this instance's install state (installed / installedVersion / updateAvailable).
+   */
+  async getCatalog(): Promise<CatalogPlugin[]> {
+    const url = this.configService.get<string>('plugins.catalogUrl');
+    if (!url) return [];
+
+    let raw: Buffer;
+    try {
+      raw = await fetchSafeBuffer(url, { maxBytes: CATALOG_MAX_BYTES });
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to fetch plugin catalog: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    let entries: CatalogEntry[];
+    try {
+      const parsed: unknown = JSON.parse(raw.toString('utf8'));
+      if (!Array.isArray(parsed)) throw new Error('catalog is not a JSON array');
+      entries = parsed as CatalogEntry[];
+    } catch (error) {
+      throw new BadRequestException(
+        `Invalid plugin catalog JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const installed = this.pluginLoader.getAllPlugins().map(p => ({ id: p.manifest.id, version: p.manifest.version }));
+    return annotateCatalog(entries, installed);
   }
 
   /** Uninstall an installed user plugin: disable, unload, and delete its files. Built-ins are protected. */

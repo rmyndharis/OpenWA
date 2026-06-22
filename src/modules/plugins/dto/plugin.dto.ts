@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsObject } from 'class-validator';
+import { IsObject, IsString, IsUrl } from 'class-validator';
 import type { PluginConfigSchema } from '../../../core/plugins';
 import { PluginType, PluginStatus } from '../../../core/plugins';
 
@@ -51,4 +51,11 @@ export class PluginConfigDto {
   @ApiProperty({ description: 'Plugin configuration object' })
   @IsObject()
   config!: Record<string, unknown>;
+}
+
+export class InstallFromUrlDto {
+  @ApiProperty({ description: 'HTTP(S) URL of the plugin .zip to download and install' })
+  @IsString()
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  url!: string;
 }

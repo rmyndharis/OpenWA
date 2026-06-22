@@ -14,7 +14,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { PluginsService } from './plugins.service';
-import { PluginDto, PluginConfigDto } from './dto/plugin.dto';
+import { PluginDto, PluginConfigDto, InstallFromUrlDto } from './dto/plugin.dto';
+import type { CatalogPlugin } from './catalog';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
@@ -44,6 +45,26 @@ export class PluginsController {
   @ApiResponse({ status: 409, description: 'Plugin already installed' })
   install(@UploadedFile() file: { buffer?: Buffer }): PluginDto {
     return this.pluginsService.install(file);
+  }
+
+  @Post('install-url')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'Install a plugin by downloading its .zip from a URL (SSRF-guarded)' })
+  @ApiResponse({ status: 201, description: 'Plugin installed' })
+  @ApiResponse({ status: 400, description: 'Invalid URL, download failed, or invalid package' })
+  @ApiResponse({ status: 409, description: 'Plugin already installed' })
+  async installFromUrl(@Body() dto: InstallFromUrlDto): Promise<PluginDto> {
+    return await this.pluginsService.installFromUrl(dto.url);
+  }
+
+  // Declared before `:id` so `GET /plugins/catalog` is not captured by the `:id` route.
+  @Get('catalog')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'List the remote plugin catalog, annotated with install state' })
+  @ApiResponse({ status: 200, description: 'Catalog entries' })
+  @ApiResponse({ status: 400, description: 'Catalog could not be fetched or parsed' })
+  async catalog(): Promise<CatalogPlugin[]> {
+    return await this.pluginsService.getCatalog();
   }
 
   @Get(':id')

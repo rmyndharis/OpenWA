@@ -37,7 +37,7 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
       new PluginStorageService(config),
       {} as unknown as ModuleRef,
     );
-    service = new PluginsService(loader);
+    service = new PluginsService(loader, config);
   });
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
