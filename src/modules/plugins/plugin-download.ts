@@ -18,7 +18,10 @@ export async function fetchSafeBuffer(
   url: string,
   opts: { maxBytes?: number; timeoutMs?: number } = {},
 ): Promise<Buffer> {
-  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  // Coerce a missing/non-finite/non-positive cap to the default: `??` alone would let a NaN through
+  // (e.g. a misparsed env value), which makes every `> maxBytes` guard below inert.
+  const maxBytes =
+    Number.isFinite(opts.maxBytes) && (opts.maxBytes as number) > 0 ? (opts.maxBytes as number) : DEFAULT_MAX_BYTES;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return withSafeFetch(url, { signal: AbortSignal.timeout(timeoutMs) }, async response => {

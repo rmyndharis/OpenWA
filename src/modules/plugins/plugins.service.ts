@@ -261,6 +261,12 @@ export class PluginsService {
       fs.rmSync(backup, { recursive: true, force: true });
     } catch (error) {
       // Roll back to the previous version: restore the backed-up directory and reload it.
+      // The failed forward path may have left the NEW version in the loader map (loadPlugin
+      // succeeded; enablePlugin failed with status=ERROR but did NOT remove it), so drop it first —
+      // otherwise the restore's loadPlugin() hits the "already loaded" guard and the runtime stays
+      // desynced from disk (new manifest in memory, old files on disk). unloadPlugin throws when
+      // nothing is loaded (the loadPlugin-itself-failed case), hence the catch.
+      await this.pluginLoader.unloadPlugin(id).catch(() => undefined);
       fs.rmSync(dir, { recursive: true, force: true });
       fs.renameSync(backup, dir);
       try {

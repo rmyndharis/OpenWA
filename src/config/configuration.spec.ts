@@ -61,3 +61,23 @@ describe('configuration — Puppeteer args delimiter', () => {
     expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
   });
 });
+
+describe('configuration — plugin download cap is fail-safe', () => {
+  const orig = process.env.PLUGIN_DOWNLOAD_MAX_BYTES;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.PLUGIN_DOWNLOAD_MAX_BYTES;
+    else process.env.PLUGIN_DOWNLOAD_MAX_BYTES = orig;
+  });
+
+  it('uses the env value when it is a valid positive integer', () => {
+    process.env.PLUGIN_DOWNLOAD_MAX_BYTES = '1048576';
+    expect(configuration().plugins.downloadMaxBytes).toBe(1048576);
+  });
+
+  it('falls back to the 5 MB default when the env value is non-numeric or non-positive', () => {
+    for (const bad of ['abc', 'unlimited', '0', '-1']) {
+      process.env.PLUGIN_DOWNLOAD_MAX_BYTES = bad;
+      expect(configuration().plugins.downloadMaxBytes).toBe(5 * 1024 * 1024);
+    }
+  });
+});

@@ -121,8 +121,13 @@ export default () => ({
     // Fetched through the SSRF guard — add its host to SSRF_ALLOWED_HOSTS if it is not publicly resolvable.
     catalogUrl:
       process.env.PLUGIN_CATALOG_URL || 'https://raw.githubusercontent.com/rmyndharis/OpenWA-plugins/main/plugins.json',
-    // Cap on a plugin .zip downloaded by install-from-URL (matches the 5 MB upload limit).
-    downloadMaxBytes: parseInt(process.env.PLUGIN_DOWNLOAD_MAX_BYTES || String(5 * 1024 * 1024), 10),
+    // Cap on a plugin .zip downloaded by install-from-URL (matches the 5 MB upload limit). Fail-safe:
+    // a non-numeric or non-positive value (parseInt → NaN/0/-n) falls back to the default rather than
+    // silently disabling the cap (a downstream `??` would not catch NaN).
+    downloadMaxBytes: (() => {
+      const n = parseInt(process.env.PLUGIN_DOWNLOAD_MAX_BYTES ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 5 * 1024 * 1024;
+    })(),
   },
 
   // Storage configuration

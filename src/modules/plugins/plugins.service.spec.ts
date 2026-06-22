@@ -7,6 +7,7 @@ import { ModuleRef } from '@nestjs/core';
 import { PluginsService } from './plugins.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
+import { PluginStatus } from '../../core/plugins/plugin.interfaces';
 import { HookManager } from '../../core/hooks';
 
 const manifest = { id: 'svc-plg', name: 'Svc Plugin', version: '1.0.0', type: 'extension', main: 'index.js' };
@@ -99,5 +100,24 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
 
   it('updatePackage on an unknown plugin throws NotFound', async () => {
     await expect(service.updatePackage('nope', pkg())).rejects.toThrow(/not found/i);
+  });
+
+  it('rolls back to the OLD version (loaded, on disk) when the new version fails to enable', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    // Pretend it was enabled so the update tries to re-enable — and that re-enable fails for the new version.
+    loader.getPlugin('svc-plg')!.status = PluginStatus.ENABLED;
+    const enableSpy = jest.spyOn(loader, 'enablePlugin').mockRejectedValue(new Error('worker failed to enable'));
+
+    await expect(service.updatePackage('svc-plg', pkg({ version: '2.0.0' }))).rejects.toThrow(/Failed to update/i);
+
+    // The rollback must leave the OLD version loaded — not the new, half-enabled (ERROR) instance.
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg.bak'))).toBe(false);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('1.0.0');
+
+    enableSpy.mockRestore();
   });
 });
