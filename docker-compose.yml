@@ -93,10 +93,9 @@ services:
       - SESSION_DATA_PATH=/app/data/sessions
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
-      # Pin the WhatsApp Web version if a session hangs at "authenticating" after scanning the QR
-      # (whatsapp-web.js 1.34.x can stall on an incompatible auto-selected WA-Web version, #251/#273).
-      # Empty = auto-select (default). Set WWEBJS_WEB_VERSION in .env to a known-good version — see
-      # docs/12-troubleshooting-faq.md. (Without this line the var in .env never reaches the container.)
+      # Optional WhatsApp Web version override. Leave empty for whatsapp-web.js auto-selection.
+      # If a session hangs at "authenticating", set WWEBJS_WEB_VERSION to a known-good cached build
+      # from wppconnect-team/wa-version; latest|auto|off also forces auto-selection.
       - WWEBJS_WEB_VERSION=${WWEBJS_WEB_VERSION:-}
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
       # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots — e.g. WSL2 or

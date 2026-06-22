@@ -1,4 +1,5 @@
-import { MessageMedia } from 'whatsapp-web.js';
+import { MessageMedia, WAState } from 'whatsapp-web.js';
+import { EventEmitter } from 'events';
 import {
   WhatsAppWebJsAdapter,
   extractLinkedParentJID,
@@ -292,6 +293,210 @@ describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', (
   });
 });
 
+describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });
+  type FakeClient = EventEmitter & {
+    info?: { wid?: { user?: string }; pushname?: string };
+    getState: jest.Mock;
+    pupPage: { evaluate: jest.Mock };
+    destroy?: jest.Mock;
+    logout?: jest.Mock;
+    pupBrowser?: { process?: jest.Mock };
+  };
+  const attachFakeClient = (
+    adapter: WhatsAppWebJsAdapter,
+    overrides: Partial<FakeClient> = {},
+  ): { client: FakeClient; onReady: jest.Mock; onStateChanged: jest.Mock } => {
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: {
+        evaluate: jest.fn().mockResolvedValue(true),
+      },
+      ...overrides,
+    }) as FakeClient;
+    const onReady = jest.fn();
+    const onStateChanged = jest.fn();
+
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onReady, onStateChanged };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    return { client, onReady, onStateChanged };
+  };
+  const deferredVoid = (): { promise: Promise<void>; resolve: () => void } => {
+    let resolve = (): void => undefined;
+    const promise = new Promise<void>(res => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+  const expectNoReadyDuringTeardown = async (
+    configureClient: (client: FakeClient, teardownWait: Promise<void>) => void,
+    startTeardown: (adapter: WhatsAppWebJsAdapter) => Promise<void>,
+  ): Promise<void> => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const teardownWait = deferredVoid();
+    const { client, onReady, onStateChanged } = attachFakeClient(adapter);
+    configureClient(client, teardownWait.promise);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(jest.getTimerCount()).toBe(1);
+
+    const teardown = startTeardown(adapter);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onStateChanged).toHaveBeenLastCalledWith(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    client.emit('ready');
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+
+    teardownWait.resolve();
+    await teardown;
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('marks the adapter ready when authenticated runtime is connected but the ready event is missed', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(onReady).toHaveBeenCalledWith('628123', 'Tester');
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not promote while the runtime is connected but client info is not populated yet', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter, { info: undefined });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(onReady).not.toHaveBeenCalled();
+
+    client.emit('auth_failure', 'stop test timer');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('deduplicates the genuine ready event after reconciliation promotes the adapter', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(2100);
+    client.emit('ready');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['disconnected', EngineStatus.DISCONNECTED] as const, ['auth_failure', EngineStatus.FAILED] as const])(
+    'does not promote if %s fires during an in-flight probe tick',
+    async (event, expectedStatus) => {
+      jest.useFakeTimers();
+
+      const adapter = newAdapter();
+      const { client, onReady } = attachFakeClient(adapter);
+      client.pupPage.evaluate.mockImplementation(() => {
+        client.emit(event, 'test teardown');
+        return Promise.resolve(true);
+      });
+
+      client.emit('authenticated');
+      await jest.advanceTimersByTimeAsync(2100);
+
+      expect(adapter.getStatus()).toBe(expectedStatus);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('keeps repeated authenticated events to one timer chain and ignores authenticated after ready', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    expect(jest.getTimerCount()).toBe(1);
+    client.emit('authenticated');
+    expect(jest.getTimerCount()).toBe(1);
+
+    await jest.advanceTimersByTimeAsync(2100);
+    client.emit('authenticated');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables ready reconciliation before disconnect awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.disconnect(),
+    );
+  });
+
+  it('disables ready reconciliation before logout awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.logout = jest.fn().mockReturnValue(teardownWait);
+        client.destroy = jest.fn().mockResolvedValue(undefined);
+      },
+      adapter => adapter.logout(),
+    );
+  });
+
+  it('disables ready reconciliation before destroy awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.destroy(),
+    );
+  });
+
+  it('disables ready reconciliation before forceDestroy awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.pupBrowser = { process: jest.fn().mockReturnValue({ kill: jest.fn() }) };
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.forceDestroy(),
+    );
+  });
+});
+
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
   // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
   const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {
@@ -328,23 +533,24 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
     else process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = orig.p;
   });
 
-  it('returns undefined (default auto-version) when unset / "latest" / "off"', () => {
+  it('returns undefined (default auto-version) when unset / "latest" / "off" / "auto"', () => {
     delete process.env.WWEBJS_WEB_VERSION;
     expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'latest';
-    expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'off';
-    expect(resolveWebVersionPin()).toBeUndefined();
+    for (const value of ['latest', 'off', 'auto']) {
+      process.env.WWEBJS_WEB_VERSION = value;
+      expect(resolveWebVersionPin()).toBeUndefined();
+    }
   });
 
   it('pins a remote webVersionCache from the version when set', () => {
     delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
-    process.env.WWEBJS_WEB_VERSION = '2.3000.1023204257';
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
     expect(resolveWebVersionPin()).toEqual({
-      webVersion: '2.3000.1023204257',
+      webVersion: '2.3000.1041203030-alpha',
       webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023204257.html',
+        remotePath:
+          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041203030-alpha.html',
       },
     });
   });
