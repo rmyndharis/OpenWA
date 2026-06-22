@@ -1,7 +1,17 @@
 // e2e boot environment. Set BEFORE AppModule is imported (setupFiles phase) so the
 // app boots against local SQLite with no Redis/queue and no production boot guard.
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { rmSync } from 'fs';
+
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_TYPE = 'sqlite';
+// Isolate the e2e data DB to a throwaway temp file so suites never pollute the developer's
+// ./data/openwa.sqlite. e2e creates sessions/webhooks and doesn't self-clean, so without this they
+// pile up across runs. Start each run from a fresh file.
+const e2eDataDb = join(tmpdir(), `openwa-e2e-${process.pid}.sqlite`);
+rmSync(e2eDataDb, { force: true });
+process.env.DATABASE_NAME = e2eDataDb;
 process.env.QUEUE_ENABLED = 'false';
 process.env.AUTO_START_SESSIONS = 'false';
 // Keep the auth/audit + data schema zero-config for the test boot.
