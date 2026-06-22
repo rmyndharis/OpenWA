@@ -18,10 +18,10 @@ export class ExtensionsRegistrar implements OnModuleInit {
   onModuleInit(): void {
     const autoReplyManifest: PluginManifest = {
       id: 'auto-reply',
-      name: 'Auto Reply (reference)',
-      version: '1.0.0',
+      name: 'Auto Reply (MaxResellers)',
+      version: '1.0.1',
       type: PluginType.EXTENSION,
-      description: 'Reference extension plugin: replies to inbound direct messages. Disabled by default.',
+      description: 'Auto-reply extension developed by MaxReseller. Automatically responds to inbound WhatsApp messages with predefined support and sales responses. Disabled by default.',
       main: 'index.ts',
       permissions: ['messages:send'],
       sessions: ['*'],

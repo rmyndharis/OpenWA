@@ -3,7 +3,7 @@ import { PluginContext } from '../../../core/plugins';
 import { HookContext, HookEvent, HookHandler } from '../../../core/hooks';
 import { IncomingMessage } from '../../../engine/interfaces/whatsapp-engine.interface';
 
-function makeContext(reply: jest.Mock): { context: PluginContext; getHandler: () => HookHandler } {
+function makeContext(reply: jest.Mock, mockStorage: Record<string, any> = {}): { context: PluginContext; getHandler: () => HookHandler } {
   let captured: HookHandler | undefined;
   const context = {
     pluginId: 'auto-reply',
@@ -11,6 +11,17 @@ function makeContext(reply: jest.Mock): { context: PluginContext; getHandler: ()
       captured = handler;
     },
     messages: { reply, sendText: jest.fn() },
+    storage: {
+      get: jest.fn().mockImplementation((key: string) => Promise.resolve(mockStorage[key] ?? null)),
+      set: jest.fn().mockImplementation((key: string, val: any) => {
+        mockStorage[key] = val;
+        return Promise.resolve();
+      }),
+      delete: jest.fn().mockImplementation((key: string) => {
+        delete mockStorage[key];
+        return Promise.resolve();
+      }),
+    },
     logger: { log: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
   } as unknown as PluginContext;
   return { context, getHandler: () => captured as HookHandler };
@@ -36,9 +47,25 @@ function ctxFor(data: IncomingMessage): HookContext<IncomingMessage> {
 }
 
 describe('AutoReplyPlugin', () => {
+  let mockStorage: Record<string, any>;
+
+  beforeEach(() => {
+    mockStorage = {
+      config: {
+        sessions: {
+          'sess-1': {
+            enabled: true,
+            trigger: 'ping',
+            greeting: 'Auto-reply: ping',
+          },
+        },
+      },
+    };
+  });
+
   it('replies to an inbound direct message and keeps it in history', async () => {
     const reply = jest.fn().mockResolvedValue({ messageId: 'x', timestamp: 1 });
-    const { context, getHandler } = makeContext(reply);
+    const { context, getHandler } = makeContext(reply, mockStorage);
     await new AutoReplyPlugin().onEnable(context);
 
     const result = await getHandler()(ctxFor(inbound()));
@@ -49,7 +76,7 @@ describe('AutoReplyPlugin', () => {
 
   it('does NOT reply to its own outgoing messages (fromMe)', async () => {
     const reply = jest.fn();
-    const { context, getHandler } = makeContext(reply);
+    const { context, getHandler } = makeContext(reply, mockStorage);
     await new AutoReplyPlugin().onEnable(context);
 
     const result = await getHandler()(ctxFor(inbound({ fromMe: true })));
@@ -60,7 +87,7 @@ describe('AutoReplyPlugin', () => {
 
   it('does NOT reply to group messages', async () => {
     const reply = jest.fn();
-    const { context, getHandler } = makeContext(reply);
+    const { context, getHandler } = makeContext(reply, mockStorage);
     await new AutoReplyPlugin().onEnable(context);
 
     const result = await getHandler()(ctxFor(inbound({ isGroup: true })));
@@ -71,7 +98,7 @@ describe('AutoReplyPlugin', () => {
 
   it('does NOT reply when the message did not originate from the engine', async () => {
     const reply = jest.fn();
-    const { context, getHandler } = makeContext(reply);
+    const { context, getHandler } = makeContext(reply, mockStorage);
     await new AutoReplyPlugin().onEnable(context);
 
     const result = await getHandler()({ ...ctxFor(inbound()), source: 'API' });
@@ -80,3 +107,4 @@ describe('AutoReplyPlugin', () => {
     expect(result).toEqual({ continue: true });
   });
 });
+

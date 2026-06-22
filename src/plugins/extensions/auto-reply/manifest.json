@@ -5,6 +5,10 @@
   "type": "extension",
   "description": "Reference extension plugin: replies to inbound direct messages. Disabled by default.",
   "main": "index.ts",
-  "permissions": ["messages:send"],
-  "sessions": ["*"]
+  "permissions": [
+    "messages:send"
+  ],
+  "sessions": [
+    "*"
+  ]
 }
