@@ -13,12 +13,18 @@ export type PluginLifecycleMethod = 'onLoad' | 'onEnable' | 'onDisable' | 'onUnl
 
 export type HostToWorkerMessage =
   | { kind: 'load'; mainPath: string }
-  | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod };
+  | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod }
+  // Reply to a worker-initiated capability call.
+  | { kind: 'cap-result'; id: number; ok: true; result: unknown }
+  | { kind: 'cap-result'; id: number; ok: false; error: string };
 
 export type WorkerToHostMessage =
   | { kind: 'ready' }
   | { kind: 'lifecycle-result'; id: number; ok: true }
   | { kind: 'lifecycle-result'; id: number; ok: false; error: string }
+  // Worker-initiated capability call (ctx.messages.* / ctx.engine.* / ctx.storage.*). The host
+  // validates it (permission + session scope) before running the real verb and replying.
+  | { kind: 'cap'; id: number; verb: string; args: unknown[] }
   | { kind: 'error'; error: string };
 
 /**

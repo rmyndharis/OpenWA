@@ -21,6 +21,7 @@ import {
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
+import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -379,10 +380,11 @@ export class PluginLoaderService implements OnModuleInit {
    * Build a worker host for a sandboxed (untrusted) plugin. Overridable so tests can inject a fake
    * instead of spawning a real OS thread. Production loads the compiled worker bootstrap from dist.
    */
-  protected createSandboxHost(): PluginWorkerHost {
+  protected createSandboxHost(capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
       new WorkerThreadChannel({ workerEntry, maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB }),
+      capDispatcher,
     );
   }
 
@@ -418,7 +420,11 @@ export class PluginLoaderService implements OnModuleInit {
   private async enableSandboxed(pluginId: string, plugin: PluginInstance): Promise<void> {
     // Containment guard: reject a manifest.main that escapes the plugin dir.
     const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
-    const host = this.createSandboxHost();
+    // The capability dispatcher runs a worker request through the SAME context an in-process plugin
+    // gets, so permission + session-scope checks (assertPermission / assertSessionAllowed) apply
+    // identically. The worker can only ask; the host is the gatekeeper.
+    const context = this.createPluginContext(plugin);
+    const host = this.createSandboxHost((verb, args) => dispatchCapabilityVerb(context, verb, args));
     this.sandboxHosts.set(pluginId, host);
     try {
       await host.load(mainPath);

@@ -15,7 +15,12 @@ export class PluginWorkerHost {
   private readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private readonly pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
 
-  constructor(private readonly channel: PluginWorkerChannel) {
+  constructor(
+    private readonly channel: PluginWorkerChannel,
+    // Runs a worker-initiated capability call host-side (validating permission + session scope before
+    // the real verb). Absent => the worker has no capabilities (e.g. before the bridge is wired).
+    private readonly capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+  ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
   }
@@ -64,6 +69,27 @@ export class PluginWorkerHost {
         else waiter.reject(new Error(message.error));
         break;
       }
+      case 'cap':
+        void this.handleCapRequest(message);
+        break;
+    }
+  }
+
+  private async handleCapRequest(message: Extract<WorkerToHostMessage, { kind: 'cap' }>): Promise<void> {
+    if (!this.capDispatcher) {
+      this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: 'no capability dispatcher' });
+      return;
+    }
+    try {
+      const result = await this.capDispatcher(message.verb, message.args);
+      this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: true, result });
+    } catch (error) {
+      this.channel.postMessage({
+        kind: 'cap-result',
+        id: message.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

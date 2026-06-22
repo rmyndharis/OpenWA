@@ -123,4 +123,41 @@ describe('PluginWorkerHost', () => {
     await host.terminate();
     expect(ch.terminated).toBe(true);
   });
+
+  describe('capability requests from the worker', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('dispatches a cap request and posts the result back', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest.fn().mockResolvedValue({ messageId: 'wamid' });
+      new PluginWorkerHost(ch, dispatcher);
+
+      ch.reply({ kind: 'cap', id: 5, verb: 'messages.sendText', args: ['s1', 'c1', 'hi'] });
+      await flush();
+
+      expect(dispatcher).toHaveBeenCalledWith('messages.sendText', ['s1', 'c1', 'hi']);
+      expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 5, ok: true, result: { messageId: 'wamid' } });
+    });
+
+    it('posts an error cap-result when the dispatcher rejects (e.g. permission denied)', async () => {
+      const ch = new FakeChannel();
+      const dispatcher = jest.fn().mockRejectedValue(new Error('missing permission'));
+      new PluginWorkerHost(ch, dispatcher);
+
+      ch.reply({ kind: 'cap', id: 7, verb: 'messages.sendText', args: [] });
+      await flush();
+
+      expect(ch.sent).toContainEqual({ kind: 'cap-result', id: 7, ok: false, error: 'missing permission' });
+    });
+
+    it('fails a cap request when no dispatcher is configured', async () => {
+      const ch = new FakeChannel();
+      new PluginWorkerHost(ch);
+
+      ch.reply({ kind: 'cap', id: 9, verb: 'messages.sendText', args: [] });
+      await flush();
+
+      expect(ch.sent.find(m => m.kind === 'cap-result')).toMatchObject({ id: 9, ok: false });
+    });
+  });
 });
