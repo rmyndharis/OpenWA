@@ -50,6 +50,8 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
 export class PluginLoaderService implements OnModuleInit {
   private readonly logger = createLogger('PluginLoaderService');
   private readonly plugins = new Map<string, PluginInstance>();
+  /** Plugin ids whose enable() is in flight — a synchronous lock so concurrent enables can't double-run. */
+  private readonly enabling = new Set<string>();
   // Live worker host per enabled sandboxed (untrusted) plugin. Built-ins are not in here.
   private readonly sandboxHosts = new Map<string, PluginWorkerHost>();
   private readonly pluginsDir: string;
@@ -209,6 +211,15 @@ export class PluginLoaderService implements OnModuleInit {
       }
     }
 
+    // Concurrency guard: status flips to ENABLED only AFTER the awaits below, so two concurrent enable
+    // calls would both pass the check above, both run onEnable, and both register the plugin's hooks
+    // (duplicate side effects). Claim the enable synchronously here so a racing caller is rejected
+    // before any await; released in finally.
+    if (this.enabling.has(pluginId)) {
+      throw new Error(`Plugin ${pluginId} is already being enabled`);
+    }
+    this.enabling.add(pluginId);
+
     try {
       if (plugin.builtIn === false) {
         await this.enableSandboxed(pluginId, plugin);
@@ -234,6 +245,8 @@ export class PluginLoaderService implements OnModuleInit {
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
 
       throw error;
+    } finally {
+      this.enabling.delete(pluginId);
     }
   }
 

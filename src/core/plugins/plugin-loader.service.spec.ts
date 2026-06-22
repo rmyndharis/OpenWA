@@ -246,3 +246,38 @@ describe('PluginLoaderService — uninstall', () => {
     await expect(loader.uninstallPlugin('core-engine')).rejects.toThrow(/built-in/i);
   });
 });
+
+describe('PluginLoaderService — enable concurrency', () => {
+  let tmpDir: string;
+  let loader: PluginLoaderService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-enable-'));
+    const config = { get: (k: string) => (k === 'dataDir' ? tmpDir : undefined) } as unknown as ConfigService;
+    loader = new PluginLoaderService(config, new HookManager(), new PluginStorageService(config), {} as unknown as ModuleRef);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('rejects a racing second enable instead of double-running onEnable', async () => {
+    let enableCount = 0;
+    const instance = {
+      onEnable: async (): Promise<void> => {
+        enableCount++;
+        await new Promise(resolve => setTimeout(resolve, 25)); // keep the first enable in flight
+      },
+    } as unknown as IPlugin;
+    loader.registerBuiltInPlugin(
+      { id: 'race-plg', name: 'Race', version: '1.0.0', type: PluginType.EXTENSION, main: 'index.js' },
+      instance,
+    );
+
+    const results = await Promise.allSettled([loader.enablePlugin('race-plg'), loader.enablePlugin('race-plg')]);
+
+    // The first claims the lock and runs onEnable once; the second is rejected before any await.
+    expect(enableCount).toBe(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toMatch(/already being enabled/i);
+    expect(loader.getPlugin('race-plg')?.status).toBe(PluginStatus.ENABLED);
+  });
+});
