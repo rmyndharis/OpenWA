@@ -463,6 +463,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
         void this.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
 
+        // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
+        // advertised + consumed there, so clients can render it live instead of polling GET /qr).
+        this.eventsGateway.emitQRCode(id, qr);
+
         // Execute hook for QR event
         void this.hookManager.execute(
           'session:qr',

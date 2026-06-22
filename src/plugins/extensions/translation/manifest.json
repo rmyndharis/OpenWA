@@ -5,7 +5,7 @@
   "type": "extension",
   "description": "Auto-translates group messages between participants' languages via LibreTranslate. Configure in-group with /tr commands. Disabled by default.",
   "main": "index.ts",
-  "permissions": ["messages:send"],
+  "permissions": ["messages:send", "engine:read"],
   "sessions": ["*"],
   "configSchema": {
     "type": "object",

@@ -94,6 +94,7 @@ describe('SessionService', () => {
       emitMessageAck: jest.fn(),
       emitMessageRevoked: jest.fn(),
       emitMessageReaction: jest.fn(),
+      emitQRCode: jest.fn(),
     };
 
     webhookService = {
@@ -1356,6 +1357,21 @@ describe('SessionService', () => {
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
       await expect(service.sendSeen('sess-uuid-1', '123@c.us')).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ── onQRCode WebSocket emit ───────────────────────────────────────
+
+  describe('onQRCode', () => {
+    it('emits the QR over the WebSocket so subscribed clients get it without polling', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const callbacks = (mockEngine.initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+
+      callbacks.onQRCode?.('qr-data-123');
+
+      expect(eventsGateway.emitQRCode).toHaveBeenCalledWith('sess-uuid-1', 'qr-data-123');
     });
   });
 
