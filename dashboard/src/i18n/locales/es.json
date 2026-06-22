@@ -629,6 +629,11 @@
     "disable": "Deshabilitar",
     "healthCheck": "Comprobación de salud",
     "configure": "Configurar",
+    "available": "Disponible",
+    "install": "Instalar plugin",
+    "uninstall": "Desinstalar",
+    "uninstallConfirm": "¿Desinstalar \"{{name}}\"? Esto elimina sus archivos.",
+    "engineSwitchHint": "Establécelo como el motor activo en Ajustes y luego reinicia",
     "empty": {
       "title": "No se encontraron plugins",
       "description": "Instala plugins para ampliar la funcionalidad de OpenWA"
@@ -644,6 +649,19 @@
       "noOptions": "No hay opciones de configuración disponibles para este plugin",
       "save": "Guardar configuración"
     },
+    "rail": {
+      "engine": "Motor activo",
+      "enabled": "habilitado",
+      "installed": "instalado",
+      "active": "Plugins activos",
+      "none": "Ninguno habilitado todavía"
+    },
+    "installModal": {
+      "title": "Instalar un plugin",
+      "hint": "Sube un plugin empaquetado como un .zip (con un manifest.json). Se ejecuta en modo aislado una vez habilitado.",
+      "choose": "Elige un archivo .zip…",
+      "tooLarge": "El archivo supera el límite de 5 MB."
+    },
     "toasts": {
       "errorTitle": "Error de plugin",
       "errorDefault": "Error al activar/desactivar el plugin",
@@ -652,7 +670,11 @@
       "healthError": "Error en la comprobación de salud",
       "savedTitle": "Configuración guardada",
       "savedDesc": "Es necesario reiniciar el servidor para aplicar los cambios.",
-      "saveFailed": "Error al guardar"
+      "saveFailed": "Error al guardar",
+      "installed": "Plugin instalado",
+      "installFailed": "Error en la instalación",
+      "uninstalled": "Plugin desinstalado",
+      "uninstallFailed": "Error al desinstalar"
     }
   }
 }

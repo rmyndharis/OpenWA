@@ -191,7 +191,7 @@ export default function Plugins() {
   };
 
   const handleUninstall = async (plugin: Plugin) => {
-    if (!window.confirm(t('plugins.uninstallConfirm', `Uninstall "${plugin.name}"? This deletes its files.`))) return;
+    if (!window.confirm(t('plugins.uninstallConfirm', { name: plugin.name }))) return;
     setActionLoading(plugin.id);
     try {
       await pluginsApi.uninstall(plugin.id);

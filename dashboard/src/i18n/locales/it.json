@@ -629,6 +629,11 @@
     "disable": "Disabilita",
     "healthCheck": "Controllo dello Stato (Health Check)",
     "configure": "Configura",
+    "available": "Disponibili",
+    "install": "Installa plugin",
+    "uninstall": "Disinstalla",
+    "uninstallConfirm": "Disinstallare \"{{name}}\"? Questa operazione ne elimina i file.",
+    "engineSwitchHint": "Imposta come motore attivo nelle Impostazioni, poi riavvia",
     "empty": {
       "title": "Nessun Plugin Trovato",
       "description": "Installa i plugin per estendere le funzionalità di OpenWA"
@@ -644,6 +649,19 @@
       "noOptions": "Nessuna opzione di configurazione disponibile per questo plugin",
       "save": "Salva Configurazione"
     },
+    "rail": {
+      "engine": "Motore attivo",
+      "enabled": "abilitati",
+      "installed": "installati",
+      "active": "Plugin attivi",
+      "none": "Nessuno ancora abilitato"
+    },
+    "installModal": {
+      "title": "Installa un plugin",
+      "hint": "Carica un plugin pacchettizzato come file .zip (con un manifest.json). Viene eseguito in sandbox una volta abilitato.",
+      "choose": "Scegli un file .zip…",
+      "tooLarge": "Il file supera il limite di 5 MB."
+    },
     "toasts": {
       "errorTitle": "Errore Plugin",
       "errorDefault": "Impossibile attivare/disattivare il plugin",
@@ -652,7 +670,11 @@
       "healthError": "Errore nel Controllo dello Stato",
       "savedTitle": "Configurazione Salvata",
       "savedDesc": "È richiesto il riavvio del server per applicare le modifiche.",
-      "saveFailed": "Salvataggio non riuscito"
+      "saveFailed": "Salvataggio non riuscito",
+      "installed": "Plugin installato",
+      "installFailed": "Installazione non riuscita",
+      "uninstalled": "Plugin disinstallato",
+      "uninstallFailed": "Disinstallazione non riuscita"
     }
   }
 }

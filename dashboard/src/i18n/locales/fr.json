@@ -629,6 +629,11 @@
     "disable": "Désactiver",
     "healthCheck": "Bilan de santé",
     "configure": "Configurer",
+    "available": "Disponible",
+    "install": "Installer le plugin",
+    "uninstall": "Désinstaller",
+    "uninstallConfirm": "Désinstaller « {{name}} » ? Cela supprime ses fichiers.",
+    "engineSwitchHint": "Définissez-le comme moteur actif dans les Paramètres, puis redémarrez",
     "empty": {
       "title": "Aucun plugin trouvé",
       "description": "Installez des plugins pour étendre les fonctionnalités d'OpenWA"
@@ -644,6 +649,19 @@
       "noOptions": "Aucune option de configuration disponible pour ce plugin",
       "save": "Enregistrer la configuration"
     },
+    "rail": {
+      "engine": "Moteur actif",
+      "enabled": "activé",
+      "installed": "installé",
+      "active": "Plugins actifs",
+      "none": "Aucun activé pour l'instant"
+    },
+    "installModal": {
+      "title": "Installer un plugin",
+      "hint": "Téléversez un plugin empaqueté au format .zip (avec un manifest.json). Il s'exécute en bac à sable une fois activé.",
+      "choose": "Choisir un fichier .zip…",
+      "tooLarge": "Le fichier dépasse la limite de 5 MB."
+    },
     "toasts": {
       "errorTitle": "Erreur de plugin",
       "errorDefault": "Échec du basculement du plugin",
@@ -652,7 +670,11 @@
       "healthError": "Erreur lors du bilan de santé",
       "savedTitle": "Configuration enregistrée",
       "savedDesc": "Redémarrage du serveur requis pour appliquer les modifications.",
-      "saveFailed": "Échec de l'enregistrement"
+      "saveFailed": "Échec de l'enregistrement",
+      "installed": "Plugin installé",
+      "installFailed": "Échec de l'installation",
+      "uninstalled": "Plugin désinstallé",
+      "uninstallFailed": "Échec de la désinstallation"
     }
   }
 }

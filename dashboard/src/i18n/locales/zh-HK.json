@@ -629,6 +629,11 @@
     "disable": "停用",
     "healthCheck": "健康檢查",
     "configure": "設定",
+    "available": "可用",
+    "install": "安裝外掛",
+    "uninstall": "解除安裝",
+    "uninstallConfirm": "解除安裝「{{name}}」？此操作會刪除其檔案。",
+    "engineSwitchHint": "在「設定」中設為使用中的引擎，然後重新啟動",
     "empty": {
       "title": "找不到外掛",
       "description": "安裝外掛以擴展 OpenWA 功能"
@@ -644,6 +649,19 @@
       "noOptions": "此外掛沒有可用設定選項",
       "save": "儲存設定"
     },
+    "rail": {
+      "engine": "使用中的引擎",
+      "enabled": "已啟用",
+      "installed": "已安裝",
+      "active": "活躍外掛",
+      "none": "尚未啟用任何外掛"
+    },
+    "installModal": {
+      "title": "安裝外掛",
+      "hint": "上載打包成 .zip 的外掛（內含 manifest.json）。啟用後會以沙盒方式執行。",
+      "choose": "選擇 .zip 檔案…",
+      "tooLarge": "檔案超出 5 MB 上限。"
+    },
     "toasts": {
       "errorTitle": "外掛錯誤",
       "errorDefault": "切換外掛失敗",
@@ -652,7 +670,11 @@
       "healthError": "健康檢查錯誤",
       "savedTitle": "設定已儲存",
       "savedDesc": "需要重新啟動伺服器以套用變更。",
-      "saveFailed": "儲存失敗"
+      "saveFailed": "儲存失敗",
+      "installed": "外掛已安裝",
+      "installFailed": "安裝失敗",
+      "uninstalled": "外掛已解除安裝",
+      "uninstallFailed": "解除安裝失敗"
     }
   }
 }

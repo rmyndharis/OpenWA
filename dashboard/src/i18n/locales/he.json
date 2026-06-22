@@ -629,6 +629,11 @@
     "disable": "השבתה",
     "healthCheck": "בדיקת תקינות",
     "configure": "הגדרה",
+    "available": "זמינים",
+    "install": "התקנת תוסף",
+    "uninstall": "הסרה",
+    "uninstallConfirm": "להסיר את \"{{name}}\"? פעולה זו תמחק את הקבצים שלו.",
+    "engineSwitchHint": "יש להגדיר כמנוע הפעיל בהגדרות ולאחר מכן לאתחל",
     "empty": {
       "title": "לא נמצאו תוספים",
       "description": "ניתן להתקין תוספים כדי להרחיב את היכולות של OpenWA"
@@ -644,6 +649,19 @@
       "noOptions": "אין אפשרויות הגדרה זמינות עבור תוסף זה",
       "save": "שמירת תצורה"
     },
+    "rail": {
+      "engine": "מנוע פעיל",
+      "enabled": "מופעלים",
+      "installed": "מותקנים",
+      "active": "תוספים פעילים",
+      "none": "אף אחד אינו מופעל עדיין"
+    },
+    "installModal": {
+      "title": "התקנת תוסף",
+      "hint": "ניתן להעלות תוסף ארוז כקובץ .zip (הכולל manifest.json). הוא פועל בארגז חול לאחר ההפעלה.",
+      "choose": "בחירת קובץ ‎.zip‎…",
+      "tooLarge": "הקובץ חורג מהמגבלה של ‎5 MB‎."
+    },
     "toasts": {
       "errorTitle": "שגיאת תוסף",
       "errorDefault": "החלפת מצב התוסף נכשלה",
@@ -652,7 +670,11 @@
       "healthError": "שגיאה בבדיקת תקינות",
       "savedTitle": "התצורה נשמרה",
       "savedDesc": "נדרש אתחול שרת כדי להחיל את השינויים.",
-      "saveFailed": "השמירה נכשלה"
+      "saveFailed": "השמירה נכשלה",
+      "installed": "התוסף הותקן",
+      "installFailed": "ההתקנה נכשלה",
+      "uninstalled": "התוסף הוסר",
+      "uninstallFailed": "ההסרה נכשלה"
     }
   }
 }

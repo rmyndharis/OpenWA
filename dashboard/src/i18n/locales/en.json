@@ -629,6 +629,11 @@
     "disable": "Disable",
     "healthCheck": "Health Check",
     "configure": "Configure",
+    "available": "Available",
+    "install": "Install plugin",
+    "uninstall": "Uninstall",
+    "uninstallConfirm": "Uninstall \"{{name}}\"? This deletes its files.",
+    "engineSwitchHint": "Set as the active engine in Settings, then restart",
     "empty": {
       "title": "No Plugins Found",
       "description": "Install plugins to extend OpenWA functionality"
@@ -644,6 +649,19 @@
       "noOptions": "No configuration options available for this plugin",
       "save": "Save Configuration"
     },
+    "rail": {
+      "engine": "Active engine",
+      "enabled": "enabled",
+      "installed": "installed",
+      "active": "Active plugins",
+      "none": "None enabled yet"
+    },
+    "installModal": {
+      "title": "Install a plugin",
+      "hint": "Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.",
+      "choose": "Choose a .zip file…",
+      "tooLarge": "The file exceeds the 5 MB limit."
+    },
     "toasts": {
       "errorTitle": "Plugin Error",
       "errorDefault": "Failed to toggle plugin",
@@ -652,7 +670,11 @@
       "healthError": "Health Check Error",
       "savedTitle": "Configuration Saved",
       "savedDesc": "Server restart required to apply changes.",
-      "saveFailed": "Save Failed"
+      "saveFailed": "Save Failed",
+      "installed": "Plugin installed",
+      "installFailed": "Install failed",
+      "uninstalled": "Plugin uninstalled",
+      "uninstallFailed": "Uninstall failed"
     }
   }
 }
