@@ -78,7 +78,7 @@
     "sqlite3": "^5.1.7",
     "tar-stream": "^3.2.0",
     "typeorm": "^0.3.29",
-    "undici": "^6.27.0",
+    "undici": "^8.5.0",
     "uuid": "^14.0.1",
     "whatsapp-web.js": "^1.34.7"
   },
