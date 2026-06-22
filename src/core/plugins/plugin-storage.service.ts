@@ -6,6 +6,29 @@ import { createLogger } from '../../common/services/logger.service';
 import { isPathWithin } from '../../common/utils/path-safety';
 import { PluginStatus, PluginStorage, PluginRegistryEntry } from './plugin.interfaces';
 
+/** Unique-per-write counter so concurrent writes to the same key don't collide on the temp file. */
+let tmpWriteSeq = 0;
+
+/**
+ * Write to a sibling temp file then atomically rename it into place. POSIX rename is atomic on the
+ * same filesystem, so a crash (SIGKILL/OOM) mid-write can never leave a truncated/corrupt target —
+ * a reader sees either the old complete file or the new complete file, never a partial one.
+ */
+function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: number }): void {
+  const tmp = `${filePath}.${process.pid}.${tmpWriteSeq++}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data, options);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* best-effort temp cleanup */
+    }
+    throw err;
+  }
+}
+
 @Injectable()
 export class PluginStorageService {
   private readonly logger = createLogger('PluginStorageService');
@@ -46,7 +69,7 @@ export class PluginStorageService {
       const entries = Array.from(this.registry.values());
       // Owner-only: plugin config can hold secrets (e.g. an API key). writeFileSync's mode only
       // applies on CREATE, so chmod an already-existing, looser file too (best-effort).
-      fs.writeFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
+      atomicWriteFileSync(this.registryPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
       try {
         fs.chmodSync(this.registryPath, 0o600);
       } catch {
@@ -162,7 +185,7 @@ export class PluginStorageService {
           return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
         }
         try {
-          fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+          atomicWriteFileSync(filePath, JSON.stringify(value, null, 2));
           return Promise.resolve();
         } catch (error) {
           logger.error(`Failed to write plugin data: ${pluginId}/${key}`, String(error));
