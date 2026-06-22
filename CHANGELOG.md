@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- ⚠️ **Breaking (plugin authors):** plugins loaded from the `plugins/` directory now run sandboxed in an isolated worker thread instead of in-process. Their context is curated to `messages`, `engine`, `storage`, `logger`, `config`, `pluginId`, and `registerHook`, with capability calls permission-checked on the host — a sandboxed plugin can no longer reach the host `hookManager` directly or share host objects. Bundled/built-in plugins (engines, auto-reply, translation) are unaffected and still run in-process. See `docs/23-plugin-sandboxing.md` for the trust model and the boundary's limits.
+
 ### Fixed
 
 - Plugins page: the "Active" state and the Enable/Activate actions were all the same green and hard to tell apart. Actions are now a solid green button and the current state a neutral chip. (#417)
