@@ -751,6 +751,34 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.failed')).toHaveLength(1);
     });
 
+    it('emits the message:ack hook for every ack so plugins (e.g. a delivery logger) can react', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageAck!('wa-out-1', 'delivered');
+      await flush();
+
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:ack',
+        expect.objectContaining({ messageId: 'wa-out-1', status: 'delivered' }),
+        expect.objectContaining({ source: 'Engine' }),
+      );
+    });
+
+    it("surfaces delivery failures via message:ack with status 'failed' (not the send-time message:failed hook)", async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageAck!('wa-out-1', 'failed');
+      await flush();
+
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:ack',
+        expect.objectContaining({ messageId: 'wa-out-1', status: 'failed' }),
+        expect.objectContaining({ source: 'Engine' }),
+      );
+      // message:failed stays reserved for send-time failures (a distinct {error,input} payload).
+      expect(hookManager.execute).not.toHaveBeenCalledWith('message:failed', expect.anything(), expect.anything());
+    });
+
     it("does not upgrade the stored status (or emit message.failed) for a 'sent' status", async () => {
       const callbacks = await startAndCaptureCallbacks();
 
