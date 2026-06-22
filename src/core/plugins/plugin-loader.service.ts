@@ -185,6 +185,18 @@ export class PluginLoaderService implements OnModuleInit {
       return; // Already enabled
     }
 
+    // Engines are mutually exclusive and pinned to the deployment's engine.type config (the factory
+    // reads that, not plugin status). Enabling a second engine at runtime would show two "active"
+    // engines and desync the factory, so reject anything but the configured active engine.
+    if (plugin.manifest.type === PluginType.ENGINE) {
+      const activeEngine = this.configService.get<string>('engine.type') ?? 'whatsapp-web.js';
+      if (pluginId !== activeEngine) {
+        throw new Error(
+          `Engine "${pluginId}" is not the active engine ("${activeEngine}"). Set engine.type and restart to switch engines.`,
+        );
+      }
+    }
+
     try {
       // Create plugin context
       const context = this.createPluginContext(plugin);
@@ -291,6 +303,41 @@ export class PluginLoaderService implements OnModuleInit {
       pluginId,
       action: 'plugin_unloaded',
     });
+  }
+
+  /** Absolute path of the directory user plugins are loaded from (used by install/uninstall). */
+  getPluginsDir(): string {
+    return this.pluginsDir;
+  }
+
+  /** Whether a plugin is a first-party built-in (engine / bundled extension) vs an installed user plugin. */
+  isBuiltIn(pluginId: string): boolean {
+    return this.pluginStorage.getPluginEntry(pluginId)?.builtIn ?? false;
+  }
+
+  /**
+   * Fully remove an installed user plugin: disable + unload from the runtime, drop its persisted
+   * registry entry, and delete its directory from disk. Built-ins (engines, bundled extensions) are
+   * registered programmatically with no on-disk dir and must never be removable.
+   */
+  async uninstallPlugin(pluginId: string): Promise<void> {
+    if (this.pluginStorage.getPluginEntry(pluginId)?.builtIn) {
+      throw new Error(`Cannot uninstall built-in plugin ${pluginId}`);
+    }
+
+    if (this.plugins.has(pluginId)) {
+      await this.unloadPlugin(pluginId);
+    }
+    this.pluginStorage.deletePluginEntry(pluginId);
+
+    // Delete the plugin's directory, guarding against a traversal id escaping the plugins dir.
+    const base = path.resolve(this.pluginsDir);
+    const dir = path.resolve(base, pluginId);
+    if (dir !== base && dir.startsWith(base + path.sep) && fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });
   }
 
   updatePluginConfig(pluginId: string, config: Record<string, unknown>): void {

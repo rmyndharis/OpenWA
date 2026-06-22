@@ -151,3 +151,98 @@ describe('PluginLoaderService — enable/config persistence', () => {
     expect(loader2.getPlugin('persist-test')?.config).toEqual({ apiKey: 'operator-secret' });
   });
 });
+
+describe('PluginLoaderService — engine mutual exclusion', () => {
+  let tmpDir: string;
+  let storage: PluginStorageService;
+
+  const engineManifest = (id: string): PluginManifest => ({
+    id,
+    name: id,
+    version: '1.0.0',
+    type: PluginType.ENGINE,
+    main: 'index.js',
+  });
+
+  const makeLoader = (activeEngine: string): PluginLoaderService => {
+    const config = {
+      get: (k: string) => (k === 'engine.type' ? activeEngine : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    return new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-eng-'));
+    storage = new PluginStorageService({
+      get: (k: string) => (k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('rejects enabling an engine that is not the configured active engine', async () => {
+    const loader = makeLoader('whatsapp-web.js');
+    loader.registerBuiltInPlugin(engineManifest('baileys'), {});
+
+    await expect(loader.enablePlugin('baileys')).rejects.toThrow(/active engine/i);
+    // Rejected up front — the plugin stays INSTALLED (not flipped to ERROR).
+    expect(loader.getPlugin('baileys')?.status).toBe(PluginStatus.INSTALLED);
+  });
+
+  it('allows enabling the configured active engine', async () => {
+    const loader = makeLoader('baileys');
+    loader.registerBuiltInPlugin(engineManifest('baileys'), {});
+
+    await loader.enablePlugin('baileys');
+    expect(loader.getPlugin('baileys')?.status).toBe(PluginStatus.ENABLED);
+  });
+});
+
+describe('PluginLoaderService — uninstall', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let storage: PluginStorageService;
+  let loader: PluginLoaderService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-uninst-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    storage = new PluginStorageService(config);
+    loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const writeUserPlugin = (id: string): string => {
+    const dir = path.join(pluginsDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({ id, name: id, version: '1.0.0', type: 'extension', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+    return dir;
+  };
+
+  it('removes the plugin directory, registry entry, and runtime instance', async () => {
+    const dir = writeUserPlugin('user-plg');
+    loader.loadPlugin(dir);
+    expect(storage.getPluginEntry('user-plg')).toBeDefined();
+
+    await loader.uninstallPlugin('user-plg');
+
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(storage.getPluginEntry('user-plg')).toBeUndefined();
+    expect(loader.getPlugin('user-plg')).toBeUndefined();
+  });
+
+  it('refuses to uninstall a built-in plugin', async () => {
+    loader.registerBuiltInPlugin(
+      { id: 'core-engine', name: 'Core', version: '1.0.0', type: PluginType.ENGINE, main: 'x.js' },
+      {},
+    );
+    await expect(loader.uninstallPlugin('core-engine')).rejects.toThrow(/built-in/i);
+  });
+});
