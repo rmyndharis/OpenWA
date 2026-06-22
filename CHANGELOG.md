@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, or declares none, is denied with a clear `PluginCapabilityError`. Previously `manifest.permissions`
   was advisory and unenforced. The built-in extensions declare exactly what they use (auto-reply:
   `messages:send`; translation: `messages:send` + `engine:read`) and are unaffected; custom plugins
-  must declare the permissions for the capabilities they call.
+  must declare the permissions for the capabilities they call. (#412)
 
 ### Fixed
 
