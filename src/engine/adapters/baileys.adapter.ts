@@ -381,7 +381,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
     await this.config.messageStore?.clearSession(this.config.sessionId).catch(() => undefined);
-    // ponytail: leaves the multi-file auth dir on disk; a fresh link overwrites it. Add fs cleanup if
+    // leaves the multi-file auth dir on disk; a fresh link overwrites it. Add fs cleanup if
     // stale creds ever block re-linking.
   }
 
