@@ -29,6 +29,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fail fast (before tests, image build, or the GitHub Release) if the release is inconsistent:
+      # the tag must match package.json, and the docs/CHANGELOG version guard must pass. This stops a
+      # mis-tagged or under-documented release from ever publishing an image or a GitHub Release.
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${TAG#v}"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag '$TAG' (version '$TAG_VERSION') does not match package.json version '$PKG_VERSION'. Bump package.json or fix the tag before releasing."
+            exit 1
+          fi
+          echo "Tag $TAG matches package.json $PKG_VERSION"
+
+      - name: Check doc version consistency
+        run: npm run check:versions
+
       - name: Run tests
         run: npm test -- --coverage
 
