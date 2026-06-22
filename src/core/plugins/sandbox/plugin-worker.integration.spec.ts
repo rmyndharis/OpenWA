@@ -7,6 +7,9 @@ const ROOT = path.resolve(__dirname, '../../../..');
 const BOOTSTRAP = path.resolve(__dirname, 'worker-bootstrap.ts');
 const FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/echo-plugin.cjs');
 const CAP_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/cap-echo-plugin.cjs');
+const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs');
+const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
+const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
 // worker's transpile to CommonJS (same override the jest/ts-jest config uses) so `require()` works.
@@ -50,6 +53,45 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     await host.runLifecycle('onEnable');
 
     expect(dispatcher).toHaveBeenCalledWith('messages.sendText', ['s', 'c', 'hi']);
+    await host.terminate();
+  });
+
+  it('round-trips a hook: the worker registers a handler, the host dispatches and gets continue/data', async () => {
+    const subscribed: string[] = [];
+    const host = new PluginWorkerHost(makeChannel(), undefined, event => subscribed.push(event));
+
+    await host.load(HOOK_FIXTURE);
+    await host.runLifecycle('onEnable'); // the plugin registers its hook here
+    await flushAsync(); // let the hook-subscribe message land
+    expect(subscribed).toContain('message:received');
+
+    const result = await host.dispatchHook({
+      event: 'message:received',
+      data: { body: 'hi' },
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    expect(result).toEqual({ continue: false, data: { body: 'hi', seen: true } });
+    await host.terminate();
+  });
+
+  it('a wedged worker hook handler times out so the host chain proceeds', async () => {
+    const host = new PluginWorkerHost(makeChannel(), undefined, () => undefined);
+
+    await host.load(HOOK_HANG_FIXTURE);
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    const onTimeout = jest.fn();
+    const result = await host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      source: 'Engine',
+      timeoutMs: 200,
+      onTimeout,
+    });
+    expect(result).toEqual({ continue: true });
+    expect(onTimeout).toHaveBeenCalled();
     await host.terminate();
   });
 });

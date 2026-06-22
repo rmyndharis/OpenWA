@@ -1,6 +1,7 @@
 import { parentPort } from 'worker_threads';
 import { HostToWorkerMessage, WorkerToHostMessage } from './protocol';
-import { WorkerCapabilityClient, buildSandboxContext, SandboxCapabilityContext } from './worker-capability';
+import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability';
+import { WorkerHookRegistry, WorkerHookHandler } from './worker-hooks';
 
 /**
  * Worker entry for an untrusted plugin. Loads the plugin module and drives its lifecycle in response
@@ -25,12 +26,17 @@ const send = (message: WorkerToHostMessage): void => port.postMessage(message);
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const capClient = new WorkerCapabilityClient(send);
+const hookRegistry = new WorkerHookRegistry(send);
 let plugin: LifecyclePlugin | null = null;
-let context: SandboxCapabilityContext | null = null;
+let context: Record<string, unknown> | null = null;
 
 port.on('message', (message: HostToWorkerMessage) => {
   if (message.kind === 'cap-result') {
     capClient.handleResult(message);
+    return;
+  }
+  if (message.kind === 'hook') {
+    void hookRegistry.handleHook(message);
     return;
   }
   void handle(message);
@@ -43,7 +49,11 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
       const mod = require(message.mainPath) as { default?: new () => LifecyclePlugin } & (new () => LifecyclePlugin);
       const PluginCtor = mod.default ?? mod;
       plugin = new PluginCtor();
-      context = buildSandboxContext(capClient);
+      context = {
+        ...buildSandboxContext(capClient),
+        registerHook: (event: string, handler: WorkerHookHandler, priority?: number) =>
+          hookRegistry.register(event, handler, priority),
+      };
       send({ kind: 'ready' });
     } catch (error) {
       send({ kind: 'error', error: errorMessage(error) });

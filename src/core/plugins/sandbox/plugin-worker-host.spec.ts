@@ -160,4 +160,56 @@ describe('PluginWorkerHost', () => {
       expect(ch.sent.find(m => m.kind === 'cap-result')).toMatchObject({ id: 9, ok: false });
     });
   });
+
+  describe('hook bridge', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('calls onHookSubscribe when the worker subscribes to an event', async () => {
+      const ch = new FakeChannel();
+      const onHookSubscribe = jest.fn();
+      new PluginWorkerHost(ch, undefined, onHookSubscribe);
+
+      ch.reply({ kind: 'hook-subscribe', event: 'message:received', priority: 50 });
+      await flush();
+
+      expect(onHookSubscribe).toHaveBeenCalledWith('message:received', 50);
+    });
+
+    it('dispatchHook posts a hook and resolves on the matching hook-result', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({
+        event: 'message:received',
+        data: { body: 'hi' },
+        source: 'Engine',
+        timeoutMs: 1000,
+      });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+      expect(sent).toMatchObject({ kind: 'hook', event: 'message:received', data: { body: 'hi' }, source: 'Engine' });
+
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: false, data: { body: 'modified' } });
+      await expect(pending).resolves.toEqual({ continue: false, data: { body: 'modified' } });
+    });
+
+    it('dispatchHook resolves continue:true on timeout so the chain is not stalled', async () => {
+      jest.useFakeTimers();
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+      const onTimeout = jest.fn();
+
+      const pending = host.dispatchHook({
+        event: 'message:received',
+        data: {},
+        source: 'Engine',
+        timeoutMs: 100,
+        onTimeout,
+      });
+      jest.advanceTimersByTime(100);
+
+      await expect(pending).resolves.toEqual({ continue: true });
+      expect(onTimeout).toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+  });
 });

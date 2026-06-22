@@ -14,15 +14,54 @@ export class PluginWorkerHost {
   private dead = false;
   private readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private readonly pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly hookPending = new Map<
+    number,
+    { resolve: (result: { continue: boolean; data?: unknown }) => void; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     private readonly channel: PluginWorkerChannel,
     // Runs a worker-initiated capability call host-side (validating permission + session scope before
     // the real verb). Absent => the worker has no capabilities (e.g. before the bridge is wired).
     private readonly capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+    // Called when the worker subscribes a handler to an event, so the host can register a shim with
+    // the hook manager that dispatches into the worker.
+    private readonly onHookSubscribe?: (event: string, priority?: number) => void,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
+  }
+
+  /**
+   * Dispatch a hook event to the worker and await its handler result. Bounded by `timeoutMs`: if the
+   * worker's handler is slow or wedged, this resolves `{ continue: true }` so the host's hook chain
+   * is never stalled by an untrusted plugin (and `onTimeout` flags it for the caller).
+   */
+  dispatchHook(options: {
+    event: string;
+    data: unknown;
+    source: string;
+    sessionId?: string;
+    timeoutMs: number;
+    onTimeout?: () => void;
+  }): Promise<{ continue: boolean; data?: unknown }> {
+    const id = this.nextId++;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        this.hookPending.delete(id);
+        options.onTimeout?.();
+        resolve({ continue: true });
+      }, options.timeoutMs);
+      this.hookPending.set(id, { resolve, timer });
+      this.channel.postMessage({
+        kind: 'hook',
+        id,
+        event: options.event,
+        data: options.data,
+        sessionId: options.sessionId,
+        source: options.source,
+      });
+    });
   }
 
   /** Load the plugin module in the worker; resolves once it reports `ready`, rejects if it errors. */
@@ -72,6 +111,19 @@ export class PluginWorkerHost {
       case 'cap':
         void this.handleCapRequest(message);
         break;
+      case 'hook-subscribe':
+        this.onHookSubscribe?.(message.event, message.priority);
+        break;
+      case 'hook-result': {
+        const waiter = this.hookPending.get(message.id);
+        if (!waiter) return;
+        this.hookPending.delete(message.id);
+        clearTimeout(waiter.timer);
+        const result: { continue: boolean; data?: unknown } = { continue: message.continue };
+        if (message.data !== undefined) result.data = message.data;
+        waiter.resolve(result);
+        break;
+      }
     }
   }
 

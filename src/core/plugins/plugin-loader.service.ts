@@ -4,7 +4,7 @@ import { ModuleRef } from '@nestjs/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
-import { HookManager } from '../hooks';
+import { HookManager, HookEvent } from '../hooks';
 import {
   PluginCapabilityError,
   PluginCapabilityPermission,
@@ -28,6 +28,8 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
+/** Time budget for a sandboxed plugin's hook handler before the chain proceeds without it. */
+const SANDBOX_HOOK_TIMEOUT_MS = 5000;
 
 /**
  * Resolve a plugin's `main` entry to an absolute path, asserting it stays inside
@@ -380,11 +382,15 @@ export class PluginLoaderService implements OnModuleInit {
    * Build a worker host for a sandboxed (untrusted) plugin. Overridable so tests can inject a fake
    * instead of spawning a real OS thread. Production loads the compiled worker bootstrap from dist.
    */
-  protected createSandboxHost(capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>): PluginWorkerHost {
+  protected createSandboxHost(
+    capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+    onHookSubscribe?: (event: string, priority?: number) => void,
+  ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
       new WorkerThreadChannel({ workerEntry, maxOldGenerationSizeMb: SANDBOX_MAX_OLD_GEN_MB }),
       capDispatcher,
+      onHookSubscribe,
     );
   }
 
@@ -413,9 +419,9 @@ export class PluginLoaderService implements OnModuleInit {
   }
 
   /**
-   * Untrusted enable: load the plugin in an isolated worker and drive its lifecycle there. No
-   * in-process instance or capability context (the capability bridge arrives in a later phase), so
-   * the worker plugin runs isolated and inert until then. A failure tears the worker back down.
+   * Untrusted enable: load the plugin in an isolated worker and drive its lifecycle there. Capability
+   * calls and hooks round-trip to the host, which enforces permission + session scope. A failure
+   * tears the worker back down.
    */
   private async enableSandboxed(pluginId: string, plugin: PluginInstance): Promise<void> {
     // Containment guard: reject a manifest.main that escapes the plugin dir.
@@ -424,7 +430,38 @@ export class PluginLoaderService implements OnModuleInit {
     // gets, so permission + session-scope checks (assertPermission / assertSessionAllowed) apply
     // identically. The worker can only ask; the host is the gatekeeper.
     const context = this.createPluginContext(plugin);
-    const host = this.createSandboxHost((verb, args) => dispatchCapabilityVerb(context, verb, args));
+
+    // When the worker subscribes to a hook, register a shim with the hook manager that dispatches the
+    // event into the worker (time-bounded, so a wedged plugin can't stall the chain). The shim looks
+    // the host up at fire time, so disabling the plugin (which removes it + unregisters hooks) stops it.
+    const onHookSubscribe = (event: string, priority?: number): void => {
+      this.hookManager.register(
+        pluginId,
+        event as HookEvent,
+        async hookCtx => {
+          const liveHost = this.sandboxHosts.get(pluginId);
+          if (!liveHost) return { continue: true };
+          return liveHost
+            .dispatchHook({
+              event,
+              data: hookCtx.data,
+              sessionId: hookCtx.sessionId,
+              source: hookCtx.source,
+              timeoutMs: SANDBOX_HOOK_TIMEOUT_MS,
+              onTimeout: () =>
+                this.logger.warn(`Sandboxed plugin ${pluginId} hook '${event}' timed out`, {
+                  pluginId,
+                  event,
+                  action: 'sandbox_hook_timeout',
+                }),
+            })
+            .then(result => ({ continue: result.continue, data: result.data }));
+        },
+        priority,
+      );
+    };
+
+    const host = this.createSandboxHost((verb, args) => dispatchCapabilityVerb(context, verb, args), onHookSubscribe);
     this.sandboxHosts.set(pluginId, host);
     try {
       await host.load(mainPath);

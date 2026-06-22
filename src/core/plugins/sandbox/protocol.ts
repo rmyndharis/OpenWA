@@ -16,7 +16,9 @@ export type HostToWorkerMessage =
   | { kind: 'lifecycle'; id: number; method: PluginLifecycleMethod }
   // Reply to a worker-initiated capability call.
   | { kind: 'cap-result'; id: number; ok: true; result: unknown }
-  | { kind: 'cap-result'; id: number; ok: false; error: string };
+  | { kind: 'cap-result'; id: number; ok: false; error: string }
+  // Dispatch a subscribed hook to the worker; it runs its handler(s) and replies with hook-result.
+  | { kind: 'hook'; id: number; event: string; data: unknown; sessionId?: string; source: string };
 
 export type WorkerToHostMessage =
   | { kind: 'ready' }
@@ -25,6 +27,10 @@ export type WorkerToHostMessage =
   // Worker-initiated capability call (ctx.messages.* / ctx.engine.* / ctx.storage.*). The host
   // validates it (permission + session scope) before running the real verb and replying.
   | { kind: 'cap'; id: number; verb: string; args: unknown[] }
+  // The worker asks the host to dispatch `event` to it (registered a handler for it).
+  | { kind: 'hook-subscribe'; event: string; priority?: number }
+  // The worker's handler result for a dispatched hook (continue/modify/error).
+  | { kind: 'hook-result'; id: number; continue: boolean; data?: unknown; error?: string }
   | { kind: 'error'; error: string };
 
 /**
