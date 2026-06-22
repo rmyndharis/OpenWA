@@ -38,7 +38,8 @@ export class ExtensionsRegistrar implements OnModuleInit {
       description:
         "Auto-translates group messages between participants' languages via LibreTranslate. Configure in-group with /tr commands. Disabled by default.",
       main: 'index.ts',
-      permissions: ['messages:send'],
+      // Sends translations (messages:send) and reads group admins via ctx.engine.getGroupInfo (engine:read).
+      permissions: ['messages:send', 'engine:read'],
       sessions: ['*'],
       // Exposed via GET /plugins so the dashboard renders an editable config form (URL + API key, etc.).
       configSchema: {

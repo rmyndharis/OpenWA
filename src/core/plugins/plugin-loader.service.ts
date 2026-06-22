@@ -7,6 +7,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../hooks';
 import {
   PluginCapabilityError,
+  PluginCapabilityPermission,
   PluginEngineReadCapability,
   PluginManifest,
   PluginMessagingCapability,
@@ -336,6 +337,20 @@ export class PluginLoaderService implements OnModuleInit {
   }
 
   /**
+   * Enforce a plugin's declared manifest permissions at the capability boundary. A plugin may only
+   * use a capability whose permission string it declares in `manifest.permissions`; anything else
+   * (including a manifest with no permissions) is denied. Runs first in each capability verb so a
+   * missing grant fails fast and uniformly as a PluginCapabilityError.
+   */
+  private assertPermission(manifest: PluginManifest, permission: PluginCapabilityPermission): void {
+    if (!(manifest.permissions ?? []).includes(permission)) {
+      throw new PluginCapabilityError(
+        `Plugin ${manifest.id} is missing the '${permission}' permission required for this capability`,
+      );
+    }
+  }
+
+  /**
    * Enforce a plugin's manifest session scope. Runs BEFORE any engine/message resolution —
    * sessionId is supplied by the plugin, so this is the security boundary. Absent = ['*'].
    */
@@ -358,6 +373,12 @@ export class PluginLoaderService implements OnModuleInit {
       throw new PluginCapabilityError(`Session ${sessionId} has no active engine (unknown or not started)`);
     }
     return engine;
+  }
+
+  /** Engine read capabilities: require the `engine:read` permission, then resolve the live engine. */
+  private resolveEngineRead(manifest: PluginManifest, sessionId: string): IWhatsAppEngine {
+    this.assertPermission(manifest, PluginCapabilityPermission.ENGINE_READ);
+    return this.resolveEngine(manifest, sessionId);
   }
 
   private createPluginContext(plugin: PluginInstance): PluginContext {
@@ -388,26 +409,29 @@ export class PluginLoaderService implements OnModuleInit {
       },
       messages: {
         sendText: async (sessionId, chatId, text) => {
-          // Validate scope + that the session has a live engine BEFORE MessageService persists a
-          // pending row: a dead/unstarted session must fail with PluginCapabilityError, not a raw
-          // TypeError + orphaned row. resolveEngine also runs assertSessionAllowed.
+          // Validate permission + scope + that the session has a live engine BEFORE MessageService
+          // persists a pending row: a missing grant / dead session must fail with
+          // PluginCapabilityError, not a raw TypeError + orphaned row. resolveEngine also runs
+          // assertSessionAllowed.
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
           this.resolveEngine(plugin.manifest, sessionId);
           return this.getMessageService().sendText(sessionId, { chatId, text });
         },
         reply: async (sessionId, chatId, quotedMessageId, text) => {
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
           this.resolveEngine(plugin.manifest, sessionId);
           return this.getMessageService().reply(sessionId, { chatId, quotedMessageId, text });
         },
       } satisfies PluginMessagingCapability,
       engine: {
         getGroupInfo: async (sessionId, groupId) =>
-          this.resolveEngine(plugin.manifest, sessionId).getGroupInfo(groupId),
-        getContacts: async sessionId => this.resolveEngine(plugin.manifest, sessionId).getContacts(),
+          this.resolveEngineRead(plugin.manifest, sessionId).getGroupInfo(groupId),
+        getContacts: async sessionId => this.resolveEngineRead(plugin.manifest, sessionId).getContacts(),
         getContactById: async (sessionId, contactId) =>
-          this.resolveEngine(plugin.manifest, sessionId).getContactById(contactId),
+          this.resolveEngineRead(plugin.manifest, sessionId).getContactById(contactId),
         checkNumberExists: async (sessionId, phone) =>
-          this.resolveEngine(plugin.manifest, sessionId).checkNumberExists(phone),
-        getChats: async sessionId => this.resolveEngine(plugin.manifest, sessionId).getChats(),
+          this.resolveEngineRead(plugin.manifest, sessionId).checkNumberExists(phone),
+        getChats: async sessionId => this.resolveEngineRead(plugin.manifest, sessionId).getChats(),
       } satisfies PluginEngineReadCapability,
     };
   }

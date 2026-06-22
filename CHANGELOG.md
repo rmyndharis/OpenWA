@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Plugin capability permissions are now enforced.** A plugin may use a capability — `ctx.messages.*`
+  (send/reply) or `ctx.engine.*` (read-only group/contact/chat queries) — only if its manifest
+  declares the matching permission (`messages:send` / `engine:read`); a plugin that doesn't declare
+  it, or declares none, is denied with a clear `PluginCapabilityError`. Previously `manifest.permissions`
+  was advisory and unenforced. The built-in extensions declare exactly what they use (auto-reply:
+  `messages:send`; translation: `messages:send` + `engine:read`) and are unaffected; custom plugins
+  must declare the permissions for the capabilities they call.
+
 ### Fixed
 
 - **A session is no longer mutated by callbacks from an engine it has already replaced or torn

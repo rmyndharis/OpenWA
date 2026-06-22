@@ -60,7 +60,9 @@ export interface PluginManifest {
   // Required features from other plugins
   requires?: string[];
 
-  // Capabilities this plugin declares (informational at this tier; not per-verb enforced)
+  // Capability permissions this plugin declares; the loader enforces them at the capability
+  // boundary (see PluginCapabilityPermission). A capability call whose permission is not declared
+  // here is denied with a PluginCapabilityError. Absent / empty = no capability access.
   permissions?: string[];
 
   // Session ids this plugin may act on, or ['*']. Absent = ['*'] (all). Enforced by the
@@ -89,7 +91,20 @@ export interface PluginConfigSchema {
 // ============================================================================
 
 /**
- * Thrown by a plugin capability when a call is rejected (out-of-scope session,
+ * Capability permissions a plugin declares in its manifest `permissions` and that the loader
+ * enforces at the capability boundary. A plugin may only use a capability whose permission it
+ * declares; an undeclared (or missing-permission) plugin is denied with a PluginCapabilityError.
+ */
+export const PluginCapabilityPermission = {
+  /** `ctx.messages.*` — send / reply on a session. */
+  MESSAGES_SEND: 'messages:send',
+  /** `ctx.engine.*` — read-only engine queries (group info, contacts, chats, number check). */
+  ENGINE_READ: 'engine:read',
+} as const;
+export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[keyof typeof PluginCapabilityPermission];
+
+/**
+ * Thrown by a plugin capability when a call is rejected (missing permission, out-of-scope session,
  * unstarted session, etc.). Gives plugins a predictable failure instead of a raw TypeError.
  */
 export class PluginCapabilityError extends Error {

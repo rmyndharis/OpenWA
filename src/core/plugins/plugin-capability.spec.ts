@@ -14,7 +14,7 @@ import {
 import { MessageService } from '../../modules/message/message.service';
 import { SessionService } from '../../modules/session/session.service';
 
-function makePlugin(sessions?: string[]): PluginInstance {
+function makePlugin(sessions?: string[], permissions: string[] = ['messages:send', 'engine:read']): PluginInstance {
   const manifest: PluginManifest = {
     id: 'test-ext',
     name: 'Test Extension',
@@ -22,6 +22,7 @@ function makePlugin(sessions?: string[]): PluginInstance {
     type: PluginType.EXTENSION,
     main: 'index.ts',
     sessions,
+    permissions,
   };
   return { manifest, status: PluginStatus.INSTALLED, config: {}, instance: null };
 }
@@ -100,6 +101,19 @@ describe('PluginLoaderService capability facade — ctx.messages', () => {
     await expect(ctx.messages.sendText('dead-session', '628@c.us', 'hi')).rejects.toBeInstanceOf(PluginCapabilityError);
     expect(messageService.sendText).not.toHaveBeenCalled();
   });
+
+  it('denies sendText when the plugin does not declare the messages:send permission', async () => {
+    const ctx = contextFor(makePlugin(['*'], [])); // no permissions
+    await expect(ctx.messages.sendText('sess-1', '628@c.us', 'hi')).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(moduleRef.get).not.toHaveBeenCalled();
+    expect(messageService.sendText).not.toHaveBeenCalled();
+  });
+
+  it('denies reply when the plugin does not declare the messages:send permission', async () => {
+    const ctx = contextFor(makePlugin(['*'], []));
+    await expect(ctx.messages.reply('sess-1', '628@c.us', 'q', 'hi')).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(messageService.reply).not.toHaveBeenCalled();
+  });
 });
 
 describe('PluginLoaderService capability facade — ctx.engine', () => {
@@ -149,5 +163,20 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
     const ctx = contextFor(makePlugin(['allowed']));
     await expect(ctx.engine.getChats('other')).rejects.toBeInstanceOf(PluginCapabilityError);
     expect(sessionService.getEngine).not.toHaveBeenCalled();
+  });
+
+  it('denies engine.getGroupInfo when the plugin does not declare the engine:read permission', async () => {
+    const { sessionService } = build({ getGroupInfo: jest.fn() });
+    const ctx = contextFor(makePlugin(['*'], ['messages:send'])); // has messages, lacks engine:read
+    await expect(ctx.engine.getGroupInfo('sess-1', 'g@g.us')).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(sessionService.getEngine).not.toHaveBeenCalled();
+  });
+
+  it('allows engine.getGroupInfo when the plugin declares engine:read', async () => {
+    const engine = { getGroupInfo: jest.fn().mockResolvedValue({ id: 'g@g.us' }) };
+    build(engine);
+    const ctx = contextFor(makePlugin(['*'], ['engine:read']));
+    await ctx.engine.getGroupInfo('sess-1', 'g@g.us');
+    expect(engine.getGroupInfo).toHaveBeenCalledWith('g@g.us');
   });
 });
