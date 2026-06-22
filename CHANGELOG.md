@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-22
+
+A patch closing a plugin-hook gap.
+
+### Fixed
+
+- The `message:ack` hook event was declared in the `HookEvent` union but never emitted, so a plugin registered for it (e.g. a delivery-status logger) silently never fired. It now fires for every delivery/read receipt with `{ messageId, status, ack }` (`source: 'Engine'`, scoped to the session), consistent with `message:received`/`message:sent`. Delivery failures surface as `message:ack` with `status: 'failed'`; the send-time `message:failed` hook is unchanged.
+
 ## [0.6.0] - 2026-06-22
 
 The **plugin platform** release: untrusted plugins now run sandboxed, and you can install and uninstall them from the dashboard. One breaking change for plugin authors (the sandbox context), so this is a minor bump.
