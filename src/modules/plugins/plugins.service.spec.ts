@@ -312,3 +312,32 @@ describe('PluginsService — per-session config', () => {
     expect(boot3.getPlugin('sess-cfg')?.activeSessions).toEqual(['sess-A']);
   });
 });
+
+describe('PluginsService i18n passthrough', () => {
+  function build(manifestI18n: unknown) {
+    const plugin = {
+      manifest: { id: 'p', name: 'P', version: '1.0.0', type: 'extension', main: 'dist/index.js', i18n: manifestI18n },
+      status: 'enabled',
+      config: {},
+      activeSessions: ['*'],
+    };
+    const loader = {
+      getAllPlugins: () => [plugin],
+      getPlugin: () => plugin,
+      isBuiltIn: () => false,
+    } as unknown as PluginLoaderService;
+    return new PluginsService(loader, { get: () => undefined } as unknown as ConfigService);
+  }
+
+  it('surfaces manifest.i18n on the DTO (findOne + findAll)', () => {
+    const i18n = { es: { name: 'P-es', config: { k: { title: 'T-es' } } } };
+    const svc = build(i18n);
+    expect(svc.findOne('p').i18n).toEqual(i18n);
+    expect(svc.findAll()[0].i18n).toEqual(i18n);
+  });
+
+  it('leaves i18n undefined when the manifest has none', () => {
+    const svc = build(undefined);
+    expect(svc.findOne('p').i18n).toBeUndefined();
+  });
+});

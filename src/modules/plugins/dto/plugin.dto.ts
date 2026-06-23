@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsObject, IsString, IsUrl } from 'class-validator';
-import type { PluginConfigSchema } from '../../../core/plugins';
+import type { PluginConfigSchema, PluginI18n } from '../../../core/plugins';
 import { PluginType, PluginStatus } from '../../../core/plugins';
 
 export class PluginDto {
@@ -45,6 +45,9 @@ export class PluginDto {
 
   @ApiPropertyOptional({ description: 'Sandboxed-iframe config editor (entry HTML + optional height)' })
   configUi?: { entry: string; height?: number };
+
+  @ApiPropertyOptional({ description: 'Localized dashboard text (name/description/config titles) per locale code' })
+  i18n?: PluginI18n;
 
   @ApiPropertyOptional({ description: 'Per-session config overrides, keyed by sessionId (secrets redacted)' })
   sessionConfig?: Record<string, Record<string, unknown>>;
