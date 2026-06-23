@@ -647,7 +647,8 @@
       "sessionDataPath": "Chemin des données de session",
       "browserArgs": "Arguments du navigateur",
       "noOptions": "Aucune option de configuration disponible pour ce plugin",
-      "save": "Enregistrer la configuration"
+      "save": "Enregistrer la configuration",
+      "addItem": "Ajouter"
     },
     "rail": {
       "engine": "Moteur actif",

@@ -647,7 +647,8 @@
       "sessionDataPath": "Percorso Dati Sessione",
       "browserArgs": "Argomenti del Browser",
       "noOptions": "Nessuna opzione di configurazione disponibile per questo plugin",
-      "save": "Salva Configurazione"
+      "save": "Salva Configurazione",
+      "addItem": "Aggiungi"
     },
     "rail": {
       "engine": "Motore attivo",

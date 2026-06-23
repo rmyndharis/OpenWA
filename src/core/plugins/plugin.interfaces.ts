@@ -81,20 +81,32 @@ export interface PluginManifest {
   net?: { allow?: string[] };
 }
 
+/**
+ * One field in a plugin's config schema. Recursive: an `object` field nests `properties`, an `array`
+ * field describes its element with `items` (array-of-rows when `items.type === 'object'`). The host
+ * renders this into an authenticated form; the plugin still reads `ctx.config` defensively.
+ */
+export interface PluginConfigField {
+  // 'textarea' is a string rendered multi-line; a field with `enum` renders as a <select>.
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'textarea';
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[]; // when present (any scalar type), the field renders as a <select>
+  required?: boolean;
+  secret?: boolean; // sensitive value (e.g. API key): masked on read, preserved on an unchanged write
+  // Validation hints, surfaced as HTML input attributes (advisory — not hard-enforced server-side):
+  min?: number; // number: value bound; string/textarea: minLength; array: min rows
+  max?: number; // number: value bound; string/textarea: maxLength; array: max rows
+  pattern?: string; // string/textarea: HTML validation regex
+  // Composite kinds:
+  items?: PluginConfigField; // array element schema; array-of-rows when items.type === 'object'
+  properties?: Record<string, PluginConfigField>; // nested-object fields (type: 'object')
+}
+
 export interface PluginConfigSchema {
   type: 'object';
-  properties: Record<
-    string,
-    {
-      type: 'string' | 'number' | 'boolean' | 'array' | 'object';
-      title?: string;
-      description?: string;
-      default?: unknown;
-      enum?: unknown[];
-      required?: boolean;
-      secret?: boolean; // For sensitive values like API keys
-    }
-  >;
+  properties: Record<string, PluginConfigField>;
 }
 
 // ============================================================================

@@ -582,15 +582,21 @@ export const settingsApi = {
 // Plugin Types
 // =============================================================================
 
-/** Field definition within a plugin's config schema (mirrors the backend PluginConfigSchema). */
+/** Field definition within a plugin's config schema (mirrors the backend PluginConfigField). */
 export interface PluginConfigField {
-  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  // 'textarea' is a multi-line string; a field with `enum` renders as a <select>.
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'textarea';
   title?: string;
   description?: string;
   default?: unknown;
   enum?: unknown[];
   required?: boolean;
   secret?: boolean;
+  min?: number;
+  max?: number;
+  pattern?: string;
+  items?: PluginConfigField; // array element schema; array-of-rows when items.type === 'object'
+  properties?: Record<string, PluginConfigField>; // nested-object fields
 }
 
 export interface PluginConfigSchema {

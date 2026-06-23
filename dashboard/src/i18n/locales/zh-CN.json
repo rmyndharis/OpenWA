@@ -647,7 +647,8 @@
       "sessionDataPath": "会话数据路径",
       "browserArgs": "浏览器参数",
       "noOptions": "此插件没有可用配置项",
-      "save": "保存配置"
+      "save": "保存配置",
+      "addItem": "添加"
     },
     "rail": {
       "engine": "活动引擎",

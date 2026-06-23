@@ -647,7 +647,8 @@
       "sessionDataPath": "Session Data Path",
       "browserArgs": "Browser Arguments",
       "noOptions": "No configuration options available for this plugin",
-      "save": "Save Configuration"
+      "save": "Save Configuration",
+      "addItem": "Add"
     },
     "rail": {
       "engine": "Active engine",

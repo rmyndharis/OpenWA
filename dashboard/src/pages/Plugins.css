@@ -452,7 +452,8 @@
 }
 
 .config-form .form-group input,
-.config-form .form-group select {
+.config-form .form-group select,
+.config-form .form-group textarea {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -463,12 +464,101 @@
   box-sizing: border-box;
 }
 
+.config-form .form-group textarea {
+  font-family: inherit;
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
 .config-form .form-group input:focus,
-.config-form .form-group select:focus {
+.config-form .form-group select:focus,
+.config-form .form-group textarea:focus {
   outline: none;
   border-color: var(--primary);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
+}
+
+/* Nested object — a bordered group of sub-fields. */
+.config-form .config-fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem 0.25rem;
+  margin: 0 0 1.25rem;
+  min-width: 0;
+}
+
+.config-form .config-fieldset > legend {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0 0.4rem;
+}
+
+/* Array-of-rows — repeating rows with add/remove. */
+.config-form .config-array {
+  margin-bottom: 1.25rem;
+}
+
+.config-form .config-array > label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.config-form .config-array-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.config-form .config-array-row-body {
+  flex: 1;
+  min-width: 0;
+  border-left: 2px solid var(--border);
+  padding-left: 0.75rem;
+}
+
+.config-form .config-array-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-light);
+  color: var(--danger, #e5484d);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.config-form .config-array-remove:hover {
+  background: var(--danger, #e5484d);
+  color: #fff;
+  border-color: var(--danger, #e5484d);
+}
+
+.config-form .config-array-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.config-form .config-array-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .config-form .form-group small {

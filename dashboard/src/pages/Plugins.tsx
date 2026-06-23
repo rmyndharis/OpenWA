@@ -20,9 +20,10 @@ import {
   Trash2,
   Globe,
   Download,
+  Plus,
 } from 'lucide-react';
 import { pluginsApi, infraApi } from '../services/api';
-import type { Plugin, CatalogPlugin } from '../services/api';
+import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   usePluginsQuery,
@@ -50,6 +51,174 @@ interface EngineConfig {
   headless: boolean;
   sessionDataPath: string;
   browserArgs: string;
+}
+
+/** A blank value for a field, used to seed a form and to add a new array row. */
+function emptyForField(field: PluginConfigField): unknown {
+  if (field.default !== undefined) return field.default;
+  switch (field.type) {
+    case 'boolean':
+      return false;
+    case 'array':
+      return [];
+    case 'object': {
+      const obj: Record<string, unknown> = {};
+      if (field.properties) for (const [k, sub] of Object.entries(field.properties)) obj[k] = emptyForField(sub);
+      return obj;
+    }
+    default: // string | number | textarea — empty string (number coerced on input)
+      return '';
+  }
+}
+
+/**
+ * Renders one config field from a plugin's schema and reports edits via `onChange`. Recurses for
+ * nested objects and array-of-rows. Module-scope (stable identity) so inputs keep focus across
+ * keystrokes. The secret redact/restore round-trip lives server-side (PUT /plugins/:id/config).
+ */
+function ConfigField({
+  field,
+  label,
+  value,
+  onChange,
+}: {
+  field: PluginConfigField;
+  label: string;
+  value: unknown;
+  onChange: (next: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const desc = field.description ? <small>{field.description}</small> : null;
+  const labelEl = (
+    <label>
+      {label}
+      {field.required && <span className="required-mark"> *</span>}
+    </label>
+  );
+
+  if (field.type === 'boolean') {
+    return (
+      <div className="form-group toggle-group">
+        <div className="toggle-info">
+          <label>{label}</label>
+          {desc}
+        </div>
+        <label className="toggle-switch">
+          <input type="checkbox" checked={Boolean(value)} onChange={e => onChange(e.target.checked)} />
+          <span className="toggle-slider"></span>
+        </label>
+      </div>
+    );
+  }
+
+  if (field.enum && field.enum.length > 0) {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <select value={String(value ?? '')} onChange={e => onChange(e.target.value)}>
+          {field.enum.map(opt => (
+            <option key={String(opt)} value={String(opt)}>
+              {String(opt)}
+            </option>
+          ))}
+        </select>
+        {desc}
+      </div>
+    );
+  }
+
+  if (field.type === 'object' && field.properties) {
+    const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+    return (
+      <fieldset className="config-fieldset">
+        <legend>{label}</legend>
+        {desc}
+        {Object.entries(field.properties).map(([k, sub]) => (
+          <ConfigField
+            key={k}
+            field={sub}
+            label={sub.title || k}
+            value={obj[k]}
+            onChange={v => onChange({ ...obj, [k]: v })}
+          />
+        ))}
+      </fieldset>
+    );
+  }
+
+  if (field.type === 'array' && field.items) {
+    const rows = Array.isArray(value) ? value : [];
+    const item = field.items;
+    return (
+      <div className="config-array">
+        {labelEl}
+        {desc}
+        {rows.map((row, i) => (
+          <div className="config-array-row" key={i}>
+            <div className="config-array-row-body">
+              <ConfigField
+                field={item}
+                label={`#${i + 1}`}
+                value={row}
+                onChange={v => onChange(rows.map((r, j) => (j === i ? v : r)))}
+              />
+            </div>
+            <button
+              type="button"
+              className="config-array-remove"
+              title={t('common.delete')}
+              aria-label={t('common.delete')}
+              onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+        <button type="button" className="config-array-add" onClick={() => onChange([...rows, emptyForField(item)])}>
+          <Plus size={14} /> {t('plugins.config.addItem')}
+        </button>
+      </div>
+    );
+  }
+
+  if (field.type === 'textarea') {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <textarea
+          value={value === undefined || value === null ? '' : String(value)}
+          placeholder={field.default !== undefined ? String(field.default) : undefined}
+          minLength={field.min}
+          maxLength={field.max}
+          rows={4}
+          onChange={e => onChange(e.target.value)}
+        />
+        {desc}
+      </div>
+    );
+  }
+
+  const inputType = field.type === 'number' ? 'number' : field.secret ? 'password' : 'text';
+  return (
+    <div className="form-group">
+      {labelEl}
+      <input
+        type={inputType}
+        value={value === undefined || value === null ? '' : String(value)}
+        placeholder={field.default !== undefined ? String(field.default) : undefined}
+        autoComplete={field.secret ? 'new-password' : undefined}
+        min={field.type === 'number' ? field.min : undefined}
+        max={field.type === 'number' ? field.max : undefined}
+        minLength={field.type !== 'number' ? field.min : undefined}
+        maxLength={field.type !== 'number' ? field.max : undefined}
+        pattern={field.type !== 'number' ? field.pattern : undefined}
+        onChange={e =>
+          onChange(field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)
+        }
+      />
+      {desc}
+    </div>
+  );
 }
 
 export default function Plugins() {
@@ -130,7 +299,7 @@ export default function Plugins() {
     if (plugin.configSchema?.properties) {
       const initial: Record<string, unknown> = {};
       for (const [key, field] of Object.entries(plugin.configSchema.properties)) {
-        initial[key] = plugin.config[key] ?? field.default ?? (field.type === 'boolean' ? false : '');
+        initial[key] = plugin.config[key] ?? emptyForField(field);
       }
       setSchemaConfig(initial);
     }
@@ -715,76 +884,15 @@ export default function Plugins() {
                 </>
               ) : configPlugin.configSchema && Object.keys(configPlugin.configSchema.properties).length > 0 ? (
                 <div className="config-form">
-                  {Object.entries(configPlugin.configSchema.properties).map(([key, field]) => {
-                    const value = schemaConfig[key];
-                    const label = field.title || key;
-
-                    if (field.type === 'boolean') {
-                      return (
-                        <div className="form-group toggle-group" key={key}>
-                          <div className="toggle-info">
-                            <label>{label}</label>
-                            {field.description && <small>{field.description}</small>}
-                          </div>
-                          <label className="toggle-switch">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(value)}
-                              onChange={e => setSchemaConfig({ ...schemaConfig, [key]: e.target.checked })}
-                            />
-                            <span className="toggle-slider"></span>
-                          </label>
-                        </div>
-                      );
-                    }
-
-                    if (field.enum && field.enum.length > 0) {
-                      return (
-                        <div className="form-group" key={key}>
-                          <label>{label}</label>
-                          <select
-                            value={String(value ?? '')}
-                            onChange={e => setSchemaConfig({ ...schemaConfig, [key]: e.target.value })}
-                          >
-                            {field.enum.map(opt => (
-                              <option key={String(opt)} value={String(opt)}>
-                                {String(opt)}
-                              </option>
-                            ))}
-                          </select>
-                          {field.description && <small>{field.description}</small>}
-                        </div>
-                      );
-                    }
-
-                    const inputType = field.type === 'number' ? 'number' : field.secret ? 'password' : 'text';
-                    return (
-                      <div className="form-group" key={key}>
-                        <label>
-                          {label}
-                          {field.required && <span className="required-mark"> *</span>}
-                        </label>
-                        <input
-                          type={inputType}
-                          value={value === undefined || value === null ? '' : String(value)}
-                          placeholder={field.default !== undefined ? String(field.default) : undefined}
-                          autoComplete={field.secret ? 'new-password' : undefined}
-                          onChange={e =>
-                            setSchemaConfig({
-                              ...schemaConfig,
-                              [key]:
-                                field.type === 'number'
-                                  ? e.target.value === ''
-                                    ? ''
-                                    : Number(e.target.value)
-                                  : e.target.value,
-                            })
-                          }
-                        />
-                        {field.description && <small>{field.description}</small>}
-                      </div>
-                    );
-                  })}
+                  {Object.entries(configPlugin.configSchema.properties).map(([key, field]) => (
+                    <ConfigField
+                      key={key}
+                      field={field}
+                      label={field.title || key}
+                      value={schemaConfig[key]}
+                      onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
+                    />
+                  ))}
                 </div>
               ) : (
                 <div className="no-config">
