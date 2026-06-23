@@ -163,6 +163,11 @@ describe('PluginsService — getConfigUiHtml (sandboxed config editor)', () => {
     expect(service.getConfigUiHtml('cfgui-plg')).toBe(HTML);
   });
 
+  it('exposes configUi on the DTO so the dashboard can render the iframe', () => {
+    installUi({ configUi: { entry: 'config/index.html', height: 480 } }, { 'config/index.html': HTML });
+    expect(service.findOne('cfgui-plg').configUi).toEqual({ entry: 'config/index.html', height: 480 });
+  });
+
   it('throws NotFound when the plugin does not exist', () => {
     expect(() => service.getConfigUiHtml('ghost')).toThrow(/not found/i);
   });
@@ -180,8 +185,21 @@ describe('PluginsService — getConfigUiHtml (sandboxed config editor)', () => {
     expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/not found/i);
   });
 
-  it('rejects a configUi entry that escapes the plugin directory', () => {
+  it('rejects a configUi entry that escapes the plugin directory (404, not a 500)', () => {
     installUi({ configUi: { entry: '../../../etc/passwd' } }, { 'config/index.html': HTML });
-    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/escape/i);
+    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/not found/i);
+  });
+
+  it('rejects a non-string configUi entry from an untrusted manifest', () => {
+    installUi({ configUi: { entry: 123 } }, { 'config/index.html': HTML });
+    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/config ui/i);
+  });
+
+  it('rejects a configUi entry that is a symlink escaping the plugin directory', () => {
+    installUi({ configUi: { entry: 'config/escape.html' } }, { 'config/index.html': HTML });
+    const outside = path.join(tmpDir, 'outside-secret.txt');
+    fs.writeFileSync(outside, 'TOP SECRET');
+    fs.symlinkSync(outside, path.join(pluginsDir, 'cfgui-plg', 'config', 'escape.html'));
+    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/not found/i);
   });
 });

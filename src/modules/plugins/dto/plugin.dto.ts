@@ -43,6 +43,9 @@ export class PluginDto {
   @ApiPropertyOptional({ description: 'Configuration schema' })
   configSchema?: PluginConfigSchema;
 
+  @ApiPropertyOptional({ description: 'Sandboxed-iframe config editor (entry HTML + optional height)' })
+  configUi?: { entry: string; height?: number };
+
   @ApiPropertyOptional({ description: 'When the plugin was loaded' })
   loadedAt?: string;
 

@@ -279,7 +279,14 @@ function PluginConfigUi({ plugin }: { plugin: Plugin }) {
       const msg = e.data as { type?: string; config?: Record<string, unknown> };
       const post = (m: unknown) => frame.postMessage(m, '*');
       if (msg?.type === 'config:get') {
-        post({ type: 'config:value', config: plugin.config, schema: plugin.configSchema });
+        // Only expose schema-DECLARED fields (already secret-redacted by the API). An undeclared key
+        // may hold a secret the host can't mask, so it never reaches the untrusted iframe; with no
+        // schema there is nothing safe to send. The plugin must declare its fields to pre-fill them.
+        const props = plugin.configSchema?.properties;
+        const safeConfig = props
+          ? Object.fromEntries(Object.keys(props).flatMap(k => (k in plugin.config ? [[k, plugin.config[k]]] : [])))
+          : {};
+        post({ type: 'config:value', config: safeConfig, schema: plugin.configSchema });
       } else if (msg?.type === 'config:save') {
         void (async () => {
           try {

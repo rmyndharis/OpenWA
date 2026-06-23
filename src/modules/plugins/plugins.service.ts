@@ -34,6 +34,7 @@ export class PluginsService {
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
+      configUi: plugin.manifest.configUi,
       sessionScoped: plugin.manifest.sessionScoped !== false,
       activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
@@ -61,6 +62,7 @@ export class PluginsService {
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
+      configUi: plugin.manifest.configUi,
       sessionScoped: plugin.manifest.sessionScoped !== false,
       activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
@@ -158,14 +160,30 @@ export class PluginsService {
       throw new NotFoundException(`Plugin ${id} not found`);
     }
     const entry = plugin.manifest.configUi?.entry;
-    if (!entry) {
+    // `entry` is untrusted manifest JSON — a non-string (or escaping) value is treated as "no config
+    // UI" (404), never a raw 500.
+    if (!entry || typeof entry !== 'string') {
       throw new NotFoundException(`Plugin ${id} has no config UI`);
     }
-    const file = resolvePluginMainPath(this.pluginLoader.getPluginsDir(), id, entry);
+    const base = path.resolve(this.pluginLoader.getPluginsDir(), id);
+    let file: string;
+    try {
+      file = resolvePluginMainPath(this.pluginLoader.getPluginsDir(), id, entry);
+    } catch {
+      throw new NotFoundException(`Config UI entry not found for plugin ${id}`);
+    }
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
       throw new NotFoundException(`Config UI entry not found for plugin ${id}`);
     }
-    return fs.readFileSync(file, 'utf-8');
+    // Defense-in-depth: the lexical guard above is symlink-blind; resolve links on BOTH the file and
+    // the plugin dir (so a symlinked tmp root like macOS /var→/private/var doesn't false-positive) and
+    // re-check containment before reading an arbitrary host file into the main process and serving it.
+    const real = fs.realpathSync(file);
+    const realBase = fs.realpathSync(base);
+    if (real !== realBase && !real.startsWith(realBase + path.sep)) {
+      throw new NotFoundException(`Config UI entry not found for plugin ${id}`);
+    }
+    return fs.readFileSync(real, 'utf-8');
   }
 
   /** Install a plugin from an uploaded .zip: validate the package, write it to the plugins dir, and load it. */
