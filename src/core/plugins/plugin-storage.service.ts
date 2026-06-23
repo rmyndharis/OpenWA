@@ -141,6 +141,20 @@ export class PluginStorageService {
     }
   }
 
+  getPluginSessions(pluginId: string): string[] | null {
+    const entry = this.registry.get(pluginId);
+    return entry?.activeSessions ?? null;
+  }
+
+  setPluginSessions(pluginId: string, sessions: string[]): void {
+    const entry = this.registry.get(pluginId);
+    if (entry) {
+      entry.activeSessions = sessions;
+      entry.updatedAt = new Date();
+      this.saveRegistry();
+    }
+  }
+
   // ============================================================================
   // Plugin Data Storage (sandboxed per-plugin storage)
   // ============================================================================

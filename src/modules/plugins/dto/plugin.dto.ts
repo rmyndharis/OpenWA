@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsObject, IsString, IsUrl } from 'class-validator';
+import { IsArray, IsObject, IsString, IsUrl } from 'class-validator';
 import type { PluginConfigSchema } from '../../../core/plugins';
 import { PluginType, PluginStatus } from '../../../core/plugins';
 
@@ -34,6 +34,12 @@ export class PluginDto {
   @ApiProperty({ description: 'Features provided by this plugin' })
   provides!: string[];
 
+  @ApiProperty({ description: 'Whether the plugin is scoped to specific sessions (false = global)' })
+  sessionScoped!: boolean;
+
+  @ApiProperty({ description: "Sessions this plugin is activated for; ['*'] = all numbers" })
+  activeSessions!: string[];
+
   @ApiPropertyOptional({ description: 'Configuration schema' })
   configSchema?: PluginConfigSchema;
 
@@ -51,6 +57,17 @@ export class PluginConfigDto {
   @ApiProperty({ description: 'Plugin configuration object' })
   @IsObject()
   config!: Record<string, unknown>;
+}
+
+export class PluginSessionsDto {
+  @ApiProperty({
+    description: "Sessions to activate the plugin for; ['*'] = all numbers, [] = none",
+    example: ['*'],
+    type: [String],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  sessions!: string[];
 }
 
 export class InstallFromUrlDto {

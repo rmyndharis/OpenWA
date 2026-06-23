@@ -14,7 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { PluginsService } from './plugins.service';
-import { PluginDto, PluginConfigDto, InstallFromUrlDto } from './dto/plugin.dto';
+import { PluginDto, PluginConfigDto, PluginSessionsDto, InstallFromUrlDto } from './dto/plugin.dto';
 import type { CatalogPlugin } from './catalog';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -100,6 +100,16 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Plugin configuration updated' })
   updateConfig(@Param('id') id: string, @Body() configDto: PluginConfigDto): { success: boolean; message: string } {
     return this.pluginsService.updateConfig(id, configDto.config);
+  }
+
+  @Put(':id/sessions')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: "Set which sessions a session-scoped plugin is activated for (['*'] = all)" })
+  @ApiResponse({ status: 200, description: 'Plugin session activation updated', type: PluginDto })
+  @ApiResponse({ status: 400, description: 'Plugin is global (not session-scoped)' })
+  @ApiResponse({ status: 404, description: 'Plugin not found' })
+  updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto): PluginDto {
+    return this.pluginsService.updateSessions(id, dto.sessions);
   }
 
   @Post(':id/update')

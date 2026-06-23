@@ -34,6 +34,8 @@ export class PluginsService {
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
+      sessionScoped: plugin.manifest.sessionScoped !== false,
+      activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
       enabledAt: plugin.enabledAt?.toISOString(),
       error: plugin.error,
@@ -59,6 +61,8 @@ export class PluginsService {
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
+      sessionScoped: plugin.manifest.sessionScoped !== false,
+      activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
       enabledAt: plugin.enabledAt?.toISOString(),
       error: plugin.error,
@@ -107,6 +111,19 @@ export class PluginsService {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  updateSessions(id: string, sessions: string[]): PluginDto {
+    const plugin = this.pluginLoader.getPlugin(id);
+    if (!plugin) {
+      throw new NotFoundException(`Plugin ${id} not found`);
+    }
+    try {
+      this.pluginLoader.setPluginSessions(id, sessions);
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : String(error));
+    }
+    return this.findOne(id);
   }
 
   updateConfig(id: string, config: Record<string, unknown>): { success: boolean; message: string } {

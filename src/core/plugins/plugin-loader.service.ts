@@ -19,6 +19,7 @@ import {
   PluginLogger,
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
+import { isPluginActiveForSession } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
@@ -186,8 +187,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       throw new Error(`Plugin ${manifest.id} is already loaded`);
     }
 
-    // Load any persisted config so an operator's settings survive a restart.
+    // Load any persisted config + per-session activation so an operator's choices survive a restart.
     const storedConfig = this.pluginStorage.getPluginConfig(manifest.id) ?? {};
+    const storedSessions = this.pluginStorage.getPluginSessions(manifest.id) ?? undefined;
 
     const pluginInstance: PluginInstance = {
       manifest,
@@ -196,6 +198,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       instance: null,
       loadedAt: new Date(),
       builtIn: false,
+      activeSessions: storedSessions,
     };
 
     this.plugins.set(manifest.id, pluginInstance);
@@ -444,6 +447,31 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Set the sessions a session-scoped plugin is activated for. `['*']` = all numbers (system-wide),
+   * an explicit list scopes it to those sessions, `[]` deactivates it everywhere. Takes effect on the
+   * next hook event (the gate reads plugin.activeSessions live) and survives a restart.
+   */
+  setPluginSessions(pluginId: string, sessions: string[]): PluginInstance {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin ${pluginId} not found`);
+    }
+    if (plugin.manifest.sessionScoped === false) {
+      throw new Error(`Plugin ${pluginId} is global (not session-scoped) and cannot be activated per session`);
+    }
+
+    plugin.activeSessions = sessions;
+    this.pluginStorage.setPluginSessions(pluginId, sessions);
+
+    this.logger.log(`Plugin active sessions updated: ${pluginId}`, {
+      pluginId,
+      action: 'plugin_sessions_updated',
+      sessions,
+    });
+    return plugin;
+  }
+
+  /**
    * Run a plugin's healthCheck across both tiers. A sandboxed plugin's healthCheck lives in the worker
    * (plugin.instance is null), so route to the live worker host (time-bounded); built-ins use the
    * in-process instance. Returns the default "healthy" when the plugin implements no health check.
@@ -503,6 +531,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     if (!allowed.includes('*') && !allowed.includes(sessionId)) {
       throw new PluginCapabilityError(`Plugin ${manifest.id} is not permitted to act on session ${sessionId}`);
     }
+  }
+
+  /** Per-session activation gate: is this plugin currently activated for `sessionId`'s event? */
+  private isHookActive(plugin: PluginInstance, sessionId: string | undefined): boolean {
+    return isPluginActiveForSession(plugin.manifest.sessionScoped ?? true, plugin.activeSessions ?? ['*'], sessionId);
   }
 
   /**
@@ -595,6 +628,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
         async hookCtx => {
           const liveHost = this.sandboxHosts.get(pluginId);
           if (!liveHost) return { continue: true };
+          // Per-session activation gate: a session-scoped plugin only sees events for the sessions
+          // it is activated for. Pass-through (don't dispatch into the worker) otherwise.
+          if (!this.isHookActive(plugin, hookCtx.sessionId)) return { continue: true };
           return liveHost
             .dispatchHook({
               event,
@@ -663,7 +699,17 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       logger: pluginLogger,
       storage: this.pluginStorage.createPluginStorage(plugin.manifest.id),
       registerHook: (event, handler, priority) => {
-        this.hookManager.register(plugin.manifest.id, event, handler, priority);
+        // Wrap with the per-session activation gate so an in-process plugin only handles events for
+        // the sessions it is activated for (mirrors the sandboxed shim).
+        this.hookManager.register(
+          plugin.manifest.id,
+          event,
+          async hookCtx => {
+            if (!this.isHookActive(plugin, hookCtx.sessionId)) return { continue: true };
+            return handler(hookCtx);
+          },
+          priority,
+        );
       },
       messages: {
         sendText: async (sessionId, chatId, text) => {
