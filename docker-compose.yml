@@ -92,7 +92,7 @@ services:
       # (Infrastructure > Engine) can select the active engine via data/.env.generated
       # (defaults to whatsapp-web.js). main.ts loads .env.generated with override:false, so a
       # real container env here would silently win over the dashboard selection.
-      - SESSION_DATA_PATH=/app/data/sessions
+      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
       # Optional WhatsApp Web version override. Leave empty for whatsapp-web.js auto-selection.
@@ -106,7 +106,7 @@ services:
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
       # Storage
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
-      - STORAGE_LOCAL_PATH=/app/data/media
+      - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-}
@@ -124,7 +124,7 @@ services:
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
       # Plugins
       - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
-      - PLUGINS_DIR=/app/data/plugins
+      - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}
       # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
