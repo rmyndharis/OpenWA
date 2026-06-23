@@ -957,6 +957,103 @@
   border-bottom-color: var(--primary, #25d366);
 }
 
+/* Config modal tabs (Configuration / Sessions) */
+.config-modal .modal-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.config-modal .modal-tab {
+  padding: 0.625rem 0.9rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.config-modal .modal-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--primary);
+}
+
+/* Sessions tab */
+.sessions-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.sessions-section > h3 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 0.25rem;
+}
+
+.sessions-section > small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.sessions-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.sessions-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0.75rem 1.5rem;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.sessions-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sessions-empty {
+  margin: 0.25rem 0 0.75rem 1.5rem;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.sessions-select {
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-light);
+  font-size: 0.9375rem;
+  margin-bottom: 1rem;
+  box-sizing: border-box;
+}
+
+.sessions-override-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 .catalog-empty {
   display: flex;
   align-items: center;

@@ -648,7 +648,9 @@
       "browserArgs": "浏览器参数",
       "noOptions": "此插件没有可用配置项",
       "save": "保存配置",
-      "addItem": "添加"
+      "addItem": "添加",
+      "tabConfig": "配置",
+      "tabSessions": "会话"
     },
     "rail": {
       "engine": "活动引擎",
@@ -676,6 +678,19 @@
       "installFailed": "安装失败",
       "uninstalled": "插件已卸载",
       "uninstallFailed": "卸载失败"
+    },
+    "sessions": {
+      "activationTitle": "运行范围",
+      "activationDesc": "选择此插件运行的会话。",
+      "allSessions": "所有会话",
+      "specificSessions": "指定会话",
+      "noSessions": "暂无会话。",
+      "saveActivation": "保存启用设置",
+      "perSessionTitle": "单会话配置",
+      "perSessionDesc": "为某个会话覆盖全局配置；未修改的字段将沿用全局值。",
+      "selectSession": "选择一个会话…",
+      "saveOverride": "保存覆盖配置",
+      "clearOverride": "清除覆盖配置"
     }
   }
 }

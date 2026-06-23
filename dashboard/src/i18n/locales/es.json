@@ -648,7 +648,9 @@
       "browserArgs": "Argumentos del navegador",
       "noOptions": "No hay opciones de configuración disponibles para este plugin",
       "save": "Guardar configuración",
-      "addItem": "Añadir"
+      "addItem": "Añadir",
+      "tabConfig": "Configuración",
+      "tabSessions": "Sesiones"
     },
     "rail": {
       "engine": "Motor activo",
@@ -676,6 +678,19 @@
       "installFailed": "Error en la instalación",
       "uninstalled": "Plugin desinstalado",
       "uninstallFailed": "Error al desinstalar"
+    },
+    "sessions": {
+      "activationTitle": "Ejecutar para",
+      "activationDesc": "Elige para qué sesiones se ejecuta este complemento.",
+      "allSessions": "Todas las sesiones",
+      "specificSessions": "Sesiones específicas",
+      "noSessions": "Aún no hay sesiones.",
+      "saveActivation": "Guardar activación",
+      "perSessionTitle": "Configuración por sesión",
+      "perSessionDesc": "Anula la configuración global para una sesión; los campos sin modificar heredan el valor global.",
+      "selectSession": "Selecciona una sesión…",
+      "saveOverride": "Guardar anulación",
+      "clearOverride": "Borrar anulación"
     }
   }
 }

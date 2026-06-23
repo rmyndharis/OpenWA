@@ -648,7 +648,9 @@
       "browserArgs": "瀏覽器參數",
       "noOptions": "此外掛沒有可用設定選項",
       "save": "儲存設定",
-      "addItem": "新增"
+      "addItem": "新增",
+      "tabConfig": "設定",
+      "tabSessions": "工作階段"
     },
     "rail": {
       "engine": "使用中的引擎",
@@ -676,6 +678,19 @@
       "installFailed": "安裝失敗",
       "uninstalled": "外掛已解除安裝",
       "uninstallFailed": "解除安裝失敗"
+    },
+    "sessions": {
+      "activationTitle": "執行對象",
+      "activationDesc": "選擇此外掛程式要為哪些工作階段執行。",
+      "allSessions": "所有工作階段",
+      "specificSessions": "指定工作階段",
+      "noSessions": "尚無工作階段。",
+      "saveActivation": "儲存啟用設定",
+      "perSessionTitle": "個別工作階段設定",
+      "perSessionDesc": "為某個工作階段覆寫全域設定;未變更的欄位會沿用全域數值。",
+      "selectSession": "選擇工作階段…",
+      "saveOverride": "儲存覆寫",
+      "clearOverride": "清除覆寫"
     }
   }
 }

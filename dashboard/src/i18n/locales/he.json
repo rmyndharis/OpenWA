@@ -648,7 +648,9 @@
       "browserArgs": "ארגומנטים של הדפדפן",
       "noOptions": "אין אפשרויות הגדרה זמינות עבור תוסף זה",
       "save": "שמירת תצורה",
-      "addItem": "הוספה"
+      "addItem": "הוספה",
+      "tabConfig": "הגדרות",
+      "tabSessions": "Sessions"
     },
     "rail": {
       "engine": "מנוע פעיל",
@@ -676,6 +678,19 @@
       "installFailed": "ההתקנה נכשלה",
       "uninstalled": "התוסף הוסר",
       "uninstallFailed": "ההסרה נכשלה"
+    },
+    "sessions": {
+      "activationTitle": "הפעלה עבור",
+      "activationDesc": "בחרו עבור אילו sessions תוסף זה יפעל.",
+      "allSessions": "כל ה-Sessions",
+      "specificSessions": "Sessions מסוימים",
+      "noSessions": "אין Sessions עדיין.",
+      "saveActivation": "שמירת הפעלה",
+      "perSessionTitle": "הגדרות לכל Session",
+      "perSessionDesc": "דריסת ההגדרות הגלובליות עבור session; שדות שלא שונו יורשים את הערך הגלובלי.",
+      "selectSession": "בחירת session…",
+      "saveOverride": "שמירת דריסה",
+      "clearOverride": "ניקוי דריסה"
     }
   }
 }

@@ -648,7 +648,9 @@
       "browserArgs": "مُعطيات المتصفح",
       "noOptions": "لا توجد خيارات إعداد لهذه الإضافة",
       "save": "حفظ الإعدادات",
-      "addItem": "إضافة"
+      "addItem": "إضافة",
+      "tabConfig": "الإعدادات",
+      "tabSessions": "الجلسات"
     },
     "rail": {
       "engine": "المحرك النشط",
@@ -676,6 +678,19 @@
       "installFailed": "فشل التثبيت",
       "uninstalled": "تمت إزالة الإضافة",
       "uninstallFailed": "فشلت الإزالة"
+    },
+    "sessions": {
+      "activationTitle": "التشغيل لـ",
+      "activationDesc": "اختر الجلسات التي يعمل عليها هذا الملحق.",
+      "allSessions": "جميع الجلسات",
+      "specificSessions": "جلسات محددة",
+      "noSessions": "لا توجد جلسات بعد.",
+      "saveActivation": "حفظ التفعيل",
+      "perSessionTitle": "إعدادات لكل جلسة",
+      "perSessionDesc": "تجاوز الإعدادات العامة لجلسة معينة؛ الحقول غير المعدّلة ترث القيمة العامة.",
+      "selectSession": "اختر جلسة…",
+      "saveOverride": "حفظ التجاوز",
+      "clearOverride": "مسح التجاوز"
     }
   }
 }

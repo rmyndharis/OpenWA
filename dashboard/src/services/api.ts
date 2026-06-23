@@ -650,6 +650,12 @@ export interface Plugin {
   configSchema?: PluginConfigSchema;
   /** When set, the plugin ships a sandboxed-iframe config editor (preferred over configSchema). */
   configUi?: { entry: string; height?: number };
+  /** Whether the plugin is scoped to specific sessions (false = global, always runs). */
+  sessionScoped: boolean;
+  /** Sessions the plugin is activated for; ['*'] = all numbers. */
+  activeSessions: string[];
+  /** Per-session config overrides, keyed by sessionId (secrets redacted per slice). */
+  sessionConfig?: Record<string, Record<string, unknown>>;
   loadedAt?: string;
   enabledAt?: string;
   error?: string;
@@ -703,6 +709,15 @@ export const pluginsApi = {
     }),
   updateConfig: (id: string, config: Record<string, unknown>) =>
     request<{ success: boolean; message: string }>(`/plugins/${id}/config`, {
+      method: 'PUT',
+      body: JSON.stringify({ config }),
+    }),
+  /** Set which sessions a session-scoped plugin is activated for (['*'] = all). */
+  setSessions: (id: string, sessions: string[]) =>
+    request<Plugin>(`/plugins/${id}/sessions`, { method: 'PUT', body: JSON.stringify({ sessions }) }),
+  /** Set (or clear, with an empty object) a plugin's config override for one session. */
+  updateSessionConfig: (id: string, sessionId: string, config: Record<string, unknown>) =>
+    request<{ success: boolean; message: string }>(`/plugins/${id}/config/${encodeURIComponent(sessionId)}`, {
       method: 'PUT',
       body: JSON.stringify({ config }),
     }),
