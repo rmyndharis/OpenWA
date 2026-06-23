@@ -9,7 +9,7 @@ describe('PluginsController authorization', () => {
   // Plugin reads expose installed versions, non-secret config, and health/error text — privileged
   // inventory on par with the ADMIN-gated write routes and the InfraController convention. A
   // VIEWER/OPERATOR key (or a session-scoped key) must not be able to enumerate it via the raw API.
-  const adminOnly = ['findAll', 'findOne', 'healthCheck', 'enable', 'disable', 'updateConfig'] as const;
+  const adminOnly = ['findAll', 'findOne', 'healthCheck', 'enable', 'disable', 'updateConfig', 'getConfigUi'] as const;
 
   it.each(adminOnly)('%s requires the ADMIN role', method => {
     const handler = PluginsController.prototype[method];

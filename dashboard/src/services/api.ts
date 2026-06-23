@@ -321,6 +321,29 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return response.json();
 }
 
+/** Like {@link request} but returns the raw response text — e.g. a plugin's HTML config-UI bundle. */
+async function requestText(endpoint: string): Promise<string> {
+  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    headers: { ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+  });
+
+  if (response.status === 401) {
+    sessionStorage.removeItem('openwa_api_key');
+    if (typeof window !== 'undefined') {
+      window.location.assign('/');
+      return new Promise<string>(() => {});
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || `HTTP ${response.status}`);
+  }
+
+  return response.text();
+}
+
 // =============================================================================
 // Session API
 // =============================================================================
@@ -617,6 +640,8 @@ export interface Plugin {
   provides: string[];
   /** Declared config fields, when the plugin exposes a schema (drives the dashboard config form). */
   configSchema?: PluginConfigSchema;
+  /** When set, the plugin ships a sandboxed-iframe config editor (preferred over configSchema). */
+  configUi?: { entry: string; height?: number };
   loadedAt?: string;
   enabledAt?: string;
   error?: string;
@@ -682,6 +707,8 @@ export const pluginsApi = {
   updateFromUrl: (id: string, url: string) =>
     request<Plugin>(`/plugins/${id}/update`, { method: 'POST', body: JSON.stringify({ url }) }),
   catalog: () => request<CatalogPlugin[]>('/plugins/catalog'),
+  /** Fetch a plugin's sandboxed config-UI entry HTML (the API key stays here, in the parent). */
+  getConfigUi: (id: string) => requestText(`/plugins/${id}/config-ui`),
   uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),

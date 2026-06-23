@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Header,
   HttpCode,
   HttpStatus,
   UseInterceptors,
@@ -100,6 +101,21 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Plugin configuration updated' })
   updateConfig(@Param('id') id: string, @Body() configDto: PluginConfigDto): { success: boolean; message: string } {
     return this.pluginsService.updateConfig(id, configDto.config);
+  }
+
+  // The dashboard fetches this WITH the API key and injects the body as an iframe `srcdoc` (sandboxed,
+  // opaque origin). Served as untrusted HTML, so it's CSP-sandboxed + nosniff in case it's ever loaded
+  // directly as a document (it can't be in a browser — navigations don't carry the X-API-Key header).
+  @Get(':id/config-ui')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @Header('Content-Security-Policy', 'sandbox')
+  @Header('X-Content-Type-Options', 'nosniff')
+  @ApiOperation({ summary: "Serve a plugin's sandboxed config-UI entry HTML (for an iframe srcdoc)" })
+  @ApiResponse({ status: 200, description: 'Config UI HTML' })
+  @ApiResponse({ status: 404, description: 'Plugin not found or has no config UI' })
+  getConfigUi(@Param('id') id: string): string {
+    return this.pluginsService.getConfigUiHtml(id);
   }
 
   @Put(':id/sessions')

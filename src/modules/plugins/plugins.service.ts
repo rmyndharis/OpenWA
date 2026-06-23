@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ConflictException, 
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PluginLoaderService, PluginStatus } from '../../core/plugins';
+import { PluginLoaderService, PluginStatus, resolvePluginMainPath } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
@@ -145,6 +145,27 @@ export class PluginsService {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Read a plugin's sandboxed config-UI entry HTML (manifest `configUi.entry`). The dashboard fetches
+   * this with the API key and injects it as an iframe `srcdoc`, so the file must be self-contained.
+   * Path is escape-guarded against the plugin directory; the entry is plugin-author-supplied.
+   */
+  getConfigUiHtml(id: string): string {
+    const plugin = this.pluginLoader.getPlugin(id);
+    if (!plugin) {
+      throw new NotFoundException(`Plugin ${id} not found`);
+    }
+    const entry = plugin.manifest.configUi?.entry;
+    if (!entry) {
+      throw new NotFoundException(`Plugin ${id} has no config UI`);
+    }
+    const file = resolvePluginMainPath(this.pluginLoader.getPluginsDir(), id, entry);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      throw new NotFoundException(`Config UI entry not found for plugin ${id}`);
+    }
+    return fs.readFileSync(file, 'utf-8');
   }
 
   /** Install a plugin from an uploaded .zip: validate the package, write it to the plugins dir, and load it. */

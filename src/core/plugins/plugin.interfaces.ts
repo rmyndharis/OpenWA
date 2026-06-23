@@ -52,6 +52,13 @@ export interface PluginManifest {
   // Configuration schema (optional, for UI generation)
   configSchema?: PluginConfigSchema;
 
+  // Optional sandboxed-iframe config editor. `entry` is a plugin-relative path to a self-contained
+  // HTML file (inline JS/CSS — a sandboxed opaque-origin iframe can't load subresources). Served by
+  // the host via the authenticated GET /plugins/:id/config-ui and injected as an iframe `srcdoc`; the
+  // editor exchanges config over a postMessage bridge (the API key never reaches the iframe). When
+  // present, the dashboard prefers it over the declarative `configSchema` form.
+  configUi?: { entry: string; height?: number };
+
   // Hooks this plugin listens to
   hooks?: HookEvent[];
 

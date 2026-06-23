@@ -121,3 +121,67 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     enableSpy.mockRestore();
   });
 });
+
+describe('PluginsService — getConfigUiHtml (sandboxed config editor)', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+  let service: PluginsService;
+
+  const HTML = '<!doctype html><title>cfg</title><script>parent.postMessage({type:"config:get"},"*")</script>';
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-cfgui-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+    service = new PluginsService(loader, config);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  function installUi(over: Record<string, unknown> = {}, files: Record<string, string> = {}): void {
+    const z = new AdmZip();
+    z.addFile(
+      'manifest.json',
+      Buffer.from(JSON.stringify({ ...manifest, id: 'cfgui-plg', configUi: { entry: 'config/index.html' }, ...over })),
+    );
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    for (const [p, c] of Object.entries(files)) z.addFile(p, Buffer.from(c));
+    service.install({ buffer: z.toBuffer() });
+  }
+
+  it('serves the configUi entry HTML for an installed plugin', () => {
+    installUi({}, { 'config/index.html': HTML });
+    expect(service.getConfigUiHtml('cfgui-plg')).toBe(HTML);
+  });
+
+  it('throws NotFound when the plugin does not exist', () => {
+    expect(() => service.getConfigUiHtml('ghost')).toThrow(/not found/i);
+  });
+
+  it('throws NotFound when the plugin declares no configUi', () => {
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify({ ...manifest, id: 'no-ui' })));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    service.install({ buffer: z.toBuffer() });
+    expect(() => service.getConfigUiHtml('no-ui')).toThrow(/config ui/i);
+  });
+
+  it('throws NotFound when the entry file is missing from the package', () => {
+    installUi({ configUi: { entry: 'config/missing.html' } }, { 'config/index.html': HTML });
+    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/not found/i);
+  });
+
+  it('rejects a configUi entry that escapes the plugin directory', () => {
+    installUi({ configUi: { entry: '../../../etc/passwd' } }, { 'config/index.html': HTML });
+    expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/escape/i);
+  });
+});

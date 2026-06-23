@@ -561,6 +561,29 @@
   color: var(--primary);
 }
 
+/* Sandboxed-iframe config editor (B-full). */
+.plugin-config-ui-frame {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-white);
+}
+
+.config-ui-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  color: var(--text-muted);
+}
+
+.config-ui-error {
+  padding: 1rem;
+  text-align: center;
+  color: var(--danger, #e5484d);
+}
+
 .config-form .form-group small {
   display: block;
   margin-top: 0.4rem;
