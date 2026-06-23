@@ -60,7 +60,7 @@ export async function performPluginFetch(
   const safeFetch = deps.fetch ?? withSafeFetch;
   const timeoutMs = Math.min(Math.max(init.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1), MAX_TIMEOUT_MS);
 
-  return safeFetch(
+  return safeFetch<PluginNetResponse>(
     url,
     {
       method: init.method ?? 'GET',
@@ -68,7 +68,7 @@ export async function performPluginFetch(
       body: init.body,
       signal: AbortSignal.timeout(timeoutMs),
     },
-    async (response: Response): Promise<PluginNetResponse> => {
+    async response => {
       const declared = Number(response.headers.get('content-length') ?? '');
       if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
         throw new Error(`plugin net.fetch response exceeds the ${MAX_BODY_BYTES}-byte cap`);
