@@ -2,7 +2,14 @@
 # Multi-stage build for production-ready image
 
 # ===== Stage 1: Builder =====
-FROM docker.io/node:22-slim AS builder
+# Pin the builder to the BUILD host's platform (not the target's). It only produces arch-INDEPENDENT
+# artifacts (the NestJS dist/ JS and the static dashboard SPA), so it never needs to run emulated for
+# the non-native target. On a multi-arch buildx build this avoids QEMU emulating the whole npm ci +
+# Vite build for arm64 — which is slow AND is where the arm64 lightningcss (Vite 8's native CSS
+# minifier) optional dependency fails to install ("Cannot find module lightningcss.linux-arm64-gnu.node").
+# The per-arch runtime deps are installed natively in the target-platform production stage below.
+# NOTE: $BUILDPLATFORM requires BuildKit (CI uses buildx; modern `docker build`/compose default to it).
+FROM --platform=$BUILDPLATFORM docker.io/node:22-slim AS builder
 
 WORKDIR /app
 

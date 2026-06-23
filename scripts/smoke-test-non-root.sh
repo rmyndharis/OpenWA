@@ -4,6 +4,10 @@
 # Requires Docker to be running locally.
 set -e
 
+# The Dockerfile pins the builder to $BUILDPLATFORM (BuildKit-injected) for multi-arch correctness,
+# so the build requires BuildKit. It's the modern default, but force it on in case the host disabled it.
+export DOCKER_BUILDKIT=1
+
 IMAGE_TAG="openwa-test-non-root:smoke"
 
 echo "==> Building test image..."
