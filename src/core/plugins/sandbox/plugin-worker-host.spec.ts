@@ -211,6 +211,17 @@ describe('PluginWorkerHost', () => {
       expect(onTimeout).toHaveBeenCalled();
       jest.useRealTimers();
     });
+
+    it('drains an in-flight hook immediately on worker exit (no stall for the full hook timeout)', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      // A long timeout: only the worker-exit drain (not the timer) can settle this promptly.
+      const pending = host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 5000 });
+      ch.crash(1);
+
+      await expect(pending).resolves.toEqual({ continue: true });
+    });
   });
 
   describe('logger + static context', () => {

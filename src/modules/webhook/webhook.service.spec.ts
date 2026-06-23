@@ -379,6 +379,23 @@ describe('WebhookService', () => {
     });
   });
 
+  describe('dispatch (queued mode) — serialization safety', () => {
+    it('catches an unserializable webhook:before payload instead of aborting the loop / rejecting', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      // A plugin's webhook:before returns a payload JSON.stringify cannot serialize (BigInt). With the
+      // secret set, the queued branch signs JSON.stringify(finalPayload) — which throws.
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: { payload: { x: 1n } } });
+      const webhook = createMockWebhook({ secret: 'sek', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+
+      // Must NOT reject (the loop/dispatch promise stays settled); the throw is caught + logged.
+      await expect(service.dispatch('sess-1', 'message.received', { ok: true })).resolves.toBeUndefined();
+
+      expect(webhookQueue.add).not.toHaveBeenCalled(); // never enqueued the un-signable job
+      expect(hookManager.execute).toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+    });
+  });
+
   // ── dispatch (smart filters) ──────────────────────────────────────
   // The event still has to match `events[]`; filters then refine WHETHER it fires based
   // on the payload. A webhook with no filters behaves exactly as before (fires on match).

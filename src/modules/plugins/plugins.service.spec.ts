@@ -262,6 +262,22 @@ describe('PluginsService — per-session config', () => {
     expect(plugin?.sessionConfig?.['sess-A']).toEqual({ apiKey: 'A-secret', lang: 'he' });
   });
 
+  // A session-restricted API key must not activate the plugin for sessions outside its allowedSessions
+  // scope (the target sessions are in the request body the guard never inspects).
+  it('rejects activating for a session outside a restricted key scope', () => {
+    expect(() => service.updateSessions('sess-cfg', ['sess-B'], ['sess-A'])).toThrow(/not authorized/i);
+    expect(() => service.updateSessions('sess-cfg', ['*'], ['sess-A'])).toThrow(/not authorized/i);
+  });
+
+  it('allows a restricted key to activate only within its scope', () => {
+    expect(service.updateSessions('sess-cfg', ['sess-A'], ['sess-A']).activeSessions).toEqual(['sess-A']);
+  });
+
+  it('lets an unrestricted key activate for all sessions', () => {
+    expect(service.updateSessions('sess-cfg', ['*'], undefined).activeSessions).toEqual(['*']);
+    expect(service.updateSessions('sess-cfg', ['*'], []).activeSessions).toEqual(['*']);
+  });
+
   it('clears the override when an empty slice is written', () => {
     service.updateSessionConfig('sess-cfg', 'sess-A', { lang: 'he' });
     service.updateSessionConfig('sess-cfg', 'sess-A', {});

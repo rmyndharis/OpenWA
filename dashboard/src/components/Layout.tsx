@@ -162,7 +162,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
           {!isCollapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
-              <span className="brand-subtitle">{t('common.appSubtitle')}</span>
+              <span className="brand-version">v{__APP_VERSION__}</span>
             </div>
           )}
         </div>
@@ -174,9 +174,17 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
             title={isCollapsed ? t('common.expand') : t('common.collapse')}
             aria-label={isCollapsed ? t('common.expand') : t('common.collapse')}
           >
-            {isCollapsed
-              ? (isRtl ? <ChevronLeft size={16} /> : <ChevronRight size={16} />)
-              : (isRtl ? <ChevronRight size={16} /> : <ChevronLeft size={16} />)}
+            {isCollapsed ? (
+              isRtl ? (
+                <ChevronLeft size={16} />
+              ) : (
+                <ChevronRight size={16} />
+              )
+            ) : isRtl ? (
+              <ChevronRight size={16} />
+            ) : (
+              <ChevronLeft size={16} />
+            )}
           </button>
         )}
 

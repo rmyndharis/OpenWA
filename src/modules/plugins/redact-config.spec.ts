@@ -206,4 +206,129 @@ describe('restoreSecretConfig (nested)', () => {
       endpoints: [{ url: 'NEW' }, { url: 'a', token: 'real1' }],
     });
   });
+
+  // A row's signature is the row with its secret masked, so editing a NON-secret field changes the
+  // signature and the content-match misses. On an in-place edit (array length unchanged) the row at
+  // the same index is the same logical row, so its stored secret must be preserved — losing it on a
+  // routine rename is silent data loss.
+  it('keeps a row secret when only its non-secret field changed (same length)', () => {
+    expect(
+      restoreSecretConfig(
+        { endpoints: [{ url: 'a-renamed', token: SECRET_SENTINEL }] },
+        { endpoints: [{ url: 'a', token: 'real' }] },
+        nestedSchema,
+      ),
+    ).toEqual({ endpoints: [{ url: 'a-renamed', token: 'real' }] });
+  });
+
+  // Two rows with identical non-secret content collide on signature; on an unchanged round-trip both
+  // secrets must survive (positional fallback), not be dropped to nothing.
+  it('restores both secrets when two rows share non-secret content (no-op round-trip)', () => {
+    expect(
+      restoreSecretConfig(
+        {
+          endpoints: [
+            { url: 'a', token: SECRET_SENTINEL },
+            { url: 'a', token: SECRET_SENTINEL },
+          ],
+        },
+        {
+          endpoints: [
+            { url: 'a', token: 'real1' },
+            { url: 'a', token: 'real2' },
+          ],
+        },
+        nestedSchema,
+      ),
+    ).toEqual({
+      endpoints: [
+        { url: 'a', token: 'real1' },
+        { url: 'a', token: 'real2' },
+      ],
+    });
+  });
+});
+
+// An array whose ITEMS are scalar secrets (e.g. a list of API keys) — every masked element shares the
+// signature "***", so content-matching is impossible and restore must align by position. A no-op
+// round-trip or an in-place edit must never wipe the stored secrets to null.
+const scalarSecretArraySchema: PluginConfigSchema = {
+  type: 'object',
+  properties: {
+    keys: { type: 'array', items: { type: 'string', secret: true } },
+  },
+};
+
+describe('restoreSecretConfig (scalar-secret array)', () => {
+  it('restores every secret on an unchanged round-trip (no null pollution)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL] },
+        { keys: ['k1', 'k2'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2'] });
+  });
+
+  it('keeps a genuinely-new secret element while restoring the unchanged ones', () => {
+    expect(
+      restoreSecretConfig({ keys: [SECRET_SENTINEL, 'brand-new'] }, { keys: ['k1', 'k2'] }, scalarSecretArraySchema),
+    ).toEqual({ keys: ['k1', 'brand-new'] });
+  });
+
+  it('drops a sentinel element that has nothing stored to keep (no null in the array)', () => {
+    expect(restoreSecretConfig({ keys: [SECRET_SENTINEL] }, { keys: [] }, scalarSecretArraySchema)).toEqual({
+      keys: [],
+    });
+  });
+});
+
+// A composite field (object/array) that is itself marked secret:true must be masked as ONE unit on
+// read and restored as a unit on write — recursing would leak its non-secret children in plaintext.
+const compositeSecretSchema: PluginConfigSchema = {
+  type: 'object',
+  properties: {
+    creds: { type: 'object', secret: true, properties: { user: { type: 'string' }, pass: { type: 'string' } } },
+    keys: { type: 'array', secret: true, items: { type: 'string' } },
+  },
+};
+
+describe('redactSecretConfig (composite secret field)', () => {
+  it('masks a whole secret object so its children never leak', () => {
+    expect(redactSecretConfig({ creds: { user: 'u', pass: 'p' } }, compositeSecretSchema)).toEqual({
+      creds: SECRET_SENTINEL,
+    });
+  });
+
+  it('masks a whole secret array so its entries never leak', () => {
+    expect(redactSecretConfig({ keys: ['k1', 'k2'] }, compositeSecretSchema)).toEqual({ keys: SECRET_SENTINEL });
+  });
+});
+
+describe('restoreSecretConfig (composite secret field)', () => {
+  it('restores a secret object from the sentinel instead of clobbering it', () => {
+    expect(
+      restoreSecretConfig({ creds: SECRET_SENTINEL }, { creds: { user: 'u', pass: 'p' } }, compositeSecretSchema),
+    ).toEqual({ creds: { user: 'u', pass: 'p' } });
+  });
+
+  it('restores a secret array from the sentinel', () => {
+    expect(restoreSecretConfig({ keys: SECRET_SENTINEL }, { keys: ['k1', 'k2'] }, compositeSecretSchema)).toEqual({
+      keys: ['k1', 'k2'],
+    });
+  });
+
+  it('stores a genuinely-new secret object as a unit', () => {
+    expect(
+      restoreSecretConfig(
+        { creds: { user: 'x', pass: 'y' } },
+        { creds: { user: 'u', pass: 'p' } },
+        compositeSecretSchema,
+      ),
+    ).toEqual({ creds: { user: 'x', pass: 'y' } });
+  });
+
+  it('drops a sentinel secret object when there is nothing stored', () => {
+    expect(restoreSecretConfig({ creds: SECRET_SENTINEL }, {}, compositeSecretSchema)).not.toHaveProperty('creds');
+  });
 });

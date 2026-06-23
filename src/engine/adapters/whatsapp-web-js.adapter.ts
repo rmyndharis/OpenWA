@@ -1,7 +1,8 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia, MessageTypes, WAState } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, MessageTypes, WAState, type Message } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
+import * as fs from 'fs';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -46,7 +47,13 @@ import {
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
 import { buildIncomingMessageBase } from './message-mapper';
-import { capInboundMedia } from './inbound-media-cap';
+import {
+  capInboundMedia,
+  inboundMediaConcurrency,
+  inboundMediaMaxBytes,
+  coerceDeclaredSize,
+} from './inbound-media-cap';
+import { ConcurrencyLimiter } from './concurrency-limiter';
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.
@@ -189,6 +196,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private readyReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private readyReconcileStartedAt = 0;
   private readyReconcileProbeInFlight = false;
+  // Guards the stuck-auth self-heal so it runs at most once per engine: a re-paired session that still
+  // can't reach readiness fails terminally instead of looping QR -> timeout -> clear forever.
+  private stuckAuthRecoveryAttempted = false;
   // Set once teardown begins so a late 'authenticated' can't resurrect a disconnecting adapter. Not
   // reset — an adapter is single-use after teardown (the session creates a fresh one to reconnect).
   private tearingDown = false;
@@ -198,6 +208,47 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   private readonly logger = createLogger('WhatsAppWebJsAdapter');
+  // Bound concurrent inbound media downloads: downloadMedia() materialises the full base64 blob, so an
+  // unbounded burst could stack many multi-MB allocations.
+  private readonly inboundLimiter = new ConcurrencyLimiter(inboundMediaConcurrency());
+
+  /**
+   * Download inbound media safely. downloadMedia() can't be size-bounded at the source, so (1) pre-gate
+   * on the sender-declared size and skip the download entirely when it exceeds the cap, and (2) run the
+   * download through the concurrency limiter for backpressure. Returns undefined when there's no media.
+   */
+  private async capInboundMediaFor(msg: Message): Promise<IncomingMessage['media'] | undefined> {
+    const maxBytes = inboundMediaMaxBytes();
+    const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
+    const declared = coerceDeclaredSize(data?.size);
+    if (declared > maxBytes) {
+      this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
+        msgId: msg.id._serialized,
+        sizeBytes: declared,
+      });
+      return {
+        mimetype: data?.mimetype ?? '',
+        filename: data?.filename || undefined,
+        omitted: true,
+        sizeBytes: declared,
+      };
+    }
+    const media = await this.inboundLimiter.run(() => msg.downloadMedia());
+    if (!media) return undefined;
+    const capped = capInboundMedia({
+      mimetype: media.mimetype,
+      filename: media.filename || undefined,
+      sizeBytes: Buffer.byteLength(media.data, 'base64'),
+      toBase64: () => media.data,
+    });
+    if (capped.omitted) {
+      this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
+        msgId: msg.id._serialized,
+        sizeBytes: capped.sizeBytes,
+      });
+    }
+    return capped;
+  }
 
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
@@ -337,22 +388,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         // Handle media
         if (msg.hasMedia) {
           try {
-            const media = await msg.downloadMedia();
-            if (media) {
-              // Cap inbound media so an oversized blob isn't persisted/webhooked/broadcast.
-              incomingMessage.media = capInboundMedia({
-                mimetype: media.mimetype,
-                filename: media.filename || undefined,
-                sizeBytes: Buffer.byteLength(media.data, 'base64'),
-                toBase64: () => media.data,
-              });
-              if (incomingMessage.media.omitted) {
-                this.logger.warn('Inbound media exceeds MEDIA_DOWNLOAD_MAX_BYTES; dropped payload, kept envelope', {
-                  msgId: msg.id._serialized,
-                  sizeBytes: incomingMessage.media.sizeBytes,
-                });
-              }
-            }
+            const capped = await this.capInboundMediaFor(msg);
+            if (capped) incomingMessage.media = capped;
           } catch (error) {
             this.logger.error('Error downloading media', String(error));
           }
@@ -478,8 +515,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // Deadline checked at the TOP of every tick (not after the probe) so a slow/hung getState() — a
       // wedged page can make it never resolve, the very #251/#273 condition — can't defeat the 90s ceiling.
       if (Date.now() - this.readyReconcileStartedAt >= READY_RECONCILE_TIMEOUT_MS) {
-        this.logger.warn('Timed out waiting for WhatsApp Web runtime readiness after authentication');
+        this.logger.warn(
+          'Timed out waiting for WhatsApp Web runtime readiness after authentication — the saved session ' +
+            'is stuck after the QR scan (usually the auto-selected WhatsApp Web build is incompatible). ' +
+            'Clearing it to re-pair; pin a known-good version via WWEBJS_WEB_VERSION (see ' +
+            'docs/12-troubleshooting-faq.md) if it keeps recurring.',
+        );
         this.clearReadyReconcile();
+        // Self-heal: don't leave the session stuck at "authenticating" forever — clear the broken auth
+        // and disconnect so the lifecycle re-pairs (a fresh QR) instead of hanging.
+        void this.recoverFromStuckAuth();
         return;
       }
 
@@ -515,6 +560,42 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
     this.readyReconcileStartedAt = 0;
     this.readyReconcileProbeInFlight = false;
+  }
+
+  /**
+   * Recover a session that authenticated but never reached runtime readiness (stale/incompatible auth
+   * or a wedged page). Clear the broken LocalAuth and disconnect so the session lifecycle re-pairs (a
+   * fresh QR) instead of hanging at "authenticating". Runs at most once per engine — a re-paired session
+   * that still can't reach readiness fails terminally rather than looping.
+   */
+  private async recoverFromStuckAuth(): Promise<void> {
+    if (this.stuckAuthRecoveryAttempted) {
+      this.setStatus(EngineStatus.FAILED);
+      this.callbacks.onError?.(
+        'WhatsApp Web could not reach readiness after re-pairing. Pin WWEBJS_WEB_VERSION to a known-good build and try again.',
+      );
+      return;
+    }
+    this.stuckAuthRecoveryAttempted = true;
+
+    const client = this.client;
+    this.client = null;
+    // Clear auth + disconnect FIRST (the recovery path), then tear the wedged client down in the
+    // background so a hung Chromium destroy can't block (or skip) the recovery.
+    await this.clearLocalAuth();
+    this.setStatus(EngineStatus.DISCONNECTED);
+    // onDisconnected drives the lifecycle's reconnect, which re-creates the engine with no saved auth
+    // → a fresh QR. (A no-op once the engine is superseded/torn down.)
+    this.callbacks.onDisconnected?.('Saved session could not be restored; cleared for re-pairing');
+    if (typeof client?.destroy === 'function') void client.destroy().catch(() => undefined);
+  }
+
+  /** Remove this session's LocalAuth directory so the next start re-pairs from a clean slate. */
+  private async clearLocalAuth(): Promise<void> {
+    const dir = path.join(path.resolve(this.config.sessionDataPath), `session-${this.config.sessionId}`);
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
+      this.logger.warn(`Could not clear stale auth at ${dir}`, String(error));
+    });
   }
 
   private async isClientRuntimeReady(): Promise<boolean> {
@@ -1231,16 +1312,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       out.isStatusBroadcast = chatId === 'status@broadcast';
       if (includeMedia && msg.hasMedia) {
         try {
-          const media = await msg.downloadMedia();
-          if (media) {
-            // Cap history media too: a large historical blob shouldn't bloat the response/heap.
-            out.media = capInboundMedia({
-              mimetype: media.mimetype,
-              filename: media.filename || undefined,
-              sizeBytes: Buffer.byteLength(media.data, 'base64'),
-              toBase64: () => media.data,
-            });
-          }
+          // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the response/heap.
+          const capped = await this.capInboundMediaFor(msg);
+          if (capped) out.media = capped;
         } catch (error) {
           this.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
         }

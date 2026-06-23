@@ -57,19 +57,30 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   const dir = path.posix.dirname(manifestEntry.entryName);
   const prefix = dir === '.' ? '' : dir + '/';
 
-  let manifest: PluginManifest;
+  let parsed: unknown;
   try {
-    manifest = JSON.parse(manifestEntry.getData().toString('utf-8')) as PluginManifest;
+    parsed = JSON.parse(manifestEntry.getData().toString('utf-8'));
   } catch {
     throw new BadRequestException('manifest.json is not valid JSON');
   }
+  // JSON.parse("null") / "[]" / "5" don't throw — but indexing a field on a non-object then throws an
+  // uncaught TypeError (HTTP 500) on the attacker-controlled install path. Require a plain object.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new BadRequestException('manifest.json must be a JSON object');
+  }
+  const manifest = parsed as PluginManifest;
   for (const field of REQUIRED_FIELDS) {
-    if (!manifest[field]) throw new BadRequestException(`manifest.json is missing required field: ${field}`);
+    // Require a non-empty STRING: a non-string value (e.g. `main: 123`) is truthy and would pass a
+    // bare falsy check, then crash a string-only API like path.posix.normalize with an uncaught
+    // TypeError (HTTP 500). Reject it cleanly as a 400 here.
+    if (typeof manifest[field] !== 'string' || manifest[field].length === 0) {
+      throw new BadRequestException(`manifest.json is missing or has an invalid required field: ${field}`);
+    }
   }
   if (!SAFE_ID.test(manifest.id) || manifest.id.includes('..')) {
     throw new BadRequestException(`Invalid plugin id: "${manifest.id}"`);
   }
-  if (RESERVED_PLUGIN_IDS.has(manifest.id)) {
+  if (RESERVED_PLUGIN_IDS.has(manifest.id.toLowerCase())) {
     throw new BadRequestException(`Plugin id "${manifest.id}" is reserved by a built-in plugin`);
   }
   if (!INSTALLABLE_TYPES.has(manifest.type)) {

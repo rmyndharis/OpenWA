@@ -17,8 +17,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiConsumes } from '@nestjs/swagger
 import { PluginsService } from './plugins.service';
 import { PluginDto, PluginConfigDto, PluginSessionsDto, InstallFromUrlDto } from './dto/plugin.dto';
 import type { CatalogPlugin } from './catalog';
-import { RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 /** Max accepted upload size for a plugin package (compressed). */
 const MAX_PLUGIN_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -138,8 +138,10 @@ export class PluginsController {
   @ApiResponse({ status: 200, description: 'Plugin session activation updated', type: PluginDto })
   @ApiResponse({ status: 400, description: 'Plugin is global (not session-scoped)' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
-  updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto): PluginDto {
-    return this.pluginsService.updateSessions(id, dto.sessions);
+  updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto, @CurrentApiKey() apiKey?: ApiKey): PluginDto {
+    // The target sessions live in the body, which the ApiKeyGuard (keyed off route params) never
+    // inspects — so a session-restricted key's allowedSessions scope must be enforced here.
+    return this.pluginsService.updateSessions(id, dto.sessions, apiKey?.allowedSessions);
   }
 
   @Post(':id/update')

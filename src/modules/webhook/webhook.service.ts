@@ -271,24 +271,28 @@ export class WebhookService {
 
       // Use queue if available, otherwise fallback to direct delivery
       if (this.queueEnabled && this.webhookQueue) {
-        const signature = webhook.secret ? this.generateSignature(JSON.stringify(finalPayload), webhook.secret) : '';
-
-        if (webhook.secret) {
-          headers['X-OpenWA-Signature'] = signature;
-        }
-
-        const jobData: WebhookJobData = {
-          webhookId: webhook.id,
-          url: webhook.url,
-          event,
-          payload: finalPayload,
-          signature,
-          headers,
-          attempt: 1,
-          maxRetries: webhook.retryCount,
-        };
-
         try {
+          // finalPayload comes from the (untrusted) webhook:before hook result, so JSON.stringify can
+          // throw (BigInt / circular). Keep serialization + signing INSIDE the try so a poisoned payload
+          // is caught here (one webhook dropped + logged) instead of aborting the whole dispatch loop
+          // and rejecting the fire-and-forget dispatch() promise.
+          const signature = webhook.secret ? this.generateSignature(JSON.stringify(finalPayload), webhook.secret) : '';
+
+          if (webhook.secret) {
+            headers['X-OpenWA-Signature'] = signature;
+          }
+
+          const jobData: WebhookJobData = {
+            webhookId: webhook.id,
+            url: webhook.url,
+            event,
+            payload: finalPayload,
+            signature,
+            headers,
+            attempt: 1,
+            maxRetries: webhook.retryCount,
+          };
+
           await this.webhookQueue.add(`webhook-${webhook.id}`, jobData, {
             attempts: webhook.retryCount,
             backoff: {

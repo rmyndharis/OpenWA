@@ -58,6 +58,9 @@ services:
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=/app/data/media
+      # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
+      # docker-compose.yml; without this it falls back to ./plugins on the read-only root and install fails.
+      - PLUGINS_DIR=/app/data/plugins
       - WEBHOOK_TIMEOUT=10000
       - WEBHOOK_MAX_RETRIES=3
       - QUEUE_ENABLED=false

@@ -1231,6 +1231,22 @@ describe('SessionService', () => {
       expect(stats.byStatus[SessionStatus.READY]).toBe(2);
       expect(stats.memoryUsage).toBeDefined();
     });
+
+    it('scopes the stats to a restricted key (active counts only in-scope engines)', async () => {
+      const findSpy = (repository.find as jest.Mock).mockResolvedValue([
+        createMockSession({ id: 'sess-A', status: SessionStatus.READY }),
+      ]);
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      engines.set('sess-A', {});
+      engines.set('sess-B', {}); // global engine the scoped key must NOT see counted
+
+      const stats = await service.getStats(['sess-A']);
+
+      expect(findSpy).toHaveBeenCalled(); // scope threaded into findAll
+      expect(stats.total).toBe(1);
+      expect(stats.active).toBe(1); // not 2 (global engines.size)
+      engines.clear();
+    });
   });
 
   // ── getChats ──────────────────────────────────────────────────────

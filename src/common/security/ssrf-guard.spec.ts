@@ -6,6 +6,7 @@ import {
   isSsrfProtectionEnabled,
   resolveSafeFetchTarget,
   pinnedLookup,
+  validatingLookup,
   withSafeFetch,
 } from './ssrf-guard';
 import * as dnsPromises from 'dns/promises';
@@ -265,6 +266,96 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     const [, init] = (undiciFetch as jest.Mock).mock.calls[0] as [string, { redirect: string; dispatcher: unknown }];
     expect(init.redirect).toBe('follow');
     expect(init.dispatcher).toBeUndefined();
+  });
+
+  it('follows redirects through a validating dispatcher when followRedirects is set (download path)', async () => {
+    // GitHub Releases 302 to a CDN; the download path must follow (not refuse) redirects — but via a
+    // per-host validating lookup so every hop is still checked. Here the original host validates and a
+    // 302 is delivered to `use` (proving assertNoRedirect is NOT applied on this path).
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock).mockResolvedValue({ status: 302, type: 'basic' });
+    const use = jest.fn(() => 'followed');
+
+    const result = await withSafeFetch('https://github.com/x/releases/download/v1/p.zip', {}, use, {
+      followRedirects: true,
+    });
+
+    expect(result).toBe('followed');
+    expect(use).toHaveBeenCalledTimes(1);
+    const [, init] = (undiciFetch as jest.Mock).mock.calls[0] as [string, { redirect: string; dispatcher: unknown }];
+    expect(init.redirect).toBe('follow'); // not 'manual' — undici follows, our lookup guards each hop
+    expect(init.dispatcher).toBeDefined();
+  });
+
+  it('still rejects an internal ORIGINAL url even with followRedirects (scheme/host validated first)', async () => {
+    const use = jest.fn();
+    await expect(withSafeFetch('http://127.0.0.1/p.zip', {}, use, { followRedirects: true })).rejects.toThrow(
+      SsrfBlockedError,
+    );
+    expect(use).not.toHaveBeenCalled();
+  });
+});
+
+describe('validatingLookup (per-hop redirect guard)', () => {
+  const run = (hostname: string): Promise<{ err: unknown; rest: unknown[] }> =>
+    new Promise(resolve => {
+      const lookup = validatingLookup() as unknown as (
+        h: string,
+        o: { all: boolean },
+        cb: (err: unknown, ...rest: unknown[]) => void,
+      ) => void;
+      lookup(hostname, { all: true }, (err, ...rest) => resolve({ err, rest }));
+    });
+
+  it('passes a public IP literal through', async () => {
+    const { err, rest } = await run('93.184.216.34');
+    expect(err).toBeNull();
+    expect(rest[0]).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  });
+
+  it('refuses an internal IPv4 literal (a redirect target cannot be loopback/private)', async () => {
+    expect((await run('127.0.0.1')).err).toBeInstanceOf(SsrfBlockedError);
+    expect((await run('169.254.169.254')).err).toBeInstanceOf(SsrfBlockedError); // cloud metadata
+    expect((await run('10.0.0.5')).err).toBeInstanceOf(SsrfBlockedError);
+  });
+
+  it('refuses an internal IPv6 literal', async () => {
+    expect((await run('::1')).err).toBeInstanceOf(SsrfBlockedError);
+  });
+
+  it('refuses a hostname that resolves to an internal address', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '10.0.0.9', family: 4 }]);
+    expect((await run('rebind.evil.example')).err).toBeInstanceOf(SsrfBlockedError);
+  });
+
+  it('passes a hostname that resolves to a public address', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    const { err, rest } = await run('cdn.example.com');
+    expect(err).toBeNull();
+    expect(rest[0]).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  });
+
+  it('returns a single (address, family) pair in non-all form', async () => {
+    const single = await new Promise<{ err: unknown; rest: unknown[] }>(resolve => {
+      const lookup = validatingLookup() as unknown as (
+        h: string,
+        o: { all: boolean },
+        cb: (err: unknown, ...rest: unknown[]) => void,
+      ) => void;
+      lookup('93.184.216.34', { all: false }, (err, ...rest) => resolve({ err, rest }));
+    });
+    expect(single.err).toBeNull();
+    expect(single.rest).toEqual(['93.184.216.34', 4]);
+  });
+
+  it('surfaces a DNS resolution failure to the callback (does not hang the connect)', async () => {
+    (dnsPromises.lookup as jest.Mock).mockRejectedValueOnce(new Error('ENOTFOUND'));
+    expect((await run('nope.example')).err).toBeInstanceOf(Error);
+  });
+
+  it('refuses a host that resolves to no addresses', async () => {
+    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([]);
+    expect((await run('empty.example')).err).toBeInstanceOf(SsrfBlockedError);
   });
 });
 

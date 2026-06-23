@@ -1,4 +1,4 @@
-.webhooks-page {
+.webhooks-page{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
@@ -6,29 +6,27 @@
 }
 
 /* Webhook create/edit modal: roomier than the default 480px (filters need width). */
-.webhooks-page .modal:not(.modal-sm) {
+.webhooks-page .modal:not(.modal-sm){
   max-width: 640px;
 }
 
 /* Consistent vertical rhythm between top-level form blocks in the webhook modals.
    Direct-child only, so nested FilterBuilder inputs/selects are untouched. */
-.webhooks-page .modal-body > input,
-.webhooks-page .modal-body > select,
-.webhooks-page .modal-body > .event-tags {
+.webhooks-page .modal-body > input, .webhooks-page .modal-body > select, .webhooks-page .modal-body > .event-tags{
   margin-bottom: 0.75rem;
 }
 
-.webhooks-page .modal-body > .event-tags {
+.webhooks-page .modal-body > .event-tags{
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
 }
 
-.page-header {
+.webhooks-page .page-header{
   margin-bottom: 2rem;
 }
 
-.header-content {
+.webhooks-page .header-content{
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -36,7 +34,7 @@
 
 /* H1 inherited from global */
 
-.btn-primary {
+.webhooks-page .btn-primary{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -51,28 +49,28 @@
   transition: background 0.2s;
 }
 
-.btn-primary:hover {
+.webhooks-page .btn-primary:hover{
   background: var(--primary-hover);
 }
 
-.webhooks-content {
+.webhooks-page .webhooks-content{
   display: grid;
   grid-template-columns: 1fr 280px;
   gap: 1.5rem;
 }
 
-.webhooks-list-container {
+.webhooks-page .webhooks-list-container{
   width: 100%;
   min-width: 0;
 }
 
-.webhooks-card-list {
+.webhooks-page .webhooks-card-list{
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-.webhook-card {
+.webhooks-page .webhook-card{
   background: var(--bg-white);
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
@@ -81,11 +79,11 @@
   transition: box-shadow 0.2s;
 }
 
-.webhook-card:hover {
+.webhooks-page .webhook-card:hover{
   box-shadow: var(--shadow-md);
 }
 
-.webhook-card-header {
+.webhooks-page .webhook-card-header{
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -95,7 +93,7 @@
   gap: 1rem;
 }
 
-.webhook-url-row {
+.webhooks-page .webhook-url-row{
   display: flex;
   align-items: center;
   gap: 0.625rem;
@@ -103,12 +101,12 @@
   min-width: 0;
 }
 
-.webhook-url-icon {
+.webhooks-page .webhook-url-icon{
   color: var(--primary);
   flex-shrink: 0;
 }
 
-.webhook-url {
+.webhooks-page .webhook-url{
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--text-primary);
@@ -120,30 +118,30 @@
   font-family: 'JetBrains Mono', monospace;
 }
 
-.webhook-card-actions {
+.webhooks-page .webhook-card-actions{
   display: flex;
   gap: 0.375rem;
   flex-shrink: 0;
 }
 
-.webhook-card-body {
+.webhooks-page .webhook-card-body{
   padding: 1rem 1.25rem;
   overflow: hidden;
 }
 
-.webhook-meta {
+.webhooks-page .webhook-meta{
   display: flex;
   gap: 2rem;
   margin-bottom: 0.875rem;
 }
 
-.webhook-meta-item {
+.webhooks-page .webhook-meta-item{
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.webhook-meta-label {
+.webhooks-page .webhook-meta-label{
   font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -151,19 +149,19 @@
   color: var(--text-secondary);
 }
 
-.webhook-meta-value {
+.webhooks-page .webhook-meta-value{
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-primary);
 }
 
-.webhook-events {
+.webhooks-page .webhook-events{
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
 }
 
-.empty-table-state {
+.webhooks-page .empty-table-state{
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -173,32 +171,32 @@
   color: var(--text-muted);
 }
 
-.empty-table-state svg {
+.webhooks-page .empty-table-state svg{
   margin-bottom: 1rem;
   opacity: 0.4;
   color: var(--text-muted);
 }
 
-.empty-table-state h3 {
+.webhooks-page .empty-table-state h3{
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0 0 0.5rem;
 }
 
-.empty-table-state p {
+.webhooks-page .empty-table-state p{
   margin: 0;
   font-size: 0.875rem;
   max-width: 300px;
 }
 
-.events-cell {
+.webhooks-page .events-cell{
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
 }
 
-.event-tag {
+.webhooks-page .event-tag{
   font-size: 0.75rem;
   padding: 0.25rem 0.625rem;
   background: rgba(37, 211, 102, 0.15);
@@ -213,7 +211,7 @@
 }
 
 /* Modal event tags - clickable (webhooks only) */
-.webhooks-page .modal-body .event-tag {
+.webhooks-page .modal-body .event-tag{
   font-size: 0.8125rem;
   padding: 0.5rem 0.75rem;
   background: var(--bg-light);
@@ -224,18 +222,18 @@
   transition: all 0.2s;
 }
 
-.webhooks-page .modal-body .event-tag:hover {
+.webhooks-page .modal-body .event-tag:hover{
   border-color: var(--primary);
   color: var(--primary);
 }
 
-.webhooks-page .modal-body .event-tag.selected {
+.webhooks-page .modal-body .event-tag.selected{
   background: var(--primary);
   color: white;
   border-color: var(--primary);
 }
 
-.filter-badge {
+.webhooks-page .filter-badge{
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -249,20 +247,19 @@
   border: 1px solid var(--border);
 }
 
-.filter-badge-interactive {
+.webhooks-page .filter-badge-interactive{
   position: relative;
   cursor: default;
   outline: none;
 }
 
-.filter-badge-interactive:hover,
-.filter-badge-interactive:focus-visible {
+.webhooks-page .filter-badge-interactive:hover, .webhooks-page .filter-badge-interactive:focus-visible{
   border-color: var(--primary);
   color: var(--text-primary);
 }
 
 /* Fixed-positioned (escapes the card's overflow:hidden); coordinates set inline from the badge rect. */
-.filter-popover {
+.webhooks-page .filter-popover{
   position: fixed;
   z-index: 100;
   min-width: 200px;
@@ -280,7 +277,7 @@
   cursor: default;
 }
 
-.filter-popover-title {
+.webhooks-page .filter-popover-title{
   font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -289,18 +286,18 @@
   margin-bottom: 0.125rem;
 }
 
-.filter-popover-row {
+.webhooks-page .filter-popover-row{
   font-size: 0.78rem;
   color: var(--text-primary);
   word-break: break-word;
 }
 
-.filter-popover-row + .filter-popover-row {
+.webhooks-page .filter-popover-row + .filter-popover-row{
   padding-top: 0.25rem;
   border-top: 1px solid var(--border);
 }
 
-.status-badge {
+.webhooks-page .status-badge{
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
@@ -312,7 +309,7 @@
   width: fit-content;
 }
 
-.status-badge::before {
+.webhooks-page .status-badge::before{
   content: '';
   width: 6px;
   height: 6px;
@@ -321,17 +318,17 @@
   flex-shrink: 0;
 }
 
-.status-badge.active {
+.webhooks-page .status-badge.active{
   background: rgba(37, 211, 102, 0.15);
   color: var(--primary);
 }
 
-.status-badge.inactive {
+.webhooks-page .status-badge.inactive{
   background: var(--bg-light);
   color: var(--text-muted);
 }
 
-.icon-btn {
+.webhooks-page .icon-btn{
   padding: 0.5rem;
   background: transparent;
   border: 1px solid var(--border);
@@ -342,18 +339,18 @@
   flex-shrink: 0;
 }
 
-.icon-btn:hover {
+.webhooks-page .icon-btn:hover{
   background: var(--bg-light);
   color: var(--text-primary);
 }
 
-.icon-btn.danger:hover {
+.webhooks-page .icon-btn.danger:hover{
   background: #fee2e2;
   border-color: #fecaca;
   color: #dc2626;
 }
 
-.events-reference {
+.webhooks-page .events-reference{
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -362,7 +359,7 @@
   height: fit-content;
 }
 
-.events-reference h3 {
+.webhooks-page .events-reference h3{
   font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
@@ -371,19 +368,19 @@
   letter-spacing: normal;
 }
 
-.events-list {
+.webhooks-page .events-list{
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 
-.event-item {
+.webhooks-page .event-item{
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.event-item code {
+.webhooks-page .event-item code{
   font-size: 0.8125rem;
   color: var(--primary);
   background: rgba(37, 211, 102, 0.1);
@@ -392,134 +389,134 @@
   width: fit-content;
 }
 
-.event-item span {
+.webhooks-page .event-item span{
   font-size: 0.8125rem;
   color: var(--text-secondary);
   line-height: 1.4;
 }
 
 /* Dark mode - explicit theme */
-[data-theme='dark'] .event-tag {
+.webhooks-page [data-theme='dark'] .event-tag{
   color: #4ade80;
   background: rgba(37, 211, 102, 0.2);
   border-color: rgba(37, 211, 102, 0.35);
 }
 
-[data-theme='dark'] .status-badge.active {
+.webhooks-page [data-theme='dark'] .status-badge.active{
   color: #4ade80;
   background: rgba(37, 211, 102, 0.2);
 }
 
-[data-theme='dark'] .webhook-url {
+.webhooks-page [data-theme='dark'] .webhook-url{
   color: #e2e8f0;
 }
 
-[data-theme='dark'] .webhook-meta-label {
+.webhooks-page [data-theme='dark'] .webhook-meta-label{
   color: #94a3b8;
 }
 
-[data-theme='dark'] .webhook-meta-value {
+.webhooks-page [data-theme='dark'] .webhook-meta-value{
   color: #e2e8f0;
 }
 
 /* Dark mode - system preference */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .event-tag {
+  :root:not([data-theme='light']) .webhooks-page .event-tag{
     color: #4ade80;
     background: rgba(37, 211, 102, 0.2);
     border-color: rgba(37, 211, 102, 0.35);
   }
 
-  :root:not([data-theme='light']) .status-badge.active {
+  :root:not([data-theme='light']) .webhooks-page .status-badge.active{
     color: #4ade80;
     background: rgba(37, 211, 102, 0.2);
   }
 
-  :root:not([data-theme='light']) .webhook-url {
+  :root:not([data-theme='light']) .webhooks-page .webhook-url{
     color: #e2e8f0;
   }
 
-  :root:not([data-theme='light']) .webhook-meta-label {
+  :root:not([data-theme='light']) .webhooks-page .webhook-meta-label{
     color: #94a3b8;
   }
 
-  :root:not([data-theme='light']) .webhook-meta-value {
+  :root:not([data-theme='light']) .webhooks-page .webhook-meta-value{
     color: #e2e8f0;
   }
 }
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .webhooks-content {
+  .webhooks-page .webhooks-content{
     grid-template-columns: 1fr;
   }
 
-  .events-reference {
+  .webhooks-page .events-reference{
     display: none;
   }
 }
 
 @media (max-width: 768px) {
-  .webhooks-page {
+  .webhooks-page{
     padding: 1rem;
   }
 
-  .webhooks-content {
+  .webhooks-page .webhooks-content{
     grid-template-columns: 1fr;
   }
 
-  .webhook-card {
+  .webhooks-page .webhook-card{
     overflow: hidden;
   }
 
-  .webhook-card-header {
+  .webhooks-page .webhook-card-header{
     flex-direction: column;
     align-items: flex-start;
     gap: 0.75rem;
     padding: 0.875rem 1rem;
   }
 
-  .webhook-url-row {
+  .webhooks-page .webhook-url-row{
     width: 100%;
     min-width: 0;
   }
 
-  .webhook-url {
+  .webhooks-page .webhook-url{
     font-size: 0.75rem;
   }
 
-  .webhook-card-actions {
+  .webhooks-page .webhook-card-actions{
     width: 100%;
     justify-content: flex-end;
   }
 
-  .webhook-card-body {
+  .webhooks-page .webhook-card-body{
     padding: 0.875rem 1rem;
   }
 
-  .webhook-meta {
+  .webhooks-page .webhook-meta{
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .webhook-meta-value {
+  .webhooks-page .webhook-meta-value{
     font-size: 0.8125rem;
     word-break: break-all;
   }
 
-  .events-cell {
+  .webhooks-page .events-cell{
     flex-wrap: wrap;
     gap: 0.375rem;
   }
 
-  .event-tag {
+  .webhooks-page .event-tag{
     font-size: 0.6875rem;
     padding: 0.2rem 0.5rem;
   }
 }
 
 /* Toast Notification */
-.toast {
+.webhooks-page .toast{
   position: fixed;
   top: 1.5rem;
   right: 1.5rem;
@@ -546,19 +543,19 @@
   }
 }
 
-.toast.success {
+.webhooks-page .toast.success{
   background: #ecfdf5;
   border: 1px solid #a7f3d0;
   color: #047857;
 }
 
-.toast.error {
+.webhooks-page .toast.error{
   background: #fef2f2;
   border: 1px solid #fecaca;
   color: #dc2626;
 }
 
-.toast-close {
+.webhooks-page .toast-close{
   background: transparent;
   border: none;
   padding: 0.25rem;
@@ -567,12 +564,12 @@
   color: inherit;
 }
 
-.toast-close:hover {
+.webhooks-page .toast-close:hover{
   opacity: 1;
 }
 
 /* Danger Button */
-.btn-danger {
+.webhooks-page .btn-danger{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -587,23 +584,23 @@
   transition: background 0.2s;
 }
 
-.btn-danger:hover {
+.webhooks-page .btn-danger:hover{
   background: #b91c1c;
 }
 
 /* Small Modal Variant */
-.modal.modal-sm {
+.webhooks-page .modal.modal-sm{
   max-width: 400px;
 }
 
 /* Disabled button */
-.icon-btn:disabled {
+.webhooks-page .icon-btn:disabled{
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Animate spin for loading */
-.animate-spin {
+.webhooks-page .animate-spin{
   animation: spin 1s linear infinite;
 }
 
@@ -617,7 +614,7 @@
 }
 
 /* Toggle Switch */
-.toggle-group {
+.webhooks-page .toggle-group{
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -627,25 +624,25 @@
   border-radius: var(--radius);
 }
 
-.toggle-label {
+.webhooks-page .toggle-label{
   font-weight: 500;
   color: var(--text-primary);
 }
 
-.toggle-switch {
+.webhooks-page .toggle-switch{
   position: relative;
   display: inline-block;
   width: 48px;
   height: 26px;
 }
 
-.toggle-switch input {
+.webhooks-page .toggle-switch input{
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.toggle-slider {
+.webhooks-page .toggle-slider{
   position: absolute;
   cursor: pointer;
   top: 0;
@@ -657,7 +654,7 @@
   border-radius: 26px;
 }
 
-.toggle-slider::before {
+.webhooks-page .toggle-slider::before{
   position: absolute;
   content: '';
   height: 20px;
@@ -670,23 +667,23 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
-.toggle-switch input:checked + .toggle-slider {
+.webhooks-page .toggle-switch input:checked + .toggle-slider{
   background-color: var(--primary);
 }
 
-.toggle-switch input:checked + .toggle-slider::before {
+.webhooks-page .toggle-switch input:checked + .toggle-slider::before{
   transform: translateX(22px);
 }
 
-.toggle-status {
+.webhooks-page .toggle-status{
   font-size: 0.875rem;
   font-weight: 500;
 }
 
-.toggle-status.active {
+.webhooks-page .toggle-status.active{
   color: var(--primary);
 }
 
-.toggle-status.inactive {
+.webhooks-page .toggle-status.inactive{
   color: var(--text-muted);
 }

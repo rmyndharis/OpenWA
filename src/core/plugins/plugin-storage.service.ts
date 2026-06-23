@@ -176,9 +176,11 @@ export class PluginStorageService {
   createPluginStorage(pluginId: string): PluginStorage {
     const pluginDataDir = path.join(this.dataDir, 'plugins', pluginId);
 
-    // Ensure directory exists
+    // Ensure directory exists. 0o700 (owner-only) because plugin storage holds the same class of
+    // secret as the registry (OAuth/refresh tokens, webhook secrets a plugin persists) — mirror the
+    // hardening saveRegistry already applies rather than inherit a group/other-readable umask default.
     if (!fs.existsSync(pluginDataDir)) {
-      fs.mkdirSync(pluginDataDir, { recursive: true });
+      fs.mkdirSync(pluginDataDir, { recursive: true, mode: 0o700 });
     }
 
     const logger = this.logger;
@@ -213,7 +215,11 @@ export class PluginStorageService {
           return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
         }
         try {
-          atomicWriteFileSync(filePath, JSON.stringify(value, null, 2));
+          // 0o600 (owner-only): a plugin-persisted secret must not land in a group/other-readable file.
+          // The mode on the temp write carries through the rename; chmod is a backstop if the target
+          // pre-existed (writeFileSync mode only applies on create). Mirrors saveRegistry's hardening.
+          atomicWriteFileSync(filePath, JSON.stringify(value, null, 2), { mode: 0o600 });
+          fs.chmodSync(filePath, 0o600);
           return Promise.resolve();
         } catch (error) {
           logger.error(`Failed to write plugin data: ${pluginId}/${key}`, String(error));

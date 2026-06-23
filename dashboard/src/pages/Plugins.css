@@ -1,11 +1,11 @@
-.plugins-page {
+.plugins-page{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
 /* Engine Card */
-.engine-card {
+.plugins-page .engine-card{
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(16, 185, 129, 0.1) 100%);
   border: 1px solid rgba(34, 197, 94, 0.2);
   border-radius: 12px;
@@ -13,19 +13,19 @@
   margin-bottom: 2rem;
 }
 
-.engine-header {
+.plugins-page .engine-header{
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.engine-info {
+.plugins-page .engine-info{
   display: flex;
   align-items: center;
   gap: 1rem;
 }
 
-.engine-icon-wrapper {
+.plugins-page .engine-icon-wrapper{
   width: 48px;
   height: 48px;
   background: rgba(34, 197, 94, 0.15);
@@ -35,11 +35,11 @@
   justify-content: center;
 }
 
-.engine-icon-wrapper svg {
+.plugins-page .engine-icon-wrapper svg{
   color: #22c55e;
 }
 
-.engine-title {
+.plugins-page .engine-title{
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -48,18 +48,18 @@
   letter-spacing: normal;
 }
 
-.engine-name {
+.plugins-page .engine-name{
   font-size: 0.875rem;
   color: #22c55e;
 }
 
-.engine-features {
+.plugins-page .engine-features{
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(34, 197, 94, 0.15);
 }
 
-.features-label {
+.plugins-page .features-label{
   font-size: 0.75rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
@@ -67,13 +67,13 @@
   letter-spacing: 0.05em;
 }
 
-.features-list {
+.plugins-page .features-list{
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
 }
 
-.feature-tag {
+.plugins-page .feature-tag{
   padding: 0.25rem 0.5rem;
   background: rgba(34, 197, 94, 0.1);
   color: #22c55e;
@@ -82,14 +82,14 @@
 }
 
 /* Plugins Grid */
-.plugins-grid {
+.plugins-page .plugins-grid{
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 1.5rem;
 }
 
 /* Plugin Card */
-.plugin-card {
+.plugins-page .plugin-card{
   background: var(--bg-white);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -99,12 +99,12 @@
     box-shadow 0.2s;
 }
 
-.plugin-card:hover {
+.plugins-page .plugin-card:hover{
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
 
-.plugin-card-header {
+.plugins-page .plugin-card-header{
   padding: 1.25rem 1.25rem 1rem;
   display: flex;
   align-items: center;
@@ -112,14 +112,14 @@
   gap: 0.5rem;
 }
 
-.plugin-info {
+.plugins-page .plugin-info{
   display: flex;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
 }
 
-.plugin-icon-wrapper {
+.plugins-page .plugin-icon-wrapper{
   width: 42px;
   height: 42px;
   background: var(--bg-light);
@@ -130,43 +130,43 @@
   flex-shrink: 0;
 }
 
-.plugin-icon-wrapper svg {
+.plugins-page .plugin-icon-wrapper svg{
   color: var(--text-secondary);
 }
 
 /* Calm, low-saturation type tints on the icon only — no loud gradient header, no alarming red. */
-.type-engine .plugin-icon-wrapper {
+.plugins-page .type-engine .plugin-icon-wrapper{
   background: rgba(34, 197, 94, 0.12);
 }
-.type-engine .plugin-icon-wrapper svg {
+.plugins-page .type-engine .plugin-icon-wrapper svg{
   color: #16a34a;
 }
-.type-extension .plugin-icon-wrapper {
+.plugins-page .type-extension .plugin-icon-wrapper{
   background: rgba(99, 102, 241, 0.12);
 }
-.type-extension .plugin-icon-wrapper svg {
+.plugins-page .type-extension .plugin-icon-wrapper svg{
   color: #6366f1;
 }
-.type-storage .plugin-icon-wrapper {
+.plugins-page .type-storage .plugin-icon-wrapper{
   background: rgba(13, 148, 136, 0.12);
 }
-.type-storage .plugin-icon-wrapper svg {
+.plugins-page .type-storage .plugin-icon-wrapper svg{
   color: #0d9488;
 }
-.type-queue .plugin-icon-wrapper {
+.plugins-page .type-queue .plugin-icon-wrapper{
   background: rgba(217, 119, 6, 0.12);
 }
-.type-queue .plugin-icon-wrapper svg {
+.plugins-page .type-queue .plugin-icon-wrapper svg{
   color: #d97706;
 }
-.type-auth .plugin-icon-wrapper {
+.plugins-page .type-auth .plugin-icon-wrapper{
   background: rgba(147, 51, 234, 0.12);
 }
-.type-auth .plugin-icon-wrapper svg {
+.plugins-page .type-auth .plugin-icon-wrapper svg{
   color: #9333ea;
 }
 
-.plugin-name {
+.plugins-page .plugin-name{
   font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -178,12 +178,12 @@
   text-overflow: ellipsis;
 }
 
-.plugin-version {
+.plugins-page .plugin-version{
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.plugin-builtin-badge {
+.plugins-page .plugin-builtin-badge{
   padding: 0.1875rem 0.5rem;
   background: var(--bg-light);
   color: var(--text-muted);
@@ -197,73 +197,73 @@
   flex-shrink: 0;
 }
 
-.plugin-card-body {
+.plugins-page .plugin-card-body{
   padding: 1.25rem;
 }
 
-.plugin-description {
+.plugins-page .plugin-description{
   color: var(--text-secondary);
   font-size: 0.875rem;
   margin-bottom: 1rem;
   line-height: 1.5;
 }
 
-.plugin-status-row {
+.plugins-page .plugin-status-row{
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1rem;
 }
 
-.plugin-status {
+.plugins-page .plugin-status{
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.status-dot {
+.plugins-page .status-dot{
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
 
-.status-dot.enabled {
+.plugins-page .status-dot.enabled{
   background: #22c55e;
 }
 
-.status-dot.disabled {
+.plugins-page .status-dot.disabled{
   background: #eab308;
 }
 
-.status-dot.error {
+.plugins-page .status-dot.error{
   background: #ef4444;
 }
 
-.status-dot.installed {
+.plugins-page .status-dot.installed{
   background: #64748b;
 }
 
-.status-text {
+.plugins-page .status-text{
   font-size: 0.875rem;
   color: var(--text-primary);
   text-transform: capitalize;
 }
 
-.plugin-type-label {
+.plugins-page .plugin-type-label{
   font-size: 0.625rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
-.plugin-provides {
+.plugins-page .plugin-provides{
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
   margin-bottom: 1rem;
 }
 
-.provides-tag {
+.plugins-page .provides-tag{
   padding: 0.25rem 0.5rem;
   background: var(--bg-light);
   color: var(--text-secondary);
@@ -271,7 +271,7 @@
   border-radius: 4px;
 }
 
-.plugin-error {
+.plugins-page .plugin-error{
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.2);
   border-radius: 6px;
@@ -279,12 +279,12 @@
   margin-bottom: 1rem;
 }
 
-.plugin-error-text {
+.plugins-page .plugin-error-text{
   color: #ef4444;
   font-size: 0.75rem;
 }
 
-.plugin-actions {
+.plugins-page .plugin-actions{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -292,7 +292,7 @@
   border-top: 1px solid var(--border);
 }
 
-.btn-toggle {
+.plugins-page .btn-toggle{
   flex: 1;
   display: flex;
   align-items: center;
@@ -308,35 +308,35 @@
 
 /* Positive action (Enable / Activate): the one solid brand-green CTA, so an action never reads
    the same as the passive "Active" state below. */
-.btn-toggle.enable {
+.plugins-page .btn-toggle.enable{
   background: var(--primary, #25d366);
   border: 1px solid var(--primary, #25d366);
   color: #fff;
 }
 
-.btn-toggle.enable:hover {
+.plugins-page .btn-toggle.enable:hover{
   background: #16a34a;
   border-color: #16a34a;
 }
 
-.btn-toggle.disable {
+.plugins-page .btn-toggle.disable{
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: #ef4444;
 }
 
-.btn-toggle.disable:hover {
+.plugins-page .btn-toggle.disable:hover{
   background: rgba(239, 68, 68, 0.2);
 }
 
-.btn-toggle:disabled {
+.plugins-page .btn-toggle:disabled{
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Passive states (Active / Required) are NOT actions — render them as quiet neutral chips, with
    only a small green check as the "it's on" signal, so they're clearly distinct from the green CTA. */
-.btn-required {
+.plugins-page .btn-required{
   flex: 1;
   display: flex;
   align-items: center;
@@ -352,11 +352,11 @@
   cursor: default;
 }
 
-.btn-required svg {
+.plugins-page .btn-required svg{
   color: var(--text-muted);
 }
 
-.btn-active {
+.plugins-page .btn-active{
   flex: 1;
   display: flex;
   align-items: center;
@@ -372,11 +372,11 @@
   cursor: default;
 }
 
-.btn-active svg {
+.plugins-page .btn-active svg{
   color: #16a34a;
 }
 
-.btn-action {
+.plugins-page .btn-action{
   width: 36px;
   height: 36px;
   display: flex;
@@ -390,43 +390,43 @@
   padding: 0;
 }
 
-.btn-action:hover {
+.plugins-page .btn-action:hover{
   background: var(--bg-white);
   border-color: var(--text-muted);
 }
 
-.btn-action svg {
+.plugins-page .btn-action svg{
   color: var(--text-secondary);
 }
 
 /* Empty State */
-.empty-state {
+.plugins-page .empty-state{
   text-align: center;
   padding: 4rem 2rem;
 }
 
-.empty-state svg {
+.plugins-page .empty-state svg{
   color: var(--text-muted);
   margin-bottom: 1rem;
 }
 
-.empty-state h3 {
+.plugins-page .empty-state h3{
   font-size: 1.25rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
 
-.empty-state p {
+.plugins-page .empty-state p{
   color: var(--text-muted);
 }
 
 /* Config Modal */
-.config-modal {
+.plugins-page .config-modal{
   max-width: 500px;
   width: 90%;
 }
 
-.config-info-banner {
+.plugins-page .config-info-banner{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -439,11 +439,11 @@
   font-size: 0.875rem;
 }
 
-.config-form .form-group {
+.plugins-page .config-form .form-group{
   margin-bottom: 1.25rem;
 }
 
-.config-form .form-group label {
+.plugins-page .config-form .form-group label{
   display: block;
   font-size: 0.875rem;
   font-weight: 600;
@@ -451,9 +451,7 @@
   margin-bottom: 0.5rem;
 }
 
-.config-form .form-group input,
-.config-form .form-group select,
-.config-form .form-group textarea {
+.plugins-page .config-form .form-group input, .plugins-page .config-form .form-group select, .plugins-page .config-form .form-group textarea{
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -464,15 +462,13 @@
   box-sizing: border-box;
 }
 
-.config-form .form-group textarea {
+.plugins-page .config-form .form-group textarea{
   font-family: inherit;
   resize: vertical;
   min-height: 4.5rem;
 }
 
-.config-form .form-group input:focus,
-.config-form .form-group select:focus,
-.config-form .form-group textarea:focus {
+.plugins-page .config-form .form-group input:focus, .plugins-page .config-form .form-group select:focus, .plugins-page .config-form .form-group textarea:focus{
   outline: none;
   border-color: var(--primary);
   background: var(--bg-white);
@@ -480,7 +476,7 @@
 }
 
 /* Nested object — a bordered group of sub-fields. */
-.config-form .config-fieldset {
+.plugins-page .config-form .config-fieldset{
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem 0.25rem;
@@ -488,7 +484,7 @@
   min-width: 0;
 }
 
-.config-form .config-fieldset > legend {
+.plugins-page .config-form .config-fieldset > legend{
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-secondary);
@@ -496,11 +492,11 @@
 }
 
 /* Array-of-rows — repeating rows with add/remove. */
-.config-form .config-array {
+.plugins-page .config-form .config-array{
   margin-bottom: 1.25rem;
 }
 
-.config-form .config-array > label {
+.plugins-page .config-form .config-array > label{
   display: block;
   font-size: 0.875rem;
   font-weight: 600;
@@ -508,21 +504,21 @@
   margin-bottom: 0.5rem;
 }
 
-.config-form .config-array-row {
+.plugins-page .config-form .config-array-row{
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
 }
 
-.config-form .config-array-row-body {
+.plugins-page .config-form .config-array-row-body{
   flex: 1;
   min-width: 0;
   border-left: 2px solid var(--border);
   padding-left: 0.75rem;
 }
 
-.config-form .config-array-remove {
+.plugins-page .config-form .config-array-remove{
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -535,13 +531,13 @@
   transition: all 0.2s;
 }
 
-.config-form .config-array-remove:hover {
+.plugins-page .config-form .config-array-remove:hover{
   background: var(--danger, #e5484d);
   color: #fff;
   border-color: var(--danger, #e5484d);
 }
 
-.config-form .config-array-add {
+.plugins-page .config-form .config-array-add{
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -556,13 +552,13 @@
   transition: all 0.2s;
 }
 
-.config-form .config-array-add:hover {
+.plugins-page .config-form .config-array-add:hover{
   border-color: var(--primary);
   color: var(--primary);
 }
 
 /* Sandboxed-iframe config editor (B-full). */
-.plugin-config-ui-frame {
+.plugins-page .plugin-config-ui-frame{
   display: block;
   width: 100%;
   border: 1px solid var(--border);
@@ -570,7 +566,7 @@
   background: var(--bg-white);
 }
 
-.config-ui-status {
+.plugins-page .config-ui-status{
   display: flex;
   align-items: center;
   justify-content: center;
@@ -578,13 +574,13 @@
   color: var(--text-muted);
 }
 
-.config-ui-error {
+.plugins-page .config-ui-error{
   padding: 1rem;
   text-align: center;
   color: var(--danger, #e5484d);
 }
 
-.config-form .form-group small {
+.plugins-page .config-form .form-group small{
   display: block;
   margin-top: 0.4rem;
   font-size: 0.75rem;
@@ -592,11 +588,11 @@
   line-height: 1.4;
 }
 
-.config-form .form-group .required-mark {
+.plugins-page .config-form .form-group .required-mark{
   color: var(--danger, #e5484d);
 }
 
-.toggle-group {
+.plugins-page .toggle-group{
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -605,22 +601,22 @@
   border-radius: 8px;
 }
 
-.toggle-info {
+.plugins-page .toggle-info{
   flex: 1;
 }
 
-.toggle-info label {
+.plugins-page .toggle-info label{
   display: block !important;
   margin-bottom: 0.25rem !important;
 }
 
-.toggle-info small {
+.plugins-page .toggle-info small{
   display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.toggle-switch {
+.plugins-page .toggle-switch{
   position: relative;
   display: inline-block;
   width: 48px;
@@ -628,13 +624,13 @@
   flex-shrink: 0;
 }
 
-.toggle-switch input {
+.plugins-page .toggle-switch input{
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.toggle-slider {
+.plugins-page .toggle-slider{
   position: absolute;
   cursor: pointer;
   top: 0;
@@ -646,7 +642,7 @@
   border-radius: 26px;
 }
 
-.toggle-slider:before {
+.plugins-page .toggle-slider:before{
   position: absolute;
   content: '';
   height: 20px;
@@ -659,25 +655,25 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.toggle-switch input:checked + .toggle-slider {
+.plugins-page .toggle-switch input:checked + .toggle-slider{
   background-color: var(--primary, #22c55e);
 }
 
-.toggle-switch input:checked + .toggle-slider:before {
+.plugins-page .toggle-switch input:checked + .toggle-slider:before{
   transform: translateX(22px);
 }
 
-.no-config {
+.plugins-page .no-config{
   text-align: center;
   padding: 2rem;
   color: var(--text-muted);
 }
 
-.no-config p {
+.plugins-page .no-config p{
   margin-top: 1rem;
 }
 
-.btn-primary {
+.plugins-page .btn-primary{
   padding: 0.75rem 1.5rem;
   background: var(--primary, #22c55e);
   color: white;
@@ -692,26 +688,26 @@
   gap: 0.5rem;
 }
 
-.btn-primary:hover {
+.plugins-page .btn-primary:hover{
   background: #16a34a;
 }
 
-.btn-primary:disabled {
+.plugins-page .btn-primary:disabled{
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 /* Responsive */
 @media (max-width: 768px) {
-  .plugins-page {
+  .plugins-page{
     padding: 1rem;
   }
 
-  .plugins-grid {
+  .plugins-page .plugins-grid{
     grid-template-columns: 1fr;
   }
 
-  .engine-header {
+  .plugins-page .engine-header{
     flex-direction: column;
     align-items: flex-start;
     gap: 1rem;
@@ -719,13 +715,13 @@
 }
 
 /* ── Two-column control layout: status rail + plugin catalog ─────────────── */
-.plugins-layout {
+.plugins-page .plugins-layout{
   display: flex;
   gap: 1.5rem;
   align-items: flex-start;
 }
 
-.plugins-rail {
+.plugins-page .plugins-rail{
   flex: 0 0 280px;
   position: sticky;
   top: 1.5rem;
@@ -738,12 +734,12 @@
   padding: 1.25rem;
 }
 
-.plugins-main {
+.plugins-page .plugins-main{
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.rail-label {
+.plugins-page .rail-label{
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -752,13 +748,13 @@
   margin-bottom: 0.625rem;
 }
 
-.rail-engine {
+.plugins-page .rail-engine{
   display: flex;
   align-items: center;
   gap: 0.625rem;
 }
 
-.rail-engine-icon {
+.plugins-page .rail-engine-icon{
   width: 34px;
   height: 34px;
   display: flex;
@@ -770,30 +766,30 @@
   flex-shrink: 0;
 }
 
-.rail-engine-meta {
+.plugins-page .rail-engine-meta{
   display: flex;
   flex-direction: column;
   min-width: 0;
   flex: 1;
 }
 
-.rail-engine-name {
+.plugins-page .rail-engine-name{
   font-weight: 600;
   font-size: 0.875rem;
   color: var(--text-primary);
 }
 
-.rail-engine-lib {
+.plugins-page .rail-engine-lib{
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.rail-stats {
+.plugins-page .rail-stats{
   display: flex;
   gap: 0.75rem;
 }
 
-.rail-stat {
+.plugins-page .rail-stat{
   flex: 1;
   background: var(--bg-light);
   border-radius: 8px;
@@ -801,7 +797,7 @@
   text-align: center;
 }
 
-.rail-stat-num {
+.plugins-page .rail-stat-num{
   display: block;
   font-size: 1.25rem;
   font-weight: 700;
@@ -809,14 +805,14 @@
   line-height: 1.2;
 }
 
-.rail-stat-label {
+.plugins-page .rail-stat-label{
   font-size: 0.6875rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.rail-active-list {
+.plugins-page .rail-active-list{
   list-style: none;
   margin: 0;
   padding: 0;
@@ -825,13 +821,13 @@
   gap: 0.5rem;
 }
 
-.rail-active-item {
+.plugins-page .rail-active-item{
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.rail-active-name {
+.plugins-page .rail-active-name{
   font-size: 0.8125rem;
   color: var(--text-primary);
   flex: 1;
@@ -840,20 +836,20 @@
   white-space: nowrap;
 }
 
-.rail-active-type {
+.plugins-page .rail-active-type{
   font-size: 0.625rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.rail-empty {
+.plugins-page .rail-empty{
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
 /* Engine that isn't the active one — non-actionable (switch via Settings + restart) */
-.btn-available {
+.plugins-page .btn-available{
   flex: 1;
   display: flex;
   align-items: center;
@@ -870,24 +866,24 @@
 }
 
 /* Uninstall icon button — neutral, red on hover */
-.btn-action-danger:hover {
+.plugins-page .btn-action-danger:hover{
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.btn-action-danger:hover svg {
+.plugins-page .btn-action-danger:hover svg{
   color: #ef4444;
 }
 
 /* Install modal */
-.install-hint {
+.plugins-page .install-hint{
   font-size: 0.875rem;
   color: var(--text-secondary);
   line-height: 1.5;
   margin-bottom: 1rem;
 }
 
-.install-drop {
+.plugins-page .install-drop{
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -902,29 +898,29 @@
   text-align: center;
 }
 
-.install-drop:hover {
+.plugins-page .install-drop:hover{
   border-color: var(--primary, #25d366);
   color: var(--text-secondary);
 }
 
-.install-drop.has-file {
+.plugins-page .install-drop.has-file{
   border-style: solid;
   border-color: var(--primary, #25d366);
   color: var(--text-primary);
   background: rgba(34, 197, 94, 0.05);
 }
 
-.install-drop-name {
+.plugins-page .install-drop-name{
   font-size: 0.875rem;
   word-break: break-all;
 }
 
 @media (max-width: 860px) {
-  .plugins-layout {
+  .plugins-page .plugins-layout{
     flex-direction: column;
   }
 
-  .plugins-rail {
+  .plugins-page .plugins-rail{
     flex-basis: auto;
     width: 100%;
     position: static;
@@ -932,14 +928,14 @@
 }
 
 /* ── Install modal: Upload / Catalog tabs + catalog list ─────────────────── */
-.install-tabs {
+.plugins-page .install-tabs{
   display: flex;
   gap: 4px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border, #e5e7eb);
 }
 
-.install-tab {
+.plugins-page .install-tab{
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -952,20 +948,20 @@
   cursor: pointer;
 }
 
-.install-tab.active {
+.plugins-page .install-tab.active{
   color: var(--text, #111827);
   border-bottom-color: var(--primary, #25d366);
 }
 
 /* Config modal tabs (Configuration / Sessions) */
-.config-modal .modal-tabs {
+.plugins-page .config-modal .modal-tabs{
   display: flex;
   gap: 4px;
   padding: 0 1.5rem;
   border-bottom: 1px solid var(--border);
 }
 
-.config-modal .modal-tab {
+.plugins-page .config-modal .modal-tab{
   padding: 0.625rem 0.9rem;
   background: none;
   border: none;
@@ -976,33 +972,33 @@
   cursor: pointer;
 }
 
-.config-modal .modal-tab.active {
+.plugins-page .config-modal .modal-tab.active{
   color: var(--text-primary);
   border-bottom-color: var(--primary);
 }
 
 /* Sessions tab */
-.sessions-tab {
+.plugins-page .sessions-tab{
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
 }
 
-.sessions-section > h3 {
+.plugins-page .sessions-section > h3{
   font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 0.25rem;
 }
 
-.sessions-section > small {
+.plugins-page .sessions-section > small{
   display: block;
   color: var(--text-muted);
   font-size: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
-.sessions-radio {
+.plugins-page .sessions-radio{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1012,7 +1008,7 @@
   cursor: pointer;
 }
 
-.sessions-checklist {
+.plugins-page .sessions-checklist{
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1021,7 +1017,7 @@
   overflow-y: auto;
 }
 
-.sessions-check {
+.plugins-page .sessions-check{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1030,13 +1026,13 @@
   cursor: pointer;
 }
 
-.sessions-empty {
+.plugins-page .sessions-empty{
   margin: 0.25rem 0 0.75rem 1.5rem;
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
-.sessions-select {
+.plugins-page .sessions-select{
   width: 100%;
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--border);
@@ -1047,14 +1043,14 @@
   box-sizing: border-box;
 }
 
-.sessions-override-actions {
+.plugins-page .sessions-override-actions{
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
 
-.catalog-empty {
+.plugins-page .catalog-empty{
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1064,12 +1060,32 @@
   font-size: 0.875rem;
 }
 
-.catalog-error {
+.plugins-page .catalog-error{
   flex-wrap: wrap;
   color: var(--danger, #dc2626);
 }
 
-.catalog-list {
+.plugins-page .catalog-search{
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.plugins-page .catalog-search input{
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+}
+
+.plugins-page .catalog-list{
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1077,7 +1093,7 @@
   overflow-y: auto;
 }
 
-.catalog-row {
+.plugins-page .catalog-row{
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1087,27 +1103,27 @@
   border-radius: 8px;
 }
 
-.catalog-row-info {
+.plugins-page .catalog-row-info{
   min-width: 0;
 }
 
-.catalog-row-name {
+.plugins-page .catalog-row-name{
   font-weight: 600;
 }
 
-.catalog-row-version {
+.plugins-page .catalog-row-version{
   color: var(--text-secondary, #6b7280);
   font-weight: 400;
   font-size: 0.85em;
 }
 
-.catalog-row-desc {
+.plugins-page .catalog-row-desc{
   color: var(--text-secondary, #6b7280);
   font-size: 0.85rem;
   margin-top: 2px;
 }
 
-.catalog-row-meta {
+.plugins-page .catalog-row-meta{
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1116,15 +1132,15 @@
   color: var(--text-secondary, #6b7280);
 }
 
-.catalog-badge.update {
+.plugins-page .catalog-badge.update{
   color: var(--primary, #25d366);
 }
 
-.catalog-row-action {
+.plugins-page .catalog-row-action{
   flex-shrink: 0;
 }
 
-.catalog-installed {
+.plugins-page .catalog-installed{
   display: inline-flex;
   align-items: center;
   gap: 6px;

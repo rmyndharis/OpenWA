@@ -7,17 +7,16 @@
   font-weight: 400;
 }
 
-html[lang="he"],
-html[dir="rtl"] {
+html[lang='he'],
+html[dir='rtl'] {
   font-family: 'Heebo', 'Rubik', 'Noto Sans Hebrew', 'Segoe UI', Arial, sans-serif;
 }
 
-html[lang="ar"] {
+html[lang='ar'] {
   font-family: 'Noto Sans Arabic', 'Cairo', 'Tajawal', 'Segoe UI', Arial, sans-serif;
 }
 
 :root {
-
   color-scheme: light dark;
   color: var(--text-primary);
   background-color: var(--bg-light);
@@ -81,9 +80,16 @@ button {
 button:hover {
   border-color: #646cff;
 }
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+/* Visible keyboard focus — cross-browser and keyboard-only, so the ring guides Tab navigation
+   without flashing on every mouse click. */
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--primary, #25d366);
+  outline-offset: 2px;
+}
+button:focus:not(:focus-visible) {
+  outline: none;
 }
 
 @media (prefers-color-scheme: light) {
@@ -271,6 +277,9 @@ select:disabled {
 
 /* Secondary Button */
 .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.75rem 1.25rem;
   background: var(--bg-light, #f8fafc);
   color: var(--text-secondary, #64748b);
@@ -315,51 +324,51 @@ code {
 /* RTL / Hebrew direction support */
 
 /* Keep code, technical identifiers, and numbers LTR even inside RTL containers */
-[dir="rtl"] code,
-[dir="rtl"] .mono,
-[dir="rtl"] pre {
+[dir='rtl'] code,
+[dir='rtl'] .mono,
+[dir='rtl'] pre {
   direction: ltr;
   text-align: left;
   unicode-bidi: embed;
 }
 
 /* Modal footer: actions should align to the start of the writing direction */
-[dir="rtl"] .modal-footer {
+[dir='rtl'] .modal-footer {
   justify-content: flex-end;
   flex-direction: row-reverse;
 }
 
 /* Select dropdown caret on the opposite side */
-[dir="rtl"] select {
+[dir='rtl'] select {
   padding: 0.75rem 1rem 0.75rem 2.5rem;
   background-position: left 0.75rem center;
 }
 
 /* Inputs in modals: text aligns naturally */
-[dir="rtl"] .modal-body input,
-[dir="rtl"] .modal-body textarea,
-[dir="rtl"] input[type="text"],
-[dir="rtl"] input[type="url"],
-[dir="rtl"] input[type="password"],
-[dir="rtl"] input[type="number"],
-[dir="rtl"] textarea {
+[dir='rtl'] .modal-body input,
+[dir='rtl'] .modal-body textarea,
+[dir='rtl'] input[type='text'],
+[dir='rtl'] input[type='url'],
+[dir='rtl'] input[type='password'],
+[dir='rtl'] input[type='number'],
+[dir='rtl'] textarea {
   text-align: right;
 }
 
 /* URLs, emails, phones — force LTR even inside RTL */
-[dir="rtl"] input[type="url"],
-[dir="rtl"] input[type="email"],
-[dir="rtl"] input[type="tel"] {
+[dir='rtl'] input[type='url'],
+[dir='rtl'] input[type='email'],
+[dir='rtl'] input[type='tel'] {
   direction: ltr;
   text-align: left;
 }
 
-[dir="rtl"] .page-header__top {
+[dir='rtl'] .page-header__top {
   flex-direction: row-reverse;
 }
 
 /* Toast container — slide in from the opposite side */
-[dir="rtl"] .toast-container {
+[dir='rtl'] .toast-container {
   right: auto;
   left: 1rem;
 }
@@ -416,4 +425,3 @@ code {
     overflow-y: auto;
   }
 }
-

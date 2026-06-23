@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
-import { HookManager, HookEvent } from '../hooks';
+import { HookManager, HookEvent, KNOWN_HOOK_EVENTS, isKnownHookEvent } from '../hooks';
 import {
   PluginCapabilityError,
   PluginCapabilityPermission,
@@ -666,10 +666,33 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // When the worker subscribes to a hook, register a shim with the hook manager that dispatches the
     // event into the worker (time-bounded, so a wedged plugin can't stall the chain). The shim looks
     // the host up at fire time, so disabling the plugin (which removes it + unregisters hooks) stops it.
+    // Harden the IPC boundary against an untrusted worker flooding the host hook registry. HookEvent is
+    // a type-only union and the wire payload is an arbitrary string, so a hostile/buggy worker can post
+    // 'hook-subscribe' with (a) the same event repeatedly and (b) unbounded fabricated event names
+    // ('x:0','x:1',…). Without guards each call adds a live host-side registration (unbounded host-heap
+    // growth + an O(n log n) re-sort). Three guards, all local to this enableSandboxed call (dropped on
+    // disable): reject unknown events (bounds growth to the finite known set + drops events that can
+    // never fire), dedup per event, and a belt-and-suspenders size cap.
+    const subscribedEvents = new Set<HookEvent>();
+    let unknownEventWarned = false;
     const onHookSubscribe = (event: string, priority?: number): void => {
+      if (!isKnownHookEvent(event)) {
+        if (!unknownEventWarned) {
+          unknownEventWarned = true; // warn at most once per plugin so a flood isn't a log-flood vector
+          this.logger.warn(`Sandboxed plugin ${pluginId} subscribed to an unknown hook event; ignoring`, {
+            pluginId,
+            event,
+            action: 'sandbox_unknown_hook_event',
+          });
+        }
+        return;
+      }
+      if (subscribedEvents.has(event)) return;
+      if (subscribedEvents.size >= KNOWN_HOOK_EVENTS.size) return; // can't exceed the known set
+      subscribedEvents.add(event);
       this.hookManager.register(
         pluginId,
-        event as HookEvent,
+        event,
         async hookCtx => {
           const liveHost = this.sandboxHosts.get(pluginId);
           if (!liveHost) return { continue: true };
@@ -859,6 +882,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       instance,
       loadedAt: new Date(),
       builtIn: true,
+      // Read persisted per-session activation + config back into the runtime, like loadPlugin —
+      // otherwise the delivery gate falls back to all-sessions/base-config after every restart for a
+      // session-scoped built-in the operator had restricted.
+      activeSessions: this.pluginStorage.getPluginSessions(manifest.id) ?? undefined,
+      sessionConfig: this.pluginStorage.getPluginSessionConfig(manifest.id) ?? undefined,
     };
 
     this.plugins.set(manifest.id, pluginInstance);

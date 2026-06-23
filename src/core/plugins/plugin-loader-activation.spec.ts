@@ -103,3 +103,38 @@ describe('PluginLoaderService — per-session activation gate (hook delivery)', 
     });
   });
 });
+
+// A built-in/bundled plugin must read its persisted per-session activation + config back into the
+// runtime on boot, exactly like a directory plugin (loadPlugin) — otherwise the gate falls back to
+// all-sessions/base-config after every restart, silently widening delivery for a plugin the operator
+// had restricted.
+describe('PluginLoaderService — registerBuiltInPlugin restart read-back', () => {
+  it('seeds activeSessions and sessionConfig from persisted storage', () => {
+    const hookManager = new HookManager();
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = {
+      getPluginConfig: jest.fn().mockReturnValue({}),
+      getPluginSessions: jest.fn().mockReturnValue(['sess-1']),
+      getPluginSessionConfig: jest.fn().mockReturnValue({ 'sess-1': { lang: 'id' } }),
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+    } as unknown as PluginStorageService;
+    const loader = new PluginLoaderService(configService, hookManager, pluginStorage, {
+      get: jest.fn(),
+    } as unknown as ModuleRef);
+
+    const manifest: PluginManifest = {
+      id: 'builtin-ext',
+      name: 'Built-in Ext',
+      version: '1.0.0',
+      type: PluginType.EXTENSION,
+      main: 'index.js',
+      sessionScoped: true,
+    };
+    loader.registerBuiltInPlugin(manifest, {});
+
+    const plugin = (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.get('builtin-ext');
+    expect(plugin?.activeSessions).toEqual(['sess-1']);
+    expect(plugin?.sessionConfig).toEqual({ 'sess-1': { lang: 'id' } });
+  });
+});

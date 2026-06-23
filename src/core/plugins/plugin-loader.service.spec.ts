@@ -84,6 +84,8 @@ describe('PluginLoaderService.registerBuiltInPlugin config', () => {
       getPluginEntry: jest.fn().mockReturnValue(undefined),
       setPluginEntry: jest.fn(),
       getPluginConfig: jest.fn().mockReturnValue(null),
+      getPluginSessions: jest.fn().mockReturnValue(undefined),
+      getPluginSessionConfig: jest.fn().mockReturnValue(undefined),
     } as unknown as PluginStorageService;
     return new PluginLoaderService(configService, new HookManager(), pluginStorage, {} as unknown as ModuleRef);
   }

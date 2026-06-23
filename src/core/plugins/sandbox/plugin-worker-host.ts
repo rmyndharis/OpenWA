@@ -253,6 +253,14 @@ export class PluginWorkerHost {
       resolve({ healthy: false, message: 'plugin worker exited' });
     });
     this.healthPending.clear();
+    // Drain in-flight hooks too (symmetry with the maps above): resolve {continue:true} — the same
+    // fail-open value the per-hook timeout already produces — so the host hook chain unblocks
+    // immediately on a worker crash instead of stalling for the full hook timeout per in-flight hook.
+    this.hookPending.forEach(({ resolve, timer }) => {
+      clearTimeout(timer);
+      resolve({ continue: true });
+    });
+    this.hookPending.clear();
   }
 
   private drain<T>(waiters: T[], fn: (w: T) => void): void {

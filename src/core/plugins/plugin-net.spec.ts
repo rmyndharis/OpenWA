@@ -77,6 +77,17 @@ describe('performPluginFetch', () => {
     expect(sink.init?.body).toBe('{}');
   });
 
+  it('coerces a non-numeric timeoutMs to the default instead of throwing a RangeError', async () => {
+    const sink: { init?: RequestInit } = {};
+    const fetcher = fakeSafeFetch(cannedResponse('{}', { 'content-type': 'application/json' }), sink);
+    // A string 'abc' would make AbortSignal.timeout(NaN) throw before the request runs; the coercion
+    // must fall back to the default so the documented timeout clamp holds and the fetch proceeds.
+    await expect(
+      performPluginFetch('https://api.example.com/t', { timeoutMs: 'abc' as unknown as number }, { fetch: fetcher }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(sink.init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('rejects a response whose declared content-length exceeds the cap', async () => {
     const sink: { init?: RequestInit } = {};
     const big = String(11 * 1024 * 1024);

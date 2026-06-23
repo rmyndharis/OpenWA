@@ -56,7 +56,16 @@ jest.mock('@whiskeysockets/baileys', () => ({
   useMultiFileAuthState: jest.fn().mockResolvedValue({ state: { creds: {}, keys: {} }, saveCreds }),
   fetchLatestBaileysVersion: jest.fn().mockResolvedValue({ version: [2, 3000, 0] }),
   getContentType: jest.fn(() => 'conversation'),
-  downloadMediaMessage: jest.fn().mockResolvedValue(Buffer.from('IMGDATA')),
+  // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
+  // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
+  downloadMediaMessage: jest.fn(() =>
+    Promise.resolve({
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from('IMGDATA');
+      },
+    }),
+  ),
   // Identity passthrough by default; individual tests may override to simulate unwrapping.
   normalizeMessageContent: jest.fn((c: unknown) => c),
   DisconnectReason: { loggedOut: 401, restartRequired: 515 },
@@ -80,6 +89,17 @@ const fakeStore = {
   getMessage: jest.fn(),
   clearSession: jest.fn().mockResolvedValue(undefined),
 };
+
+/** A fresh async-iterable stream of the given chunks (the shape `downloadMediaMessage('stream')` returns). */
+function streamOf(...chunks: Buffer[]): AsyncIterable<Buffer> & { destroy: () => void } {
+  return {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async *[Symbol.asyncIterator]() {
+      for (const c of chunks) yield c;
+    },
+    destroy: jest.fn(),
+  };
+}
 const newAdapter = (): BaileysAdapter =>
   new BaileysAdapter({ sessionId: 'sess-1', authDir: './data/baileys', messageStore: fakeStore });
 
@@ -710,7 +730,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     };
     baileys.getContentType.mockReturnValue('imageMessage');
     const imgBuf = Buffer.from('PNGBYTES');
-    baileys.downloadMediaMessage.mockResolvedValue(imgBuf);
+    baileys.downloadMediaMessage.mockResolvedValue(streamOf(imgBuf));
 
     const onMessage = jest.fn();
     const adapter = newAdapter();
@@ -739,6 +759,81 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg.media).toEqual({ mimetype: 'image/png', data: imgBuf.toString('base64') });
   });
 
+  it('inbound media: skips the download entirely when the declared fileLength exceeds the cap', async () => {
+    const prev = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '10';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+        getContentType: jest.Mock;
+        downloadMediaMessage: jest.Mock;
+      };
+      baileys.getContentType.mockReturnValue('documentMessage');
+      baileys.downloadMediaMessage.mockClear();
+
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'BIG1' },
+            message: { documentMessage: { mimetype: 'application/pdf', fileName: 'huge.pdf', fileLength: 1000 } },
+            messageTimestamp: 1700000030,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { media: { omitted?: boolean; data?: string; sizeBytes?: number } };
+      expect(msg.media.omitted).toBe(true);
+      expect(msg.media.data).toBeUndefined();
+      expect(msg.media.sizeBytes).toBe(1000);
+      expect(baileys.downloadMediaMessage).not.toHaveBeenCalled(); // over-cap media is never downloaded
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      else process.env.MEDIA_DOWNLOAD_MAX_BYTES = prev;
+    }
+  });
+
+  it('inbound media: aborts mid-download when the stream exceeds the cap (sender understated size)', async () => {
+    const prev = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '10';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+        getContentType: jest.Mock;
+        downloadMediaMessage: jest.Mock;
+      };
+      baileys.getContentType.mockReturnValue('imageMessage');
+      // No declared fileLength (passes the pre-gate), but the stream yields 18 bytes > the 10-byte cap.
+      baileys.downloadMediaMessage.mockResolvedValue(streamOf(Buffer.alloc(6), Buffer.alloc(6), Buffer.alloc(6)));
+
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'LIAR1' },
+            message: { imageMessage: { mimetype: 'image/png' } },
+            messageTimestamp: 1700000031,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { media: { omitted?: boolean; data?: string } };
+      expect(msg.media.omitted).toBe(true);
+      expect(msg.media.data).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      else process.env.MEDIA_DOWNLOAD_MAX_BYTES = prev;
+    }
+  });
+
   it('inbound documentWithCaption: normalizeMessageContent unwraps wrapper, yields non-empty mimetype', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
@@ -748,7 +843,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     };
     baileys.getContentType.mockReturnValue('documentWithCaptionMessage');
     const docBuf = Buffer.from('PDFBYTES');
-    baileys.downloadMediaMessage.mockResolvedValue(docBuf);
+    baileys.downloadMediaMessage.mockResolvedValue(streamOf(docBuf));
     // Simulate normalizeMessageContent unwrapping: returns the inner documentMessage.
     baileys.normalizeMessageContent.mockReturnValue({
       documentMessage: { mimetype: 'application/pdf', fileName: 'report.pdf', caption: 'Q1 report' },

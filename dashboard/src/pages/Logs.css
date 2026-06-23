@@ -1,14 +1,14 @@
-.logs-page {
+.logs-page{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.page-header {
+.logs-page .page-header{
   margin-bottom: 1.5rem;
 }
 
-.header-content {
+.logs-page .header-content{
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -16,7 +16,7 @@
 
 /* H1 inherited from global */
 
-.btn-secondary {
+.logs-page .btn-secondary{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -31,17 +31,17 @@
   transition: all 0.2s;
 }
 
-.btn-secondary:hover {
+.logs-page .btn-secondary:hover{
   background: var(--bg-light);
 }
 
-.filters-bar {
+.logs-page .filters-bar{
   display: flex;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
 
-.search-input {
+.logs-page .search-input{
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -53,11 +53,11 @@
   border-radius: var(--radius);
 }
 
-.search-input svg {
+.logs-page .search-input svg{
   color: var(--text-muted);
 }
 
-.search-input input {
+.logs-page .search-input input{
   flex: 1;
   border: none;
   background: none;
@@ -65,11 +65,11 @@
   color: var(--text-primary);
 }
 
-.search-input input:focus {
+.logs-page .search-input input:focus{
   outline: none;
 }
 
-.filter-group {
+.logs-page .filter-group{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -79,11 +79,11 @@
   border-radius: var(--radius);
 }
 
-.filter-group svg {
+.logs-page .filter-group svg{
   color: var(--text-muted);
 }
 
-.filter-group select {
+.logs-page .filter-group select{
   padding: 0.75rem 0;
   border: none;
   background: none;
@@ -92,11 +92,11 @@
   cursor: pointer;
 }
 
-.filter-group select:focus {
+.logs-page .filter-group select:focus{
   outline: none;
 }
 
-.logs-table-container {
+.logs-page .logs-table-container{
   background: var(--bg-white);
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
@@ -104,7 +104,7 @@
   overflow-x: auto;
 }
 
-.logs-table {
+.logs-page .logs-table{
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -112,7 +112,7 @@
 }
 
 /* Unified row styling - same class for header and data */
-.logs-table .table-row {
+.logs-page .logs-table .table-row{
   display: grid;
   grid-template-columns: 180px 200px 150px 150px 150px 1fr 120px;
   gap: 1rem;
@@ -121,11 +121,11 @@
   border-bottom: 1px solid var(--border);
 }
 
-.logs-table .table-row:last-child {
+.logs-page .logs-table .table-row:last-child{
   border-bottom: none;
 }
 
-.logs-table .table-row.header {
+.logs-page .logs-table .table-row.header{
   background: var(--bg-light);
   font-size: 0.7rem;
   font-weight: 700;
@@ -135,37 +135,37 @@
   border-bottom: 1px solid var(--border);
 }
 
-.logs-table .table-row:not(.header):hover {
+.logs-page .logs-table .table-row:not(.header):hover{
   background: rgba(37, 211, 102, 0.05);
 }
 
-.timestamp {
+.logs-page .timestamp{
   font-family: monospace;
   font-size: 0.8125rem;
   color: var(--text-muted);
   white-space: nowrap;
 }
 
-.action {
+.logs-page .action{
   font-weight: 600;
   color: var(--text-primary);
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-.api-key {
+.logs-page .api-key{
   font-family: monospace;
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-.ip {
+.logs-page .ip{
   font-family: monospace;
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-.details {
+.logs-page .details{
   font-size: 0.875rem;
   color: var(--text-secondary);
   overflow: hidden;
@@ -173,7 +173,7 @@
   white-space: nowrap;
 }
 
-.severity-badge {
+.logs-page .severity-badge{
   display: inline-block;
   padding: 0.25rem 0.625rem;
   border-radius: 6px;
@@ -184,26 +184,26 @@
   white-space: nowrap;
 }
 
-.logs-table .table-row > span:last-child {
+.logs-page .logs-table .table-row > span:last-child{
   justify-self: end;
 }
 
-.severity-badge.info {
+.logs-page .severity-badge.info{
   background: #dbeafe;
   color: #1d4ed8;
 }
 
-.severity-badge.warn {
+.logs-page .severity-badge.warn{
   background: #fef3c7;
   color: #d97706;
 }
 
-.severity-badge.error {
+.logs-page .severity-badge.error{
   background: #fee2e2;
   color: #dc2626;
 }
 
-.pagination {
+.logs-page .pagination{
   display: flex;
   justify-content: center;
   align-items: center;
@@ -211,7 +211,7 @@
   margin-top: 1.5rem;
 }
 
-.pagination button {
+.logs-page .pagination button{
   padding: 0.5rem 1rem;
   font-size: 0.875rem;
   background: var(--bg-white);
@@ -222,33 +222,33 @@
   transition: all 0.2s;
 }
 
-.pagination button:hover:not(:disabled) {
+.logs-page .pagination button:hover:not(:disabled){
   background: var(--bg-light);
 }
 
-.pagination button:disabled {
+.logs-page .pagination button:disabled{
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.page-numbers {
+.logs-page .page-numbers{
   display: flex;
   gap: 0.25rem;
 }
 
-.page-numbers button {
+.logs-page .page-numbers button{
   min-width: 36px;
   padding: 0.5rem;
 }
 
-.page-numbers button.active {
+.logs-page .page-numbers button.active{
   background: var(--primary);
   border-color: var(--primary);
   color: white;
 }
 
 /* Empty Table State */
-.empty-table-state {
+.logs-page .empty-table-state{
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -258,20 +258,20 @@
   color: var(--text-muted);
 }
 
-.empty-table-state svg {
+.logs-page .empty-table-state svg{
   margin-bottom: 1rem;
   opacity: 0.4;
   color: var(--text-muted);
 }
 
-.empty-table-state h3 {
+.logs-page .empty-table-state h3{
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0 0 0.5rem;
 }
 
-.empty-table-state p {
+.logs-page .empty-table-state p{
   margin: 0;
   font-size: 0.875rem;
   max-width: 300px;
@@ -279,47 +279,49 @@
 
 /* Mobile Responsive */
 @media (max-width: 768px) {
-  .logs-page {
+  .logs-page{
     padding: 1rem;
   }
 
-  .filters-bar {
+  .logs-page .filters-bar{
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .search-input {
+  .logs-page .search-input{
     max-width: none;
   }
 
-  .filter-group {
+  .logs-page .filter-group{
     width: 100%;
     justify-content: space-between;
   }
 
-  .filter-group select {
+  .logs-page .filter-group select{
     flex: 1;
     padding: 0.75rem 0;
   }
 
-  .logs-table-container {
+  .logs-page .logs-table-container{
     overflow-x: visible;
     border: none;
     background: transparent;
     box-shadow: none;
   }
 
-  .logs-table {
+  .logs-page .logs-table{
     display: block;
   }
 
-  .logs-table .table-row.header {
+  .logs-page .logs-table .table-row.header{
     display: none;
   }
 
-  .logs-table .table-row:not(.header) {
+  .logs-page .logs-table .table-row:not(.header){
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
     gap: 0.5rem;
     padding: 1rem;
     background: var(--bg-white);
@@ -329,12 +331,19 @@
     margin-bottom: 0.75rem;
   }
 
-  .logs-table .table-row:not(.header):hover {
+  /* Cells inherit centering from the desktop grid; force a left-aligned, scannable card. */
+  .logs-page .logs-table .table-row:not(.header) > span{
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .logs-page .logs-table .table-row:not(.header):hover{
     background: var(--bg-white);
   }
 
   /* Action label prominent at top */
-  .logs-table .table-row .action {
+  .logs-page .logs-table .table-row .action{
     font-size: 0.9375rem;
     font-weight: 600;
     order: 1;
@@ -342,42 +351,40 @@
   }
 
   /* Timestamp secondary */
-  .logs-table .table-row .timestamp {
+  .logs-page .logs-table .table-row .timestamp{
     order: 2;
     font-size: 0.75rem;
   }
 
   /* Session, API Key, IP - inline info */
-  .logs-table .table-row > span:nth-child(3),
-  .logs-table .table-row > span:nth-child(4),
-  .logs-table .table-row > span:nth-child(5) {
+  .logs-page .logs-table .table-row > span:nth-child(3), .logs-page .logs-table .table-row > span:nth-child(4), .logs-page .logs-table .table-row > span:nth-child(5){
     display: none;
   }
 
   /* Severity badge stays visible */
-  .logs-table .table-row > span:last-child {
+  .logs-page .logs-table .table-row > span:last-child{
     order: 3;
     justify-self: flex-start;
   }
 
-  .pagination {
+  .logs-page .pagination{
     flex-wrap: wrap;
     gap: 0.5rem;
   }
 
-  .pagination button {
+  .logs-page .pagination button{
     padding: 0.5rem 0.75rem;
     font-size: 0.8125rem;
   }
 
-  .page-numbers button {
+  .logs-page .page-numbers button{
     min-width: 32px;
     padding: 0.5rem 0.25rem;
   }
 }
 
 @media (max-width: 480px) {
-  .logs-page {
+  .logs-page{
     padding: 0.75rem;
   }
 }

@@ -274,6 +274,52 @@ export function pinnedLookup(addresses: LookupAddress[]): LookupFunction {
 }
 
 /**
+ * A `connect.lookup` that resolves EVERY host it is asked to connect to and refuses any that resolve
+ * to an internal/reserved address. Used by the redirect-following download path so that each hop —
+ * the original URL AND every redirect target — is validated at connect time, not just the first one.
+ * This closes the redirect-bypass hole a single-host pin can't: a 3xx to an internal host is rejected
+ * at the socket. Allowlisted hosts (SSRF_ALLOWED_HOSTS) are resolved without the block check, matching
+ * {@link resolveSafeFetchTarget}.
+ */
+export function validatingLookup(): LookupFunction {
+  const fn = (hostname: string, options: LookupOptions, callback: (...args: unknown[]) => void): void => {
+    const host = hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+    const allowlisted = getAllowedHosts().has(host.toLowerCase());
+    const finish = (addrs: LookupAddress[]): void => {
+      if (options.all) callback(null, addrs);
+      else callback(null, addrs[0].address, addrs[0].family);
+    };
+
+    if (isIPv4(host) || isIPv6(host)) {
+      if (!allowlisted && isBlockedAddress(host)) {
+        callback(new SsrfBlockedError(`Blocked internal address: ${host}`));
+        return;
+      }
+      finish([{ address: host, family: isIPv6(host) ? 6 : 4 }]);
+      return;
+    }
+
+    lookupWithDeadline(host)
+      .then(resolved => {
+        if (resolved.length === 0) {
+          callback(new SsrfBlockedError(`Could not resolve host: ${host}`));
+          return;
+        }
+        if (!allowlisted) {
+          const bad = resolved.find(a => isBlockedAddress(a.address));
+          if (bad) {
+            callback(new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${bad.address}`));
+            return;
+          }
+        }
+        finish(resolved);
+      })
+      .catch((err: unknown) => callback(err instanceof Error ? err : new Error(String(err))));
+  };
+  return fn as unknown as LookupFunction;
+}
+
+/**
  * Perform an SSRF-safe fetch and hand the response to `use`, then tear down the per-request
  * connection. The host is validated and resolved ONCE; the connection is pinned to the vetted IP(s)
  * via an undici dispatcher so it cannot be re-resolved to an internal address between check and
@@ -291,11 +337,26 @@ export async function withSafeFetch<T>(
   rawUrl: string,
   init: RequestInit,
   use: (response: Response) => Promise<T> | T,
-  opts: { guard?: boolean } = {},
+  opts: { guard?: boolean; followRedirects?: boolean } = {},
 ): Promise<T> {
   const guard = opts.guard ?? true;
   if (!guard) {
     return use(await undiciFetch(rawUrl, { ...init, redirect: 'follow' }));
+  }
+
+  if (opts.followRedirects) {
+    // Download path (plugin .zip / catalog JSON): public release hosts legitimately 302 to a CDN, so
+    // refusing every redirect breaks them. Follow redirects, but SECURELY — instead of pinning one
+    // host's IPs, route the connection through a lookup that resolves+validates EVERY host on demand,
+    // so each hop (original + every redirect target) is checked at connect time and a 3xx to an
+    // internal host is blocked at the socket. The scheme/host of the original URL is validated first.
+    await resolveSafeFetchTarget(rawUrl);
+    const dispatcher = new Agent({ connect: { lookup: validatingLookup() } });
+    try {
+      return await use(await undiciFetch(rawUrl, { ...init, redirect: 'follow', dispatcher }));
+    } finally {
+      await dispatcher.destroy().catch(() => undefined);
+    }
   }
 
   const target = await resolveSafeFetchTarget(rawUrl);
