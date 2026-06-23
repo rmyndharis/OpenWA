@@ -558,6 +558,9 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     await jest.advanceTimersByTimeAsync(45_000); // ~95s total
     expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING); // never falsely promoted
     expect(jest.getTimerCount()).toBe(0); // gave up at the 90s deadline
+    // The at-most-one-in-flight guard must keep the single hung probe from piling up: getState is
+    // issued once and not re-issued while it's still pending (a guard-less per-tick probe would be ~45).
+    expect(client.getState).toHaveBeenCalledTimes(1);
   });
 });
 
