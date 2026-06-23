@@ -495,6 +495,70 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
       adapter => adapter.forceDestroy(),
     );
   });
+
+  // A re-fired 'authenticated' (whatsapp-web.js can emit it again on a resume/resync before 'ready')
+  // must NOT restart the 90s reconcile window, or a flapping link keeps the probe alive forever.
+  it('does not reset the 90s reconcile deadline when authenticated re-fires mid-probe', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    // Runtime never reports the WWebJS global, so the probe never promotes and ticks to the deadline.
+    const { client } = attachFakeClient(adapter, { pupPage: { evaluate: jest.fn().mockResolvedValue(false) } });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(80_000);
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    client.emit('authenticated'); // re-fire 80s in — must not restart the window
+    await jest.advanceTimersByTimeAsync(11_000); // 91s total since the FIRST authenticated
+
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(jest.getTimerCount()).toBe(0); // gave up at 90s; not reset by the re-fire
+  });
+
+  // beginClientTeardown sets DISCONNECTED before the awaited destroy/logout; an 'authenticated' event
+  // arriving in that window must not resurrect the adapter to AUTHENTICATING.
+  it('ignores an authenticated event fired during teardown (status stays disconnected)', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const teardownWait = deferredVoid();
+    const { client, onReady } = attachFakeClient(adapter);
+    client.destroy = jest.fn().mockReturnValue(teardownWait.promise);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    const teardown = adapter.disconnect();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    client.emit('authenticated'); // must NOT revive to AUTHENTICATING / re-arm the probe
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    teardownWait.resolve();
+    await teardown;
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
+  // A wedged page can make getState() hang (the exact #251/#273 condition). The probe must keep its
+  // own cadence (a hung probe can't stall the loop) and still honor the 90s give-up deadline.
+  it('keeps probing and still times out when getState hangs instead of stalling forever', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter, { getState: jest.fn().mockReturnValue(new Promise<never>(() => {})) });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(50_000);
+    expect(jest.getTimerCount()).toBe(1); // chain still alive despite the hung probe
+
+    await jest.advanceTimersByTimeAsync(45_000); // ~95s total
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING); // never falsely promoted
+    expect(jest.getTimerCount()).toBe(0); // gave up at the 90s deadline
+  });
 });
 
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {

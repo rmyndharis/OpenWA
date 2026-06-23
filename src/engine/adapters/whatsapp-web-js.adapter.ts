@@ -188,6 +188,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private callbacks: EngineEventCallbacks = {};
   private readyReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private readyReconcileStartedAt = 0;
+  private readyReconcileProbeInFlight = false;
+  // Set once teardown begins so a late 'authenticated' can't resurrect a disconnecting adapter. Not
+  // reset — an adapter is single-use after teardown (the session creates a fresh one to reconnect).
+  private tearingDown = false;
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -279,7 +283,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('authenticated', () => {
-      if (this.status === EngineStatus.READY) return;
+      // Only the first authentication starts the reconcile window. Ignore a re-fired 'authenticated'
+      // while already AUTHENTICATING (so it can't restart the 90s deadline), once READY/FAILED, or any
+      // time during/after teardown (so a late event can't resurrect a disconnecting adapter). The
+      // initial status is DISCONNECTED, so teardown is distinguished by the flag, not by DISCONNECTED.
+      if (
+        this.tearingDown ||
+        this.status === EngineStatus.AUTHENTICATING ||
+        this.status === EngineStatus.READY ||
+        this.status === EngineStatus.FAILED
+      ) {
+        return;
+      }
       this.setStatus(EngineStatus.AUTHENTICATING);
       this.qrCode = null;
       this.scheduleReadyReconcile();
@@ -454,41 +469,42 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.clearReadyReconcile();
     this.readyReconcileStartedAt = Date.now();
 
-    const tick = async (): Promise<void> => {
+    const tick = (): void => {
       if (!this.client || this.status !== EngineStatus.AUTHENTICATING) {
         this.clearReadyReconcile();
         return;
       }
 
-      try {
-        if (await this.isClientRuntimeReady()) {
-          if (!this.client || this.status !== EngineStatus.AUTHENTICATING) {
-            this.clearReadyReconcile();
-            return;
-          }
-          this.logger.warn('WhatsApp Web ready event was missed; reconciling from connected runtime state');
-          this.markReadyFromClientInfo();
-          return;
-        }
-      } catch (error) {
-        this.logger.debug('Ready reconciliation probe failed', { error: String(error) });
-      }
-
+      // Deadline checked at the TOP of every tick (not after the probe) so a slow/hung getState() — a
+      // wedged page can make it never resolve, the very #251/#273 condition — can't defeat the 90s ceiling.
       if (Date.now() - this.readyReconcileStartedAt >= READY_RECONCILE_TIMEOUT_MS) {
         this.logger.warn('Timed out waiting for WhatsApp Web runtime readiness after authentication');
         this.clearReadyReconcile();
         return;
       }
 
-      this.readyReconcileTimer = setTimeout(() => {
-        void tick();
-      }, READY_RECONCILE_INTERVAL_MS);
+      // Schedule the next tick up front, independent of the probe, so a hung probe can never stall the
+      // loop. The probe runs fire-and-forget with at-most-one in flight: if the previous one is still
+      // pending (hung), skip this round — the loop keeps ticking and gives up at the deadline above.
+      this.readyReconcileTimer = setTimeout(tick, READY_RECONCILE_INTERVAL_MS);
       this.readyReconcileTimer.unref?.();
+
+      if (this.readyReconcileProbeInFlight) return;
+      this.readyReconcileProbeInFlight = true;
+      void this.isClientRuntimeReady()
+        .then(ready => {
+          if (ready && this.client && this.status === EngineStatus.AUTHENTICATING) {
+            this.logger.warn('WhatsApp Web ready event was missed; reconciling from connected runtime state');
+            this.markReadyFromClientInfo();
+          }
+        })
+        .catch(error => this.logger.debug('Ready reconciliation probe failed', { error: String(error) }))
+        .finally(() => {
+          this.readyReconcileProbeInFlight = false;
+        });
     };
 
-    this.readyReconcileTimer = setTimeout(() => {
-      void tick();
-    }, READY_RECONCILE_INTERVAL_MS);
+    this.readyReconcileTimer = setTimeout(tick, READY_RECONCILE_INTERVAL_MS);
     this.readyReconcileTimer.unref?.();
   }
 
@@ -498,6 +514,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.readyReconcileTimer = null;
     }
     this.readyReconcileStartedAt = 0;
+    this.readyReconcileProbeInFlight = false;
   }
 
   private async isClientRuntimeReady(): Promise<boolean> {
@@ -522,6 +539,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const client = this.client;
     if (!client) return null;
 
+    this.tearingDown = true;
     this.clearReadyReconcile();
     if (this.status !== EngineStatus.DISCONNECTED) {
       this.setStatus(EngineStatus.DISCONNECTED);
