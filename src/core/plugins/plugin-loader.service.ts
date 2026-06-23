@@ -249,6 +249,10 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       builtIn,
       installedAt: existing?.installedAt ?? new Date(),
       updatedAt: new Date(),
+      // setPluginEntry REPLACES the entry, so the operator's per-session activation + config must be
+      // carried over or every boot wipes them from disk (lost after the second restart).
+      activeSessions: existing?.activeSessions,
+      sessionConfig: existing?.sessionConfig,
     });
   }
 

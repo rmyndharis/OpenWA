@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import AdmZip from 'adm-zip';
+import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginsService } from './plugins.service';
@@ -269,5 +270,45 @@ describe('PluginsService — per-session config', () => {
 
   it('404s for an unknown plugin', () => {
     expect(() => service.updateSessionConfig('ghost', 'sess-A', { lang: 'he' })).toThrow(/not found/i);
+  });
+
+  it('rejects per-session config for a global (non-session-scoped) plugin with 400', () => {
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify({ ...manifest, id: 'global-plg', sessionScoped: false })));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    service.install({ buffer: z.toBuffer() });
+    expect(() => service.updateSessionConfig('global-plg', 'sess-A', { lang: 'he' })).toThrow(BadRequestException);
+  });
+
+  // A reload rebuilds the registry entry; it must NOT drop the operator's per-session config or
+  // active-session selection. The wipe only surfaces on the SECOND restart (the first still has the
+  // pre-wipe in-memory copy), so exercise two reload cycles.
+  it('preserves per-session config and active sessions across two restarts', () => {
+    const pluginDir = path.join(pluginsDir, 'sess-cfg');
+    service.updateSessionConfig('sess-cfg', 'sess-A', { lang: 'he' });
+    loader.setPluginSessions('sess-cfg', ['sess-A']);
+
+    const reload = (): PluginLoaderService => {
+      const l = new PluginLoaderService(
+        {
+          get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+        } as unknown as ConfigService,
+        new HookManager(),
+        new PluginStorageService({
+          get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+        } as unknown as ConfigService),
+        {} as unknown as ModuleRef,
+      );
+      l.loadPlugin(pluginDir);
+      return l;
+    };
+
+    const boot2 = reload();
+    expect(boot2.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ lang: 'he' });
+    expect(boot2.getPlugin('sess-cfg')?.activeSessions).toEqual(['sess-A']);
+
+    const boot3 = reload();
+    expect(boot3.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ lang: 'he' });
+    expect(boot3.getPlugin('sess-cfg')?.activeSessions).toEqual(['sess-A']);
   });
 });

@@ -167,6 +167,10 @@ export class PluginsService {
     if (!plugin) {
       throw new NotFoundException(`Plugin ${id} not found`);
     }
+    if (plugin.manifest.sessionScoped === false) {
+      // A global plugin has no per-session config — reject with 400 (mirrors PUT /:id/sessions).
+      throw new BadRequestException(`Plugin ${id} is global (not session-scoped) and has no per-session config`);
+    }
 
     try {
       const existing = plugin.sessionConfig?.[sessionId];

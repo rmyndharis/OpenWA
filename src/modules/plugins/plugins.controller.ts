@@ -122,6 +122,7 @@ export class PluginsController {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Set a plugin config override for a specific session (empty = clear it)' })
   @ApiResponse({ status: 200, description: 'Per-session plugin configuration updated' })
+  @ApiResponse({ status: 400, description: 'Plugin is global (not session-scoped)' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   updateSessionConfig(
     @Param('id') id: string,
