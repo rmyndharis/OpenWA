@@ -49,6 +49,32 @@ export function redactSecretConfig(
   return redactObject(out, schema.properties);
 }
 
+/** Deterministic JSON (object keys sorted) so two equal shapes compare equal regardless of key order. */
+function stableStringify(v: unknown): string {
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  if (isPlainObject(v)) {
+    return (
+      '{' +
+      Object.keys(v)
+        .sort()
+        .map(k => JSON.stringify(k) + ':' + stableStringify(v[k]))
+        .join(',') +
+      '}'
+    );
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/**
+ * An array element's identity for matching on restore: the element with its secrets masked, so a
+ * stored row (real secret) and the dashboard's round-tripped row (sentinel secret) share a signature
+ * iff their NON-secret content is equal. Scalar-secret elements collapse to the same signature and so
+ * are deliberately ambiguous (never auto-restored to the wrong one).
+ */
+function elementSignature(value: unknown, field: PluginConfigField): string {
+  return stableStringify(redactValue(value, field));
+}
+
 /** Restore one value against its field. `keep:false` means drop the key (sentinel with nothing stored). */
 function restoreValue(
   incoming: unknown,
@@ -62,12 +88,27 @@ function restoreValue(
     };
   }
   if (field.type === 'array' && field.items && Array.isArray(incoming)) {
-    // ponytail: rows matched to the stored secret by position — fine for the dashboard's full-array
-    // round-trip (order preserved); switch to an id-keyed match if rows become reorderable.
+    const itemField = field.items;
     const existingArr = Array.isArray(existing) ? existing : [];
+    // Match each incoming element to its stored counterpart by NON-SECRET content (a row's signature
+    // is the row with its secrets masked), not by array index. Adding / removing / reordering rows
+    // then can't bind a sentinel to a different row's secret. Only an unambiguous match (exactly one
+    // stored element with that signature) restores; otherwise the sentinel is treated as "nothing
+    // stored" (dropped), so a secret may be lost on an ambiguous edit but is never mis-targeted.
+    const sigCount = new Map<string, number>();
+    const sigFirst = new Map<string, unknown>();
+    for (const ex of existingArr) {
+      const s = elementSignature(ex, itemField);
+      sigCount.set(s, (sigCount.get(s) ?? 0) + 1);
+      if (!sigFirst.has(s)) sigFirst.set(s, ex);
+    }
     return {
       keep: true,
-      value: incoming.map((item, i) => restoreValue(item, existingArr[i], field.items as PluginConfigField).value),
+      value: incoming.map(item => {
+        const s = elementSignature(item, itemField);
+        const match = sigCount.get(s) === 1 ? sigFirst.get(s) : undefined;
+        return restoreValue(item, match, itemField).value;
+      }),
     };
   }
   if (field.secret && (incoming === SECRET_SENTINEL || !isMeaningful(incoming))) {

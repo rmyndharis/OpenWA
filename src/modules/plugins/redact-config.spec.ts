@@ -121,7 +121,7 @@ describe('restoreSecretConfig (nested)', () => {
     ).toEqual({ provider: { apiKey: 'real', region: 'eu' } });
   });
 
-  it('restores per-row array-of-rows secrets by position, keeping genuinely-new ones', () => {
+  it('restores per-row array-of-rows secrets, keeping genuinely-new ones', () => {
     expect(
       restoreSecretConfig(
         {
@@ -143,6 +143,67 @@ describe('restoreSecretConfig (nested)', () => {
         { url: 'a', token: 'real1' },
         { url: 'b', token: 'new' },
       ],
+    });
+  });
+
+  // Rows are matched to the stored secret by their non-secret content, NOT by array index — so
+  // adding/removing/reordering a row can never bind a sentinel to a different row's stored secret.
+  it('restores by content after a row is removed (no positional drift)', () => {
+    expect(
+      restoreSecretConfig(
+        { endpoints: [{ url: 'b', token: SECRET_SENTINEL }] },
+        {
+          endpoints: [
+            { url: 'a', token: 'real_a' },
+            { url: 'b', token: 'real_b' },
+          ],
+        },
+        nestedSchema,
+      ),
+    ).toEqual({ endpoints: [{ url: 'b', token: 'real_b' }] });
+  });
+
+  it('restores by content after rows are reordered', () => {
+    expect(
+      restoreSecretConfig(
+        {
+          endpoints: [
+            { url: 'b', token: SECRET_SENTINEL },
+            { url: 'a', token: SECRET_SENTINEL },
+          ],
+        },
+        {
+          endpoints: [
+            { url: 'a', token: 'real_a' },
+            { url: 'b', token: 'real_b' },
+          ],
+        },
+        nestedSchema,
+      ),
+    ).toEqual({
+      endpoints: [
+        { url: 'b', token: 'real_b' },
+        { url: 'a', token: 'real_a' },
+      ],
+    });
+  });
+
+  it('does not mis-target a secret onto a newly-inserted row', () => {
+    // New row "NEW" has no stored counterpart → its sentinel is dropped (not filled with a's secret);
+    // existing row "a" keeps its own secret regardless of the index shift.
+    expect(
+      restoreSecretConfig(
+        {
+          endpoints: [
+            { url: 'NEW', token: SECRET_SENTINEL },
+            { url: 'a', token: SECRET_SENTINEL },
+          ],
+        },
+        { endpoints: [{ url: 'a', token: 'real1' }] },
+        nestedSchema,
+      ),
+    ).toEqual({
+      endpoints: [{ url: 'NEW' }, { url: 'a', token: 'real1' }],
     });
   });
 });

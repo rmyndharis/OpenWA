@@ -56,6 +56,9 @@ interface EngineConfig {
 /** A blank value for a field, used to seed a form and to add a new array row. */
 function emptyForField(field: PluginConfigField): unknown {
   if (field.default !== undefined) return field.default;
+  // A <select> always shows its first option, so seed enum state to it — otherwise the form shows a
+  // value the user never picked and would save '' instead.
+  if (field.enum && field.enum.length > 0) return field.enum[0];
   switch (field.type) {
     case 'boolean':
       return false;
@@ -112,11 +115,16 @@ function ConfigField({
   }
 
   if (field.enum && field.enum.length > 0) {
+    const options = field.enum;
     return (
       <div className="form-group">
         {labelEl}
-        <select value={String(value ?? '')} onChange={e => onChange(e.target.value)}>
-          {field.enum.map(opt => (
+        <select
+          value={String(value ?? '')}
+          // Restore the option's original type (e.g. a number/boolean enum), not the raw string value.
+          onChange={e => onChange(options.find(o => String(o) === e.target.value) ?? e.target.value)}
+        >
+          {options.map(opt => (
             <option key={String(opt)} value={String(opt)}>
               {String(opt)}
             </option>
@@ -127,13 +135,14 @@ function ConfigField({
     );
   }
 
-  if (field.type === 'object' && field.properties) {
+  if (field.type === 'object') {
     const obj = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+    const props = field.properties ?? {};
     return (
       <fieldset className="config-fieldset">
         <legend>{label}</legend>
         {desc}
-        {Object.entries(field.properties).map(([k, sub]) => (
+        {Object.entries(props).map(([k, sub]) => (
           <ConfigField
             key={k}
             field={sub}
@@ -146,9 +155,19 @@ function ConfigField({
     );
   }
 
-  if (field.type === 'array' && field.items) {
+  if (field.type === 'array') {
     const rows = Array.isArray(value) ? value : [];
     const item = field.items;
+    if (!item) {
+      // No element schema declared — nothing to render safely (don't fall through to a text input
+      // that would stringify the array to "[object Object]"/"" and corrupt it).
+      return (
+        <div className="config-array">
+          {labelEl}
+          {desc}
+        </div>
+      );
+    }
     return (
       <div className="config-array">
         {labelEl}
