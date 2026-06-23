@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
+import { coerceFieldInput, emptyForField } from '../utils/pluginConfigForm';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Puzzle,
@@ -22,6 +23,7 @@ import {
   Globe,
   Download,
   Plus,
+  Search,
 } from 'lucide-react';
 import { pluginsApi, infraApi } from '../services/api';
 import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
@@ -53,27 +55,6 @@ interface EngineConfig {
   headless: boolean;
   sessionDataPath: string;
   browserArgs: string;
-}
-
-/** A blank value for a field, used to seed a form and to add a new array row. */
-function emptyForField(field: PluginConfigField): unknown {
-  if (field.default !== undefined) return field.default;
-  // A <select> always shows its first option, so seed enum state to it — otherwise the form shows a
-  // value the user never picked and would save '' instead.
-  if (field.enum && field.enum.length > 0) return field.enum[0];
-  switch (field.type) {
-    case 'boolean':
-      return false;
-    case 'array':
-      return [];
-    case 'object': {
-      const obj: Record<string, unknown> = {};
-      if (field.properties) for (const [k, sub] of Object.entries(field.properties)) obj[k] = emptyForField(sub);
-      return obj;
-    }
-    default: // string | number | textarea — empty string (number coerced on input)
-      return '';
-  }
 }
 
 /**
@@ -243,6 +224,7 @@ function ConfigField({
         <textarea
           value={value === undefined || value === null ? '' : String(value)}
           placeholder={field.default !== undefined ? String(field.default) : undefined}
+          required={field.required}
           minLength={field.min}
           maxLength={field.max}
           rows={4}
@@ -262,14 +244,13 @@ function ConfigField({
         value={value === undefined || value === null ? '' : String(value)}
         placeholder={field.default !== undefined ? String(field.default) : undefined}
         autoComplete={field.secret ? 'new-password' : undefined}
+        required={field.required}
         min={field.type === 'number' ? field.min : undefined}
         max={field.type === 'number' ? field.max : undefined}
         minLength={field.type !== 'number' ? field.min : undefined}
         maxLength={field.type !== 'number' ? field.max : undefined}
         pattern={field.type !== 'number' ? field.pattern : undefined}
-        onChange={e =>
-          onChange(field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)
-        }
+        onChange={e => onChange(coerceFieldInput(field, e.target.value))}
       />
       {desc}
     </div>
@@ -335,7 +316,11 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
         void (async () => {
           try {
             if (sessionId)
-              await pluginsApi.updateSessionConfig(plugin.id, sessionId, sparseSessionOverride(msg.config ?? {}, plugin));
+              await pluginsApi.updateSessionConfig(
+                plugin.id,
+                sessionId,
+                sparseSessionOverride(msg.config ?? {}, plugin),
+              );
             else await pluginsApi.updateConfig(plugin.id, msg.config ?? {});
             void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
             post({ type: 'config:saved' });
@@ -407,6 +392,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   const [selSession, setSelSession] = useState<string>('');
   const [overrideCfg, setOverrideCfg] = useState<Record<string, unknown>>({});
   const [savingOverride, setSavingOverride] = useState(false);
+  const overrideFormRef = useRef<HTMLFormElement>(null);
 
   // Seed the override form from the resolved slice (the session's override value where set, else base).
   // Keyed on selSession + plugin.id (NOT the plugin object): `configPlugin` is derived from the live
@@ -429,6 +415,8 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
 
   const saveOverride = async () => {
     if (!selSession || !plugin.configSchema?.properties) return;
+    // Enforce the schema's HTML constraint hints (required/min/max/pattern) before saving.
+    if (overrideFormRef.current && !overrideFormRef.current.reportValidity()) return;
     setSavingOverride(true);
     try {
       await pluginsApi.updateSessionConfig(plugin.id, selSession, sparseSessionOverride(overrideCfg, plugin));
@@ -513,7 +501,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
             <PluginConfigUi key={selSession} plugin={plugin} sessionId={selSession} />
           ) : selSession && plugin.configSchema ? (
             <>
-              <div className="config-form">
+              <form ref={overrideFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
                 {Object.entries(lzProps ?? plugin.configSchema.properties).map(([key, field]) => (
                   <ConfigField
                     key={key}
@@ -523,7 +511,7 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
                     onChange={v => setOverrideCfg({ ...overrideCfg, [key]: v })}
                   />
                 ))}
-              </div>
+              </form>
               <div className="sessions-override-actions">
                 <button className="btn-secondary" onClick={() => void clearOverride()} disabled={savingOverride}>
                   {t('plugins.sessions.clearOverride')}
@@ -553,6 +541,7 @@ export default function Plugins() {
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const schemaFormRef = useRef<HTMLFormElement>(null);
 
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [configPluginId, setConfigPluginId] = useState<string | null>(null);
@@ -576,6 +565,7 @@ export default function Plugins() {
   const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
 
   const refetchAll = () => {
@@ -594,7 +584,10 @@ export default function Plugins() {
       }
       refetchAll();
     } catch (err) {
-      toast.error(t('plugins.toasts.errorTitle'), err instanceof Error ? err.message : t('plugins.toasts.errorDefault'));
+      toast.error(
+        t('plugins.toasts.errorTitle'),
+        err instanceof Error ? err.message : t('plugins.toasts.errorDefault'),
+      );
     } finally {
       setActionLoading(null);
     }
@@ -632,6 +625,8 @@ export default function Plugins() {
 
   const handleSaveSchemaConfig = async () => {
     if (!configPlugin) return;
+    // Enforce the schema's HTML constraint hints (required/min/max/pattern) before saving.
+    if (schemaFormRef.current && !schemaFormRef.current.reportValidity()) return;
     setSavingConfig(true);
     try {
       await pluginsApi.updateConfig(configPlugin.id, schemaConfig);
@@ -858,138 +853,145 @@ export default function Plugins() {
 
         <main className="plugins-main">
           <div className="plugins-grid">
-        {plugins.map(plugin => {
-          const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
-          const isLoading = actionLoading === plugin.id;
-          const lz = localizePlugin(plugin, i18n.language);
+            {plugins.map(plugin => {
+              const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
+              const isLoading = actionLoading === plugin.id;
+              const lz = localizePlugin(plugin, i18n.language);
 
-          return (
-            <div key={plugin.id} className="plugin-card">
-              <div className={`plugin-card-header type-${plugin.type}`}>
-                <div className="plugin-info">
-                  <div className="plugin-icon-wrapper">
-                    <TypeIcon size={20} />
+              return (
+                <div key={plugin.id} className="plugin-card">
+                  <div className={`plugin-card-header type-${plugin.type}`}>
+                    <div className="plugin-info">
+                      <div className="plugin-icon-wrapper">
+                        <TypeIcon size={20} />
+                      </div>
+                      <div>
+                        <h3 className="plugin-name">{lz.name}</h3>
+                        <span className="plugin-version">v{plugin.version}</span>
+                      </div>
+                    </div>
+                    {plugin.builtIn && <span className="plugin-builtin-badge">{t('plugins.builtIn')}</span>}
                   </div>
-                  <div>
-                    <h3 className="plugin-name">{lz.name}</h3>
-                    <span className="plugin-version">v{plugin.version}</span>
-                  </div>
-                </div>
-                {plugin.builtIn && <span className="plugin-builtin-badge">{t('plugins.builtIn')}</span>}
-              </div>
 
-              <div className="plugin-card-body">
-                <p className="plugin-description">{lz.description || t('plugins.noDescription')}</p>
+                  <div className="plugin-card-body">
+                    <p className="plugin-description">{lz.description || t('plugins.noDescription')}</p>
 
-                <div className="plugin-status-row">
-                  <div className="plugin-status">
-                    <span className={`status-dot ${plugin.status}`} />
-                    <span className="status-text">{plugin.status}</span>
-                  </div>
-                  <span className="plugin-type-label">{plugin.type}</span>
-                </div>
+                    <div className="plugin-status-row">
+                      <div className="plugin-status">
+                        <span className={`status-dot ${plugin.status}`} />
+                        <span className="status-text">{plugin.status}</span>
+                      </div>
+                      <span className="plugin-type-label">{plugin.type}</span>
+                    </div>
 
-                {plugin.error && (
-                  <div className="plugin-error">
-                    <p className="plugin-error-text">{plugin.error}</p>
-                  </div>
-                )}
+                    {plugin.error && (
+                      <div className="plugin-error">
+                        <p className="plugin-error-text">{plugin.error}</p>
+                      </div>
+                    )}
 
-                {plugin.provides && plugin.provides.length > 0 && (
-                  <div className="plugin-provides">
-                    {plugin.provides.map(item => (
-                      <span key={item} className="provides-tag">
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="plugin-actions">
-                  {plugin.type === 'engine' ? (
-                    (() => {
-                      const enginePlugins = plugins.filter(p => p.type === 'engine');
-                      const isOnlyEngine = enginePlugins.length === 1;
-                      const isActive = plugin.status === 'enabled';
-
-                      if (isOnlyEngine && isActive) {
-                        return (
-                          <span className="btn-required">
-                            <CheckCircle size={16} />
-                            {t('plugins.required')}
+                    {plugin.provides && plugin.provides.length > 0 && (
+                      <div className="plugin-provides">
+                        {plugin.provides.map(item => (
+                          <span key={item} className="provides-tag">
+                            {item}
                           </span>
-                        );
-                      } else if (isActive) {
-                        return (
-                          <span className="btn-active">
-                            <CheckCircle size={16} />
-                            {t('plugins.active')}
-                          </span>
-                        );
-                      } else {
-                        // Engines are pinned to engine.type and switched via Settings + restart, not at
-                        // runtime — show "available" instead of a misleading "Activate" that the API rejects.
-                        return (
-                          <span
-                            className="btn-available"
-                            title={t('plugins.engineSwitchHint', 'Set as the active engine in Settings, then restart')}
-                          >
-                            <Cpu size={16} />
-                            {t('plugins.available', 'Available')}
-                          </span>
-                        );
-                      }
-                    })()
-                  ) : (
-                    <button
-                      onClick={() => handleToggle(plugin)}
-                      disabled={isLoading}
-                      className={`btn-toggle ${plugin.status === 'enabled' ? 'disable' : 'enable'}`}
-                    >
-                      {isLoading ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : plugin.status === 'enabled' ? (
-                        <>
-                          <PowerOff size={16} />
-                          {t('plugins.disable')}
-                        </>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="plugin-actions">
+                      {plugin.type === 'engine' ? (
+                        (() => {
+                          const enginePlugins = plugins.filter(p => p.type === 'engine');
+                          const isOnlyEngine = enginePlugins.length === 1;
+                          const isActive = plugin.status === 'enabled';
+
+                          if (isOnlyEngine && isActive) {
+                            return (
+                              <span className="btn-required">
+                                <CheckCircle size={16} />
+                                {t('plugins.required')}
+                              </span>
+                            );
+                          } else if (isActive) {
+                            return (
+                              <span className="btn-active">
+                                <CheckCircle size={16} />
+                                {t('plugins.active')}
+                              </span>
+                            );
+                          } else {
+                            // Engines are pinned to engine.type and switched via Settings + restart, not at
+                            // runtime — show "available" instead of a misleading "Activate" that the API rejects.
+                            return (
+                              <span
+                                className="btn-available"
+                                title={t(
+                                  'plugins.engineSwitchHint',
+                                  'Set as the active engine in Settings, then restart',
+                                )}
+                              >
+                                <Cpu size={16} />
+                                {t('plugins.available', 'Available')}
+                              </span>
+                            );
+                          }
+                        })()
                       ) : (
-                        <>
-                          <Power size={16} />
-                          {t('plugins.enable')}
-                        </>
+                        <button
+                          onClick={() => handleToggle(plugin)}
+                          disabled={isLoading}
+                          className={`btn-toggle ${plugin.status === 'enabled' ? 'disable' : 'enable'}`}
+                        >
+                          {isLoading ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : plugin.status === 'enabled' ? (
+                            <>
+                              <PowerOff size={16} />
+                              {t('plugins.disable')}
+                            </>
+                          ) : (
+                            <>
+                              <Power size={16} />
+                              {t('plugins.enable')}
+                            </>
+                          )}
+                        </button>
                       )}
-                    </button>
-                  )}
 
-                  <button
-                    onClick={() => handleHealthCheck(plugin.id)}
-                    disabled={isLoading}
-                    className="btn-action"
-                    title={t('plugins.healthCheck')}
-                  >
-                    <CheckCircle size={16} />
-                  </button>
+                      <button
+                        onClick={() => handleHealthCheck(plugin.id)}
+                        disabled={isLoading}
+                        className="btn-action"
+                        title={t('plugins.healthCheck')}
+                      >
+                        <CheckCircle size={16} />
+                      </button>
 
-                  <button className="btn-action" title={t('plugins.configure')} onClick={() => handleOpenConfig(plugin)}>
-                    <Settings size={16} />
-                  </button>
+                      <button
+                        className="btn-action"
+                        title={t('plugins.configure')}
+                        onClick={() => handleOpenConfig(plugin)}
+                      >
+                        <Settings size={16} />
+                      </button>
 
-                  {!plugin.builtIn && (
-                    <button
-                      className="btn-action btn-action-danger"
-                      title={t('plugins.uninstall', 'Uninstall')}
-                      onClick={() => void handleUninstall(plugin)}
-                      disabled={isLoading}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
+                      {!plugin.builtIn && (
+                        <button
+                          className="btn-action btn-action-danger"
+                          title={t('plugins.uninstall', 'Uninstall')}
+                          onClick={() => void handleUninstall(plugin)}
+                          disabled={isLoading}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          );
-        })}
+              );
+            })}
           </div>
         </main>
       </div>
@@ -1030,7 +1032,10 @@ export default function Plugins() {
               <>
                 <div className="modal-body">
                   <p className="install-hint">
-                    {t('plugins.installModal.hint', 'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.')}
+                    {t(
+                      'plugins.installModal.hint',
+                      'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.',
+                    )}
                   </p>
                   <label className={`install-drop${installFile ? ' has-file' : ''}`}>
                     <input
@@ -1049,7 +1054,11 @@ export default function Plugins() {
                   <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
                     {t('common.cancel', 'Cancel')}
                   </button>
-                  <button className="btn-primary" onClick={() => void handleInstall()} disabled={!installFile || installing}>
+                  <button
+                    className="btn-primary"
+                    onClick={() => void handleInstall()}
+                    disabled={!installFile || installing}
+                  >
                     {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                     {t('plugins.install', 'Install plugin')}
                   </button>
@@ -1059,7 +1068,10 @@ export default function Plugins() {
               <>
                 <div className="modal-body">
                   <p className="install-hint">
-                    {t('plugins.installModal.catalogHint', 'Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.')}
+                    {t(
+                      'plugins.installModal.catalogHint',
+                      'Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.',
+                    )}
                   </p>
                   {catalogLoading ? (
                     <div className="catalog-empty">
@@ -1075,64 +1087,92 @@ export default function Plugins() {
                   ) : catalog.length === 0 ? (
                     <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
                   ) : (
-                    <div className="catalog-list">
-                      {catalog.map(entry => {
-                        const lz = localizePlugin(entry, i18n.language);
-                        return (
-                        <div className="catalog-row" key={entry.id}>
-                          <div className="catalog-row-info">
-                            <div className="catalog-row-name">
-                              {lz.name} <span className="catalog-row-version">v{entry.version}</span>
-                            </div>
-                            {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
-                            <div className="catalog-row-meta">
-                              {entry.author && <span className="catalog-row-author">{entry.author}</span>}
-                              {entry.updateAvailable && (
-                                <span className="catalog-badge update">
-                                  {t('plugins.catalog.updateAvailable', 'Update available')} (v{entry.installedVersion} → v{entry.version})
-                                </span>
-                              )}
-                            </div>
+                    (() => {
+                      const q = catalogSearch.trim().toLowerCase();
+                      const filtered = q
+                        ? catalog.filter(e =>
+                            [e.name, e.description, e.author, e.id].some(f => f?.toLowerCase().includes(q)),
+                          )
+                        : catalog;
+                      return (
+                        <>
+                          <div className="catalog-search">
+                            <Search size={15} />
+                            <input
+                              type="text"
+                              value={catalogSearch}
+                              onChange={e => setCatalogSearch(e.target.value)}
+                              placeholder={t('plugins.catalog.searchPlaceholder', 'Search plugins…')}
+                            />
                           </div>
-                          <div className="catalog-row-action">
-                            {entry.installed ? (
-                              entry.updateAvailable ? (
-                                <button
-                                  className="btn-primary"
-                                  disabled={installingId !== null || !entry.download}
-                                  onClick={() => void handleUpdateFromCatalog(entry)}
-                                >
-                                  {installingId === entry.id ? (
-                                    <Loader2 size={15} className="animate-spin" />
-                                  ) : (
-                                    <Download size={15} />
-                                  )}
-                                  {t('plugins.catalog.update', 'Update')}
-                                </button>
-                              ) : (
-                                <span className="catalog-installed">
-                                  <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
-                                </span>
-                              )
-                            ) : (
-                              <button
-                                className="btn-primary"
-                                disabled={installingId !== null || !entry.download}
-                                onClick={() => void handleInstallFromCatalog(entry)}
-                              >
-                                {installingId === entry.id ? (
-                                  <Loader2 size={15} className="animate-spin" />
-                                ) : (
-                                  <Download size={15} />
-                                )}
-                                {t('plugins.catalog.install', 'Install')}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        );
-                      })}
-                    </div>
+                          {filtered.length === 0 ? (
+                            <div className="catalog-empty">
+                              {t('plugins.catalog.noMatch', 'No plugins match your search.')}
+                            </div>
+                          ) : (
+                            <div className="catalog-list">
+                              {filtered.map(entry => {
+                                const lz = localizePlugin(entry, i18n.language);
+                                return (
+                                  <div className="catalog-row" key={entry.id}>
+                                    <div className="catalog-row-info">
+                                      <div className="catalog-row-name">
+                                        {lz.name} <span className="catalog-row-version">v{entry.version}</span>
+                                      </div>
+                                      {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
+                                      <div className="catalog-row-meta">
+                                        {entry.author && <span className="catalog-row-author">{entry.author}</span>}
+                                        {entry.updateAvailable && (
+                                          <span className="catalog-badge update">
+                                            {t('plugins.catalog.updateAvailable', 'Update available')} (v
+                                            {entry.installedVersion} → v{entry.version})
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="catalog-row-action">
+                                      {entry.installed ? (
+                                        entry.updateAvailable ? (
+                                          <button
+                                            className="btn-primary"
+                                            disabled={installingId !== null || !entry.download}
+                                            onClick={() => void handleUpdateFromCatalog(entry)}
+                                          >
+                                            {installingId === entry.id ? (
+                                              <Loader2 size={15} className="animate-spin" />
+                                            ) : (
+                                              <Download size={15} />
+                                            )}
+                                            {t('plugins.catalog.update', 'Update')}
+                                          </button>
+                                        ) : (
+                                          <span className="catalog-installed">
+                                            <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
+                                          </span>
+                                        )
+                                      ) : (
+                                        <button
+                                          className="btn-primary"
+                                          disabled={installingId !== null || !entry.download}
+                                          onClick={() => void handleInstallFromCatalog(entry)}
+                                        >
+                                          {installingId === entry.id ? (
+                                            <Loader2 size={15} className="animate-spin" />
+                                          ) : (
+                                            <Download size={15} />
+                                          )}
+                                          {t('plugins.catalog.install', 'Install')}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()
                   )}
                 </div>
                 <div className="modal-footer">
@@ -1146,135 +1186,144 @@ export default function Plugins() {
         </div>
       )}
 
-      {showConfigModal && configPlugin && (() => {
-        const lz = localizePlugin(configPlugin, i18n.language);
-        // Session-scoped, non-engine plugins get a Configuration/Sessions tab split; others keep one body.
-        const showTabs = configPlugin.type !== 'engine' && configPlugin.sessionScoped !== false;
-        return (
-        <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
-          <div className="modal config-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('plugins.config.title', { name: lz.name })}</h2>
-              <button className="btn-icon" onClick={() => setShowConfigModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
+      {showConfigModal &&
+        configPlugin &&
+        (() => {
+          const lz = localizePlugin(configPlugin, i18n.language);
+          // Session-scoped, non-engine plugins get a Configuration/Sessions tab split; others keep one body.
+          const showTabs = configPlugin.type !== 'engine' && configPlugin.sessionScoped !== false;
+          return (
+            <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
+              <div className="modal config-modal" onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h2>{t('plugins.config.title', { name: lz.name })}</h2>
+                  <button className="btn-icon" onClick={() => setShowConfigModal(false)}>
+                    <X size={20} />
+                  </button>
+                </div>
 
-            {showTabs && (
-              <div className="modal-tabs">
-                <button
-                  className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
-                  onClick={() => setConfigTab('config')}
-                >
-                  {t('plugins.config.tabConfig')}
-                </button>
-                <button
-                  className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
-                  onClick={() => setConfigTab('sessions')}
-                >
-                  {t('plugins.config.tabSessions')}
-                </button>
-              </div>
-            )}
-
-            <div className="modal-body">
-              {showTabs && configTab === 'sessions' ? (
-                <SessionsTab plugin={configPlugin} />
-              ) : configPlugin.type === 'engine' ? (
-                <>
-                  <div className="config-info-banner">
-                    <AlertCircle size={16} />
-                    <span>{t('plugins.config.restartNotice')}</span>
+                {showTabs && (
+                  <div className="modal-tabs">
+                    <button
+                      className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
+                      onClick={() => setConfigTab('config')}
+                    >
+                      {t('plugins.config.tabConfig')}
+                    </button>
+                    <button
+                      className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
+                      onClick={() => setConfigTab('sessions')}
+                    >
+                      {t('plugins.config.tabSessions')}
+                    </button>
                   </div>
+                )}
 
-                  <div className="config-form">
-                    <div className="form-group">
-                      <label>{t('plugins.config.engineType')}</label>
-                      <select
-                        value={engineConfig.type}
-                        onChange={e => setEngineConfig({ ...engineConfig, type: e.target.value })}
-                      >
-                        <option value="whatsapp-web.js">WhatsApp Web.js</option>
-                      </select>
-                    </div>
-
-                    <div className="form-group toggle-group">
-                      <div className="toggle-info">
-                        <label>{t('plugins.config.headless')}</label>
-                        <small>{t('plugins.config.headlessDesc')}</small>
+                <div className="modal-body">
+                  {showTabs && configTab === 'sessions' ? (
+                    <SessionsTab plugin={configPlugin} />
+                  ) : configPlugin.type === 'engine' ? (
+                    <>
+                      <div className="config-info-banner">
+                        <AlertCircle size={16} />
+                        <span>{t('plugins.config.restartNotice')}</span>
                       </div>
-                      <label className="toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={engineConfig.headless}
-                          onChange={e => setEngineConfig({ ...engineConfig, headless: e.target.checked })}
+
+                      {/* Only the browser engine (whatsapp-web.js) has Puppeteer settings. Baileys is a
+                      WebSocket client with no browser, so headless/browser-args don't apply. */}
+                      {configPlugin.id === 'whatsapp-web.js' ? (
+                        <div className="config-form">
+                          <div className="form-group toggle-group">
+                            <div className="toggle-info">
+                              <label>{t('plugins.config.headless')}</label>
+                              <small>{t('plugins.config.headlessDesc')}</small>
+                            </div>
+                            <label className="toggle-switch">
+                              <input
+                                type="checkbox"
+                                checked={engineConfig.headless}
+                                onChange={e => setEngineConfig({ ...engineConfig, headless: e.target.checked })}
+                              />
+                              <span className="toggle-slider"></span>
+                            </label>
+                          </div>
+
+                          <div className="form-group">
+                            <label>{t('plugins.config.sessionDataPath')}</label>
+                            <input
+                              type="text"
+                              value={engineConfig.sessionDataPath}
+                              onChange={e => setEngineConfig({ ...engineConfig, sessionDataPath: e.target.value })}
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>{t('plugins.config.browserArgs')}</label>
+                            <input
+                              type="text"
+                              value={engineConfig.browserArgs}
+                              onChange={e => setEngineConfig({ ...engineConfig, browserArgs: e.target.value })}
+                              placeholder="--no-sandbox --disable-gpu"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="no-config">
+                          <Cpu size={48} style={{ opacity: 0.3 }} />
+                          <p>
+                            {t(
+                              'plugins.config.noBrowserEngine',
+                              'This engine connects over WebSocket — it has no browser, so there are no headless or browser-argument settings here. Its options are set via environment variables, and the active engine is selected with ENGINE_TYPE (a restart applies the change).',
+                            )}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  ) : configPlugin.configUi ? (
+                    <PluginConfigUi plugin={configPlugin} />
+                  ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
+                    <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
+                      {Object.entries(lz.configSchema.properties).map(([key, field]) => (
+                        <ConfigField
+                          key={key}
+                          field={field}
+                          label={field.title || key}
+                          value={schemaConfig[key]}
+                          onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
                         />
-                        <span className="toggle-slider"></span>
-                      </label>
+                      ))}
+                    </form>
+                  ) : (
+                    <div className="no-config">
+                      <Settings size={48} style={{ opacity: 0.3 }} />
+                      <p>{t('plugins.config.noOptions')}</p>
                     </div>
-
-                    <div className="form-group">
-                      <label>{t('plugins.config.sessionDataPath')}</label>
-                      <input
-                        type="text"
-                        value={engineConfig.sessionDataPath}
-                        onChange={e => setEngineConfig({ ...engineConfig, sessionDataPath: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label>{t('plugins.config.browserArgs')}</label>
-                      <input
-                        type="text"
-                        value={engineConfig.browserArgs}
-                        onChange={e => setEngineConfig({ ...engineConfig, browserArgs: e.target.value })}
-                        placeholder="--no-sandbox --disable-gpu"
-                      />
-                    </div>
-                  </div>
-                </>
-              ) : configPlugin.configUi ? (
-                <PluginConfigUi plugin={configPlugin} />
-              ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
-                <div className="config-form">
-                  {Object.entries(lz.configSchema.properties).map(([key, field]) => (
-                    <ConfigField
-                      key={key}
-                      field={field}
-                      label={field.title || key}
-                      value={schemaConfig[key]}
-                      onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
-                    />
-                  ))}
+                  )}
                 </div>
-              ) : (
-                <div className="no-config">
-                  <Settings size={48} style={{ opacity: 0.3 }} />
-                  <p>{t('plugins.config.noOptions')}</p>
-                </div>
-              )}
-            </div>
 
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
-                {t('common.close')}
-              </button>
-              {/* The Sessions tab has its own Save/Clear actions; the footer Save is config-tab only. */}
-              {showTabs && configTab === 'sessions' ? null : configPlugin.type === 'engine' ? (
-                <button className="btn-primary" onClick={handleSaveConfig} disabled={savingConfig}>
-                  {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
-                </button>
-              ) : configPlugin.configUi ? null : lz.configSchema &&
-                Object.keys(lz.configSchema.properties).length > 0 ? (
-                <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
-                  {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
-                </button>
-              ) : null}
+                <div className="modal-footer">
+                  <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
+                    {t('common.close')}
+                  </button>
+                  {/* The Sessions tab has its own Save/Clear actions; the footer Save is config-tab only.
+                  Only the browser engine has savable settings — Baileys shows an info panel, no Save. */}
+                  {showTabs && configTab === 'sessions' ? null : configPlugin.type === 'engine' ? (
+                    configPlugin.id === 'whatsapp-web.js' ? (
+                      <button className="btn-primary" onClick={handleSaveConfig} disabled={savingConfig}>
+                        {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
+                      </button>
+                    ) : null
+                  ) : configPlugin.configUi ? null : lz.configSchema &&
+                    Object.keys(lz.configSchema.properties).length > 0 ? (
+                    <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
+                      {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        );
-      })()}
+          );
+        })()}
     </div>
   );
 }

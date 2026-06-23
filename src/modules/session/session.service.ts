@@ -1181,7 +1181,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Get overall session statistics for multi-session monitoring
    */
-  async getStats(): Promise<{
+  async getStats(allowedSessions?: string[] | null): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -1189,7 +1189,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    const sessions = await this.findAll();
+    // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
+    // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
+    const scope = allowedSessions && allowedSessions.length > 0 ? allowedSessions : null;
+    const sessions = await this.findAll(scope);
     const byStatus: Record<string, number> = {};
 
     for (const session of sessions) {
@@ -1200,7 +1203,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     return {
       total: sessions.length,
-      active: this.engines.size,
+      // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
+      active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
       byStatus,

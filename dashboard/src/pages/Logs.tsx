@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, Search, Filter, Loader2, FileText, AlertCircle } from 'lucide-react';
 import type { AuditLog } from '../services/api';
+import { auditApi } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLogsQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
@@ -13,6 +14,7 @@ export function Logs() {
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
   const limit = 20;
 
   const severityParam = severityFilter !== 'all' ? severityFilter : undefined;
@@ -31,10 +33,7 @@ export function Logs() {
 
   const formatTimestamp = (date: string) => new Date(date).toLocaleString();
 
-  // Export the currently loaded (and filtered) logs to a CSV download. Client-side only —
-  // it exports what the page already has, not the whole audit history.
-  const handleExportCsv = () => {
-    if (filteredLogs.length === 0) return;
+  const buildCsv = (rows: AuditLog[]): string => {
     const headers = [
       'timestamp',
       'action',
@@ -51,7 +50,7 @@ export function Logs() {
       const s = value === undefined || value === null ? '' : String(value);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const rows = filteredLogs.map(log =>
+    const lines = rows.map(log =>
       [
         log.createdAt,
         log.action,
@@ -67,7 +66,10 @@ export function Logs() {
         .map(escape)
         .join(','),
     );
-    const csv = [headers.join(','), ...rows].join('\n');
+    return [headers.join(','), ...lines].join('\n');
+  };
+
+  const download = (csv: string) => {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -75,6 +77,35 @@ export function Logs() {
     a.download = `openwa-logs-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Export the WHOLE audit history (honouring the active severity filter + search), not just the
+  // current page — paginate through the API up to a safety cap so a huge table can't OOM the tab. On
+  // a fetch error, fall back to exporting the rows already on screen.
+  const handleExportCsv = async () => {
+    if (exporting) return;
+    setExporting(true);
+    const PAGE = 500;
+    const CAP = 50000;
+    try {
+      const all: AuditLog[] = [];
+      let offset = 0;
+      for (;;) {
+        const res = await auditApi.list({ severity: severityParam, limit: PAGE, offset });
+        all.push(...res.data);
+        offset += res.data.length;
+        if (res.data.length < PAGE || offset >= res.total || all.length >= CAP) break;
+      }
+      const q = searchQuery.toLowerCase();
+      const rows = q
+        ? all.filter(l => l.action.toLowerCase().includes(q) || (l.errorMessage || '').toLowerCase().includes(q))
+        : all;
+      if (rows.length > 0) download(buildCsv(rows));
+    } catch {
+      if (filteredLogs.length > 0) download(buildCsv(filteredLogs)); // graceful fallback to the page
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (loading && logs.length === 0) {
@@ -94,8 +125,8 @@ export function Logs() {
         title={t('logs.title')}
         subtitle={t('logs.subtitle')}
         actions={
-          <button className="btn-secondary" onClick={handleExportCsv} disabled={filteredLogs.length === 0}>
-            <Download size={18} />
+          <button className="btn-secondary" onClick={() => void handleExportCsv()} disabled={exporting || total === 0}>
+            {exporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
             {t('logs.exportCsv')}
           </button>
         }

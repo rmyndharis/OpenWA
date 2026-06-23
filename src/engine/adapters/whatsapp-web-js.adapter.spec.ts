@@ -10,6 +10,7 @@ import {
   resolveWebVersionPin,
   wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
+import * as fs from 'fs';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -545,22 +546,49 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
 
   // A wedged page can make getState() hang (the exact #251/#273 condition). The probe must keep its
   // own cadence (a hung probe can't stall the loop) and still honor the 90s give-up deadline.
-  it('keeps probing and still times out when getState hangs instead of stalling forever', async () => {
+  it('keeps probing and self-heals (clears auth + disconnects) when getState hangs past the deadline', async () => {
     jest.useFakeTimers();
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
 
     const adapter = newAdapter();
-    const { client } = attachFakeClient(adapter, { getState: jest.fn().mockReturnValue(new Promise<never>(() => {})) });
+    const { client } = attachFakeClient(adapter, {
+      getState: jest.fn().mockReturnValue(new Promise<never>(() => {})),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: { onDisconnected?: jest.Mock } }).callbacks.onDisconnected = onDisconnected;
 
     client.emit('authenticated');
     await jest.advanceTimersByTimeAsync(50_000);
     expect(jest.getTimerCount()).toBe(1); // chain still alive despite the hung probe
 
     await jest.advanceTimersByTimeAsync(45_000); // ~95s total
-    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING); // never falsely promoted
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED); // never falsely promoted; self-healed
     expect(jest.getTimerCount()).toBe(0); // gave up at the 90s deadline
-    // The at-most-one-in-flight guard must keep the single hung probe from piling up: getState is
-    // issued once and not re-issued while it's still pending (a guard-less per-tick probe would be ~45).
-    expect(client.getState).toHaveBeenCalledTimes(1);
+    expect(client.getState).toHaveBeenCalledTimes(1); // at-most-one-in-flight guard held
+    // Self-heal: the broken auth is cleared and a disconnect surfaced so the lifecycle re-pairs (QR).
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('session-sess-1'), { recursive: true, force: true });
+    expect(onDisconnected).toHaveBeenCalled();
+
+    rmSpy.mockRestore();
+  });
+
+  it('fails terminally on a second stuck-auth cycle (no QR -> timeout -> clear loop)', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+    (adapter as unknown as { callbacks: { onError?: jest.Mock } }).callbacks = { onError };
+    const recover = (adapter as unknown as { recoverFromStuckAuth: () => Promise<void> }).recoverFromStuckAuth.bind(
+      adapter,
+    );
+
+    await recover(); // first stuck cycle: clears + disconnects
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    await recover(); // second: terminal failure, not another clear
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalled();
+    expect(rmSpy).toHaveBeenCalledTimes(1); // auth cleared only once
+    rmSpy.mockRestore();
   });
 });
 

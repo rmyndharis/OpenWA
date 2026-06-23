@@ -58,7 +58,12 @@ export async function performPluginFetch(
   deps: { fetch?: typeof withSafeFetch } = {},
 ): Promise<PluginNetResponse> {
   const safeFetch = deps.fetch ?? withSafeFetch;
-  const timeoutMs = Math.min(Math.max(init.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1), MAX_TIMEOUT_MS);
+  // Coerce a non-finite timeoutMs (a string/object/NaN from the untrusted worker) to the default
+  // instead of letting it flow through as NaN — `Math.max('abc', 1)` is NaN, and AbortSignal.timeout(NaN)
+  // throws a RangeError, silently defeating the documented default + hard-cap clamp.
+  const requested =
+    typeof init.timeoutMs === 'number' && Number.isFinite(init.timeoutMs) ? init.timeoutMs : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.min(Math.max(requested, 1), MAX_TIMEOUT_MS);
 
   return safeFetch<PluginNetResponse>(
     url,

@@ -1,14 +1,14 @@
-.api-keys-page {
+.api-keys-page{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.page-header {
+.api-keys-page .page-header{
   margin-bottom: 2rem;
 }
 
-.header-content {
+.api-keys-page .header-content{
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -16,7 +16,7 @@
 
 /* H1 inherited from global */
 
-.btn-primary {
+.api-keys-page .btn-primary{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -31,17 +31,17 @@
   transition: background 0.2s;
 }
 
-.btn-primary:hover {
+.api-keys-page .btn-primary:hover{
   background: var(--primary-hover);
 }
 
-.api-keys-content {
+.api-keys-page .api-keys-content{
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
 }
 
-.keys-table-container {
+.api-keys-page .keys-table-container{
   background: var(--bg-white);
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
@@ -50,14 +50,14 @@
   overflow-x: auto;
 }
 
-.keys-table {
+.api-keys-page .keys-table{
   width: 100%;
   font-size: 0.875rem;
   border-collapse: collapse;
 }
 
 /* Table header and row styling */
-.keys-table thead tr.table-row.header th {
+.api-keys-page .keys-table thead tr.table-row.header th{
   background: var(--bg-light);
   font-size: 0.7rem;
   font-weight: 700;
@@ -69,41 +69,41 @@
   text-align: left;
 }
 
-.keys-table tbody tr.table-row td {
+.api-keys-page .keys-table tbody tr.table-row td{
   padding: 1.125rem 1.5rem;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 
-.keys-table tbody tr.table-row:last-child td {
+.api-keys-page .keys-table tbody tr.table-row:last-child td{
   border-bottom: none;
 }
 
-.keys-table tbody tr.table-row:hover {
+.api-keys-page .keys-table tbody tr.table-row:hover{
   background: rgba(37, 211, 102, 0.05);
 }
 
-.keys-table tbody tr.table-row:nth-child(even) {
+.api-keys-page .keys-table tbody tr.table-row:nth-child(even){
   background: rgba(0, 0, 0, 0.02);
 }
 
-.keys-table tbody tr.table-row:nth-child(even):hover {
+.api-keys-page .keys-table tbody tr.table-row:nth-child(even):hover{
   background: rgba(37, 211, 102, 0.05);
 }
 
-.name-cell {
+.api-keys-page .name-cell{
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-.key-cell {
+.api-keys-page .key-cell{
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.key-cell code {
+.api-keys-page .key-cell code{
   font-size: 0.8125rem;
   color: var(--text-secondary);
   background: var(--bg-light);
@@ -113,7 +113,7 @@
   white-space: nowrap;
 }
 
-.icon-btn-sm {
+.api-keys-page .icon-btn-sm{
   padding: 0.25rem;
   background: transparent;
   border: none;
@@ -123,17 +123,17 @@
   flex-shrink: 0;
 }
 
-.icon-btn-sm:hover {
+.api-keys-page .icon-btn-sm:hover{
   color: var(--text-primary);
 }
 
-.permissions-cell {
+.api-keys-page .permissions-cell{
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
 }
 
-.permission-badge {
+.api-keys-page .permission-badge{
   font-size: 0.6875rem;
   padding: 0.25rem 0.5rem;
   background: #e0f2fe;
@@ -143,25 +143,25 @@
   white-space: nowrap;
 }
 
-.permission-badge:first-child:last-child {
+.api-keys-page .permission-badge:first-child:last-child{
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.rate-limit {
+.api-keys-page .rate-limit{
   font-family: monospace;
   font-size: 0.8125rem;
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
-.actions-cell {
+.api-keys-page .actions-cell{
   display: flex;
   gap: 0.25rem;
   justify-content: flex-end;
 }
 
-.icon-btn {
+.api-keys-page .icon-btn{
   padding: 0.5rem;
   background: transparent;
   border: 1px solid var(--border);
@@ -172,18 +172,18 @@
   flex-shrink: 0;
 }
 
-.icon-btn:hover {
+.api-keys-page .icon-btn:hover{
   background: var(--bg-light);
   color: var(--text-primary);
 }
 
-.icon-btn.danger:hover {
+.api-keys-page .icon-btn.danger:hover{
   background: #fee2e2;
   border-color: #fecaca;
   color: #dc2626;
 }
 
-.permissions-reference {
+.api-keys-page .permissions-reference{
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -191,18 +191,18 @@
   border: 1px solid var(--border);
 }
 
-.permissions-reference h3 {
+.api-keys-page .permissions-reference h3{
   /* Inherits from H3 */
   margin-bottom: 1rem;
 }
 
-.permissions-list {
+.api-keys-page .permissions-list{
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 0.75rem;
 }
 
-.perm-item {
+.api-keys-page .perm-item{
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -211,7 +211,7 @@
   border-radius: var(--radius);
 }
 
-.perm-item code {
+.api-keys-page .perm-item code{
   font-size: 0.8125rem;
   color: var(--primary);
   background: rgba(37, 211, 102, 0.1);
@@ -220,13 +220,13 @@
   width: fit-content;
 }
 
-.perm-item span {
+.api-keys-page .perm-item span{
   font-size: 0.75rem;
   color: var(--text-secondary);
 }
 
 /* Empty Table State */
-.empty-table-state {
+.api-keys-page .empty-table-state{
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -236,41 +236,41 @@
   color: var(--text-muted);
 }
 
-.empty-table-state svg {
+.api-keys-page .empty-table-state svg{
   margin-bottom: 1rem;
   opacity: 0.4;
   color: var(--text-muted);
 }
 
-.empty-table-state h3 {
+.api-keys-page .empty-table-state h3{
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0 0 0.5rem;
 }
 
-.empty-table-state p {
+.api-keys-page .empty-table-state p{
   margin: 0;
   font-size: 0.875rem;
   max-width: 300px;
 }
 
 /* Confirmation Modal Styles */
-.confirm-modal {
+.api-keys-page .confirm-modal{
   max-width: 400px;
 }
 
-.confirm-icon-wrapper {
+.api-keys-page .confirm-icon-wrapper{
   display: flex;
   justify-content: center;
   margin-bottom: 1rem;
 }
 
-.confirm-warning-icon {
+.api-keys-page .confirm-warning-icon{
   color: #f59e0b;
 }
 
-.confirm-message {
+.api-keys-page .confirm-message{
   text-align: center;
   color: var(--text-secondary);
   font-size: 0.9375rem;
@@ -278,11 +278,11 @@
   margin: 0;
 }
 
-.confirm-message strong {
+.api-keys-page .confirm-message strong{
   color: var(--text-primary);
 }
 
-.btn-danger {
+.api-keys-page .btn-danger{
   padding: 0.75rem 1.25rem;
   background: #dc2626;
   color: white;
@@ -294,29 +294,29 @@
   transition: background 0.2s;
 }
 
-.btn-danger:hover {
+.api-keys-page .btn-danger:hover{
   background: #b91c1c;
 }
 
 /* Mobile Responsive */
 @media (max-width: 768px) {
-  .api-keys-page {
+  .api-keys-page{
     padding: 1rem;
   }
 
   /* Header adjustments for mobile */
-  .api-keys-page .header-content {
+  .api-keys-page .header-content{
     flex-direction: column;
     align-items: stretch;
     gap: 1rem;
   }
 
-  .api-keys-page .btn-primary {
+  .api-keys-page .btn-primary{
     width: 100%;
     justify-content: center;
   }
 
-  .keys-table-container {
+  .api-keys-page .keys-table-container{
     overflow-x: visible;
     border: none;
     background: transparent;
@@ -324,21 +324,21 @@
   }
 
   /* Switch to card layout on mobile */
-  .keys-table {
+  .api-keys-page .keys-table{
     display: block;
   }
 
-  .keys-table thead {
+  .api-keys-page .keys-table thead{
     display: none;
   }
 
-  .keys-table tbody {
+  .api-keys-page .keys-table tbody{
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
 
-  .keys-table tbody tr.table-row {
+  .api-keys-page .keys-table tbody tr.table-row{
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -349,24 +349,22 @@
     box-shadow: var(--shadow-sm);
   }
 
-  .keys-table tbody tr.table-row:hover,
-  .keys-table tbody tr.table-row:nth-child(even),
-  .keys-table tbody tr.table-row:nth-child(even):hover {
+  .api-keys-page .keys-table tbody tr.table-row:hover, .api-keys-page .keys-table tbody tr.table-row:nth-child(even), .api-keys-page .keys-table tbody tr.table-row:nth-child(even):hover{
     background: var(--bg-white);
   }
 
-  .keys-table tbody tr.table-row td {
+  .api-keys-page .keys-table tbody tr.table-row td{
     padding: 0;
     border-bottom: none;
     display: block;
   }
 
   /* Name cell - prominent at top */
-  .keys-table tbody tr.table-row td:first-child {
+  .api-keys-page .keys-table tbody tr.table-row td:first-child{
     order: 1;
   }
 
-  .keys-table tbody tr.table-row td:first-child .name-cell {
+  .api-keys-page .keys-table tbody tr.table-row td:first-child .name-cell{
     font-size: 1.125rem;
     font-weight: 600;
     display: block;
@@ -374,81 +372,80 @@
   }
 
   /* Key cell */
-  .keys-table tbody tr.table-row td:nth-child(2) {
+  .api-keys-page .keys-table tbody tr.table-row td:nth-child(2){
     order: 2;
   }
 
-  .keys-table tbody tr.table-row td:nth-child(2) .key-cell {
+  .api-keys-page .keys-table tbody tr.table-row td:nth-child(2) .key-cell{
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
-  .keys-table tbody tr.table-row td:nth-child(2) .key-cell code {
+  .api-keys-page .keys-table tbody tr.table-row td:nth-child(2) .key-cell code{
     font-size: 0.75rem;
     word-break: break-all;
     white-space: normal;
   }
 
   /* Role & Status - wrapper for badges */
-  .keys-table tbody tr.table-row td:nth-child(3),
-  .keys-table tbody tr.table-row td:nth-child(4) {
+  .api-keys-page .keys-table tbody tr.table-row td:nth-child(3), .api-keys-page .keys-table tbody tr.table-row td:nth-child(4){
     display: inline-block;
     order: 3;
   }
 
-  .keys-table tbody tr.table-row td:nth-child(3) {
+  .api-keys-page .keys-table tbody tr.table-row td:nth-child(3){
     margin-right: 0.5rem;
   }
 
   /* Status badges styling */
-  .status-badge {
+  .api-keys-page .status-badge{
     font-size: 0.6875rem;
     padding: 0.25rem 0.5rem;
     border-radius: 9999px;
     font-weight: 600;
   }
 
-  .status-badge.active {
+  .api-keys-page .status-badge.active{
     background: rgba(37, 211, 102, 0.1);
     color: var(--primary);
   }
 
-  .status-badge.inactive {
+  .api-keys-page .status-badge.inactive{
     background: #fee2e2;
     color: #dc2626;
   }
 
   /* Actions cell - bottom with separator */
-  .keys-table tbody tr.table-row td:last-child {
+  .api-keys-page .keys-table tbody tr.table-row td:last-child{
     order: 5;
     margin-top: 0.5rem;
     padding-top: 0.75rem;
     border-top: 1px solid var(--border);
   }
 
-  .keys-table tbody tr.table-row td:last-child .actions-cell {
+  .api-keys-page .keys-table tbody tr.table-row td:last-child .actions-cell{
     justify-content: flex-start;
     gap: 0.5rem;
   }
 
   /* Permissions reference mobile */
-  .permissions-reference {
+  .api-keys-page .permissions-reference{
     padding: 1rem;
   }
 
-  .permissions-reference h3 {
+  .api-keys-page .permissions-reference h3{
     font-size: 0.9375rem;
   }
 }
 
 @media (max-width: 480px) {
-  .permissions-list {
+  .api-keys-page .permissions-list{
     grid-template-columns: 1fr;
   }
 
-  .api-keys-page {
+  .api-keys-page{
     padding: 0.75rem;
   }
 }

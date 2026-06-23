@@ -105,7 +105,7 @@
     "noPermission": "You do not have permission to send messages",
     "send": "Send",
     "placeholderTitle": "Start messaging",
-    "placeholderDesc": "Select an active chat from the left sidebar to start reading and sending WhatsApp messages.",
+    "placeholderDesc": "Choose a conversation to read and reply.",
     "deleteConfirm": "Delete this message for everyone?",
     "messageDeleted": "🚫 This message was deleted",
     "errors": {
@@ -594,11 +594,11 @@
       "disabled": "Disabled"
     },
     "restart": {
-      "idleTitle": "⚙️ Configuration Saved",
-      "restartingTitle": "🔄 Restarting Server...",
-      "waitingTitle": "⏳ Please Wait...",
-      "successTitle": "✅ Server Ready",
-      "errorTitle": "❌ Restart Failed",
+      "idleTitle": "Configuration saved",
+      "restartingTitle": "Restarting server…",
+      "waitingTitle": "Please wait…",
+      "successTitle": "Server ready",
+      "errorTitle": "Restart failed",
       "idleDesc": "Configuration has been saved to <code>.env.generated</code>.<br/>A server restart is required to apply the changes.",
       "later": "Restart Later",
       "now": "Restart Now",
@@ -633,10 +633,10 @@
     "install": "Install plugin",
     "uninstall": "Uninstall",
     "uninstallConfirm": "Uninstall \"{{name}}\"? This deletes its files.",
-    "engineSwitchHint": "Set as the active engine in Settings, then restart",
+    "engineSwitchHint": "To switch the active engine, set ENGINE_TYPE in the environment and restart the server",
     "empty": {
-      "title": "No Plugins Found",
-      "description": "Install plugins to extend OpenWA functionality"
+      "title": "No plugins installed",
+      "description": "Install a plugin to extend what OpenWA can do."
     },
     "config": {
       "title": "Configure {{name}}",

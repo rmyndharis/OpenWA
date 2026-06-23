@@ -34,6 +34,13 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(await storage.get('state')).toBeNull();
   });
 
+  it('creates the per-plugin dir 0o700 and data files 0o600 (persisted secrets not world-readable)', async () => {
+    await storage.set('secret', { token: 'shh' });
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    expect(fs.statSync(pluginDataDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(pluginDataDir, 'secret.json')).mode & 0o777).toBe(0o600);
+  });
+
   it('is atomic: a write that fails mid-way leaves the previous file intact (no partial overwrite)', async () => {
     await storage.set('state', { good: true });
     // Simulate a crash after the temp file is written but before the rename — the target must keep its

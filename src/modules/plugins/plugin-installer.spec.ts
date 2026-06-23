@@ -43,6 +43,25 @@ describe('parsePluginPackage', () => {
     );
   });
 
+  it('rejects a non-string required field (numeric main) with a clean 400, not a TypeError/500', () => {
+    // A non-string `main` is truthy, so a bare falsy check would pass it through and then crash
+    // path.posix.normalize with an uncaught TypeError (HTTP 500). It must be rejected as a 400.
+    const bad = { ...validManifest, main: 123 };
+    expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
+      /invalid required field/i,
+    );
+  });
+
+  it('rejects a non-object manifest (null / array / scalar) with a 400, not a TypeError/500', () => {
+    // JSON.parse("null") is null (no throw); accessing manifest['id'] on it then throws an uncaught
+    // TypeError (HTTP 500). null, an array, and a bare scalar must all be rejected as a clean 400.
+    for (const body of ['null', '[]', '"x"', '5', 'true']) {
+      expect(() => parsePluginPackage(zipOf({ 'manifest.json': body, 'index.js': 'x' }))).toThrow(
+        /must be a JSON object/i,
+      );
+    }
+  });
+
   it('rejects an unsafe plugin id', () => {
     const bad = { ...validManifest, id: '../evil' };
     expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
@@ -52,6 +71,15 @@ describe('parsePluginPackage', () => {
 
   it('rejects an id reserved by a built-in', () => {
     const bad = { ...validManifest, id: 'baileys' };
+    expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
+      /reserved/i,
+    );
+  });
+
+  it('rejects a case-variant of a reserved id (the id check is case-insensitive)', () => {
+    // SAFE_ID accepts mixed case, so a case-variant must still hit the reservation — else `Auto-Reply`
+    // installs as a distinct plugin that shadows the reserved `auto-reply`.
+    const bad = { ...validManifest, id: 'Auto-Reply' };
     expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
       /reserved/i,
     );

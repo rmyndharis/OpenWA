@@ -1,28 +1,27 @@
-.message-tester {
+.message-tester{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.message-tester .page-header {
+.message-tester .page-header{
   margin-bottom: 2rem;
 }
 
 /* H1 inherited from global */
-.message-tester .page-header p {
+.message-tester .page-header p{
   margin: 0;
   font-size: 0.9375rem;
   color: var(--text-secondary);
 }
 
-.tester-panels {
+.message-tester .tester-panels{
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
 }
 
-.compose-panel,
-.response-panel {
+.message-tester .compose-panel, .message-tester .response-panel{
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -30,17 +29,16 @@
   border: 1px solid var(--border);
 }
 
-.compose-panel h2,
-.response-panel h2 {
+.message-tester .compose-panel h2, .message-tester .response-panel h2{
   /* Inherits from H2 */
   margin-bottom: 1.5rem;
 }
 
-.form-group {
+.message-tester .form-group{
   margin-bottom: 1.25rem;
 }
 
-.form-group label {
+.message-tester .form-group label{
   display: block;
   font-size: 0.7rem;
   font-weight: 700;
@@ -50,9 +48,7 @@
   margin-bottom: 0.5rem;
 }
 
-.form-group input,
-.form-group select,
-.form-group textarea {
+.message-tester .form-group input, .message-tester .form-group select, .message-tester .form-group textarea{
   width: 100%;
   padding: 0.75rem 1rem;
   font-size: 0.9375rem;
@@ -62,33 +58,31 @@
   transition: border-color 0.2s;
 }
 
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
+.message-tester .form-group input:focus, .message-tester .form-group select:focus, .message-tester .form-group textarea:focus{
   outline: none;
   border-color: var(--primary);
 }
 
-.form-group textarea {
+.message-tester .form-group textarea{
   resize: vertical;
   min-height: 100px;
 }
 
-.form-group .hint {
+.message-tester .form-group .hint{
   display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 0.375rem;
 }
 
-.toggle-group {
+.message-tester .toggle-group{
   display: flex;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
 }
 
-.toggle-group button {
+.message-tester .toggle-group button{
   flex: 1;
   padding: 0.625rem 1rem;
   font-size: 0.875rem;
@@ -100,16 +94,16 @@
   color: var(--text-secondary);
 }
 
-.toggle-group button:first-child {
+.message-tester .toggle-group button:first-child{
   border-right: 1px solid var(--border);
 }
 
-.toggle-group button.active {
+.message-tester .toggle-group button.active{
   background: var(--primary);
   color: white;
 }
 
-.send-btn {
+.message-tester .send-btn{
   display: flex;
   align-items: center;
   justify-content: center;
@@ -126,16 +120,16 @@
   transition: background 0.2s;
 }
 
-.send-btn:hover:not(:disabled) {
+.message-tester .send-btn:hover:not(:disabled){
   background: var(--primary-hover);
 }
 
-.send-btn:disabled {
+.message-tester .send-btn:disabled{
   opacity: 0.7;
   cursor: not-allowed;
 }
 
-.response-status {
+.message-tester .response-status{
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -146,54 +140,54 @@
   margin-bottom: 1rem;
 }
 
-.response-status.success {
+.message-tester .response-status.success{
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.response-status.error {
+.message-tester .response-status.error{
   background: #FEE2E2;
   color: #DC2626;
 }
 
-.response-details {
+.message-tester .response-details{
   margin-bottom: 1rem;
 }
 
-.detail-row {
+.message-tester .detail-row{
   display: flex;
   justify-content: space-between;
   padding: 0.625rem 0;
   border-bottom: 1px solid var(--border);
 }
 
-.detail-row:last-child {
+.message-tester .detail-row:last-child{
   border-bottom: none;
 }
 
-.detail-label {
+.message-tester .detail-label{
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
 
-.detail-value {
+.message-tester .detail-value{
   font-size: 0.875rem;
   color: var(--text-primary);
   font-weight: 500;
 }
 
-.detail-value.mono {
+.message-tester .detail-value.mono{
   font-family: monospace;
 }
 
-.response-json {
+.message-tester .response-json{
   background: #1E293B;
   border-radius: var(--radius);
   padding: 1rem;
   overflow-x: auto;
 }
 
-.response-json pre {
+.message-tester .response-json pre{
   margin: 0;
   color: #E2E8F0;
   font-size: 0.8125rem;
@@ -201,7 +195,7 @@
   white-space: pre-wrap;
 }
 
-.response-empty {
+.message-tester .response-empty{
   display: flex;
   align-items: center;
   justify-content: center;
@@ -210,35 +204,34 @@
   border-radius: var(--radius);
 }
 
-.response-empty p {
+.message-tester .response-empty p{
   color: var(--text-muted);
   margin: 0;
 }
 
 @media (max-width: 1000px) {
-  .tester-panels {
+  .message-tester .tester-panels{
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 768px) {
-  .message-tester {
+  .message-tester{
     padding: 1rem;
   }
 
-  .compose-panel,
-  .response-panel {
+  .message-tester .compose-panel, .message-tester .response-panel{
     padding: 1rem;
   }
 
-  .toggle-group {
+  .message-tester .toggle-group{
     flex-wrap: wrap;
     border: none;
     gap: 0.5rem;
     overflow: visible;
   }
 
-  .toggle-group button {
+  .message-tester .toggle-group button{
     min-width: 0;
     padding: 0.5rem 0.875rem;
     font-size: 0.8125rem;
@@ -246,18 +239,16 @@
     border-radius: 6px;
   }
 
-  .toggle-group button.active {
+  .message-tester .toggle-group button.active{
     border-color: var(--primary) !important;
   }
 
-  .send-btn {
+  .message-tester .send-btn{
     font-size: 0.9375rem;
     padding: 0.75rem 1rem;
   }
 
-  .form-group input,
-  .form-group select,
-  .form-group textarea {
+  .message-tester .form-group input, .message-tester .form-group select, .message-tester .form-group textarea{
     font-size: 0.875rem;
     padding: 0.625rem 0.75rem;
   }

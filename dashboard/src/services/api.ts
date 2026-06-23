@@ -169,6 +169,20 @@ export interface ChatMessage {
   };
 }
 
+// Live WhatsApp message from the engine history endpoint (not a persisted DB row): it carries `fromMe`
+// instead of `direction`/`status`. Used to backfill a chat thread the gateway never captured live.
+export interface EngineHistoryMessage {
+  id: string;
+  chatId: string;
+  from: string;
+  to: string;
+  body: string;
+  type: string;
+  timestamp: number;
+  fromMe?: boolean;
+  media?: { mimetype: string; filename?: string; data?: string };
+}
+
 export interface SendMediaPayload {
   base64?: string;
   url?: string;
@@ -378,6 +392,12 @@ export const sessionApi = {
   getChatMessages: (id: string, chatId: string, limit = 100) =>
     request<{ messages: ChatMessage[]; total: number }>(
       `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}`,
+    ),
+  // Live history straight from WhatsApp (bypasses the DB) — backfills a thread the gateway never
+  // captured, e.g. a freshly paired session whose persisted store is still empty.
+  getChatHistory: (id: string, chatId: string, limit = 100) =>
+    request<EngineHistoryMessage[]>(
+      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}`,
     ),
 };
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-23
+
 > **v0.7 — plugin-contract expansion.** Richer plugin config (declarative + sandboxed-iframe editors),
 > per-session activation and config, SSRF-guarded outbound HTTP, and the removal of the bundled
 > reference extensions in favour of the marketplace. ⚠️ See the **Removed** note before upgrading.
@@ -18,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plugins: **per-session config overrides**. A session-scoped plugin can carry per-session config on top of its base (`'*'`) config via `PUT /plugins/:id/config/:sessionId`; `ctx.config` (read inside a hook) is the override shallow-merged over the base for the firing session, resolved race-safely via `AsyncLocalStorage` for both in-process and sandboxed plugins. Overrides are secret-redacted per slice on the API and survive a restart. (#441)
 - Plugins: per-session activation. A session-scoped plugin can now be activated for all numbers (`*`) or an explicit set of sessions via `PUT /plugins/:id/sessions`, and only receives hook events for the sessions it is active for (enforced at delivery). A plugin declares `sessionScoped` in its manifest (default `true`); a global plugin (`false`, e.g. a metrics logger) always runs. The active set is surfaced on the plugin API and survives a restart. (#438)
 - Plugins: a new `ctx.net.fetch` capability lets a sandboxed plugin make outbound HTTP through the host's SSRF guard (resolve-once-pin, redirects refused), gated by a `net:fetch` permission plus a manifest `net.allow` host allowlist (`host:port`, bare `host`, or `*` for any public host; internal IPs are always blocked). Responses are bounded by a timeout and a streamed size cap. (#437)
+- Chats: opening a conversation now shows its recent history. The dashboard backfills messages directly from WhatsApp when the gateway has none stored yet and merges them with locally-persisted messages, so a freshly connected session shows the conversation instead of an empty thread.
+- Engine (whatsapp-web.js): a reconnect that stalls mid-authentication now self-heals — the stale local auth is cleared and a fresh QR pairing is started — and the WhatsApp Web build can be pinned via `WWEBJS_WEB_VERSION` for environments where the auto-selected build drifts.
+- Dashboard: a searchable plugin catalog, audit-log CSV export across all pages (not just the current view), the running version shown in the sidebar, and an engine-aware engine-configuration dialog (Baileys no longer shows Puppeteer-only fields).
+
+### Changed
+
+- Dashboard, small screens: the chat view is now a single-pane list → conversation flow with a back control instead of a cramped two-pane; page headers place the description directly under the title; and keyboard focus is a consistent, cross-browser, keyboard-only ring. Plus assorted copy and empty-state refinements.
+- Plugins (install): install-from-URL / catalog downloads now follow CDN redirects safely — each hop is re-validated through the SSRF guard — so plugins published on GitHub Releases install correctly.
 
 ### Removed
 
@@ -27,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Plugins: an operator's per-session activation (and now per-session config) was silently dropped from the on-disk registry on the second restart, because the registry entry was rebuilt on each load without carrying those fields. Both are now preserved across restarts. (#441)
 - Docker: the multi-arch image build failed on `linux/arm64` (`Cannot find module lightningcss.linux-arm64-gnu.node`) — the builder stage was QEMU-emulated per target and the emulated arm64 install couldn't fetch lightningcss's (Vite's native CSS minifier) arm64 binary. The builder, which only produces arch-independent artifacts, is now pinned to `$BUILDPLATFORM` so it runs natively; per-arch runtime deps still install in the target-platform stage. Restores `linux/arm64` GHCR publishing.
+- Inbound media is now size-capped before the full attachment is buffered into memory, on both engines, and concurrent inbound media downloads are bounded — lowering peak memory under bursty load.
+- Plugins: composite (object/array) config fields marked `secret` are now fully masked when read back; plugin storage files and directories are created with owner-only permissions; and several runtime robustness fixes (timeout, validation, and error handling) in the sandbox and installer.
+
+### Security
+
+- Session scope is now enforced on the session-statistics overview and on per-session plugin activation, so an API key restricted to specific sessions can no longer read or change state for sessions outside its scope.
 
 ## [0.6.2] - 2026-06-23
 

@@ -11,7 +11,12 @@ type FakeHost = { load: jest.Mock; runLifecycle: jest.Mock; terminate: jest.Mock
 /** Loader that returns fake worker hosts so routing is testable without spawning a real OS thread. */
 class TestableLoader extends PluginLoaderService {
   readonly hosts: FakeHost[] = [];
-  protected createSandboxHost(): PluginWorkerHost {
+  capturedOnHookSubscribe?: (event: string, priority?: number) => void;
+  protected createSandboxHost(
+    _capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+    onHookSubscribe?: (event: string, priority?: number) => void,
+  ): PluginWorkerHost {
+    this.capturedOnHookSubscribe = onHookSubscribe;
     const host: FakeHost = {
       load: jest.fn().mockResolvedValue(undefined),
       runLifecycle: jest.fn().mockResolvedValue(undefined),
@@ -98,6 +103,46 @@ describe('PluginLoaderService — sandbox tier routing', () => {
     expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
     // the host must be dropped so a misbehaving plugin can't leak its worker thread
     expect((loader as unknown as { sandboxHosts: Map<string, unknown> }).sandboxHosts.has('p1')).toBe(false);
+  });
+
+  it('dedups duplicate hook-subscribe from the worker so a flood cannot grow the host registry', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    const registerSpy = jest.spyOn(hookManager, 'register');
+
+    await loader.enablePlugin('p1');
+    const onHookSubscribe = loader.capturedOnHookSubscribe;
+    expect(onHookSubscribe).toBeDefined();
+
+    // A hostile worker posts the same subscribe many times; the host must register it ONCE.
+    onHookSubscribe!('message:received');
+    onHookSubscribe!('message:received');
+    onHookSubscribe!('message:received');
+    expect(registerSpy.mock.calls.filter(c => c[1] === 'message:received')).toHaveLength(1);
+
+    // A genuinely distinct event still registers.
+    onHookSubscribe!('message:sending');
+    expect(registerSpy.mock.calls.filter(c => c[1] === 'message:sending')).toHaveLength(1);
+  });
+
+  it('drops fabricated (unknown) hook-subscribe events so the host registry cannot grow unbounded', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    const registerSpy = jest.spyOn(hookManager, 'register');
+
+    await loader.enablePlugin('p1');
+    const onHookSubscribe = loader.capturedOnHookSubscribe;
+    expect(onHookSubscribe).toBeDefined();
+
+    // A worker floods the boundary with fabricated event names — none may reach hookManager.register.
+    for (let i = 0; i < 1000; i++) onHookSubscribe!(`x:${i}`);
+    expect(registerSpy).not.toHaveBeenCalled();
+
+    // A real, known event still registers.
+    onHookSubscribe!('message:received');
+    expect(registerSpy.mock.calls.filter(c => c[1] === 'message:received')).toHaveLength(1);
   });
 
   it('enables a built-in plugin in-process (no sandbox worker spawned)', async () => {

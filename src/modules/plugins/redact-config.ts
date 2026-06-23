@@ -14,13 +14,16 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> =>
  * as-is so the mask never implies a secret that isn't set.
  */
 function redactValue(value: unknown, field: PluginConfigField): unknown {
+  // Mask a `secret` field BEFORE descending into its structure: a whole object/array marked secret
+  // (e.g. a credentials object or a list of keys) must be masked as one unit, not recursed into —
+  // otherwise its non-secret children leak verbatim. Scalar secrets are masked here too.
+  if (field.secret && isMeaningful(value)) return SECRET_SENTINEL;
   if (field.type === 'object' && field.properties && isPlainObject(value)) {
     return redactObject(value, field.properties);
   }
   if (field.type === 'array' && field.items && Array.isArray(value)) {
     return value.map(item => redactValue(item, field.items as PluginConfigField));
   }
-  if (field.secret && isMeaningful(value)) return SECRET_SENTINEL;
   return value;
 }
 
@@ -81,6 +84,16 @@ function restoreValue(
   existing: unknown,
   field: PluginConfigField,
 ): { keep: boolean; value?: unknown } {
+  // Mirror redactValue: a `secret` field is handled as ONE unit before any structural recursion. A
+  // sentinel/empty incoming keeps the stored value (or drops it); a genuinely-new value is stored
+  // as-is. Without this, a composite secret (object/array) would recurse and its masked children
+  // would clobber the stored secret instead of restoring it.
+  if (field.secret) {
+    if (incoming === SECRET_SENTINEL || !isMeaningful(incoming)) {
+      return isMeaningful(existing) ? { keep: true, value: existing } : { keep: false };
+    }
+    return { keep: true, value: incoming };
+  }
   if (field.type === 'object' && field.properties && isPlainObject(incoming)) {
     return {
       keep: true,
@@ -89,7 +102,7 @@ function restoreValue(
   }
   if (field.type === 'array' && field.items && Array.isArray(incoming)) {
     const itemField = field.items;
-    const existingArr = Array.isArray(existing) ? existing : [];
+    const existingArr: unknown[] = Array.isArray(existing) ? existing : [];
     // Match each incoming element to its stored counterpart by NON-SECRET content (a row's signature
     // is the row with its secrets masked), not by array index. Adding / removing / reordering rows
     // then can't bind a sentinel to a different row's secret. Only an unambiguous match (exactly one
@@ -102,18 +115,26 @@ function restoreValue(
       sigCount.set(s, (sigCount.get(s) ?? 0) + 1);
       if (!sigFirst.has(s)) sigFirst.set(s, ex);
     }
+    const sameLength = incoming.length === existingArr.length;
     return {
       keep: true,
-      value: incoming.map(item => {
-        const s = elementSignature(item, itemField);
-        const match = sigCount.get(s) === 1 ? sigFirst.get(s) : undefined;
-        return restoreValue(item, match, itemField).value;
-      }),
+      value: incoming
+        .map((item, i) => {
+          const s = elementSignature(item, itemField);
+          // Prefer an unambiguous content match — a row keeps its secret across reorder / insert /
+          // removal. When the signature can't disambiguate (scalar-secret elements all mask to the
+          // sentinel; duplicate rows; or a row whose NON-secret field was edited), fall back to the
+          // same index, but only when the array length is unchanged: a same-length round-trip is an
+          // in-place edit (position i is the same logical row), whereas a length change is a true
+          // insert/removal where positional binding could graft a stored secret onto a new row.
+          const match = sigCount.get(s) === 1 ? sigFirst.get(s) : sameLength ? existingArr[i] : undefined;
+          return restoreValue(item, match, itemField);
+        })
+        // Honor keep:false like restoreObject does (drop the element) rather than emitting `.value`
+        // (undefined), which would serialize to a null hole in the persisted array.
+        .filter(r => r.keep)
+        .map(r => r.value),
     };
-  }
-  if (field.secret && (incoming === SECRET_SENTINEL || !isMeaningful(incoming))) {
-    if (isMeaningful(existing)) return { keep: true, value: existing };
-    return { keep: false };
   }
   return { keep: true, value: incoming };
 }

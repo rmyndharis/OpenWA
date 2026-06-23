@@ -299,7 +299,7 @@ export class SessionController {
     status: 200,
     description: 'Session statistics including counts and memory usage',
   })
-  async getStats(): Promise<{
+  async getStats(@CurrentApiKey() apiKey?: ApiKey): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -307,6 +307,8 @@ export class SessionController {
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    return this.sessionService.getStats();
+    // Scope aggregate stats to the key's allowedSessions so a session-restricted key cannot enumerate
+    // global session counts/status (the route carries no :id for the guard to scope against).
+    return this.sessionService.getStats(apiKey?.allowedSessions);
   }
 }
