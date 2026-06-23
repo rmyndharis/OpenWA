@@ -19,6 +19,7 @@ const base = {
 };
 
 test('identity when no i18n at all', () => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { i18n, ...p } = base;
   const out = localizePlugin(p as typeof base, 'es');
   assert.equal(out, p); // same reference — no override

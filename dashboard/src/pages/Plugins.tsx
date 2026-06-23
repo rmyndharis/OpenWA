@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { localizePlugin } from '../utils/localizePlugin';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Puzzle,
@@ -326,7 +327,7 @@ function PluginConfigUi({ plugin }: { plugin: Plugin }) {
 }
 
 export default function Plugins() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   useDocumentTitle(t('plugins.title'));
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -533,7 +534,7 @@ export default function Plugins() {
   };
 
   const handleUninstall = async (plugin: Plugin) => {
-    if (!window.confirm(t('plugins.uninstallConfirm', { name: plugin.name }))) return;
+    if (!window.confirm(t('plugins.uninstallConfirm', { name: localizePlugin(plugin, i18n.language).name }))) return;
     setActionLoading(plugin.id);
     try {
       await pluginsApi.uninstall(plugin.id);
@@ -627,7 +628,7 @@ export default function Plugins() {
                 {activePlugins.map(p => (
                   <li key={p.id} className="rail-active-item">
                     <span className="status-dot enabled" />
-                    <span className="rail-active-name">{p.name}</span>
+                    <span className="rail-active-name">{localizePlugin(p, i18n.language).name}</span>
                     <span className="rail-active-type">{p.type}</span>
                   </li>
                 ))}
@@ -641,6 +642,7 @@ export default function Plugins() {
         {plugins.map(plugin => {
           const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
           const isLoading = actionLoading === plugin.id;
+          const lz = localizePlugin(plugin, i18n.language);
 
           return (
             <div key={plugin.id} className="plugin-card">
@@ -650,7 +652,7 @@ export default function Plugins() {
                     <TypeIcon size={20} />
                   </div>
                   <div>
-                    <h3 className="plugin-name">{plugin.name}</h3>
+                    <h3 className="plugin-name">{lz.name}</h3>
                     <span className="plugin-version">v{plugin.version}</span>
                   </div>
                 </div>
@@ -658,7 +660,7 @@ export default function Plugins() {
               </div>
 
               <div className="plugin-card-body">
-                <p className="plugin-description">{plugin.description || t('plugins.noDescription')}</p>
+                <p className="plugin-description">{lz.description || t('plugins.noDescription')}</p>
 
                 <div className="plugin-status-row">
                   <div className="plugin-status">
@@ -855,13 +857,15 @@ export default function Plugins() {
                     <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
                   ) : (
                     <div className="catalog-list">
-                      {catalog.map(entry => (
+                      {catalog.map(entry => {
+                        const lz = localizePlugin(entry, i18n.language);
+                        return (
                         <div className="catalog-row" key={entry.id}>
                           <div className="catalog-row-info">
                             <div className="catalog-row-name">
-                              {entry.name} <span className="catalog-row-version">v{entry.version}</span>
+                              {lz.name} <span className="catalog-row-version">v{entry.version}</span>
                             </div>
-                            {entry.description && <div className="catalog-row-desc">{entry.description}</div>}
+                            {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
                             <div className="catalog-row-meta">
                               {entry.author && <span className="catalog-row-author">{entry.author}</span>}
                               {entry.updateAvailable && (
@@ -907,7 +911,8 @@ export default function Plugins() {
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -922,11 +927,13 @@ export default function Plugins() {
         </div>
       )}
 
-      {showConfigModal && configPlugin && (
+      {showConfigModal && configPlugin && (() => {
+        const lz = localizePlugin(configPlugin, i18n.language);
+        return (
         <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
           <div className="modal config-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{t('plugins.config.title', { name: configPlugin.name })}</h2>
+              <h2>{t('plugins.config.title', { name: lz.name })}</h2>
               <button className="btn-icon" onClick={() => setShowConfigModal(false)}>
                 <X size={20} />
               </button>
@@ -988,9 +995,9 @@ export default function Plugins() {
                 </>
               ) : configPlugin.configUi ? (
                 <PluginConfigUi plugin={configPlugin} />
-              ) : configPlugin.configSchema && Object.keys(configPlugin.configSchema.properties).length > 0 ? (
+              ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
                 <div className="config-form">
-                  {Object.entries(configPlugin.configSchema.properties).map(([key, field]) => (
+                  {Object.entries(lz.configSchema.properties).map(([key, field]) => (
                     <ConfigField
                       key={key}
                       field={field}
@@ -1016,8 +1023,8 @@ export default function Plugins() {
                 <button className="btn-primary" onClick={handleSaveConfig} disabled={savingConfig}>
                   {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
                 </button>
-              ) : configPlugin.configUi ? null : configPlugin.configSchema &&
-                Object.keys(configPlugin.configSchema.properties).length > 0 ? (
+              ) : configPlugin.configUi ? null : lz.configSchema &&
+                Object.keys(lz.configSchema.properties).length > 0 ? (
                 <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
                   {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
                 </button>
@@ -1025,7 +1032,8 @@ export default function Plugins() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
