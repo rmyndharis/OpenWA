@@ -64,6 +64,7 @@ interface SaveConfigDto {
     s3Endpoint?: string;
   };
   engine?: {
+    type?: string;
     headless?: boolean;
     sessionDataPath?: string;
     browserArgs?: string;
@@ -169,7 +170,7 @@ interface SavedConfigResponse {
     s3Endpoint: string;
     s3CredentialsSet: boolean;
   };
-  engine: { headless: boolean; sessionDataPath: string; browserArgs: string };
+  engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
 }
 
 @ApiTags('infrastructure')
@@ -214,9 +215,12 @@ export class InfraController {
     const storagePath = this.configService.get<string>('storage.path', './uploads');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
-    const engineHeadless = this.configService.get<boolean>('engine.headless', true);
+    // configuration.ts nests these under engine.puppeteer.{headless,args}; the old flat
+    // engine.headless / engine.browserArgs keys never existed, so status always reported defaults.
+    const engineHeadless = this.configService.get<boolean>('engine.puppeteer.headless', true) ?? true;
     const sessionDataPath = this.configService.get<string>('engine.sessionDataPath', './data/sessions');
-    const browserArgs = this.configService.get<string>('engine.browserArgs', '--no-sandbox --disable-gpu');
+    const browserArgs =
+      this.configService.get<string[]>('engine.puppeteer.args')?.join(' ') || '--no-sandbox --disable-gpu';
 
     return {
       database: { connected: dbConnected, type: dbType, host: dbHost },
@@ -289,6 +293,7 @@ export class InfraController {
         s3CredentialsSet: Boolean(saved.S3_ACCESS_KEY_ID && saved.S3_SECRET_ACCESS_KEY),
       },
       engine: {
+        type: saved.ENGINE_TYPE || 'whatsapp-web.js',
         headless: saved.PUPPETEER_HEADLESS !== 'false',
         sessionDataPath: saved.SESSION_DATA_PATH || '',
         browserArgs: saved.PUPPETEER_ARGS || '',
@@ -428,6 +433,15 @@ export class InfraController {
       // Engine. NOTE: PUPPETEER_HEADLESS / SESSION_DATA_PATH / PUPPETEER_ARGS are the names
       // configuration.ts reads (previously saved as ENGINE_* and silently ignored — #226).
       if (config.engine) {
+        // Persist the selected engine so the Infrastructure tile can actually switch engines (the
+        // active engine was previously only settable via the ENGINE_TYPE env, never from the UI).
+        if (config.engine.type) {
+          const validEngineIds = this.engineFactory.getAvailableEngines().map(e => e.id);
+          if (!validEngineIds.includes(config.engine.type)) {
+            throw new BadRequestException(`Unknown engine type: ${config.engine.type}`);
+          }
+          updates.ENGINE_TYPE = config.engine.type;
+        }
         updates.PUPPETEER_HEADLESS = config.engine.headless !== false ? 'true' : 'false';
         updates.SESSION_DATA_PATH = config.engine.sessionDataPath || './data/sessions';
         updates.PUPPETEER_ARGS = config.engine.browserArgs || '--no-sandbox --disable-gpu';

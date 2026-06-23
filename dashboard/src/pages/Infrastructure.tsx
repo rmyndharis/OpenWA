@@ -12,10 +12,16 @@ import {
   Globe,
   Webhook,
   Gauge,
+  Cpu,
 } from 'lucide-react';
 import { infraApi, API_BASE_URL } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useInfraStatusQuery, useInfraConfigQuery } from '../hooks/queries';
+import {
+  useInfraStatusQuery,
+  useInfraConfigQuery,
+  useEnginesQuery,
+  useCurrentEngineQuery,
+} from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/Toast';
 import './Infrastructure.css';
@@ -57,6 +63,13 @@ interface StorageConfig {
   s3Endpoint: string;
 }
 
+interface EngineConfig {
+  type: string;
+  headless: boolean;
+  sessionDataPath: string;
+  browserArgs: string;
+}
+
 interface QueueStats {
   pending: number;
   completed: number;
@@ -90,6 +103,9 @@ export function Infrastructure() {
   const toast = useToast();
   const { data: infraStatus, isLoading: loading } = useInfraStatusQuery();
   const { data: savedConfig } = useInfraConfigQuery();
+  const { data: engines = [] } = useEnginesQuery();
+  const { data: currentEngineData } = useCurrentEngineQuery();
+  const currentEngine = currentEngineData?.engineType ?? '';
   const [saving, setSaving] = useState(false);
   const [showRestartModal, setShowRestartModal] = useState(false);
   const [restartCountdown, setRestartCountdown] = useState(0);
@@ -130,6 +146,13 @@ export function Infrastructure() {
   const [queueStats, setQueueStats] = useState({
     messages: { pending: 0, completed: 0, failed: 0 } as QueueStats,
     webhooks: { pending: 0, completed: 0, failed: 0 } as QueueStats,
+  });
+
+  const [engineConfig, setEngineConfig] = useState<EngineConfig>({
+    type: 'whatsapp-web.js',
+    headless: true,
+    sessionDataPath: './data/sessions',
+    browserArgs: '--no-sandbox --disable-gpu',
   });
 
   const [redisEnabled, setRedisEnabled] = useState(false);
@@ -222,7 +245,19 @@ export function Infrastructure() {
       s3Region: savedConfig.storage.s3Region || prev.s3Region,
       s3Endpoint: savedConfig.storage.s3Endpoint || prev.s3Endpoint,
     }));
+    setEngineConfig(prev => ({
+      ...prev,
+      headless: savedConfig.engine.headless,
+      sessionDataPath: savedConfig.engine.sessionDataPath || prev.sessionDataPath,
+      browserArgs: savedConfig.engine.browserArgs || prev.browserArgs,
+    }));
   }, [savedConfig]);
+
+  // The active engine reflects what's actually running (honours a real-env ENGINE_TYPE override),
+  // so seed the selected radio from it rather than the saved .env.generated value.
+  useEffect(() => {
+    if (currentEngine) setEngineConfig(prev => ({ ...prev, type: currentEngine }));
+  }, [currentEngine]);
 
   if (loading) {
     return (
@@ -241,6 +276,8 @@ export function Infrastructure() {
     setRedisConfig(prev => ({ ...prev, [key]: value }));
   const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
     setStorageConfig(prev => ({ ...prev, [key]: value }));
+  const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) =>
+    setEngineConfig(prev => ({ ...prev, [key]: value }));
   const updateServerConfig = (key: keyof ServerConfig, value: string) =>
     setServerConfig(prev => ({ ...prev, [key]: value }));
   const updateWebhookConfig = (key: keyof WebhookConfig, value: number) =>
@@ -256,6 +293,7 @@ export function Infrastructure() {
         redis: { enabled: redisEnabled, ...redisConfig },
         queue: { enabled: queueEnabled },
         storage: { ...storageConfig },
+        engine: { ...engineConfig },
         server: { ...serverConfig },
         webhook: { ...webhookConfig },
         rateLimit: { ...rateLimitConfig },
@@ -660,6 +698,81 @@ export function Infrastructure() {
               {t('infrastructure.database.migrationsHint')}
             </p>
           </div>
+        </section>
+
+        {/* Engine */}
+        <section className="infra-card">
+          <div className="card-header">
+            <div className="header-left">
+              <Cpu size={20} />
+              <h2>{t('infrastructure.engine.title')}</h2>
+            </div>
+            <span className="status-indicator connected">● {currentEngine || engineConfig.type}</span>
+          </div>
+
+          <div className="radio-group">
+            {engines.map(engine => (
+              <label key={engine.id} className={`radio-option ${engineConfig.type === engine.id ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="engineType"
+                  checked={engineConfig.type === engine.id}
+                  onChange={() => updateEngineConfig('type', engine.id)}
+                />
+                <Cpu className="watermark-icon" />
+                <span>{engine.name}</span>
+                <small>
+                  {engine.library
+                    ? `${engine.library.name} ${engine.library.version}`
+                    : t('infrastructure.engine.builtIn')}
+                </small>
+              </label>
+            ))}
+          </div>
+
+          {engineConfig.type === 'whatsapp-web.js' ? (
+            <div className="config-form">
+              <div className="toggle-row">
+                <div className="toggle-info">
+                  <span>{t('infrastructure.engine.headless')}</span>
+                  <small>{t('infrastructure.engine.headlessDesc')}</small>
+                </div>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={engineConfig.headless}
+                    onChange={e => updateEngineConfig('headless', e.target.checked)}
+                  />
+                  <span className="toggle-slider"></span>
+                </label>
+              </div>
+              <div className="form-group">
+                <label>{t('infrastructure.engine.sessionDataPath')}</label>
+                <input
+                  type="text"
+                  value={engineConfig.sessionDataPath}
+                  onChange={e => updateEngineConfig('sessionDataPath', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>{t('infrastructure.engine.browserArgs')}</label>
+                <input
+                  type="text"
+                  value={engineConfig.browserArgs}
+                  onChange={e => updateEngineConfig('browserArgs', e.target.value)}
+                  placeholder="--no-sandbox --disable-gpu"
+                />
+              </div>
+            </div>
+          ) : (
+            <p style={{ margin: '0.5rem 0 0', color: '#64748B', fontSize: '0.8125rem', lineHeight: 1.5 }}>
+              {t('infrastructure.engine.noBrowser')}
+            </p>
+          )}
+
+          <p style={{ margin: '1rem 0 0', color: '#64748B', fontSize: '0.8125rem', lineHeight: 1.5 }}>
+            {t('infrastructure.engine.restartNote')}
+          </p>
         </section>
 
         {/* Redis */}

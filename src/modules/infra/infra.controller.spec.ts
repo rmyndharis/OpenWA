@@ -231,6 +231,53 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
   });
 });
 
+describe('InfraController.saveConfig engine selection (persist ENGINE_TYPE — Infrastructure tile)', () => {
+  const engineFactory = {
+    getAvailableEngines: () => [{ id: 'whatsapp-web.js' }, { id: 'baileys' }],
+  };
+  const newController = () =>
+    new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      engineFactory as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  function written(config: unknown, existing?: string): string {
+    (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
+    (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
+    (fs.writeFileSync as jest.Mock).mockClear();
+    newController().saveConfig(config as never);
+    const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+    return content;
+  }
+
+  it('persists ENGINE_TYPE when a valid engine is selected', () => {
+    const env = written({ engine: { type: 'baileys', headless: true } });
+    expect(env).toContain('ENGINE_TYPE=baileys');
+  });
+
+  it('does not write ENGINE_TYPE when no engine type is provided (avoids clobbering)', () => {
+    const env = written({ engine: { headless: false } });
+    expect(env).not.toContain('ENGINE_TYPE=');
+    expect(env).toContain('PUPPETEER_HEADLESS=false');
+  });
+
+  it('rejects an unknown engine type and writes nothing', () => {
+    (fs.writeFileSync as jest.Mock).mockClear();
+    const res = newController().saveConfig({ engine: { type: 'bogus' } });
+    expect(res.saved).toBe(false);
+    expect(res.message).toMatch(/unknown engine/i);
+    expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
+  });
+});
+
 describe('InfraController.importData round-trips export-data (no silent message/batch loss)', () => {
   let ds: DataSource;
   let controller: InfraController;
@@ -373,7 +420,7 @@ describe('InfraController.getConfig (#226)', () => {
   it('returns the saved config shape without echoing secrets', () => {
     (fs.existsSync as jest.Mock).mockReturnValue(true);
     (fs.readFileSync as jest.Mock).mockReturnValue(
-      'DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_PASSWORD=secret\nSESSION_DATA_PATH=./sess\nSTORAGE_TYPE=s3\nS3_ACCESS_KEY_ID=ak\nS3_SECRET_ACCESS_KEY=sk\n',
+      'DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_PASSWORD=secret\nSESSION_DATA_PATH=./sess\nENGINE_TYPE=baileys\nSTORAGE_TYPE=s3\nS3_ACCESS_KEY_ID=ak\nS3_SECRET_ACCESS_KEY=sk\n',
     );
     const controller = new InfraController(
       {} as never,
@@ -394,11 +441,41 @@ describe('InfraController.getConfig (#226)', () => {
     expect(cfg.database.host).toBe('db');
     expect(cfg.database.passwordSet).toBe(true);
     expect(cfg.engine.sessionDataPath).toBe('./sess');
+    expect(cfg.engine.type).toBe('baileys');
     expect(cfg.storage.type).toBe('s3');
     expect(cfg.storage.s3CredentialsSet).toBe(true);
     // Secrets are never present on the returned object.
     expect(JSON.stringify(cfg)).not.toContain('secret');
     expect(JSON.stringify(cfg)).not.toContain('"ak"');
+  });
+});
+
+describe('InfraController.getStatus engine (F7 — reads the real engine.puppeteer.* keys)', () => {
+  it('reports the saved headless/browserArgs instead of stale defaults from non-existent flat keys', async () => {
+    const map: Record<string, unknown> = {
+      'engine.type': 'whatsapp-web.js',
+      'engine.puppeteer.headless': false,
+      'engine.puppeteer.args': ['--foo', '--bar'],
+      'engine.sessionDataPath': './sess',
+    };
+    const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
+    const cache = { isAvailable: () => Promise.resolve(false) };
+    const ds = { isInitialized: true };
+    const controller = new InfraController(
+      config as never,
+      ds as never,
+      ds as never,
+      {} as never,
+      {} as never,
+      cache as never,
+      {} as never,
+      {} as never,
+    );
+
+    const status = await controller.getStatus();
+    expect(status.engine.headless).toBe(false);
+    expect(status.engine.browserArgs).toBe('--foo --bar');
+    expect(status.engine.sessionDataPath).toBe('./sess');
   });
 });
 

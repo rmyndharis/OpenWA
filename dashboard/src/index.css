@@ -174,6 +174,11 @@ select:disabled {
   width: 90%;
   max-width: 480px;
   animation: slideUp 0.3s ease;
+  /* Cap height and lay out as a flex column so the body scrolls while the header and footer stay
+     pinned — config-heavy modals no longer push the title/Save button off-screen. */
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
   overflow: hidden;
 }
 
@@ -194,6 +199,7 @@ select:disabled {
   align-items: center;
   padding: 1.5rem 1.5rem 1rem;
   border-bottom: 1px solid var(--border, #e2e8f0);
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -207,6 +213,9 @@ select:disabled {
 
 .modal-body {
   padding: 1.5rem;
+  /* Scroll the body (not the whole card) so the pinned header/footer stay visible. */
+  overflow-y: auto;
+  flex: 1 1 auto;
 }
 
 .modal-body > label {
@@ -235,11 +244,27 @@ select:disabled {
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
+/* The rule above is meant for TEXT inputs. Radios/checkboxes would otherwise stretch to width:100%
+   and shove their labels far to the right; reset them back to their native box. The :not() excludes
+   the visually-hidden toggle-switch checkbox (it must stay width:0) so this never ties with the
+   per-page `.toggle-switch input { width:0 }` rule on specificity. */
+.modal-body input[type='radio']:not(.toggle-switch input),
+.modal-body input[type='checkbox']:not(.toggle-switch input) {
+  width: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  flex: none;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
   padding: 1rem 1.5rem 1.5rem;
+  flex-shrink: 0;
 }
 
 /* Icon Button (modal close X) */
@@ -421,7 +446,7 @@ code {
     width: 100%;
     margin: 0;
     border-radius: 16px 16px 0 0;
-    max-height: 90vh;
-    overflow-y: auto;
+    /* max-height + body scroll already come from the base .modal rule; the bottom-sheet only
+       changes width/anchoring. (Scrolling lives on .modal-body to avoid a double scrollbar.) */
   }
 }

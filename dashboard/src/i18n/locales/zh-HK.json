@@ -143,7 +143,8 @@
       "activeSessions": "活躍工作階段",
       "messagesToday": "今日訊息",
       "webhooksConfigured": "已設定 Webhook",
-      "apiCalls": "API 呼叫（24 小時）"
+      "apiCalls": "API 呼叫（24 小時）",
+      "totalMessages": "訊息總數"
     },
     "sessionsOverview": "工作階段概覽",
     "showingSessions": "顯示 {{shown}} / {{total}} 個工作階段",
@@ -158,7 +159,22 @@
     "view": "查看",
     "disconnect": "中斷連線",
     "errorPrefix": "錯誤：{{message}}",
-    "loadError": "載入資料失敗"
+    "loadError": "載入資料失敗",
+    "charts": {
+      "title": "訊息分析",
+      "period": {
+        "24h": "24小時",
+        "7d": "7天",
+        "30d": "30天"
+      },
+      "overTime": "訊息趨勢",
+      "byType": "按類型分類的訊息",
+      "topChats": "熱門聊天",
+      "sent": "已傳送",
+      "received": "已接收",
+      "messages": "訊息",
+      "empty": "此期間沒有訊息活動。"
+    }
   },
   "sessionStatus": {
     "created": "新增",
@@ -552,6 +568,17 @@
       "migrationsStatus": "結構會透過 TypeORM 自動同步",
       "migrationsHint": "遷移會自動管理。手動遷移請使用 CLI。"
     },
+    "engine": {
+      "title": "WhatsApp 引擎",
+      "subtitle": "選擇並設定 WhatsApp 連線引擎。",
+      "builtIn": "內置",
+      "headless": "無頭模式",
+      "headlessDesc": "在沒有可見介面的情況下執行瀏覽器（建議用於生產環境）。",
+      "sessionDataPath": "工作階段資料路徑",
+      "browserArgs": "瀏覽器參數",
+      "noBrowser": "此引擎透過 WebSocket 連線——沒有瀏覽器，因此沒有無頭模式或瀏覽器參數設定。使用中的引擎會在重新啟動後生效。",
+      "restartNote": "切換引擎會在伺服器重新啟動後生效。"
+    },
     "redis": {
       "title": "Redis",
       "enable": "啟用 Redis",
@@ -615,7 +642,7 @@
   },
   "plugins": {
     "title": "外掛",
-    "subtitle": "管理引擎、儲存後端和擴充功能",
+    "subtitle": "安裝、設定和管理擴充功能",
     "refresh": "重新整理",
     "engineCard": "目前 WhatsApp 引擎",
     "running": "執行中",

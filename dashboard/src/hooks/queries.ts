@@ -7,9 +7,11 @@ import {
   auditApi,
   infraApi,
   pluginsApi,
+  statsApi,
   type Webhook,
   type WebhookFilters,
   type TemplatePayload,
+  type StatsPeriod,
 } from '../services/api';
 
 // ── Query Keys ────────────────────────────────────────────────────────
@@ -28,6 +30,8 @@ export const queryKeys = {
   plugins: ['plugins'] as const,
   engines: ['engines'] as const,
   currentEngine: ['engines', 'current'] as const,
+  statsOverview: ['stats', 'overview'] as const,
+  statsMessages: (period: string) => ['stats', 'messages', period] as const,
 };
 
 // ── Session Queries ───────────────────────────────────────────────────
@@ -264,5 +268,26 @@ export function useCurrentEngineQuery() {
     queryKey: queryKeys.currentEngine,
     queryFn: pluginsApi.getCurrentEngine,
     staleTime: 60_000,
+  });
+}
+
+// ── Stats Queries ─────────────────────────────────────────────────────
+// /stats/* is ADMIN-only; a non-admin key gets 403 → don't retry, let the UI fall back gracefully.
+
+export function useStatsOverviewQuery() {
+  return useQuery({
+    queryKey: queryKeys.statsOverview,
+    queryFn: statsApi.getOverview,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useStatsMessagesQuery(period: StatsPeriod) {
+  return useQuery({
+    queryKey: queryKeys.statsMessages(period),
+    queryFn: () => statsApi.getMessages(period),
+    staleTime: 30_000,
+    retry: false,
   });
 }

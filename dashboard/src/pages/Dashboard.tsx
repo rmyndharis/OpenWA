@@ -1,10 +1,21 @@
+import { lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { MessageSquare, Send, Webhook, Activity, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useSessionsQuery, useSessionStatsQuery, useWebhooksQuery, useStopSessionMutation } from '../hooks/queries';
+import {
+  useSessionsQuery,
+  useSessionStatsQuery,
+  useWebhooksQuery,
+  useStopSessionMutation,
+  useStatsOverviewQuery,
+} from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import './Dashboard.css';
+
+// recharts is heavy (~150kB gzip); load the analytics section on demand so it never bloats the
+// main/login bundle and only ships when the dashboard actually renders.
+const DashboardCharts = lazy(() => import('../components/DashboardCharts').then(m => ({ default: m.DashboardCharts })));
 
 export function Dashboard() {
   const { t } = useTranslation();
@@ -13,7 +24,12 @@ export function Dashboard() {
   const { data: sessions = [], isLoading: loadingSessions, error: sessionsError } = useSessionsQuery();
   const { data: stats } = useSessionStatsQuery();
   const { data: webhooks = [] } = useWebhooksQuery();
+  // /stats/overview is ADMIN-only; for a non-admin key it 403s → overview stays undefined and the
+  // message cards fall back to '—' without breaking the (un-gated) session cards.
+  const { data: overview } = useStatsOverviewQuery();
   const stopMutation = useStopSessionMutation();
+  const messagesToday = overview ? overview.messages.today.sent + overview.messages.today.received : '—';
+  const totalMessages = overview ? overview.messages.sent + overview.messages.received : '—';
   const loading = loadingSessions;
   const error = sessionsError instanceof Error
     ? sessionsError.message
@@ -38,9 +54,9 @@ export function Dashboard() {
       trend: `+${stats?.ready ?? 0}`,
       trendUp: true,
     },
-    { label: t('dashboard.stats.messagesToday'), value: '—', icon: Send, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.messagesToday'), value: messagesToday, icon: Send, trend: '0', trendUp: null },
     { label: t('dashboard.stats.webhooksConfigured'), value: webhookCount, icon: Webhook, trend: '0', trendUp: null },
-    { label: t('dashboard.stats.apiCalls'), value: '—', icon: Activity, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.totalMessages'), value: totalMessages, icon: Activity, trend: '0', trendUp: null },
   ];
 
   const formatLastActive = (date?: string) => {
@@ -105,6 +121,10 @@ export function Dashboard() {
           </div>
         ))}
       </div>
+
+      <Suspense fallback={null}>
+        <DashboardCharts />
+      </Suspense>
 
       <section className="sessions-section">
         <div className="section-header">

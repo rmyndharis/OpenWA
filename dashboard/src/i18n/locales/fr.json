@@ -143,7 +143,8 @@
       "activeSessions": "Sessions actives",
       "messagesToday": "Messages aujourd'hui",
       "webhooksConfigured": "Webhooks configurés",
-      "apiCalls": "Appels API (24h)"
+      "apiCalls": "Appels API (24h)",
+      "totalMessages": "Messages totaux"
     },
     "sessionsOverview": "Aperçu des sessions",
     "showingSessions": "Affichage de {{shown}} sur {{total}} sessions",
@@ -158,7 +159,22 @@
     "view": "Voir",
     "disconnect": "Déconnecter",
     "errorPrefix": "Erreur : {{message}}",
-    "loadError": "Échec du chargement des données"
+    "loadError": "Échec du chargement des données",
+    "charts": {
+      "title": "Analyses des messages",
+      "period": {
+        "24h": "24 h",
+        "7d": "7 j",
+        "30d": "30 j"
+      },
+      "overTime": "Messages au fil du temps",
+      "byType": "Messages par type",
+      "topChats": "Discussions principales",
+      "sent": "Envoyés",
+      "received": "Reçus",
+      "messages": "Messages",
+      "empty": "Aucune activité de message sur cette période."
+    }
   },
   "sessionStatus": {
     "created": "Nouveau",
@@ -552,6 +568,17 @@
       "migrationsStatus": "Le schéma est auto-synchronisé avec TypeORM",
       "migrationsHint": "Les migrations sont gérées automatiquement. Utilisez la CLI pour les migrations manuelles."
     },
+    "engine": {
+      "title": "Moteur WhatsApp",
+      "subtitle": "Choisissez et configurez le moteur de connexion WhatsApp.",
+      "builtIn": "Intégré",
+      "headless": "Mode headless",
+      "headlessDesc": "Exécuter le navigateur sans interface visible (recommandé en production).",
+      "sessionDataPath": "Chemin des données de session",
+      "browserArgs": "Arguments du navigateur",
+      "noBrowser": "Ce moteur se connecte via WebSocket : il n'a pas de navigateur, il n'y a donc pas de réglages de mode headless ni d'arguments de navigateur. Le moteur actif est appliqué après un redémarrage.",
+      "restartNote": "Le changement de moteur prend effet après le redémarrage du serveur."
+    },
     "redis": {
       "title": "Redis",
       "enable": "Activer Redis",
@@ -615,7 +642,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "subtitle": "Gérez les moteurs, les backends de stockage et les extensions",
+    "subtitle": "Installez, configurez et gérez les extensions",
     "refresh": "Actualiser",
     "engineCard": "Moteur WhatsApp actif",
     "running": "En cours d'exécution",

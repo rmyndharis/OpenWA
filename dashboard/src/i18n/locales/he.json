@@ -143,7 +143,8 @@
       "activeSessions": "Sessions פעילים",
       "messagesToday": "הודעות היום",
       "webhooksConfigured": "Webhooks מוגדרים",
-      "apiCalls": "קריאות API (24 שעות)"
+      "apiCalls": "קריאות API (24 שעות)",
+      "totalMessages": "סה\"כ הודעות"
     },
     "sessionsOverview": "סקירת Sessions",
     "showingSessions": "מוצגים {{shown}} מתוך {{total}} Sessions",
@@ -158,7 +159,22 @@
     "view": "צפייה",
     "disconnect": "ניתוק",
     "errorPrefix": "שגיאה: {{message}}",
-    "loadError": "טעינת הנתונים נכשלה"
+    "loadError": "טעינת הנתונים נכשלה",
+    "charts": {
+      "title": "ניתוח הודעות",
+      "period": {
+        "24h": "24 ש'",
+        "7d": "7 ימים",
+        "30d": "30 יום"
+      },
+      "overTime": "הודעות לאורך זמן",
+      "byType": "הודעות לפי סוג",
+      "topChats": "צ'אטים מובילים",
+      "sent": "נשלחו",
+      "received": "התקבלו",
+      "messages": "הודעות",
+      "empty": "אין פעילות הודעות בתקופה זו."
+    }
   },
   "sessionStatus": {
     "created": "חדש",
@@ -552,6 +568,17 @@
       "migrationsStatus": "הסכמה מסונכרנת אוטומטית עם TypeORM",
       "migrationsHint": "ה-Migrations מנוהלים אוטומטית. ניתן להשתמש ב-CLI ל-Migrations ידניים."
     },
+    "engine": {
+      "title": "מנוע WhatsApp",
+      "subtitle": "בחר והגדר את מנוע החיבור של WhatsApp.",
+      "builtIn": "מובנה",
+      "headless": "מצב ללא ממשק",
+      "headlessDesc": "הרצת הדפדפן ללא ממשק גלוי (מומלץ לסביבת ייצור).",
+      "sessionDataPath": "נתיב נתוני הפעלה",
+      "browserArgs": "ארגומנטים של הדפדפן",
+      "noBrowser": "מנוע זה מתחבר באמצעות WebSocket — אין לו דפדפן, ולכן אין הגדרות למצב ללא ממשק או לארגומנטים של הדפדפן. המנוע הפעיל מוחל לאחר הפעלה מחדש.",
+      "restartNote": "החלפת המנוע נכנסת לתוקף לאחר הפעלה מחדש של השרת."
+    },
     "redis": {
       "title": "Redis",
       "enable": "הפעלת Redis",
@@ -615,7 +642,7 @@
   },
   "plugins": {
     "title": "תוספים",
-    "subtitle": "ניהול מנועים, יעדי אחסון והרחבות",
+    "subtitle": "התקנה, הגדרה וניהול של הרחבות",
     "refresh": "רענון",
     "engineCard": "מנוע WhatsApp פעיל",
     "running": "פועל",

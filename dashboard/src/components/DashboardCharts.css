@@ -1,0 +1,103 @@
+/* Dashboard analytics — all rules scoped under .dashboard-charts to avoid global collisions. */
+.dashboard-charts {
+  margin-bottom: 2rem;
+}
+
+.dashboard-charts .charts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.dashboard-charts .charts-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary);
+}
+
+.dashboard-charts .charts-title h2 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+/* Segmented pill period selector (matches the plugin/install tab control). */
+.dashboard-charts .period-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.dashboard-charts .period-tab {
+  padding: 0.35rem 0.85rem;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dashboard-charts .period-tab.active {
+  background: var(--bg-white);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.dashboard-charts .charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.dashboard-charts .chart-card {
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  min-width: 0; /* let recharts ResponsiveContainer shrink inside the grid track */
+}
+
+.dashboard-charts .chart-wide {
+  grid-column: 1 / -1;
+}
+
+.dashboard-charts .chart-card h3 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 1rem;
+}
+
+.dashboard-charts .charts-empty {
+  background: var(--bg-white);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.dashboard-charts .charts-empty.small {
+  border: none;
+  padding: 2rem 1rem;
+}
+
+@media (max-width: 768px) {
+  .dashboard-charts .charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-charts .chart-wide {
+    grid-column: auto;
+  }
+}

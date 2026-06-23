@@ -39,6 +39,12 @@ describe('HealthController', () => {
       expect(result.status).toBe('ok');
       expect(result.timestamp).toBeDefined();
     });
+
+    it('reports the running version (from package.json) so the dashboard reads it live', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { version } = require('../../../package.json') as { version: string };
+      expect(controller.check().version).toBe(version);
+    });
   });
 
   describe('liveness', () => {

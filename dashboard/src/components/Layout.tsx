@@ -25,6 +25,7 @@ import {
 import { useTheme } from '../hooks/useTheme';
 import { type UserRole } from '../hooks/useRole';
 import { languageOptions, resolveSupportedLanguage, rtlLanguages, type SupportedLanguage } from '../i18n';
+import { healthApi } from '../services/api';
 import './Layout.css';
 
 interface LayoutProps {
@@ -60,6 +61,9 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  // Show the build-time version immediately, then replace it with the live running version from the
+  // backend so a stale-built bundle can't display the wrong number. Falls back silently on error.
+  const [version, setVersion] = useState(__APP_VERSION__);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = useState(false);
   const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -73,6 +77,21 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    healthApi
+      .check()
+      .then(info => {
+        if (active && info?.version) setVersion(info.version);
+      })
+      .catch(() => {
+        /* keep the build-time fallback */
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleNavClick = () => {
@@ -162,7 +181,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
           {!isCollapsed && (
             <div className="sidebar-brand">
               <span className="brand-name">{t('common.appName')}</span>
-              <span className="brand-version">v{__APP_VERSION__}</span>
+              <span className="brand-version">v{version}</span>
             </div>
           )}
         </div>

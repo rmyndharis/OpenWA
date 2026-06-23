@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Dashboard: a **Message Analytics** section — a period selector (24h / 7d / 30d) with messages-over-time, messages-by-type, and top-chats charts, sourced from the existing statistics endpoints. The charting bundle is code-split so it loads only with the Dashboard, not on the login screen.
+- Infrastructure: an **Engine Configuration** tile to pick and configure the active WhatsApp engine (whatsapp-web.js / Baileys), mirroring the Database tile. Selecting an engine persists the choice and applies on restart.
+
+### Changed
+
+- Dashboard: the **Messages Today** card is now populated from real data, and the previously-empty **API Calls** card is replaced with a **Total Messages** metric. The sidebar version is now read live from the backend, so a stale-built bundle no longer shows the wrong version.
+- Plugins: the WhatsApp engine adapters are no longer listed as plugin cards — they are configured under **Infrastructure → Engine**. The Plugins page is now extensions-only.
+- Plugins config dialog: the Configuration/Sessions and install tabs use a cleaner segmented control; the modal caps its height and scrolls its body with a pinned header and footer (Save is always reachable) and is wider for config-heavy plugins.
+- ⚠️ **Deployment:** the bundled docker-compose files no longer pin `ENGINE_TYPE`, so the active engine can be chosen from **Infrastructure → Engine** (persisted to `data/.env.generated`). A real container/host `ENGINE_TYPE` env still takes precedence; leave it unset to let the dashboard control the engine.
+
+### Fixed
+
+- Chats: voice notes and videos now play — the Content-Security-Policy was missing a `media-src` for `data:` URIs, so the browser blocked inline audio/video.
+- Chats: stickers, images, videos and documents loaded from history now render instead of collapsing to an empty timestamp-only bubble (history is fetched with its media payload).
+- Chats: on small screens the conversation back-button icon is now visible (inherited button padding had squeezed it to zero width).
+- Plugins config dialog: radio buttons on the Sessions tab no longer stretch to full width and strand their labels.
+- Infrastructure: the engine status and the engine config form now reflect the real saved headless / session-path / browser-argument values instead of always showing defaults.
+
 ## [0.7.0] - 2026-06-23
 
 > **v0.7 — plugin-contract expansion.** Richer plugin config (declarative + sandboxed-iframe editors),

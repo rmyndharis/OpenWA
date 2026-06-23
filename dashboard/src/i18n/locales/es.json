@@ -143,7 +143,8 @@
       "activeSessions": "Sesiones activas",
       "messagesToday": "Mensajes hoy",
       "webhooksConfigured": "Webhooks configurados",
-      "apiCalls": "Llamadas API (24h)"
+      "apiCalls": "Llamadas API (24h)",
+      "totalMessages": "Mensajes totales"
     },
     "sessionsOverview": "Resumen de sesiones",
     "showingSessions": "Mostrando {{shown}} de {{total}} sesiones",
@@ -158,7 +159,22 @@
     "view": "Ver",
     "disconnect": "Desconectar",
     "errorPrefix": "Error: {{message}}",
-    "loadError": "Error al cargar los datos"
+    "loadError": "Error al cargar los datos",
+    "charts": {
+      "title": "Analíticas de mensajes",
+      "period": {
+        "24h": "24 h",
+        "7d": "7 d",
+        "30d": "30 d"
+      },
+      "overTime": "Mensajes a lo largo del tiempo",
+      "byType": "Mensajes por tipo",
+      "topChats": "Chats principales",
+      "sent": "Enviados",
+      "received": "Recibidos",
+      "messages": "Mensajes",
+      "empty": "Sin actividad de mensajes en este período."
+    }
   },
   "sessionStatus": {
     "created": "Nueva",
@@ -552,6 +568,17 @@
       "migrationsStatus": "El esquema se sincroniza automáticamente con TypeORM",
       "migrationsHint": "Las migraciones se gestionan automáticamente. Usa la CLI para migraciones manuales."
     },
+    "engine": {
+      "title": "Motor de WhatsApp",
+      "subtitle": "Elige y configura el motor de conexión de WhatsApp.",
+      "builtIn": "Integrado",
+      "headless": "Modo headless",
+      "headlessDesc": "Ejecuta el navegador sin interfaz visible (recomendado para producción).",
+      "sessionDataPath": "Ruta de datos de sesión",
+      "browserArgs": "Argumentos del navegador",
+      "noBrowser": "Este motor se conecta por WebSocket: no tiene navegador, por lo que no hay ajustes de modo headless ni de argumentos del navegador. El motor activo se aplica tras reiniciar.",
+      "restartNote": "Cambiar el motor surte efecto tras reiniciar el servidor."
+    },
     "redis": {
       "title": "Redis",
       "enable": "Habilitar Redis",
@@ -615,7 +642,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "subtitle": "Gestiona motores, backends de almacenamiento y extensiones",
+    "subtitle": "Instala, configura y gestiona extensiones",
     "refresh": "Actualizar",
     "engineCard": "Motor de WhatsApp activo",
     "running": "En ejecución",

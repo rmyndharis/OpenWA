@@ -18,6 +18,11 @@ interface HealthCheckResult {
 /** Bound each dependency probe so a hung connection can't stall the readiness check. */
 const READINESS_PROBE_TIMEOUT_MS = 3000;
 
+// Source the running version from package.json (same pattern as swagger.config.ts) so the dashboard
+// can read it live and never show a stale build-time-baked version. Read once at module load.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version: APP_VERSION } = require('../../../package.json') as { version: string };
+
 @ApiTags('health')
 @Controller('health')
 @Public()
@@ -32,10 +37,11 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Basic health check' })
   @ApiResponse({ status: 200, description: 'Application is healthy' })
-  check(): { status: string; timestamp: string } {
+  check(): { status: string; timestamp: string; version: string } {
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),
+      version: APP_VERSION,
     };
   }
 

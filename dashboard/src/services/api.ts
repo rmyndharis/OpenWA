@@ -194,6 +194,8 @@ export interface SendMediaPayload {
 export interface HealthStatus {
   status: 'ok' | 'error';
   timestamp?: string;
+  /** Running backend version (from package.json) — read live so the sidebar never shows a stale build. */
+  version?: string;
   details?: {
     database?: { status: string };
     redis?: { status: string };
@@ -239,7 +241,7 @@ export interface SavedConfig {
     s3Endpoint: string;
     s3CredentialsSet: boolean;
   };
-  engine: { headless: boolean; sessionDataPath: string; browserArgs: string };
+  engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
 }
 
 export interface SaveConfigPayload {
@@ -276,6 +278,7 @@ export interface SaveConfigPayload {
     s3Endpoint?: string;
   };
   engine?: {
+    type?: string;
     headless?: boolean;
     sessionDataPath?: string;
     browserArgs?: string;
@@ -395,9 +398,13 @@ export const sessionApi = {
     ),
   // Live history straight from WhatsApp (bypasses the DB) — backfills a thread the gateway never
   // captured, e.g. a freshly paired session whose persisted store is still empty.
-  getChatHistory: (id: string, chatId: string, limit = 100) =>
+  // includeMedia downloads the media payload (base64) for history messages so stickers/images/
+  // video/voice render instead of collapsing to an empty timestamp-only bubble.
+  getChatHistory: (id: string, chatId: string, limit = 100, includeMedia = false) =>
     request<EngineHistoryMessage[]>(
-      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}`,
+      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}${
+        includeMedia ? '&includeMedia=true' : ''
+      }`,
     ),
 };
 
@@ -757,4 +764,33 @@ export const pluginsApi = {
   uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
+};
+
+// =============================================================================
+// Statistics API (mirrors src/modules/stats)
+// =============================================================================
+
+export type StatsPeriod = '24h' | '7d' | '30d';
+
+export interface OverviewStats {
+  sessions: { active: number; total: number; byStatus: Record<string, number> };
+  messages: { sent: number; received: number; failed: number; today: { sent: number; received: number } };
+}
+
+export interface MessageTimeSeriesPoint {
+  timestamp: string;
+  sent: number;
+  received: number;
+}
+
+export interface MessageStats {
+  timeSeries: MessageTimeSeriesPoint[];
+  byType: Record<string, number>;
+  bySession: Array<{ sessionId: string; name: string; sent: number; received: number }>;
+  topChats: Array<{ chatId: string; messageCount: number }>;
+}
+
+export const statsApi = {
+  getOverview: () => request<OverviewStats>('/stats/overview'),
+  getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
 };

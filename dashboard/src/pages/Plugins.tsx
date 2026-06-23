@@ -25,17 +25,10 @@ import {
   Plus,
   Search,
 } from 'lucide-react';
-import { pluginsApi, infraApi } from '../services/api';
+import { pluginsApi } from '../services/api';
 import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import {
-  usePluginsQuery,
-  useEnginesQuery,
-  useCurrentEngineQuery,
-  useInfraStatusQuery,
-  useSessionsQuery,
-  queryKeys,
-} from '../hooks/queries';
+import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/Toast';
 import './Plugins.css';
@@ -49,13 +42,6 @@ const pluginTypeIcons: Record<PluginType, typeof Puzzle> = {
   auth: Shield,
   extension: Zap,
 };
-
-interface EngineConfig {
-  type: string;
-  headless: boolean;
-  sessionDataPath: string;
-  browserArgs: string;
-}
 
 /**
  * Build a sparse per-session config override from a full edited config: include only non-secret keys
@@ -534,10 +520,6 @@ export default function Plugins() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { data: plugins = [], isLoading: loadingPlugins, error: queryError } = usePluginsQuery();
-  const { data: engines = [] } = useEnginesQuery();
-  const { data: currentEngineData } = useCurrentEngineQuery();
-  const { data: infraStatus } = useInfraStatusQuery();
-  const currentEngine = currentEngineData?.engineType ?? '';
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -549,12 +531,6 @@ export default function Plugins() {
   // latest activeSessions/sessionConfig after a save + invalidate — not a stale open-time snapshot.
   const configPlugin = configPluginId ? (plugins.find(p => p.id === configPluginId) ?? null) : null;
   const [configTab, setConfigTab] = useState<'config' | 'sessions'>('config');
-  const [engineConfig, setEngineConfig] = useState<EngineConfig>({
-    type: infraStatus?.engine?.type || 'whatsapp-web.js',
-    headless: infraStatus?.engine?.headless ?? true,
-    sessionDataPath: '/data/sessions',
-    browserArgs: '--no-sandbox --disable-gpu',
-  });
   const [savingConfig, setSavingConfig] = useState(false);
   // Values for a schema-driven (non-engine) plugin's config form, keyed by configSchema property.
   const [schemaConfig, setSchemaConfig] = useState<Record<string, unknown>>({});
@@ -570,8 +546,6 @@ export default function Plugins() {
 
   const refetchAll = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.engines });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.currentEngine });
   };
 
   const handleToggle = async (plugin: Plugin) => {
@@ -631,28 +605,6 @@ export default function Plugins() {
     try {
       await pluginsApi.updateConfig(configPlugin.id, schemaConfig);
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
-      toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
-      setShowConfigModal(false);
-    } catch (err) {
-      toast.error(t('plugins.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  const handleSaveConfig = async () => {
-    setSavingConfig(true);
-    try {
-      // Persist the engine section to the backend (.env.generated via PUT /infra/config).
-      // The engine `type` isn't a savable field (only whatsapp-web.js exists); the backend
-      // maps these to PUPPETEER_HEADLESS / SESSION_DATA_PATH / PUPPETEER_ARGS.
-      await infraApi.saveConfig({
-        engine: {
-          headless: engineConfig.headless,
-          sessionDataPath: engineConfig.sessionDataPath,
-          browserArgs: engineConfig.browserArgs,
-        },
-      });
       toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
       setShowConfigModal(false);
     } catch (err) {
@@ -772,9 +724,11 @@ export default function Plugins() {
     );
   }
 
-  const activeEngine = engines.find(e => e.id === currentEngine);
-  const enabledCount = plugins.filter(p => p.status === 'enabled').length;
-  const activePlugins = plugins.filter(p => p.status === 'enabled');
+  // Engines are configured under Infrastructure (Engine Configuration tile), not here — keep them
+  // out of the plugin grid, the counts and the rail so the Plugins page is extensions-only.
+  const visiblePlugins = plugins.filter(p => p.type !== 'engine');
+  const enabledCount = visiblePlugins.filter(p => p.status === 'enabled').length;
+  const activePlugins = visiblePlugins.filter(p => p.status === 'enabled');
 
   return (
     <div className="plugins-page">
@@ -804,31 +758,13 @@ export default function Plugins() {
 
       <div className="plugins-layout">
         <aside className="plugins-rail">
-          <div className="rail-section">
-            <p className="rail-label">{t('plugins.rail.engine', 'Active engine')}</p>
-            <div className="rail-engine">
-              <div className="rail-engine-icon">
-                <Cpu size={18} />
-              </div>
-              <div className="rail-engine-meta">
-                <span className="rail-engine-name">{currentEngine || '—'}</span>
-                {activeEngine?.library && (
-                  <span className="rail-engine-lib">
-                    {activeEngine.library.name} {activeEngine.library.version}
-                  </span>
-                )}
-              </div>
-              <span className="status-badge connected">{t('plugins.running')}</span>
-            </div>
-          </div>
-
           <div className="rail-stats">
             <div className="rail-stat">
               <span className="rail-stat-num">{enabledCount}</span>
               <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
             </div>
             <div className="rail-stat">
-              <span className="rail-stat-num">{plugins.length}</span>
+              <span className="rail-stat-num">{visiblePlugins.length}</span>
               <span className="rail-stat-label">{t('plugins.rail.installed', 'installed')}</span>
             </div>
           </div>
@@ -853,7 +789,7 @@ export default function Plugins() {
 
         <main className="plugins-main">
           <div className="plugins-grid">
-            {plugins.map(plugin => {
+            {visiblePlugins.map(plugin => {
               const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
               const isLoading = actionLoading === plugin.id;
               const lz = localizePlugin(plugin, i18n.language);
@@ -901,64 +837,25 @@ export default function Plugins() {
                     )}
 
                     <div className="plugin-actions">
-                      {plugin.type === 'engine' ? (
-                        (() => {
-                          const enginePlugins = plugins.filter(p => p.type === 'engine');
-                          const isOnlyEngine = enginePlugins.length === 1;
-                          const isActive = plugin.status === 'enabled';
-
-                          if (isOnlyEngine && isActive) {
-                            return (
-                              <span className="btn-required">
-                                <CheckCircle size={16} />
-                                {t('plugins.required')}
-                              </span>
-                            );
-                          } else if (isActive) {
-                            return (
-                              <span className="btn-active">
-                                <CheckCircle size={16} />
-                                {t('plugins.active')}
-                              </span>
-                            );
-                          } else {
-                            // Engines are pinned to engine.type and switched via Settings + restart, not at
-                            // runtime — show "available" instead of a misleading "Activate" that the API rejects.
-                            return (
-                              <span
-                                className="btn-available"
-                                title={t(
-                                  'plugins.engineSwitchHint',
-                                  'Set as the active engine in Settings, then restart',
-                                )}
-                              >
-                                <Cpu size={16} />
-                                {t('plugins.available', 'Available')}
-                              </span>
-                            );
-                          }
-                        })()
-                      ) : (
-                        <button
-                          onClick={() => handleToggle(plugin)}
-                          disabled={isLoading}
-                          className={`btn-toggle ${plugin.status === 'enabled' ? 'disable' : 'enable'}`}
-                        >
-                          {isLoading ? (
-                            <Loader2 size={16} className="animate-spin" />
-                          ) : plugin.status === 'enabled' ? (
-                            <>
-                              <PowerOff size={16} />
-                              {t('plugins.disable')}
-                            </>
-                          ) : (
-                            <>
-                              <Power size={16} />
-                              {t('plugins.enable')}
-                            </>
-                          )}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => handleToggle(plugin)}
+                        disabled={isLoading}
+                        className={`btn-toggle ${plugin.status === 'enabled' ? 'disable' : 'enable'}`}
+                      >
+                        {isLoading ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : plugin.status === 'enabled' ? (
+                          <>
+                            <PowerOff size={16} />
+                            {t('plugins.disable')}
+                          </>
+                        ) : (
+                          <>
+                            <Power size={16} />
+                            {t('plugins.enable')}
+                          </>
+                        )}
+                      </button>
 
                       <button
                         onClick={() => handleHealthCheck(plugin.id)}
@@ -996,7 +893,7 @@ export default function Plugins() {
         </main>
       </div>
 
-      {plugins.length === 0 && !loading && (
+      {visiblePlugins.length === 0 && !loading && (
         <div className="empty-state">
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>
@@ -1190,8 +1087,8 @@ export default function Plugins() {
         configPlugin &&
         (() => {
           const lz = localizePlugin(configPlugin, i18n.language);
-          // Session-scoped, non-engine plugins get a Configuration/Sessions tab split; others keep one body.
-          const showTabs = configPlugin.type !== 'engine' && configPlugin.sessionScoped !== false;
+          // Session-scoped plugins get a Configuration/Sessions tab split; others keep one body.
+          const showTabs = configPlugin.sessionScoped !== false;
           return (
             <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
               <div className="modal config-modal" onClick={e => e.stopPropagation()}>
@@ -1222,63 +1119,6 @@ export default function Plugins() {
                 <div className="modal-body">
                   {showTabs && configTab === 'sessions' ? (
                     <SessionsTab plugin={configPlugin} />
-                  ) : configPlugin.type === 'engine' ? (
-                    <>
-                      <div className="config-info-banner">
-                        <AlertCircle size={16} />
-                        <span>{t('plugins.config.restartNotice')}</span>
-                      </div>
-
-                      {/* Only the browser engine (whatsapp-web.js) has Puppeteer settings. Baileys is a
-                      WebSocket client with no browser, so headless/browser-args don't apply. */}
-                      {configPlugin.id === 'whatsapp-web.js' ? (
-                        <div className="config-form">
-                          <div className="form-group toggle-group">
-                            <div className="toggle-info">
-                              <label>{t('plugins.config.headless')}</label>
-                              <small>{t('plugins.config.headlessDesc')}</small>
-                            </div>
-                            <label className="toggle-switch">
-                              <input
-                                type="checkbox"
-                                checked={engineConfig.headless}
-                                onChange={e => setEngineConfig({ ...engineConfig, headless: e.target.checked })}
-                              />
-                              <span className="toggle-slider"></span>
-                            </label>
-                          </div>
-
-                          <div className="form-group">
-                            <label>{t('plugins.config.sessionDataPath')}</label>
-                            <input
-                              type="text"
-                              value={engineConfig.sessionDataPath}
-                              onChange={e => setEngineConfig({ ...engineConfig, sessionDataPath: e.target.value })}
-                            />
-                          </div>
-
-                          <div className="form-group">
-                            <label>{t('plugins.config.browserArgs')}</label>
-                            <input
-                              type="text"
-                              value={engineConfig.browserArgs}
-                              onChange={e => setEngineConfig({ ...engineConfig, browserArgs: e.target.value })}
-                              placeholder="--no-sandbox --disable-gpu"
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="no-config">
-                          <Cpu size={48} style={{ opacity: 0.3 }} />
-                          <p>
-                            {t(
-                              'plugins.config.noBrowserEngine',
-                              'This engine connects over WebSocket — it has no browser, so there are no headless or browser-argument settings here. Its options are set via environment variables, and the active engine is selected with ENGINE_TYPE (a restart applies the change).',
-                            )}
-                          </p>
-                        </div>
-                      )}
-                    </>
                   ) : configPlugin.configUi ? (
                     <PluginConfigUi plugin={configPlugin} />
                   ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
@@ -1305,15 +1145,8 @@ export default function Plugins() {
                   <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
                     {t('common.close')}
                   </button>
-                  {/* The Sessions tab has its own Save/Clear actions; the footer Save is config-tab only.
-                  Only the browser engine has savable settings — Baileys shows an info panel, no Save. */}
-                  {showTabs && configTab === 'sessions' ? null : configPlugin.type === 'engine' ? (
-                    configPlugin.id === 'whatsapp-web.js' ? (
-                      <button className="btn-primary" onClick={handleSaveConfig} disabled={savingConfig}>
-                        {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
-                      </button>
-                    ) : null
-                  ) : configPlugin.configUi ? null : lz.configSchema &&
+                  {/* The Sessions tab has its own Save/Clear actions; the footer Save is config-tab only. */}
+                  {showTabs && configTab === 'sessions' ? null : configPlugin.configUi ? null : lz.configSchema &&
                     Object.keys(lz.configSchema.properties).length > 0 ? (
                     <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
                       {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}

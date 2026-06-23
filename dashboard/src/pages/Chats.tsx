@@ -341,7 +341,7 @@ export function Chats() {
         // failing — only surface an error if both do.
         const [dbRes, historyRes] = await Promise.allSettled([
           sessionApi.getChatMessages(selectedSessionId, chatId, 100),
-          sessionApi.getChatHistory(selectedSessionId, chatId, 100),
+          sessionApi.getChatHistory(selectedSessionId, chatId, 100, true),
         ]);
         if (dbRes.status === 'rejected' && historyRes.status === 'rejected') throw dbRes.reason;
         const dbMessages = dbRes.status === 'fulfilled' ? dbRes.value.messages : [];

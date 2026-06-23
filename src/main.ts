@@ -155,6 +155,10 @@ async function bootstrap() {
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           scriptSrc: ["'self'"],
           imgSrc: ["'self'", 'data:', 'https:'],
+          // Chat media (voice notes, video) is served to the dashboard as data: URIs. Without an
+          // explicit media-src, <audio>/<video> fall back to default-src 'self' and are blocked.
+          // Mirror imgSrc so audio/video render the same way images already do.
+          mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
           connectSrc: ["'self'"],
           fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           objectSrc: ["'none'"],

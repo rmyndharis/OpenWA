@@ -143,7 +143,8 @@
       "activeSessions": "Active Sessions",
       "messagesToday": "Messages Today",
       "webhooksConfigured": "Webhooks Configured",
-      "apiCalls": "API Calls (24h)"
+      "apiCalls": "API Calls (24h)",
+      "totalMessages": "Total Messages"
     },
     "sessionsOverview": "Sessions Overview",
     "showingSessions": "Showing {{shown}} of {{total}} sessions",
@@ -158,7 +159,22 @@
     "view": "View",
     "disconnect": "Disconnect",
     "errorPrefix": "Error: {{message}}",
-    "loadError": "Failed to load data"
+    "loadError": "Failed to load data",
+    "charts": {
+      "title": "Message Analytics",
+      "period": {
+        "24h": "24h",
+        "7d": "7d",
+        "30d": "30d"
+      },
+      "overTime": "Messages over time",
+      "byType": "Messages by type",
+      "topChats": "Top chats",
+      "sent": "Sent",
+      "received": "Received",
+      "messages": "Messages",
+      "empty": "No message activity in this period."
+    }
   },
   "sessionStatus": {
     "created": "New",
@@ -552,6 +568,17 @@
       "migrationsStatus": "Schema is auto-synchronized with TypeORM",
       "migrationsHint": "Migrations are managed automatically. Use CLI for manual migrations."
     },
+    "engine": {
+      "title": "WhatsApp Engine",
+      "subtitle": "Choose and configure the WhatsApp connection engine.",
+      "builtIn": "Built-in",
+      "headless": "Headless Mode",
+      "headlessDesc": "Run the browser without a visible UI (recommended for production).",
+      "sessionDataPath": "Session Data Path",
+      "browserArgs": "Browser Arguments",
+      "noBrowser": "This engine connects over WebSocket — it has no browser, so there are no headless or browser-argument settings. The active engine is applied after a restart.",
+      "restartNote": "Switching the engine takes effect after a server restart."
+    },
     "redis": {
       "title": "Redis",
       "enable": "Enable Redis",
@@ -615,7 +642,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "subtitle": "Manage engines, storage backends, and extensions",
+    "subtitle": "Install, configure, and manage extensions",
     "refresh": "Refresh",
     "engineCard": "Active WhatsApp Engine",
     "running": "Running",

@@ -288,6 +288,9 @@
   justify-content: center;
   width: 36px;
   height: 36px;
+  /* Reset the global `button` padding (0.6em 1.2em): with box-sizing:border-box it would consume
+     the whole 36px width and collapse the arrow icon to 0px wide, making the button look empty. */
+  padding: 0;
   margin-left: -0.5rem;
   background: transparent;
   border: none;
