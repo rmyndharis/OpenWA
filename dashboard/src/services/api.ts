@@ -627,6 +627,14 @@ export interface PluginConfigSchema {
   properties: Record<string, PluginConfigField>;
 }
 
+export interface PluginI18nText { title?: string; description?: string }
+export interface PluginI18nLocale {
+  name?: string;
+  description?: string;
+  config?: Record<string, PluginI18nText>;
+}
+export type PluginI18n = Record<string, PluginI18nLocale>;
+
 export interface Plugin {
   id: string;
   name: string;
@@ -645,6 +653,7 @@ export interface Plugin {
   loadedAt?: string;
   enabledAt?: string;
   error?: string;
+  i18n?: PluginI18n;
 }
 
 export interface Engine {
@@ -674,6 +683,7 @@ export interface CatalogPlugin {
   installed: boolean;
   installedVersion: string | null;
   updateAvailable: boolean;
+  i18n?: PluginI18n;
 }
 
 // =============================================================================
