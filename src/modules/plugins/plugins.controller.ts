@@ -118,6 +118,19 @@ export class PluginsController {
     return this.pluginsService.getConfigUiHtml(id);
   }
 
+  @Put(':id/config/:sessionId')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'Set a plugin config override for a specific session (empty = clear it)' })
+  @ApiResponse({ status: 200, description: 'Per-session plugin configuration updated' })
+  @ApiResponse({ status: 404, description: 'Plugin not found' })
+  updateSessionConfig(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Body() configDto: PluginConfigDto,
+  ): { success: boolean; message: string } {
+    return this.pluginsService.updateSessionConfig(id, sessionId, configDto.config);
+  }
+
   @Put(':id/sessions')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: "Set which sessions a session-scoped plugin is activated for (['*'] = all)" })

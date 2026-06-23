@@ -263,6 +263,10 @@ export interface PluginInstance {
   // Sessions a session-scoped plugin is activated for; ['*'] = all. Defaulted to ['*'] on enable.
   // Ignored for a global (sessionScoped:false) plugin. Persisted on the registry entry.
   activeSessions?: string[];
+  // Per-session config overrides, keyed by sessionId. The config a hook sees for session S is the
+  // override shallow-merged over `config` (the '*' base) — see resolvePluginConfig. Absent = no
+  // overrides (every session gets the base). Persisted on the registry entry.
+  sessionConfig?: Record<string, Record<string, unknown>>;
   // First-party built-ins (engines, bundled extensions) run in-process; plugins loaded from the
   // plugins directory are untrusted and run sandboxed in a worker. `false` => sandboxed.
   builtIn?: boolean;
@@ -285,4 +289,6 @@ export interface PluginRegistryEntry {
   // Sessions a session-scoped plugin is activated for; ['*'] = all. Absent = not yet set (treated
   // as ['*'] on enable).
   activeSessions?: string[];
+  // Per-session config overrides (keyed by sessionId), merged over `config` per session at hook time.
+  sessionConfig?: Record<string, Record<string, unknown>>;
 }

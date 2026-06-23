@@ -1,7 +1,7 @@
 import { parentPort } from 'worker_threads';
 import { HostToWorkerMessage, WorkerToHostMessage } from './protocol';
 import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability';
-import { WorkerHookRegistry, WorkerHookHandler } from './worker-hooks';
+import { WorkerHookRegistry, WorkerHookHandler, hookConfigStore } from './worker-hooks';
 
 /**
  * Worker entry for an untrusted plugin. Loads the plugin module and drives its lifecycle in response
@@ -45,6 +45,8 @@ const logger = {
 };
 let plugin: LifecyclePlugin | null = null;
 let context: Record<string, unknown> | null = null;
+// The base ('*') config; ctx.config returns the per-hook session slice when one is in scope, else this.
+let baseConfig: Record<string, unknown> = {};
 
 port.on('message', (message: HostToWorkerMessage) => {
   if (message.kind === 'cap-result') {
@@ -66,9 +68,14 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
       const PluginCtor = mod.default ?? mod;
       plugin = new PluginCtor();
       const staticContext = message.context ?? { pluginId: 'unknown', config: {} };
+      baseConfig = staticContext.config;
       context = {
         pluginId: staticContext.pluginId,
-        config: staticContext.config,
+        // Per-session: a hook dispatch scopes its resolved slice via hookConfigStore; outside a hook
+        // (lifecycle, onConfigChange) this is the base config.
+        get config() {
+          return hookConfigStore.getStore()?.config ?? baseConfig;
+        },
         logger,
         ...buildSandboxContext(capClient),
         registerHook: (event: string, handler: WorkerHookHandler, priority?: number) =>
@@ -92,9 +99,9 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
   }
 
   if (message.kind === 'config-change') {
-    // Refresh ctx.config so later reads see the new value, then notify the plugin (fire-and-forget —
-    // onConfigChange returns void, and an ack would just race the next operation).
-    if (context) context.config = message.config;
+    // Refresh the base config so later (non-hook) reads of ctx.config see the new value, then notify
+    // the plugin (fire-and-forget — onConfigChange returns void, and an ack would race the next op).
+    baseConfig = message.config;
     void Promise.resolve(plugin?.onConfigChange?.(context, message.config)).catch(error =>
       logger.error('onConfigChange threw', error),
     );

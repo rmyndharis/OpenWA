@@ -26,7 +26,17 @@ export type HostToWorkerMessage =
   | { kind: 'cap-result'; id: number; ok: true; result: unknown }
   | { kind: 'cap-result'; id: number; ok: false; error: string }
   // Dispatch a subscribed hook to the worker; it runs its handler(s) and replies with hook-result.
-  | { kind: 'hook'; id: number; event: string; data: unknown; sessionId?: string; source: string }
+  // `config` is the per-session-resolved config the host computed for this event's sessionId (the
+  // override merged over the base); the worker exposes it as ctx.config for the duration of the call.
+  | {
+      kind: 'hook';
+      id: number;
+      event: string;
+      data: unknown;
+      sessionId?: string;
+      source: string;
+      config?: Record<string, unknown>;
+    }
   // The plugin's config was updated: refresh ctx.config and invoke onConfigChange (fire-and-forget).
   | { kind: 'config-change'; config: Record<string, unknown> }
   // Ask the worker plugin to run its healthCheck(); it replies with health-result.

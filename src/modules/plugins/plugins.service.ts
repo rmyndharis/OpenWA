@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PluginLoaderService, PluginStatus, resolvePluginMainPath } from '../../core/plugins';
+import type { PluginConfigSchema } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
@@ -35,6 +36,7 @@ export class PluginsService {
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
       configUi: plugin.manifest.configUi,
+      sessionConfig: this.redactSessionConfig(plugin.sessionConfig, plugin.manifest.configSchema),
       sessionScoped: plugin.manifest.sessionScoped !== false,
       activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
@@ -63,6 +65,7 @@ export class PluginsService {
       provides: plugin.manifest.provides ?? [],
       configSchema: plugin.manifest.configSchema,
       configUi: plugin.manifest.configUi,
+      sessionConfig: this.redactSessionConfig(plugin.sessionConfig, plugin.manifest.configSchema),
       sessionScoped: plugin.manifest.sessionScoped !== false,
       activeSessions: plugin.activeSessions ?? ['*'],
       loadedAt: plugin.loadedAt?.toISOString(),
@@ -147,6 +150,46 @@ export class PluginsService {
         message: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Set a plugin's per-session config override for `sessionId`. Like updateConfig, the dashboard PUTs
+   * the whole (redacted) slice back, so a sentinel secret restores the stored per-session value. An
+   * empty slice clears the override (the session falls back to the base config).
+   */
+  updateSessionConfig(
+    id: string,
+    sessionId: string,
+    config: Record<string, unknown>,
+  ): { success: boolean; message: string } {
+    const plugin = this.pluginLoader.getPlugin(id);
+
+    if (!plugin) {
+      throw new NotFoundException(`Plugin ${id} not found`);
+    }
+
+    try {
+      const existing = plugin.sessionConfig?.[sessionId];
+      const merged = restoreSecretConfig(config, existing, plugin.manifest.configSchema);
+      this.pluginLoader.setPluginSessionConfig(id, sessionId, merged);
+      return { success: true, message: `Plugin ${id} configuration for session ${sessionId} updated` };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** Redact secrets in every per-session config slice for the DTO (mirrors the base config redaction). */
+  private redactSessionConfig(
+    sessionConfig: Record<string, Record<string, unknown>> | undefined,
+    schema: PluginConfigSchema | undefined,
+  ): Record<string, Record<string, unknown>> | undefined {
+    if (!sessionConfig) return undefined;
+    return Object.fromEntries(
+      Object.entries(sessionConfig).map(([sid, cfg]) => [sid, redactSecretConfig(cfg, schema)]),
+    );
   }
 
   /**

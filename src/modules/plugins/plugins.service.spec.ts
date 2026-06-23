@@ -203,3 +203,71 @@ describe('PluginsService — getConfigUiHtml (sandboxed config editor)', () => {
     expect(() => service.getConfigUiHtml('cfgui-plg')).toThrow(/not found/i);
   });
 });
+
+describe('PluginsService — per-session config', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+  let service: PluginsService;
+
+  const schemaManifest = {
+    ...manifest,
+    id: 'sess-cfg',
+    configSchema: {
+      type: 'object',
+      properties: { apiKey: { type: 'string', secret: true }, lang: { type: 'string' } },
+    },
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-sesscfg-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+    service = new PluginsService(loader, config);
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify(schemaManifest)));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    service.install({ buffer: z.toBuffer() });
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('stores a per-session override and exposes it (secrets redacted) on the DTO', () => {
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
+    const dto = service.findOne('sess-cfg');
+    expect(dto.sessionConfig).toEqual({ 'sess-A': { apiKey: '***', lang: 'he' } });
+  });
+
+  it('restores the stored per-session secret when the incoming value is the sentinel', () => {
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
+    // The dashboard PUTs the masked slice back; the real per-session secret must survive.
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: '***', lang: 'en' });
+    expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ apiKey: 'A-secret', lang: 'en' });
+  });
+
+  it('keeps the base config and per-session overrides independent', () => {
+    service.updateConfig('sess-cfg', { apiKey: 'BASE', lang: 'en' });
+    service.updateSessionConfig('sess-cfg', 'sess-A', { apiKey: 'A-secret', lang: 'he' });
+    const plugin = loader.getPlugin('sess-cfg');
+    expect(plugin?.config).toEqual({ apiKey: 'BASE', lang: 'en' });
+    expect(plugin?.sessionConfig?.['sess-A']).toEqual({ apiKey: 'A-secret', lang: 'he' });
+  });
+
+  it('clears the override when an empty slice is written', () => {
+    service.updateSessionConfig('sess-cfg', 'sess-A', { lang: 'he' });
+    service.updateSessionConfig('sess-cfg', 'sess-A', {});
+    expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toBeUndefined();
+  });
+
+  it('404s for an unknown plugin', () => {
+    expect(() => service.updateSessionConfig('ghost', 'sess-A', { lang: 'he' })).toThrow(/not found/i);
+  });
+});

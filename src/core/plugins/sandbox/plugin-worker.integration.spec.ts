@@ -11,6 +11,7 @@ const HOOK_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-plugin.cjs')
 const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-plugin.cjs');
 const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
 const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.cjs');
+const HOOK_CONFIG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-config-plugin.cjs');
 const CTX_LIFECYCLE_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-lifecycle-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
@@ -134,6 +135,57 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     expect(data.meta.nested).toEqual({ n: 1 });
     expect(data.meta.ts.getTime()).toBe(new Date('2026-06-22T00:00:00.000Z').getTime());
     expect(data.seen).toBe(true);
+    await host.terminate();
+  });
+
+  it('exposes the host-resolved per-session config slice as ctx.config during a hook', async () => {
+    const host = new PluginWorkerHost(makeChannel(), undefined, () => undefined);
+    await host.load(HOOK_CONFIG_FIXTURE, { pluginId: 'hc', config: { greeting: 'base', lang: 'en' } });
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    // A dispatch carrying the resolved slice → the handler sees exactly that as ctx.config.
+    const overridden = await host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      source: 'Engine',
+      timeoutMs: 5000,
+      config: { greeting: 'hello-A', lang: 'en', extra: 1 },
+    });
+    expect((overridden.data as { config: unknown }).config).toEqual({ greeting: 'hello-A', lang: 'en', extra: 1 });
+
+    // No resolved slice → ctx.config falls back to the base config.
+    const base = await host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 5000 });
+    expect((base.data as { config: unknown }).config).toEqual({ greeting: 'base', lang: 'en' });
+    await host.terminate();
+  });
+
+  it('keeps ctx.config correct when hooks for different sessions interleave across an await', async () => {
+    const host = new PluginWorkerHost(makeChannel(), undefined, () => undefined);
+    await host.load(HOOK_CONFIG_FIXTURE, { pluginId: 'hc', config: { who: 'base' } });
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    // Dispatch A (slow: reads ctx.config AFTER an await) and B (fast) concurrently. Without an
+    // AsyncLocalStorage scope, B's config would clobber a shared ctx.config and A would read B's.
+    const [a, b] = await Promise.all([
+      host.dispatchHook({
+        event: 'message:received',
+        data: { delay: 80 },
+        source: 'Engine',
+        timeoutMs: 5000,
+        config: { who: 'session-A' },
+      }),
+      host.dispatchHook({
+        event: 'message:received',
+        data: { delay: 0 },
+        source: 'Engine',
+        timeoutMs: 5000,
+        config: { who: 'session-B' },
+      }),
+    ]);
+    expect((a.data as { config: { who: string } }).config.who).toBe('session-A');
+    expect((b.data as { config: { who: string } }).config.who).toBe('session-B');
     await host.terminate();
   });
 

@@ -61,6 +61,7 @@ export class PluginWorkerHost {
     data: unknown;
     source: string;
     sessionId?: string;
+    config?: Record<string, unknown>;
     timeoutMs: number;
     onTimeout?: () => void;
   }): Promise<{ continue: boolean; data?: unknown }> {
@@ -79,6 +80,7 @@ export class PluginWorkerHost {
         data: options.data,
         sessionId: options.sessionId,
         source: options.source,
+        config: options.config,
       });
     });
   }

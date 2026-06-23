@@ -1,4 +1,12 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { WorkerToHostMessage, HostToWorkerMessage } from './protocol';
+
+/**
+ * Carries the per-session-resolved config for the duration of a hook dispatch so ctx.config (a getter
+ * in worker-bootstrap) returns the right slice — even when events for different sessions interleave.
+ * AsyncLocalStorage scopes it per async call tree, so concurrent dispatches never see each other's.
+ */
+export const hookConfigStore = new AsyncLocalStorage<{ config: Record<string, unknown> }>();
 
 export interface WorkerHookContext {
   event: string;
@@ -38,6 +46,18 @@ export class WorkerHookRegistry {
   }
 
   async handleHook(message: Extract<HostToWorkerMessage, { kind: 'hook' }>): Promise<void> {
+    // Run the whole dispatch inside the per-session config scope so every handler (and any async work
+    // it awaits) sees ctx.config resolved for THIS event's session. Absent config => the bootstrap
+    // getter falls back to the base config.
+    const run = () => this.dispatch(message);
+    if (message.config !== undefined) {
+      await hookConfigStore.run({ config: message.config }, run);
+    } else {
+      await run();
+    }
+  }
+
+  private async dispatch(message: Extract<HostToWorkerMessage, { kind: 'hook' }>): Promise<void> {
     const list = this.handlers.get(message.event) ?? [];
     let data = message.data;
     let shouldContinue = true;

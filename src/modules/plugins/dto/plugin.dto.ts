@@ -46,6 +46,9 @@ export class PluginDto {
   @ApiPropertyOptional({ description: 'Sandboxed-iframe config editor (entry HTML + optional height)' })
   configUi?: { entry: string; height?: number };
 
+  @ApiPropertyOptional({ description: 'Per-session config overrides, keyed by sessionId (secrets redacted)' })
+  sessionConfig?: Record<string, Record<string, unknown>>;
+
   @ApiPropertyOptional({ description: 'When the plugin was loaded' })
   loadedAt?: string;
 

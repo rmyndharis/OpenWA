@@ -1,4 +1,4 @@
-import { isPluginActiveForSession } from './plugin-activation';
+import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
 
 describe('isPluginActiveForSession', () => {
   it('a global (non-session-scoped) plugin is always active', () => {
@@ -22,5 +22,41 @@ describe('isPluginActiveForSession', () => {
 
   it('a non-session-attributed event (no sessionId) is not gated', () => {
     expect(isPluginActiveForSession(true, [], undefined)).toBe(true);
+  });
+});
+
+describe('resolvePluginConfig', () => {
+  const base = { greeting: 'hi', lang: 'en', timeoutMs: 4000 };
+
+  it('returns the base config when there is no per-session override', () => {
+    expect(resolvePluginConfig(base, undefined, 'sess-1', true)).toEqual(base);
+    expect(resolvePluginConfig(base, {}, 'sess-1', true)).toEqual(base);
+    expect(resolvePluginConfig(base, { 'other-sess': { lang: 'he' } }, 'sess-1', true)).toEqual(base);
+  });
+
+  it('shallow-merges the session override over the base (override wins per top-level key)', () => {
+    expect(resolvePluginConfig(base, { 'sess-1': { lang: 'he', extra: true } }, 'sess-1', true)).toEqual({
+      greeting: 'hi',
+      lang: 'he',
+      timeoutMs: 4000,
+      extra: true,
+    });
+  });
+
+  it('ignores overrides for a global (non-session-scoped) plugin', () => {
+    expect(resolvePluginConfig(base, { 'sess-1': { lang: 'he' } }, 'sess-1', false)).toEqual(base);
+  });
+
+  it('ignores overrides for a non-session-attributed event (no sessionId)', () => {
+    expect(resolvePluginConfig(base, { 'sess-1': { lang: 'he' } }, undefined, true)).toEqual(base);
+  });
+
+  it('does not mutate the base or the override', () => {
+    const b = { a: 1 };
+    const sc = { 'sess-1': { a: 2 } };
+    const out = resolvePluginConfig(b, sc, 'sess-1', true);
+    expect(out).toEqual({ a: 2 });
+    expect(b).toEqual({ a: 1 });
+    expect(sc).toEqual({ 'sess-1': { a: 2 } });
   });
 });

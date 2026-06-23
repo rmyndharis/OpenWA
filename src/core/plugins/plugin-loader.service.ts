@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
+import { AsyncLocalStorage } from 'async_hooks';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
@@ -21,7 +22,7 @@ import {
 } from './plugin.interfaces';
 import { isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
-import { isPluginActiveForSession } from './plugin-activation';
+import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
@@ -87,6 +88,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   private readonly enabling = new Set<string>();
   // Live worker host per enabled sandboxed (untrusted) plugin. Built-ins are not in here.
   private readonly sandboxHosts = new Map<string, PluginWorkerHost>();
+  // Carries the firing event's sessionId across an in-process hook handler so ctx.config (a getter)
+  // resolves the per-session slice. Per async call tree, so concurrent sessions don't cross over.
+  private readonly hookSession = new AsyncLocalStorage<{ sessionId?: string }>();
   private readonly pluginsDir: string;
 
   constructor(
@@ -189,9 +193,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       throw new Error(`Plugin ${manifest.id} is already loaded`);
     }
 
-    // Load any persisted config + per-session activation so an operator's choices survive a restart.
+    // Load any persisted config + per-session activation + per-session config so an operator's choices
+    // survive a restart.
     const storedConfig = this.pluginStorage.getPluginConfig(manifest.id) ?? {};
     const storedSessions = this.pluginStorage.getPluginSessions(manifest.id) ?? undefined;
+    const storedSessionConfig = this.pluginStorage.getPluginSessionConfig(manifest.id) ?? undefined;
 
     const pluginInstance: PluginInstance = {
       manifest,
@@ -201,6 +207,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       loadedAt: new Date(),
       builtIn: false,
       activeSessions: storedSessions,
+      sessionConfig: storedSessionConfig,
     };
 
     this.plugins.set(manifest.id, pluginInstance);
@@ -474,6 +481,38 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Set (or clear) a plugin's per-session config override for `sessionId`. Hooks for that session then
+   * see the override shallow-merged over the base via ctx.config — applied on the next event
+   * (resolution reads plugin.sessionConfig live) and persisted across restart. An empty override
+   * removes it (the session falls back to the base). Global plugins have no per-session config.
+   */
+  setPluginSessionConfig(pluginId: string, sessionId: string, config: Record<string, unknown>): PluginInstance {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin ${pluginId} not found`);
+    }
+    if (plugin.manifest.sessionScoped === false) {
+      throw new Error(`Plugin ${pluginId} is global (not session-scoped) and has no per-session config`);
+    }
+
+    const next = { ...(plugin.sessionConfig ?? {}) };
+    if (config && Object.keys(config).length > 0) {
+      next[sessionId] = config;
+    } else {
+      delete next[sessionId];
+    }
+    plugin.sessionConfig = next;
+    this.pluginStorage.setPluginSessionConfig(pluginId, next);
+
+    this.logger.debug(`Plugin session config updated: ${pluginId}`, {
+      pluginId,
+      action: 'plugin_session_config_updated',
+      sessionId,
+    });
+    return plugin;
+  }
+
+  /**
    * Run a plugin's healthCheck across both tiers. A sandboxed plugin's healthCheck lives in the worker
    * (plugin.instance is null), so route to the live worker host (time-bounded); built-ins use the
    * in-process instance. Returns the default "healthy" when the plugin implements no health check.
@@ -639,6 +678,14 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
               data: hookCtx.data,
               sessionId: hookCtx.sessionId,
               source: hookCtx.source,
+              // The host resolves the per-session slice (real secrets — the worker is the plugin's
+              // trusted execution context) and ships it; the worker exposes it as ctx.config.
+              config: resolvePluginConfig(
+                plugin.config,
+                plugin.sessionConfig,
+                hookCtx.sessionId,
+                plugin.manifest.sessionScoped !== false,
+              ),
               timeoutMs: SANDBOX_HOOK_TIMEOUT_MS,
               onTimeout: () =>
                 this.logger.warn(`Sandboxed plugin ${pluginId} hook '${event}' timed out`, {
@@ -693,22 +740,33 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
         ),
     };
 
+    const hookSession = this.hookSession;
     return {
       pluginId: plugin.manifest.id,
       manifest: plugin.manifest,
-      config: plugin.config,
+      // Per-session: inside a hook, returns the override merged over the base for the firing session;
+      // outside a hook (lifecycle), the base config. A getter so it reflects live config edits too.
+      get config() {
+        return resolvePluginConfig(
+          plugin.config,
+          plugin.sessionConfig,
+          hookSession.getStore()?.sessionId,
+          plugin.manifest.sessionScoped !== false,
+        );
+      },
       hookManager: this.hookManager,
       logger: pluginLogger,
       storage: this.pluginStorage.createPluginStorage(plugin.manifest.id),
       registerHook: (event, handler, priority) => {
         // Wrap with the per-session activation gate so an in-process plugin only handles events for
-        // the sessions it is activated for (mirrors the sandboxed shim).
+        // the sessions it is activated for (mirrors the sandboxed shim), and scope the firing
+        // sessionId so ctx.config resolves the right per-session slice for the handler.
         this.hookManager.register(
           plugin.manifest.id,
           event,
           async hookCtx => {
             if (!this.isHookActive(plugin, hookCtx.sessionId)) return { continue: true };
-            return handler(hookCtx);
+            return this.hookSession.run({ sessionId: hookCtx.sessionId }, () => handler(hookCtx));
           },
           priority,
         );
