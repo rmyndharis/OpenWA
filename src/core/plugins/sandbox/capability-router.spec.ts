@@ -19,6 +19,9 @@ function makeContext() {
       delete: jest.fn().mockResolvedValue(undefined),
       list: jest.fn().mockResolvedValue([]),
     },
+    net: {
+      fetch: jest.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK', headers: {}, body: 'x' }),
+    },
   };
 }
 
@@ -47,6 +50,14 @@ describe('dispatchCapabilityVerb', () => {
     const out = await dispatchCapabilityVerb(ctx, 'storage.get', ['k']);
     expect(ctx.storage.get).toHaveBeenCalledWith('k');
     expect(out).toBe('v');
+  });
+
+  it('routes net.fetch with the url + init and returns the serialized response', async () => {
+    const ctx = makeContext();
+    const init = { method: 'POST', body: '{}' };
+    const out = await dispatchCapabilityVerb(ctx, 'net.fetch', ['https://api.example.com/t', init]);
+    expect(ctx.net.fetch).toHaveBeenCalledWith('https://api.example.com/t', init);
+    expect(out).toMatchObject({ ok: true, status: 200, body: 'x' });
   });
 
   it('rejects an unknown verb — only allowlisted capabilities are reachable', async () => {

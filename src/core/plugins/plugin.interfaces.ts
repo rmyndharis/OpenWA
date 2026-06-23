@@ -6,6 +6,7 @@
 import { HookManager, HookEvent, HookHandler } from '../hooks';
 import type { MessageResponseDto } from '../../modules/message/dto';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { PluginNetRequestInit, PluginNetResponse } from './plugin-net';
 
 // ============================================================================
 // Plugin Types
@@ -73,6 +74,11 @@ export interface PluginManifest {
   // receives hook events for the sessions an operator has activated it for (see activeSessions); a
   // global plugin (false) always runs, with no per-number notion (e.g. a metrics logger).
   sessionScoped?: boolean;
+
+  // Outbound-HTTP host allowlist for `ctx.net.fetch` (requires the `net:fetch` permission). Each
+  // entry is `host:port` (exact) or a bare `host` (any port); `'*'` allows any public host. Absent /
+  // empty = deny all. The SSRF guard still blocks internal IPs regardless of this list.
+  net?: { allow?: string[] };
 }
 
 export interface PluginConfigSchema {
@@ -105,6 +111,8 @@ export const PluginCapabilityPermission = {
   MESSAGES_SEND: 'messages:send',
   /** `ctx.engine.*` — read-only engine queries (group info, contacts, chats, number check). */
   ENGINE_READ: 'engine:read',
+  /** `ctx.net.fetch` — SSRF-guarded outbound HTTP, scoped to the manifest `net.allow` host list. */
+  NET_FETCH: 'net:fetch',
 } as const;
 export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[keyof typeof PluginCapabilityPermission];
 
@@ -130,6 +138,11 @@ export interface PluginEngineReadCapability {
   getContactById(sessionId: string, contactId: string): ReturnType<IWhatsAppEngine['getContactById']>;
   checkNumberExists(sessionId: string, phone: string): ReturnType<IWhatsAppEngine['checkNumberExists']>;
   getChats(sessionId: string): ReturnType<IWhatsAppEngine['getChats']>;
+}
+
+/** Outbound HTTP for a plugin — always through the host SSRF guard, scoped to `manifest.net.allow`. */
+export interface PluginNetCapability {
+  fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
 }
 
 // ============================================================================
@@ -161,6 +174,9 @@ export interface PluginContext {
 
   // Read-only, scoped engine queries.
   engine: PluginEngineReadCapability;
+
+  // SSRF-guarded outbound HTTP, scoped to the manifest `net.allow` host list.
+  net: PluginNetCapability;
 }
 
 export interface PluginLogger {

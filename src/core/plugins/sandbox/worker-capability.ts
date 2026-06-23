@@ -46,6 +46,9 @@ export interface SandboxCapabilityContext {
     delete(key: string): Promise<unknown>;
     list(prefix?: string): Promise<unknown>;
   };
+  net: {
+    fetch(url: string, init?: unknown): Promise<unknown>;
+  };
 }
 
 /** Build the proxy capability context handed to a sandboxed plugin in the worker. */
@@ -68,6 +71,9 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
       set: (key, value) => client.call('storage.set', [key, value]),
       delete: key => client.call('storage.delete', [key]),
       list: prefix => client.call('storage.list', [prefix]),
+    },
+    net: {
+      fetch: (url, init) => client.call('net.fetch', [url, init]),
     },
   };
 }
