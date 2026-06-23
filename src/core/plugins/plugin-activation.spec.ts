@@ -43,6 +43,21 @@ describe('resolvePluginConfig', () => {
     });
   });
 
+  it('deep-merges a nested object override, inheriting untouched nested keys (e.g. a nested secret)', () => {
+    const b = { smtp: { host: 'mail.x', password: 'real' }, lang: 'en' };
+    const sc = { 'sess-1': { smtp: { host: 'mail.y' } } };
+    expect(resolvePluginConfig(b, sc, 'sess-1', true)).toEqual({
+      smtp: { host: 'mail.y', password: 'real' },
+      lang: 'en',
+    });
+  });
+
+  it('replaces arrays wholesale on override (no element-wise merge)', () => {
+    const b = { items: [1, 2, 3] };
+    const sc = { 'sess-1': { items: [9] } };
+    expect(resolvePluginConfig(b, sc, 'sess-1', true)).toEqual({ items: [9] });
+  });
+
   it('ignores overrides for a global (non-session-scoped) plugin', () => {
     expect(resolvePluginConfig(base, { 'sess-1': { lang: 'he' } }, 'sess-1', false)).toEqual(base);
   });

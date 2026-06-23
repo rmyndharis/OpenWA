@@ -77,6 +77,34 @@ function emptyForField(field: PluginConfigField): unknown {
 }
 
 /**
+ * Build a sparse per-session config override from a full edited config: include only non-secret keys
+ * whose value differs from the Global base (so untouched keys keep inheriting Global), plus every
+ * secret key (the backend restores an untouched `***` to the stored per-session value, or drops it →
+ * inherits). A key absent from the base whose value is just the empty default is skipped, so an
+ * untouched optional field never creates a spurious override. With no schema, the input is returned
+ * as-is. Pairs with the host's deep-merge at resolve time, so a nested untouched key is never dropped.
+ */
+function sparseSessionOverride(full: Record<string, unknown>, plugin: Plugin): Record<string, unknown> {
+  const props = plugin.configSchema?.properties;
+  if (!props) return full;
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(props)) {
+    if (!(key in full)) continue;
+    const val = full[key];
+    if (field.secret) {
+      out[key] = val;
+      continue;
+    }
+    if (JSON.stringify(val) === JSON.stringify(plugin.config[key])) continue; // unchanged → inherit Global
+    if (plugin.config[key] === undefined && JSON.stringify(val) === JSON.stringify(emptyForField(field))) {
+      continue; // untouched optional field with no Global value → don't pin a spurious empty override
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+/**
  * Renders one config field from a plugin's schema and reports edits via `onChange`. Recurses for
  * nested objects and array-of-rows. Module-scope (stable identity) so inputs keep focus across
  * keystrokes. The secret redact/restore round-trip lives server-side (PUT /plugins/:id/config).
@@ -300,7 +328,8 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
       } else if (msg?.type === 'config:save') {
         void (async () => {
           try {
-            if (sessionId) await pluginsApi.updateSessionConfig(plugin.id, sessionId, msg.config ?? {});
+            if (sessionId)
+              await pluginsApi.updateSessionConfig(plugin.id, sessionId, sparseSessionOverride(msg.config ?? {}, plugin));
             else await pluginsApi.updateConfig(plugin.id, msg.config ?? {});
             void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
             post({ type: 'config:saved' });
@@ -389,19 +418,10 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   }, [selSession, plugin]);
 
   const saveOverride = async () => {
-    const props = plugin.configSchema?.properties;
-    if (!selSession || !props) return;
+    if (!selSession || !plugin.configSchema?.properties) return;
     setSavingOverride(true);
     try {
-      // Sparse override: send only non-secret keys that differ from base (unchanged keys keep
-      // inheriting Global), plus every secret key — the backend restores an untouched `***` to the
-      // stored per-session secret (or drops it → inherits) and stores a newly-entered one.
-      const out: Record<string, unknown> = {};
-      for (const [key, field] of Object.entries(props)) {
-        if (field.secret) out[key] = overrideCfg[key];
-        else if (JSON.stringify(overrideCfg[key]) !== JSON.stringify(plugin.config[key])) out[key] = overrideCfg[key];
-      }
-      await pluginsApi.updateSessionConfig(plugin.id, selSession, out);
+      await pluginsApi.updateSessionConfig(plugin.id, selSession, sparseSessionOverride(overrideCfg, plugin));
       void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
       toast.success(t('plugins.toasts.savedTitle'), t('plugins.toasts.savedDesc'));
     } catch (err) {
@@ -484,11 +504,11 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
           ) : selSession && plugin.configSchema ? (
             <>
               <div className="config-form">
-                {Object.entries(plugin.configSchema.properties).map(([key, field]) => (
+                {Object.entries(lzProps ?? plugin.configSchema.properties).map(([key, field]) => (
                   <ConfigField
                     key={key}
                     field={field}
-                    label={lzProps?.[key]?.title || field.title || key}
+                    label={field.title || key}
                     value={overrideCfg[key]}
                     onChange={v => setOverrideCfg({ ...overrideCfg, [key]: v })}
                   />
@@ -525,7 +545,10 @@ export default function Plugins() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const [showConfigModal, setShowConfigModal] = useState(false);
-  const [configPlugin, setConfigPlugin] = useState<Plugin | null>(null);
+  const [configPluginId, setConfigPluginId] = useState<string | null>(null);
+  // Derive the open plugin from the LIVE query so the modal (esp. the Sessions tab) reflects the
+  // latest activeSessions/sessionConfig after a save + invalidate — not a stale open-time snapshot.
+  const configPlugin = configPluginId ? (plugins.find(p => p.id === configPluginId) ?? null) : null;
   const [configTab, setConfigTab] = useState<'config' | 'sessions'>('config');
   const [engineConfig, setEngineConfig] = useState<EngineConfig>({
     type: infraStatus?.engine?.type || 'whatsapp-web.js',
@@ -584,7 +607,7 @@ export default function Plugins() {
   };
 
   const handleOpenConfig = (plugin: Plugin) => {
-    setConfigPlugin(plugin);
+    setConfigPluginId(plugin.id);
     setConfigTab('config');
     // Seed the schema form from the plugin's saved config, falling back to each field's default.
     if (plugin.configSchema?.properties) {
