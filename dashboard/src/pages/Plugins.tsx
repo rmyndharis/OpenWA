@@ -402,7 +402,10 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   const [overrideCfg, setOverrideCfg] = useState<Record<string, unknown>>({});
   const [savingOverride, setSavingOverride] = useState(false);
 
-  // Seed the override form from the resolved slice: the session's override value where set, else base.
+  // Seed the override form from the resolved slice (the session's override value where set, else base).
+  // Keyed on selSession + plugin.id (NOT the plugin object): `configPlugin` is derived from the live
+  // query, so it gets a new reference on every refetch (refetchOnWindowFocus) — re-running on that
+  // would wipe the operator's in-progress edits. Reseed only when the selected session/plugin changes.
   useEffect(() => {
     const props = plugin.configSchema?.properties;
     if (!selSession || !props) {
@@ -415,7 +418,8 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
       seeded[key] = key in ov ? ov[key] : (plugin.config[key] ?? emptyForField(field));
     }
     setOverrideCfg(seeded);
-  }, [selSession, plugin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selSession, plugin.id]);
 
   const saveOverride = async () => {
     if (!selSession || !plugin.configSchema?.properties) return;
