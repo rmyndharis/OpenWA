@@ -10,12 +10,21 @@ function fakeSafeFetch(response: Response, sink: { init?: RequestInit }): typeof
 }
 
 function cannedResponse(body: string, headers: Record<string, string>, status = 200): Response {
+  const bytes = new TextEncoder().encode(body);
+  let read = false;
   return {
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 200 ? 'OK' : 'ERR',
     headers: new Headers(headers),
-    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer),
+    // Minimal ReadableStream-like body: yields the bytes once, then done.
+    body: {
+      getReader: () => ({
+        read: () =>
+          Promise.resolve(read ? { done: true, value: undefined } : ((read = true), { done: false, value: bytes })),
+        cancel: () => Promise.resolve(),
+      }),
+    },
   } as unknown as Response;
 }
 

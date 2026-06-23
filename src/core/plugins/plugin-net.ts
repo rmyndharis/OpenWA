@@ -73,9 +73,23 @@ export async function performPluginFetch(
       if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
         throw new Error(`plugin net.fetch response exceeds the ${MAX_BODY_BYTES}-byte cap`);
       }
-      const buf = Buffer.from(await response.arrayBuffer());
-      if (buf.byteLength > MAX_BODY_BYTES) {
-        throw new Error(`plugin net.fetch response exceeds the ${MAX_BODY_BYTES}-byte cap`);
+      // Stream with a running cap so a chunked response without an honest content-length can't blow
+      // past the limit (arrayBuffer() would buffer the whole body first). Mirrors plugin-download.
+      const reader = response.body?.getReader();
+      const chunks: Buffer[] = [];
+      let total = 0;
+      if (reader) {
+        for (;;) {
+          const { done, value } = (await reader.read()) as { done: boolean; value?: Uint8Array };
+          if (done) break;
+          if (!value) continue;
+          total += value.byteLength;
+          if (total > MAX_BODY_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            throw new Error(`plugin net.fetch response exceeds the ${MAX_BODY_BYTES}-byte cap`);
+          }
+          chunks.push(Buffer.from(value));
+        }
       }
       const headers: Record<string, string> = {};
       response.headers.forEach((value, key) => {
@@ -86,7 +100,7 @@ export async function performPluginFetch(
         status: response.status,
         statusText: response.statusText,
         headers,
-        body: buf.toString('utf-8'),
+        body: Buffer.concat(chunks).toString('utf-8'),
       };
     },
   );
