@@ -86,7 +86,25 @@ export interface PluginManifest {
   // entry is `host:port` (exact) or a bare `host` (any port); `'*'` allows any public host. Absent /
   // empty = deny all. The SSRF guard still blocks internal IPs regardless of this list.
   net?: { allow?: string[] };
+
+  // Localized dashboard text (name/description/config field titles) per locale code. English is the
+  // base manifest + fallback. Dashboard-only; does not affect runtime behavior.
+  i18n?: PluginI18n;
 }
+
+/** Localized overrides for a plugin's dashboard-facing text, per locale (dashboard i18n). */
+export interface PluginI18nText {
+  title?: string;
+  description?: string;
+}
+export interface PluginI18nLocale {
+  name?: string;
+  description?: string;
+  /** Keyed by a TOP-LEVEL configSchema.properties key; only title/description are localized. */
+  config?: Record<string, PluginI18nText>;
+}
+/** Keyed by a dashboard locale code (e.g. "es", "zh-CN"). Untranslated entries fall back to English. */
+export type PluginI18n = Record<string, PluginI18nLocale>;
 
 /**
  * One field in a plugin's config schema. Recursive: an `object` field nests `properties`, an `array`
