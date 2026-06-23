@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Plugins: a new `ctx.net.fetch` capability lets a sandboxed plugin make outbound HTTP through the host's SSRF guard (resolve-once-pin, redirects refused), gated by a `net:fetch` permission plus a manifest `net.allow` host allowlist (`host:port`, bare `host`, or `*` for any public host; internal IPs are always blocked). Responses are bounded by a timeout and a size cap. (#436)
+- Plugins: a new `ctx.net.fetch` capability lets a sandboxed plugin make outbound HTTP through the host's SSRF guard (resolve-once-pin, redirects refused), gated by a `net:fetch` permission plus a manifest `net.allow` host allowlist (`host:port`, bare `host`, or `*` for any public host; internal IPs are always blocked). Responses are bounded by a timeout and a size cap. (#437)
 
 ## [0.6.2] - 2026-06-23
 
