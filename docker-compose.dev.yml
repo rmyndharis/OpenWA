@@ -34,23 +34,29 @@ services:
     ports:
       # Bind to localhost by default; set BIND_HOST=0.0.0.0 in .env to reach it from another host.
       - '${BIND_HOST:-127.0.0.1}:2785:2785'
+    # User-facing settings read from the environment (or .env) with a sane default fallback
+    # (${VAR:-default}); override any of them without editing this file. The data paths default
+    # under /app/data (the ./data bind mount) so they persist out of the box — override only if you
+    # also mount that target. Truly container-internal values (HOME, XDG_*, PORT) stay fixed: they
+    # must match the image/entrypoint. Same convention as the production docker-compose.yml.
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=${NODE_ENV:-development}
       - PORT=2785
       - HOME=/tmp
       # Chromium reads its home from the passwd entry (no /home/openwa), so it needs writable, existing
       # config/cache dirs on the tmpfs or it hard-crashes at launch; the entrypoint pre-creates them. (#254)
       - XDG_CONFIG_HOME=/tmp/.config
       - XDG_CACHE_HOME=/tmp/.cache
-      - DATABASE_TYPE=sqlite
-      - DATABASE_NAME=/app/data/openwa.sqlite
-      - DATABASE_SYNCHRONIZE=true
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
+      - DATABASE_NAME=${DATABASE_NAME:-/app/data/openwa.sqlite}
+      - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-true}
       # ENGINE_TYPE not pinned: the dashboard (Infrastructure > Engine) selects the active engine via
       # data/.env.generated (default whatsapp-web.js). main.ts loads it with override:false, so a real
       # env here would override the dashboard choice.
-      - SESSION_DATA_PATH=/app/data/sessions
-      - PUPPETEER_HEADLESS=true
-      - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
+      - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
+      - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
       # Optional WhatsApp Web version override. Leave empty for whatsapp-web.js auto-selection.
       # If a session hangs at "authenticating", set WWEBJS_WEB_VERSION to a known-good cached build
       # from wppconnect-team/wa-version; latest|auto|off also forces auto-selection.
@@ -58,14 +64,14 @@ services:
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
       # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots. Empty = default.
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
-      - STORAGE_TYPE=local
-      - STORAGE_LOCAL_PATH=/app/data/media
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
       # docker-compose.yml; without this it falls back to ./plugins on the read-only root and install fails.
-      - PLUGINS_DIR=/app/data/plugins
-      - WEBHOOK_TIMEOUT=10000
-      - WEBHOOK_MAX_RETRIES=3
-      - QUEUE_ENABLED=false
+      - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
+      - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10000}
+      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
+      - QUEUE_ENABLED=${QUEUE_ENABLED:-false}
     volumes:
       - ./data:/app/data
     restart: unless-stopped
