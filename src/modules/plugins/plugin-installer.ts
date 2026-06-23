@@ -12,7 +12,11 @@ export interface PackageLimits {
 
 export const DEFAULT_PACKAGE_LIMITS: PackageLimits = { maxEntries: 200, maxTotalBytes: 20 * 1024 * 1024 };
 
-/** Plugin ids that ship built-in and must never be shadowed by an uploaded package. */
+/**
+ * Plugin ids an uploaded package must never use. `whatsapp-web.js` / `baileys` are built-in engines;
+ * `auto-reply` / `translation` are the legacy bundled-extension ids (removed in v0.7 — superseded by
+ * the marketplace `chat-flow` / `group-translate`) kept reserved so a re-upload can't shadow them.
+ */
 export const RESERVED_PLUGIN_IDS = new Set(['whatsapp-web.js', 'baileys', 'auto-reply', 'translation']);
 
 /** Only extensions are user-installable; engines (and other tiers) are built-in by design. */

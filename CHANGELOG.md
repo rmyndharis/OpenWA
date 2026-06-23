@@ -7,10 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **v0.7 — plugin-contract expansion.** Richer plugin config (declarative + sandboxed-iframe editors),
+> per-session activation and config, SSRF-guarded outbound HTTP, and the removal of the bundled
+> reference extensions in favour of the marketplace. ⚠️ See the **Removed** note before upgrading.
+
 ### Added
 
+- Plugins: richer **config schema** vocabulary — a `textarea` type, `min`/`max`/`pattern` validation hints, and composite kinds (`items` for arrays, including **array-of-rows** when `items` is an object; `properties` for nested objects; `enum` renders a select). The dashboard config form renders them recursively, and secret redaction/restore now recurses so a `secret` field at any depth is masked on read and preserved on an unchanged write. (#439)
+- Plugins: a plugin may ship a **sandboxed-iframe config editor** via manifest `configUi { entry, height? }`. The host serves the entry over an authenticated `GET /plugins/:id/config-ui` (ADMIN, path/realpath escape-guarded, CSP-sandboxed) and the dashboard injects it as an `srcdoc` into a `sandbox="allow-scripts"` iframe (opaque origin). The editor exchanges config over a `postMessage` bridge — the API key never enters the iframe, and it only ever receives schema-declared, secret-redacted config. (#440)
+- Plugins: **per-session config overrides**. A session-scoped plugin can carry per-session config on top of its base (`'*'`) config via `PUT /plugins/:id/config/:sessionId`; `ctx.config` (read inside a hook) is the override shallow-merged over the base for the firing session, resolved race-safely via `AsyncLocalStorage` for both in-process and sandboxed plugins. Overrides are secret-redacted per slice on the API and survive a restart. (#441)
 - Plugins: per-session activation. A session-scoped plugin can now be activated for all numbers (`*`) or an explicit set of sessions via `PUT /plugins/:id/sessions`, and only receives hook events for the sessions it is active for (enforced at delivery). A plugin declares `sessionScoped` in its manifest (default `true`); a global plugin (`false`, e.g. a metrics logger) always runs. The active set is surfaced on the plugin API and survives a restart. (#438)
 - Plugins: a new `ctx.net.fetch` capability lets a sandboxed plugin make outbound HTTP through the host's SSRF guard (resolve-once-pin, redirects refused), gated by a `net:fetch` permission plus a manifest `net.allow` host allowlist (`host:port`, bare `host`, or `*` for any public host; internal IPs are always blocked). Responses are bounded by a timeout and a streamed size cap. (#437)
+
+### Removed
+
+- ⚠️ **Breaking:** the bundled reference extensions `auto-reply` and `translation` have been removed from core. They are superseded by the marketplace plugins **`chat-flow`** (interactive auto-reply) and **`group-translate`** (LibreTranslate group translation), which target the v0.7 contract. **Upgrade:** if you had either enabled, install the replacement from the dashboard (Plugins → Catalog, or `POST /plugins/install-url`) and re-enter its config. The ids `auto-reply` / `translation` remain reserved (an uploaded package can't claim them). Built-in **engines** (whatsapp-web.js, Baileys) are unaffected.
+
+### Fixed
+
+- Plugins: an operator's per-session activation (and now per-session config) was silently dropped from the on-disk registry on the second restart, because the registry entry was rebuilt on each load without carrying those fields. Both are now preserved across restarts. (#441)
 
 ## [0.6.2] - 2026-06-23
 

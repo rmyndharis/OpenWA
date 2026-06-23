@@ -541,7 +541,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
-              // Plugin stopped processing (e.g., auto-reply handled it)
+              // A plugin handled the event and asked to stop the chain (continue: false).
               return;
             }
 
