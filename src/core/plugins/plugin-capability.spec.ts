@@ -180,3 +180,40 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
     expect(engine.getGroupInfo).toHaveBeenCalledWith('g@g.us');
   });
 });
+
+describe('PluginLoaderService capability facade — ctx.net', () => {
+  function loaderWith(): PluginLoaderService {
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = { createPluginStorage: jest.fn().mockReturnValue({}) } as unknown as PluginStorageService;
+    return new PluginLoaderService(configService, new HookManager(), pluginStorage, {
+      get: jest.fn(),
+    } as unknown as ModuleRef);
+  }
+  function netPlugin(permissions: string[], allow?: string[]): PluginInstance {
+    const manifest: PluginManifest = {
+      id: 'net-ext',
+      name: 'Net Extension',
+      version: '1.0.0',
+      type: PluginType.EXTENSION,
+      main: 'index.ts',
+      permissions,
+      net: allow ? { allow } : undefined,
+    };
+    return { manifest, status: PluginStatus.INSTALLED, config: {}, instance: null };
+  }
+  function contextFor(loader: PluginLoaderService, plugin: PluginInstance): PluginContext {
+    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
+      plugin,
+    );
+  }
+
+  it('denies net.fetch when the plugin does not declare net:fetch', async () => {
+    const ctx = contextFor(loaderWith(), netPlugin([], ['*']));
+    await expect(ctx.net.fetch('https://api.example.com/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+  });
+
+  it('denies net.fetch when the host is not in the manifest net.allow list', async () => {
+    const ctx = contextFor(loaderWith(), netPlugin(['net:fetch'], ['only.example.com:443']));
+    await expect(ctx.net.fetch('https://api.example.com/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+  });
+});

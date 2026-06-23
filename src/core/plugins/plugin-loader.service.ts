@@ -11,6 +11,7 @@ import {
   PluginEngineReadCapability,
   PluginManifest,
   PluginMessagingCapability,
+  PluginNetCapability,
   PluginInstance,
   PluginStatus,
   PluginContext,
@@ -18,6 +19,7 @@ import {
   PluginType,
   PluginLogger,
 } from './plugin.interfaces';
+import { isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
@@ -691,6 +693,19 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           this.resolveEngineRead(plugin.manifest, sessionId).checkNumberExists(phone),
         getChats: async sessionId => this.resolveEngineRead(plugin.manifest, sessionId).getChats(),
       } satisfies PluginEngineReadCapability,
+      net: {
+        fetch: async (url, init) => {
+          // Two gates: the declared permission, then the manifest host allowlist. The SSRF guard
+          // inside performPluginFetch still blocks internal IPs even when the host is allowlisted.
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
+          if (!isNetHostAllowed(plugin.manifest.net?.allow, url)) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id} may not fetch ${url} — add its host to the manifest net.allow list`,
+            );
+          }
+          return performPluginFetch(url, init);
+        },
+      } satisfies PluginNetCapability,
     };
   }
 
