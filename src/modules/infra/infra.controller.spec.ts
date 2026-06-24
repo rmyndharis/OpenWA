@@ -34,6 +34,8 @@ import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch, BatchStatus } from '../message/entities/message-batch.entity';
+import { Template } from '../template/entities/template.entity';
+import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -453,6 +455,103 @@ describe('InfraController.importData round-trips export-data (no silent message/
     expect(await ds.getRepository(Message).count()).toBe(1);
     expect((await ds.getRepository(Message).findOneByOrFail({ id: 'm1' })).body).toBe('keep me');
     expect(await ds.getRepository(Session).findOneBy({ id: 's2' })).toBeNull();
+  });
+});
+
+describe('InfraController.import/export preserves every data-DB table', () => {
+  let ds: DataSource;
+  let controller: InfraController;
+  const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
+  const newController = () =>
+    new InfraController(cfg as never, {} as never, ds, {} as never, {} as never, {} as never, {} as never, {} as never);
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [Session, Webhook, Message, MessageBatch, Template, BaileysStoredMessage],
+      synchronize: true,
+    });
+    await ds.initialize();
+    controller = newController();
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  const seedSession = (id: string) =>
+    ds.getRepository(Session).save(
+      ds.getRepository(Session).create({
+        id,
+        name: `session-${id}`,
+        status: SessionStatus.READY,
+        phone: null,
+        pushName: null,
+        config: {},
+        proxyUrl: null,
+        proxyType: null,
+        connectedAt: null,
+        lastActiveAt: null,
+      }),
+    );
+
+  // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
+  // so an import that never re-inserts them permanently wipes both on the documented backup flow.
+  it('restores templates and baileys_stored_messages instead of cascade-wiping them', async () => {
+    await seedSession('s1');
+    await ds
+      .getRepository(Template)
+      .save(ds.getRepository(Template).create({ id: 't1', sessionId: 's1', name: 'greet', body: 'Hi {{name}}' }));
+    await ds.getRepository(BaileysStoredMessage).save(
+      ds.getRepository(BaileysStoredMessage).create({
+        id: 'bsm1',
+        sessionId: 's1',
+        waMessageId: 'WA1',
+        serializedMessage: '{"k":"v"}',
+      }),
+    );
+
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(await ds.getRepository(Template).count()).toBe(1);
+    expect(await ds.getRepository(BaileysStoredMessage).count()).toBe(1);
+    expect((await ds.getRepository(Template).findOneByOrFail({ id: 't1' })).body).toBe('Hi {{name}}');
+    expect((await ds.getRepository(BaileysStoredMessage).findOneByOrFail({ id: 'bsm1' })).serializedMessage).toBe(
+      '{"k":"v"}',
+    );
+  });
+
+  // The webhooks INSERT omitted the `filters` column, so a filtered webhook came back firing on
+  // every event after a restore (over-delivery / PII fan-out).
+  it('preserves webhook filters across a round-trip', async () => {
+    await seedSession('s1');
+    await ds.getRepository(Webhook).save(
+      ds.getRepository(Webhook).create({
+        id: 'w1',
+        sessionId: 's1',
+        url: 'https://example.com/hook',
+        events: ['message'],
+        secret: null,
+        headers: {},
+        active: true,
+        retryCount: 3,
+        filters: { conditions: [{ field: 'sender', operator: 'equals', value: '123@c.us' }] },
+      }),
+    );
+
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.imported).toBe(true);
+    expect((await ds.getRepository(Webhook).findOneByOrFail({ id: 'w1' })).filters).toEqual({
+      conditions: [{ field: 'sender', operator: 'equals', value: '123@c.us' }],
+    });
+    // The active flag (exported as integer 1 from SQLite) must round-trip as a real boolean.
+    expect((await ds.getRepository(Webhook).findOneByOrFail({ id: 'w1' })).active).toBe(true);
   });
 });
 

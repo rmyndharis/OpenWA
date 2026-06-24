@@ -94,7 +94,8 @@ interface WebhookRow {
   events: string | string[];
   secret: string | null;
   headers: string | Record<string, string>;
-  active: boolean;
+  filters: string | Record<string, unknown> | null;
+  active: boolean | number;
   retryCount: number;
   lastTriggeredAt: string | null;
   createdAt: string;
@@ -137,11 +138,35 @@ interface MessageBatchRow {
   completed_at: string | null;
 }
 
+// templates + baileys_stored_messages both FK sessions ON DELETE CASCADE, so import's
+// `DELETE FROM sessions` wipes them; they must be exported and re-inserted or the documented
+// backup flow loses them permanently.
+interface TemplateRow {
+  id: string;
+  sessionId: string;
+  name: string;
+  body: string;
+  header: string | null;
+  footer: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BaileysStoredMessageRow {
+  id: string;
+  sessionId: string;
+  waMessageId: string;
+  serializedMessage: string;
+  createdAt: string;
+}
+
 interface MigrationTables {
   sessions: SessionRow[];
   webhooks: WebhookRow[];
   messages: MessageRow[];
   messageBatches: MessageBatchRow[];
+  templates: TemplateRow[];
+  baileysStoredMessages: BaileysStoredMessageRow[];
 }
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
@@ -607,15 +632,24 @@ export class InfraController {
     exportedAt: string;
     dataDbType: string;
     tables: MigrationTables;
-    counts: { sessions: number; webhooks: number; messages: number; messageBatches: number };
+    counts: {
+      sessions: number;
+      webhooks: number;
+      messages: number;
+      messageBatches: number;
+      templates: number;
+      baileysStoredMessages: number;
+    };
   }> {
     // Get all entities from Data DB
     const sessions = await this.dataDataSource.query<SessionRow[]>('SELECT * FROM sessions');
     const webhooks = await this.dataDataSource.query<WebhookRow[]>('SELECT * FROM webhooks');
 
-    // Messages table may not exist yet or be empty
+    // These tables may not exist yet (older DB) or be empty.
     let messages: MessageRow[] = [];
     let messageBatches: MessageBatchRow[] = [];
+    let templates: TemplateRow[] = [];
+    let baileysStoredMessages: BaileysStoredMessageRow[] = [];
 
     try {
       messages = await this.dataDataSource.query<MessageRow[]>('SELECT * FROM messages');
@@ -629,6 +663,20 @@ export class InfraController {
       this.logger.debug('Message batches table not available for export', { error: String(error) });
     }
 
+    try {
+      templates = await this.dataDataSource.query<TemplateRow[]>('SELECT * FROM templates');
+    } catch (error) {
+      this.logger.debug('Templates table not available for export', { error: String(error) });
+    }
+
+    try {
+      baileysStoredMessages = await this.dataDataSource.query<BaileysStoredMessageRow[]>(
+        'SELECT * FROM baileys_stored_messages',
+      );
+    } catch (error) {
+      this.logger.debug('Baileys stored messages table not available for export', { error: String(error) });
+    }
+
     return {
       exportedAt: new Date().toISOString(),
       dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
@@ -637,12 +685,16 @@ export class InfraController {
         webhooks,
         messages,
         messageBatches,
+        templates,
+        baileysStoredMessages,
       },
       counts: {
         sessions: sessions.length,
         webhooks: webhooks.length,
         messages: messages.length,
         messageBatches: messageBatches.length,
+        templates: templates.length,
+        baileysStoredMessages: baileysStoredMessages.length,
       },
     };
   }
@@ -675,7 +727,14 @@ export class InfraController {
     },
   ): Promise<{
     imported: boolean;
-    counts: { sessions: number; webhooks: number; messages: number; messageBatches: number };
+    counts: {
+      sessions: number;
+      webhooks: number;
+      messages: number;
+      messageBatches: number;
+      templates: number;
+      baileysStoredMessages: number;
+    };
     warnings: string[];
   }> {
     const warnings: string[] = [];
@@ -684,10 +743,15 @@ export class InfraController {
     await queryRunner.startTransaction();
 
     try {
-      // Clear existing data (in correct order due to foreign keys)
+      // Clear existing data (in correct order due to foreign keys). templates and
+      // baileys_stored_messages FK sessions ON DELETE CASCADE, so the sessions DELETE would clear
+      // them too; clearing them explicitly first keeps the order correct on engines where the
+      // cascade is not enforced, and is a no-op when the table doesn't exist.
       await queryRunner.query('DELETE FROM webhooks');
       await queryRunner.query('DELETE FROM messages').catch(() => {});
       await queryRunner.query('DELETE FROM message_batches').catch(() => {});
+      await queryRunner.query('DELETE FROM templates').catch(() => {});
+      await queryRunner.query('DELETE FROM baileys_stored_messages').catch(() => {});
       await queryRunner.query('DELETE FROM sessions');
 
       // Import sessions first
@@ -726,8 +790,8 @@ export class InfraController {
         for (const webhook of data.tables.webhooks) {
           try {
             await queryRunner.query(
-              `INSERT INTO webhooks (id, "sessionId", url, events, secret, headers, active, "retryCount", "lastTriggeredAt", "createdAt", "updatedAt") 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              `INSERT INTO webhooks (id, "sessionId", url, events, secret, headers, filters, active, "retryCount", "lastTriggeredAt", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
               [
                 webhook.id,
                 webhook.sessionId,
@@ -735,6 +799,11 @@ export class InfraController {
                 typeof webhook.events === 'string' ? webhook.events : JSON.stringify(webhook.events || []),
                 webhook.secret,
                 typeof webhook.headers === 'string' ? webhook.headers : JSON.stringify(webhook.headers || {}),
+                webhook.filters == null
+                  ? null
+                  : typeof webhook.filters === 'string'
+                    ? webhook.filters
+                    : JSON.stringify(webhook.filters),
                 webhook.active,
                 webhook.retryCount,
                 webhook.lastTriggeredAt,
@@ -827,11 +896,56 @@ export class InfraController {
         }
       }
 
+      // Import templates (optional; FK -> sessions, restored above)
+      let templatesCount = 0;
+      if (data.tables.templates?.length) {
+        for (const tpl of data.tables.templates) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO templates (id, "sessionId", name, body, header, footer, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                tpl.id,
+                tpl.sessionId,
+                tpl.name,
+                tpl.body,
+                tpl.header ?? null,
+                tpl.footer ?? null,
+                tpl.createdAt,
+                tpl.updatedAt,
+              ],
+            );
+            templatesCount++;
+          } catch (err) {
+            warnings.push(`Failed to import template ${tpl.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import baileys stored messages (optional; FK -> sessions, restored above)
+      let baileysStoredMessagesCount = 0;
+      if (data.tables.baileysStoredMessages?.length) {
+        for (const bsm of data.tables.baileysStoredMessages) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO baileys_stored_messages (id, "sessionId", "waMessageId", "serializedMessage", "createdAt")
+               VALUES ($1, $2, $3, $4, $5)`,
+              [bsm.id, bsm.sessionId, bsm.waMessageId, bsm.serializedMessage, bsm.createdAt],
+            );
+            baileysStoredMessagesCount++;
+          } catch (err) {
+            warnings.push(`Failed to import baileys stored message ${bsm.id}: ${err}`);
+          }
+        }
+      }
+
       const counts = {
         sessions: sessionsCount,
         webhooks: webhooksCount,
         messages: messagesCount,
         messageBatches: messageBatchesCount,
+        templates: templatesCount,
+        baileysStoredMessages: baileysStoredMessagesCount,
       };
 
       // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any
