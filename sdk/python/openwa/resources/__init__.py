@@ -16,6 +16,7 @@ from .labels import LabelsResource
 from .messages import MessagesResource
 from .sessions import SessionsResource
 from .status import StatusResource
+from .templates import TemplatesResource
 from .webhooks import WebhooksResource
 
 __all__ = [
@@ -29,5 +30,6 @@ __all__ = [
     "MessagesResource",
     "SessionsResource",
     "StatusResource",
+    "TemplatesResource",
     "WebhooksResource",
 ]

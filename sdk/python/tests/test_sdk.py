@@ -457,7 +457,29 @@ class TestLabelsChannelsCatalog:
         client.catalog.send_catalog("s", {"chatId": "a@c.us", "body": "cat"})
         assert "/messages/send-catalog" in backend.calls[-1].url
 
-    def test_client_exposes_all_11_resources(self):
+    def test_templates_crud(self):
+        tpl = {"id": "t1", "sessionId": "s", "name": "welcome", "body": "Hi {{name}}", "createdAt": "", "updatedAt": ""}
+        backend = MockBackend()
+        backend.on("GET", "/templates/t1", body=tpl)
+        backend.on("GET", "/templates", body=[tpl])
+        backend.on("POST", "/templates", body=tpl)
+        backend.on("PUT", "/templates/t1", body={**tpl, "body": "Hello {{name}}"})
+        backend.on("DELETE", "/templates/t1", status=204)
+        client = make_client(backend)
+        client.templates.list("s")
+        assert "/api/sessions/s/templates" in backend.last_call.url
+        client.templates.get("s", "t1")
+        assert backend.last_call.url.endswith("/api/sessions/s/templates/t1")
+        client.templates.create("s", {"name": "welcome", "body": "Hi {{name}}"})
+        assert backend.last_call.method == "POST"
+        assert backend.last_call.body == {"name": "welcome", "body": "Hi {{name}}"}
+        client.templates.update("s", "t1", {"body": "Hello {{name}}"})
+        assert backend.last_call.method == "PUT"
+        assert backend.last_call.body == {"body": "Hello {{name}}"}
+        client.templates.delete("s", "t1")
+        assert backend.last_call.method == "DELETE"
+
+    def test_client_exposes_all_resources(self):
         client = make_client(MockBackend())
-        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health", "labels", "channels", "catalog"]:
+        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health", "labels", "channels", "catalog", "templates"]:
             assert hasattr(client, r)

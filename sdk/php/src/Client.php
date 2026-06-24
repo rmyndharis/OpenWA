@@ -17,6 +17,7 @@ use OpenWA\Resources\LabelsResource;
 use OpenWA\Resources\MessagesResource;
 use OpenWA\Resources\SessionsResource;
 use OpenWA\Resources\StatusResource;
+use OpenWA\Resources\TemplatesResource;
 use OpenWA\Resources\WebhooksResource;
 
 /**
@@ -59,6 +60,7 @@ class Client
     public LabelsResource $labels;
     public ChannelsResource $channels;
     public CatalogResource $catalog;
+    public TemplatesResource $templates;
 
     /**
      * @param array{
@@ -97,6 +99,7 @@ class Client
         $this->labels = new LabelsResource($this->http);
         $this->channels = new ChannelsResource($this->http);
         $this->catalog = new CatalogResource($this->http);
+        $this->templates = new TemplatesResource($this->http);
     }
 
     /** Validate the configured API key and resolve its role. */

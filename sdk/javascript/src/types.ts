@@ -545,6 +545,30 @@ export interface AuthValidateResponse {
   role?: string;
 }
 
+// ── Template ──────────────────────────────────────────────────────
+
+export interface TemplateRecord {
+  id: string;
+  sessionId: string;
+  name: string;
+  /** Template body with `{{variable}}` placeholders. */
+  body: string;
+  header?: string | null;
+  footer?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTemplateRequest {
+  /** Unique template name within the session. */
+  name: string;
+  body: string;
+  header?: string;
+  footer?: string;
+}
+
+export type UpdateTemplateRequest = Partial<CreateTemplateRequest>;
+
 // ── Label (WhatsApp Business) ─────────────────────────────────────
 
 export interface LabelRecord {

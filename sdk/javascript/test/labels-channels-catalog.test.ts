@@ -90,8 +90,33 @@ describe('CatalogResource — exact paths (note: catalog controller is session-r
   });
 });
 
-describe('Client exposes all 11 resources', () => {
-  it('has labels, channels, catalog on the client', () => {
+describe('TemplatesResource — exact paths and bodies', () => {
+  it('list / get / create / update / delete', async () => {
+    const tpl = { id: 't1', sessionId: 's', name: 'welcome', body: 'Hi {{name}}', createdAt: '', updatedAt: '' };
+    const t = new MockTransport()
+      .on('GET', /\/templates$/, { body: [tpl] })
+      .on('GET', /\/templates\/t1$/, { body: tpl })
+      .on('POST', /\/templates$/, { body: tpl })
+      .on('PUT', /\/templates\/t1$/, { body: { ...tpl, body: 'Hello {{name}}' } })
+      .on('DELETE', /\/templates\/t1$/, { status: 204 });
+    const c = client(t);
+    await c.templates.list('s');
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s/templates');
+    await c.templates.get('s', 't1');
+    expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s/templates/t1');
+    await c.templates.create('s', { name: 'welcome', body: 'Hi {{name}}' });
+    expect(t.lastCall!.method).toBe('POST');
+    expect(t.lastCall!.body).toEqual({ name: 'welcome', body: 'Hi {{name}}' });
+    await c.templates.update('s', 't1', { body: 'Hello {{name}}' });
+    expect(t.lastCall!.method).toBe('PUT');
+    expect(t.lastCall!.body).toEqual({ body: 'Hello {{name}}' });
+    await c.templates.delete('s', 't1');
+    expect(t.lastCall!.method).toBe('DELETE');
+  });
+});
+
+describe('Client exposes all resources', () => {
+  it('has labels, channels, catalog, templates on the client', () => {
     const c = client(new MockTransport());
     for (const r of [
       'sessions',
@@ -105,6 +130,7 @@ describe('Client exposes all 11 resources', () => {
       'labels',
       'channels',
       'catalog',
+      'templates',
     ]) {
       expect(c).toHaveProperty(r);
     }

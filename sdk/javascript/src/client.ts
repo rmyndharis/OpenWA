@@ -34,6 +34,7 @@ import { LabelsResource } from './resources/labels.js';
 import { MessagesResource } from './resources/messages.js';
 import { SessionsResource } from './resources/sessions.js';
 import { StatusResource } from './resources/status.js';
+import { TemplatesResource } from './resources/templates.js';
 import { WebhooksResource } from './resources/webhooks.js';
 import type { AuthValidateResponse, MessageResponse, SendMediaRequest } from './types.js';
 
@@ -79,6 +80,7 @@ export class OpenWAClient {
   readonly labels = new LabelsResource(this);
   readonly channels = new ChannelsResource(this);
   readonly catalog = new CatalogResource(this);
+  readonly templates = new TemplatesResource(this);
 
   // ── Auth ─────────────────────────────────────────────────────────
 

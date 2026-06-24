@@ -530,6 +530,36 @@ class AuthValidateResponse(TypedDict, total=False):
     role: str
 
 
+# ── Template ──────────────────────────────────────────────────────
+
+
+class TemplateRecord(TypedDict, total=False):
+    id: str
+    sessionId: str
+    name: str
+    body: str  # template body with {{variable}} placeholders
+    header: str | None
+    footer: str | None
+    createdAt: str
+    updatedAt: str
+
+
+class CreateTemplateRequest(TypedDict, total=False):
+    # name + body required; header/footer optional. Modeled total=False
+    # (callers pass plain dicts); the backend validates the required fields.
+    name: str
+    body: str
+    header: str
+    footer: str
+
+
+class UpdateTemplateRequest(TypedDict, total=False):
+    name: str
+    body: str
+    header: str
+    footer: str
+
+
 # ── Label (WhatsApp Business) ─────────────────────────────────────
 
 

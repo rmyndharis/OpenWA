@@ -40,6 +40,7 @@ from .resources import (
     MessagesResource,
     SessionsResource,
     StatusResource,
+    TemplatesResource,
     WebhooksResource,
 )
 from .types import AuthValidateResponse
@@ -112,6 +113,10 @@ class OpenWAClient:
     @property
     def catalog(self) -> CatalogResource:
         return CatalogResource(self._http)
+
+    @property
+    def templates(self) -> TemplatesResource:
+        return TemplatesResource(self._http)
 
     # ── Auth ─────────────────────────────────────────────────────────
 
