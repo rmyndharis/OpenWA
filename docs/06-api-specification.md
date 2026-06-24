@@ -1494,12 +1494,33 @@ flowchart TB
     "isGroup": false,
     "hasMedia": false,
     "contact": {
+      "id": "628123456789@c.us",
+      "number": "628123456789",
       "name": "John Doe",
-      "pushName": "John"
+      "pushName": "John",
+      "shortName": "John",
+      "type": "in",
+      "isMyContact": true,
+      "isWAContact": true,
+      "isBusiness": false,
+      "isEnterprise": false,
+      "verifiedName": null,
+      "verifiedLevel": 0,
+      "isBlocked": false,
+      "labels": []
     }
   }
 }
 ```
+
+> **`contact` fields (opt-in via `WEBHOOK_CONTACT_DETAILS`).** By default the `contact` object carries
+> only `name` and `pushName`. Set `WEBHOOK_CONTACT_DETAILS=true` to expose the full set shown above
+> (`id`, `number`, `shortName`, `type`, the business flags, `isBlocked`, `labels`, …). All fields are
+> optional and best-effort, read synchronously from the WhatsApp Web contact cache already fetched for
+> the message — **no extra WhatsApp API calls** are made. Profile picture and about/status are
+> intentionally not included (they require per-message network calls and risk rate-limiting/ban). For
+> an `@lid` privacy-id sender, `number` may be empty; use the top-level `senderPhone` field for the
+> resolved phone number.
 
 > **Optional `senderPhone` (`@lid` resolution).** When a sender is identified by a WhatsApp privacy id
 > (`from`/`author` ends in `@lid`) and `RESOLVE_LID_TO_PHONE=true` is set, the payload also carries a

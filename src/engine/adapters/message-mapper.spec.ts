@@ -1,4 +1,10 @@
-import { buildIncomingMessageBase, mapWwebjsMessageType, RawMessageFields } from './message-mapper';
+import {
+  buildIncomingMessageBase,
+  mapContactFields,
+  mapWwebjsMessageType,
+  RawContactFields,
+  RawMessageFields,
+} from './message-mapper';
 
 describe('buildIncomingMessageBase', () => {
   const base: RawMessageFields = {
@@ -100,5 +106,88 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {
     expect(mapWwebjsMessageType(raw)).toBe(expected);
+  });
+});
+
+describe('mapContactFields', () => {
+  const businessRaw: RawContactFields = {
+    id: { _serialized: '254571402260600@lid' },
+    number: '254571402260600',
+    name: 'Leo hermano',
+    pushname: 'leo',
+    shortName: 'Leo',
+    type: 'in',
+    isMyContact: true,
+    isWAContact: true,
+    isBusiness: true,
+    isEnterprise: false,
+    verifiedName: 'Leo Store',
+    verifiedLevel: 2,
+    isBlocked: false,
+    labels: ['L1', 'L2'],
+  };
+
+  describe('full mode (WEBHOOK_CONTACT_DETAILS opt-in)', () => {
+    it('copies the sync fields for a business contact', () => {
+      expect(mapContactFields(businessRaw, true)).toEqual({
+        id: '254571402260600@lid',
+        number: '254571402260600',
+        name: 'Leo hermano',
+        pushName: 'leo',
+        shortName: 'Leo',
+        type: 'in',
+        isMyContact: true,
+        isWAContact: true,
+        isBusiness: true,
+        isEnterprise: false,
+        verifiedName: 'Leo Store',
+        verifiedLevel: 2,
+        isBlocked: false,
+        labels: ['L1', 'L2'],
+      });
+    });
+
+    it('omits business fields and empty values for a plain personal contact', () => {
+      const r = mapContactFields(
+        {
+          id: { _serialized: '584145200715@c.us' },
+          number: '584145200715',
+          pushname: 'Ana',
+          isMyContact: false,
+          isWAContact: true,
+          isBusiness: false,
+        },
+        true,
+      );
+      expect(r).toEqual({
+        id: '584145200715@c.us',
+        number: '584145200715',
+        pushName: 'Ana',
+        isMyContact: false,
+        isWAContact: true,
+        isBusiness: false,
+      });
+      expect('verifiedName' in r).toBe(false);
+      expect('name' in r).toBe(false);
+      expect('labels' in r).toBe(false);
+    });
+
+    it('returns an empty object when nothing is set', () => {
+      expect(mapContactFields({}, true)).toEqual({});
+    });
+
+    it('drops an empty labels array', () => {
+      expect(mapContactFields({ labels: [] }, true)).toEqual({});
+    });
+  });
+
+  describe('minimal mode (default)', () => {
+    it('returns only name and pushName even when the contact has full data', () => {
+      expect(mapContactFields(businessRaw)).toEqual({ name: 'Leo hermano', pushName: 'leo' });
+    });
+
+    it('omits name/pushName when absent and never includes extended fields', () => {
+      expect(mapContactFields({ number: '584145200715', isBusiness: true })).toEqual({});
+    });
   });
 });

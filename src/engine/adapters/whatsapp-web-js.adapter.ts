@@ -46,7 +46,7 @@ import {
   WwjsChannelData,
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
-import { buildIncomingMessageBase } from './message-mapper';
+import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import {
   capInboundMedia,
   inboundMediaConcurrency,
@@ -360,15 +360,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       try {
         const incomingMessage: IncomingMessage = buildIncomingMessageBase(msg);
 
-        // Enrich the sender contact with the saved name (best-effort, from the WhatsApp Web cache).
-        // `author`/`from` resolve to the actual sender for group and 1:1 messages respectively.
+        // Attach the sender's contact info. getContact() gives the real sender (author in groups, from
+        // in 1:1); we read only its synchronous fields and never the async getters (profile pic, about),
+        // which would hit WhatsApp on every message.
         try {
           const contact = await msg.getContact();
-          if (contact?.name || contact?.pushname) {
-            incomingMessage.contact = {
-              name: contact.name || incomingMessage.contact?.name,
-              pushName: contact.pushname || incomingMessage.contact?.pushName,
-            };
+          if (contact) {
+            // Off by default the payload keeps { name, pushName }; WEBHOOK_CONTACT_DETAILS opts into the
+            // full set. Merge over the base so the notifyName pushName isn't lost, and skip an empty
+            // result so we don't emit an empty contact object.
+            const full = process.env.WEBHOOK_CONTACT_DETAILS === 'true';
+            const merged = { ...incomingMessage.contact, ...mapContactFields(contact, full) };
+            if (Object.keys(merged).length > 0) {
+              incomingMessage.contact = merged;
+            }
           }
         } catch (error) {
           this.logger.error('Error getting message contact', String(error));
