@@ -146,6 +146,8 @@ export interface ReactMessageRequest {
 export interface DeleteMessageRequest {
   chatId: Jid;
   messageId: string;
+  /** Delete for everyone (default true). */
+  forEveryone?: boolean;
 }
 
 export interface SendTemplateRequest {
@@ -270,9 +272,13 @@ export interface BulkMessageItem {
 
 export interface SendBulkRequest {
   messages: BulkMessageItem[];
+  /** Optional caller-supplied idempotency/batch id. */
+  batchId?: string;
   options?: {
     /** Minimum 1000 ms; default 3000. */
     delayBetweenMessages?: number;
+    /** Randomize the delay between messages to look less automated. */
+    randomizeDelay?: boolean;
     stopOnError?: boolean;
   };
 }
@@ -296,11 +302,11 @@ export interface BatchProgress {
 
 /** Per-message outcome within a batch result list. */
 export interface BatchMessageResult {
-  index?: number;
   chatId?: Jid;
-  messageId?: string;
   status?: string;
-  error?: string;
+  messageId?: string;
+  sentAt?: string;
+  error?: { code: string; message: string };
 }
 
 /**
@@ -415,6 +421,10 @@ export type WebhookEvent =
   | 'session.qr'
   | 'session.authenticated'
   | 'session.disconnected'
+  // Reserved: accepted on subscribe but not dispatched yet.
+  | 'group.join'
+  | 'group.leave'
+  | 'group.update'
   | '*';
 
 export interface WebhookFilterCondition {
@@ -500,6 +510,10 @@ export interface StatusRecord {
 
 export interface SendTextStatusRequest {
   text: string;
+  /** Hex background color, e.g. `#25D366`. */
+  backgroundColor?: string;
+  /** Font index supported by WhatsApp status. */
+  font?: number;
 }
 
 /** Media payload for a status post: provide `url` OR `base64`. */

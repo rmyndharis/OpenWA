@@ -23,7 +23,10 @@ BulkMessageType = Literal["text", "image", "video", "audio", "document"]
 WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
     "message.reaction", "session.status", "session.qr", "session.authenticated",
-    "session.disconnected", "*",
+    "session.disconnected",
+    # Reserved: accepted on subscribe but not dispatched yet.
+    "group.join", "group.leave", "group.update",
+    "*",
 ]
 
 
@@ -106,10 +109,13 @@ class SendMediaRequest(TypedDict, total=False):
     caption: str
 
 
-class SendLocationRequest(TypedDict):
+class SendLocationRequest(TypedDict, total=False):
+    # chatId/latitude/longitude required; description/address optional.
     chatId: Jid
     latitude: float
     longitude: float
+    description: str
+    address: str
 
 
 class SendContactRequest(TypedDict):
@@ -136,9 +142,11 @@ class ReactMessageRequest(TypedDict):
     emoji: str
 
 
-class DeleteMessageRequest(TypedDict):
+class DeleteMessageRequest(TypedDict, total=False):
+    # chatId/messageId required; forEveryone optional (default true).
     chatId: Jid
     messageId: str
+    forEveryone: bool
 
 
 class SendTemplateRequest(TypedDict, total=False):
@@ -267,14 +275,17 @@ class BulkMessageContent(TypedDict, total=False):
     caption: str
 
 
-class BulkMessageItem(TypedDict):
+class BulkMessageItem(TypedDict, total=False):
+    # chatId/type/content required; variables optional.
     chatId: Jid
     type: BulkMessageType
     content: BulkMessageContent
+    variables: dict[str, str]
 
 
 class BulkOptions(TypedDict, total=False):
     delayBetweenMessages: int
+    randomizeDelay: bool
     stopOnError: bool
 
 
@@ -283,8 +294,9 @@ class _SendBulkRequired(TypedDict):
 
 
 class SendBulkRequest(_SendBulkRequired, total=False):
-    # `options` is optional; the backend applies defaults when omitted.
+    # `options` and `batchId` are optional; the backend applies defaults.
     options: BulkOptions
+    batchId: str
 
 
 class BulkMessageResponse(TypedDict):
@@ -295,12 +307,17 @@ class BulkMessageResponse(TypedDict):
     statusUrl: str
 
 
+class BatchError(TypedDict, total=False):
+    code: str
+    message: str
+
+
 class BatchMessageResult(TypedDict, total=False):
-    index: int
     chatId: Jid
-    messageId: str
     status: str
-    error: str
+    messageId: str
+    sentAt: str
+    error: BatchError
 
 
 class BatchProgress(TypedDict, total=False):
@@ -483,8 +500,11 @@ class StatusRecord(TypedDict, total=False):
     timestamp: str | int
 
 
-class SendTextStatusRequest(TypedDict):
+class SendTextStatusRequest(TypedDict, total=False):
+    # text required; backgroundColor (hex, e.g. #25D366) and font optional.
     text: str
+    backgroundColor: str
+    font: int
 
 
 class StatusMediaInput(TypedDict, total=False):
