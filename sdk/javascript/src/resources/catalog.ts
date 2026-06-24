@@ -15,6 +15,7 @@ import type {
   CatalogProduct,
   CatalogProductsQuery,
   MessageResponse,
+  PaginatedProducts,
   SendCatalogRequest,
   SendProductRequest,
 } from '../types.js';
@@ -30,9 +31,9 @@ export class CatalogResource {
     });
   }
 
-  /** List catalog products (paginated). */
-  products(sessionId: string, query?: CatalogProductsQuery): Promise<CatalogProduct[]> {
-    return this.client.request<CatalogProduct[]>({
+  /** List catalog products. Returns a `{ products, pagination }` page. */
+  products(sessionId: string, query?: CatalogProductsQuery): Promise<PaginatedProducts> {
+    return this.client.request<PaginatedProducts>({
       method: 'GET',
       path: `/api/sessions/${sessionId}/catalog/products`,
       query,

@@ -10,8 +10,8 @@ describe('GroupsResource — exact paths and bodies', () => {
   it('list / get / create', async () => {
     const t = new MockTransport()
       .on('GET', /\/groups$/, { body: [] })
-      .on('GET', /\/groups\/g1@g\.us$/, { body: { id: 'g1@g.us', subject: 'G', participants: [] } })
-      .on('POST', /\/groups$/, { body: { id: 'g1@g.us', subject: 'G', participants: [] } });
+      .on('GET', /\/groups\/g1@g\.us$/, { body: { id: 'g1@g.us', name: 'G', participants: [] } })
+      .on('POST', /\/groups$/, { body: { id: 'g1@g.us', name: 'G', participants: [] } });
     const c = client(t);
     await c.groups.list('s');
     expect(t.lastCall!.url).toBe('http://x/api/sessions/s/groups');

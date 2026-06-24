@@ -58,13 +58,17 @@ describe('ChannelsResource — exact paths', () => {
 describe('CatalogResource — exact paths (note: catalog controller is session-rooted)', () => {
   it('info / products / product', async () => {
     const t = new MockTransport()
-      .on('GET', /\/catalog$/, { body: { name: 'My Shop', productsCount: 5 } })
-      .on('GET', /\/catalog\/products$/, { body: [{ id: 'p1', name: 'Widget' }] })
+      .on('GET', /\/catalog$/, { body: { id: 'c1', name: 'My Shop', productCount: 5, url: 'http://shop' } })
+      .on('GET', /\/catalog\/products$/, {
+        body: { products: [{ id: 'p1', name: 'Widget' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } },
+      })
       .on('GET', /\/catalog\/products\/p1$/, { body: { id: 'p1', name: 'Widget' } });
     const c = client(t);
     await c.catalog.info('s');
     expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions/s/catalog');
-    await c.catalog.products('s', { page: 1, limit: 20 });
+    const page = await c.catalog.products('s', { page: 1, limit: 20 });
+    expect(page.products).toHaveLength(1);
+    expect(page.pagination.total).toBe(1);
     expect(t.lastCall!.url).toContain('/catalog/products');
     expect(t.lastCall!.url).toContain('page=1');
     expect(t.lastCall!.url).toContain('limit=20');

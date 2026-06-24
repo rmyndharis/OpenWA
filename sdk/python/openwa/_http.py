@@ -23,7 +23,17 @@ def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) 
     url = f"{base_url.rstrip('/')}{path}"
     if not query:
         return url
-    params = {k: str(v) for k, v in query.items() if v is not None}
+
+    def _serialize(v: Any) -> str:
+        # Booleans must be lowercase: the backend reads query flags as `=== 'true'`,
+        # so Python's default str(True) == 'True' would be silently ignored.
+        if v is True:
+            return "true"
+        if v is False:
+            return "false"
+        return str(v)
+
+    params = {k: _serialize(v) for k, v in query.items() if v is not None}
     if not params:
         return url
     req = httpx.Request("GET", url, params=params)

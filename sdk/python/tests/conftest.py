@@ -57,9 +57,13 @@ class MockBackend:
             call = RecordedCall(method=method, url=url, headers=dict(request.headers), body=body)
             self.calls.append(call)
 
-            for route_method, path_prefix, responder in self.routes:
-                if route_method == method and path_prefix in url:
-                    return responder(call)
+            # Most-specific (longest) matching prefix wins, so a nested route like
+            # "/catalog/products" is preferred over "/catalog" regardless of
+            # registration order.
+            matches = [(pp, resp) for m, pp, resp in self.routes if m == method and pp in url]
+            if matches:
+                _, responder = max(matches, key=lambda pair: len(pair[0]))
+                return responder(call)
             if self.fallback is not None:
                 return self.fallback(call)
             raise AssertionError(f"MockBackend: no route for {method} {url}")

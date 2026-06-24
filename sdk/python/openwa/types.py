@@ -69,13 +69,19 @@ class RequestPairingCodeRequest(TypedDict):
     phoneNumber: str
 
 
+class MemoryUsage(TypedDict):
+    heapUsed: int
+    heapTotal: int
+    rss: int
+
+
 class SessionStatsOverview(TypedDict, total=False):
     total: int
     active: int
     ready: int
     disconnected: int
     byStatus: dict[str, int]
-    memoryUsage: int
+    memoryUsage: MemoryUsage
 
 
 # ── Message ───────────────────────────────────────────────────────
@@ -233,6 +239,14 @@ class BatchMessageResult(TypedDict, total=False):
     error: str
 
 
+class BatchProgress(TypedDict, total=False):
+    total: int
+    sent: int
+    failed: int
+    pending: int
+    cancelled: int
+
+
 class BatchStatusResponse(TypedDict, total=False):
     """Response from ``GET /messages/batch/:batchId`` and the cancel endpoint.
 
@@ -241,7 +255,7 @@ class BatchStatusResponse(TypedDict, total=False):
 
     batchId: str
     status: str
-    progress: int
+    progress: BatchProgress
     results: list[BatchMessageResult]
     startedAt: str
     completedAt: str
@@ -279,22 +293,34 @@ class ContactPhoneResponse(TypedDict):
 
 class GroupParticipant(TypedDict, total=False):
     id: Jid
+    number: str
+    name: str
     isAdmin: bool
     isSuperAdmin: bool
 
 
 class GroupSummary(TypedDict, total=False):
+    """Item returned by ``GET /sessions/:id/groups`` (the slim list shape)."""
+
     id: Jid
-    subject: str
+    name: str
+    participantsCount: int
+    isAdmin: bool
+    linkedParentJID: str | None
+
+
+class GroupInfo(TypedDict, total=False):
+    """Full detail returned by ``GET /sessions/:id/groups/:groupId``."""
+
+    id: Jid
+    name: str
     description: str | None
     owner: Jid | None
-    size: int
-    createdAt: str
-    pictureUrl: str | None
-
-
-class GroupInfo(GroupSummary, total=False):
+    createdAt: int
     participants: list[GroupParticipant]
+    isReadOnly: bool
+    isAnnounce: bool
+    linkedParentJID: str | None
 
 
 class CreateGroupRequest(TypedDict):
@@ -364,7 +390,8 @@ class ChatSummary(TypedDict, total=False):
     name: str | None
     isGroup: bool
     unreadCount: int
-    lastMessage: MessageRecord | None
+    # Server returns a plain preview string, not a message object.
+    lastMessage: str
     timestamp: str | int
 
 
@@ -479,9 +506,11 @@ class SubscribeChannelRequest(TypedDict):
 
 
 class CatalogInfo(TypedDict, total=False):
+    id: str
     name: str
     description: str | None
-    productsCount: int
+    productCount: int
+    url: str
 
 
 class CatalogProductsQuery(TypedDict, total=False):
@@ -493,11 +522,27 @@ class CatalogProduct(TypedDict, total=False):
     id: str
     name: str
     description: str | None
-    price: str | None
-    currency: str | None
-    url: str | None
+    price: float
+    currency: str
+    priceFormatted: str
     imageUrl: str | None
-    availability: str
+    url: str
+    isAvailable: bool
+    retailerId: str
+
+
+class ProductPagination(TypedDict):
+    page: int
+    limit: int
+    total: int
+    totalPages: int
+
+
+class PaginatedProducts(TypedDict):
+    """Paginated payload returned by ``GET /sessions/:id/catalog/products``."""
+
+    products: list[CatalogProduct]
+    pagination: ProductPagination
 
 
 # chatId + productId required; body optional. Modeled total=False for 3.9 compat

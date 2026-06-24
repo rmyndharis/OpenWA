@@ -146,6 +146,14 @@ class TestMessages:
         client.messages.reactions("s", "a@c.us", "m1")
         assert "/messages/a@c.us/m1/reactions" in backend.calls[-1].url
 
+    def test_history_boolean_query_serializes_lowercase(self):
+        # Server reads `includeMedia === 'true'`; Python str(True) == 'True' would be ignored.
+        backend = MockBackend().on("GET", "/history", body=[])
+        make_client(backend).messages.history("s", "a@c.us", {"limit": 5, "includeMedia": True, "deep": False})
+        url = backend.last_call.url
+        assert "includeMedia=true" in url
+        assert "deep=false" in url
+
     def test_bulk_and_batch_status(self):
         backend = MockBackend()
         backend.on("POST", "/send-bulk", body={
@@ -153,17 +161,19 @@ class TestMessages:
             "estimatedCompletionTime": "t", "statusUrl": "/u",
         })
         backend.on("GET", "/batch/b", body={
-            "batchId": "b", "status": "done", "progress": 100,
+            "batchId": "b", "status": "done",
+            "progress": {"total": 1, "sent": 1, "failed": 0, "pending": 0, "cancelled": 0},
             "results": [], "startedAt": "s", "completedAt": "c",
         })
         backend.on("POST", "/cancel", body={
-            "batchId": "b", "status": "cancelled", "progress": 50,
+            "batchId": "b", "status": "cancelled",
+            "progress": {"total": 1, "sent": 0, "failed": 0, "pending": 0, "cancelled": 1},
         })
         client = make_client(backend)
         client.messages.send_bulk("s", {"messages": [{"chatId": "a@c.us", "type": "text", "content": {"text": "x"}}]})
         assert "/messages/send-bulk" in backend.calls[-1].url
         status = client.messages.batch_status("s", "b")
-        assert status["progress"] == 100
+        assert status["progress"]["sent"] == 1
         assert "/messages/batch/b" in backend.calls[-1].url
         cancelled = client.messages.cancel_batch("s", "b")
         assert cancelled["status"] == "cancelled"
@@ -402,15 +412,19 @@ class TestLabelsChannelsCatalog:
 
     def test_catalog(self):
         backend = MockBackend()
-        backend.on("GET", "/catalog", body={"name": "My Shop", "productsCount": 5})
-        backend.on("GET", "/catalog/products", body=[{"id": "p1", "name": "Widget"}])
+        backend.on("GET", "/catalog", body={"id": "c1", "name": "My Shop", "productCount": 5, "url": "http://shop"})
+        backend.on("GET", "/catalog/products", body={
+            "products": [{"id": "p1", "name": "Widget"}],
+            "pagination": {"page": 1, "limit": 20, "total": 1, "totalPages": 1},
+        })
         backend.on("GET", "/catalog/products/p1", body={"id": "p1", "name": "Widget"})
         backend.on("POST", "/messages/send-product", body={"messageId": "m", "timestamp": 1})
         backend.on("POST", "/messages/send-catalog", body={"messageId": "m", "timestamp": 1})
         client = make_client(backend)
         client.catalog.info("s")
         assert "/sessions/s/catalog" in backend.calls[-1].url
-        client.catalog.products("s", {"page": 1, "limit": 20})
+        page = client.catalog.products("s", {"page": 1, "limit": 20})
+        assert page["pagination"]["total"] == 1
         assert "page=1" in backend.calls[-1].url
         client.catalog.product("s", "p1")
         client.catalog.send_product("s", {"chatId": "a@c.us", "productId": "p1", "body": "x"})

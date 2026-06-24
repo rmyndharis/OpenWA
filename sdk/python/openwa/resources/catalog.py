@@ -16,6 +16,7 @@ from ..types import (
     CatalogProduct,
     CatalogProductsQuery,
     MessageResponse,
+    PaginatedProducts,
     SendCatalogRequest,
     SendProductRequest,
 )
@@ -33,7 +34,7 @@ class CatalogResource:
 
     def products(
         self, session_id: str, query: CatalogProductsQuery | None = None
-    ) -> list[CatalogProduct]:
+    ) -> PaginatedProducts:
         return self._http.request(
             "GET", f"/api/sessions/{session_id}/catalog/products", query=query
         )

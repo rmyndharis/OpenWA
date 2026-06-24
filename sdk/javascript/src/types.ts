@@ -79,7 +79,7 @@ export interface SessionStatsOverview {
   ready: number;
   disconnected: number;
   byStatus: Record<string, number>;
-  memoryUsage?: number;
+  memoryUsage?: { heapUsed: number; heapTotal: number; rss: number };
 }
 
 // ── Message ───────────────────────────────────────────────────────
@@ -244,6 +244,15 @@ export interface BulkMessageResponse {
   statusUrl: string;
 }
 
+/** Progress counters for a bulk-send batch. */
+export interface BatchProgress {
+  total: number;
+  sent: number;
+  failed: number;
+  pending: number;
+  cancelled: number;
+}
+
 /** Per-message outcome within a batch result list. */
 export interface BatchMessageResult {
   index?: number;
@@ -261,7 +270,7 @@ export interface BatchMessageResult {
 export interface BatchStatusResponse {
   batchId: string;
   status: string;
-  progress?: number;
+  progress?: BatchProgress;
   results?: BatchMessageResult[];
   startedAt?: string;
   completedAt?: string;
@@ -297,22 +306,34 @@ export interface ContactPhoneResponse {
 
 export interface GroupParticipant {
   id: Jid;
-  isAdmin?: boolean;
-  isSuperAdmin?: boolean;
+  number: string;
+  name?: string;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
 }
 
+/** Item returned by `GET /sessions/:id/groups` (the slim list shape). */
 export interface GroupSummary {
   id: Jid;
-  subject: string;
-  description?: string | null;
-  owner?: Jid | null;
-  size?: number;
-  createdAt?: string;
-  pictureUrl?: string | null;
+  name: string;
+  participantsCount?: number;
+  isAdmin?: boolean;
+  /** JID of the parent community, or null if standalone. */
+  linkedParentJID?: string | null;
 }
 
-export interface GroupInfo extends GroupSummary {
+/** Full detail returned by `GET /sessions/:id/groups/:groupId`. */
+export interface GroupInfo {
+  id: Jid;
+  name: string;
+  description?: string | null;
+  owner?: Jid | null;
+  /** Unix timestamp in seconds. */
+  createdAt?: number;
   participants: GroupParticipant[];
+  isReadOnly?: boolean;
+  isAnnounce?: boolean;
+  linkedParentJID?: string | null;
 }
 
 export interface CreateGroupRequest {
@@ -406,7 +427,8 @@ export interface ChatSummary {
   name?: string | null;
   isGroup?: boolean;
   unreadCount?: number;
-  lastMessage?: MessageRecord | null;
+  /** Preview text of the last message (the server returns a plain string, not an object). */
+  lastMessage?: string;
   timestamp?: string | number;
 }
 
@@ -519,9 +541,11 @@ export interface SubscribeChannelRequest {
 // ── Catalog (Business) ────────────────────────────────────────────
 
 export interface CatalogInfo {
-  name?: string;
+  id: string;
+  name: string;
   description?: string | null;
-  productsCount?: number;
+  productCount: number;
+  url: string;
 }
 
 export interface CatalogProductsQuery {
@@ -533,13 +557,21 @@ export interface CatalogProductsQuery {
 
 export interface CatalogProduct {
   id: string;
-  name?: string;
+  name: string;
   description?: string | null;
-  price?: string | null;
-  currency?: string | null;
-  url?: string | null;
+  price: number;
+  currency: string;
+  priceFormatted: string;
   imageUrl?: string | null;
-  availability?: string;
+  url: string;
+  isAvailable: boolean;
+  retailerId?: string;
+}
+
+/** Paginated payload returned by `GET /sessions/:id/catalog/products`. */
+export interface PaginatedProducts {
+  products: CatalogProduct[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
 export interface SendProductRequest {

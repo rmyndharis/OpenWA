@@ -101,16 +101,23 @@ describe('MessagesResource — exact paths', () => {
         body: { batchId: 'b', status: 'queued', totalMessages: 1, estimatedCompletionTime: 't', statusUrl: '/u' },
       })
       .on('GET', /\/batch\/b$/, {
-        body: { batchId: 'b', status: 'done', progress: 100, results: [], startedAt: 's', completedAt: 'c' },
+        body: {
+          batchId: 'b',
+          status: 'done',
+          progress: { total: 1, sent: 1, failed: 0, pending: 0, cancelled: 0 },
+          results: [],
+          startedAt: 's',
+          completedAt: 'c',
+        },
       })
       .on('POST', /\/batch\/b\/cancel$/, {
-        body: { batchId: 'b', status: 'cancelled', progress: 50 },
+        body: { batchId: 'b', status: 'cancelled', progress: { total: 1, sent: 0, failed: 0, pending: 0, cancelled: 1 } },
       });
     const c = client(t);
     await c.messages.sendBulk('s', { messages: [{ chatId: 'a@c.us', type: 'text', content: { text: 'x' } }] });
     expect(t.lastCall!.url).toContain('/messages/send-bulk');
     const status = await c.messages.batchStatus('s', 'b');
-    expect(status.progress).toBe(100);
+    expect(status.progress?.sent).toBe(1);
     expect(t.lastCall!.url).toContain('/messages/batch/b');
     const cancelled = await c.messages.cancelBatch('s', 'b');
     expect(cancelled.status).toBe('cancelled');
