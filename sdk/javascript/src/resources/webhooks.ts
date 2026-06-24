@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { CreateWebhookRequest, UpdateWebhookRequest, WebhookResponse, WebhookTestResult } from '../types.js';
 
@@ -15,7 +16,7 @@ export class WebhooksResource {
   list(sessionId: string): Promise<WebhookResponse[]> {
     return this.client.request<WebhookResponse[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/webhooks`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks`,
     });
   }
 
@@ -23,7 +24,7 @@ export class WebhooksResource {
   get(sessionId: string, id: string): Promise<WebhookResponse> {
     return this.client.request<WebhookResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/webhooks/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks/${encodeSegment(id)}`,
     });
   }
 
@@ -31,7 +32,7 @@ export class WebhooksResource {
   create(sessionId: string, body: CreateWebhookRequest): Promise<WebhookResponse> {
     return this.client.request<WebhookResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/webhooks`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks`,
       body,
     });
   }
@@ -40,7 +41,7 @@ export class WebhooksResource {
   update(sessionId: string, id: string, body: UpdateWebhookRequest): Promise<WebhookResponse> {
     return this.client.request<WebhookResponse>({
       method: 'PUT',
-      path: `/api/sessions/${sessionId}/webhooks/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks/${encodeSegment(id)}`,
       body,
     });
   }
@@ -49,7 +50,7 @@ export class WebhooksResource {
   delete(sessionId: string, id: string): Promise<void> {
     return this.client.request<void>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/webhooks/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks/${encodeSegment(id)}`,
     });
   }
 
@@ -57,7 +58,7 @@ export class WebhooksResource {
   test(sessionId: string, id: string): Promise<WebhookTestResult> {
     return this.client.request<WebhookTestResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/webhooks/${id}/test`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/webhooks/${encodeSegment(id)}/test`,
     });
   }
 }

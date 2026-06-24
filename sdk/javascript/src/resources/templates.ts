@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { CreateTemplateRequest, TemplateRecord, UpdateTemplateRequest } from '../types.js';
 
@@ -15,7 +16,7 @@ export class TemplatesResource {
   list(sessionId: string): Promise<TemplateRecord[]> {
     return this.client.request<TemplateRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/templates`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/templates`,
     });
   }
 
@@ -23,7 +24,7 @@ export class TemplatesResource {
   get(sessionId: string, id: string): Promise<TemplateRecord> {
     return this.client.request<TemplateRecord>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/templates/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/templates/${encodeSegment(id)}`,
     });
   }
 
@@ -31,7 +32,7 @@ export class TemplatesResource {
   create(sessionId: string, body: CreateTemplateRequest): Promise<TemplateRecord> {
     return this.client.request<TemplateRecord>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/templates`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/templates`,
       body,
     });
   }
@@ -40,7 +41,7 @@ export class TemplatesResource {
   update(sessionId: string, id: string, body: UpdateTemplateRequest): Promise<TemplateRecord> {
     return this.client.request<TemplateRecord>({
       method: 'PUT',
-      path: `/api/sessions/${sessionId}/templates/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/templates/${encodeSegment(id)}`,
       body,
     });
   }
@@ -49,7 +50,7 @@ export class TemplatesResource {
   delete(sessionId: string, id: string): Promise<void> {
     return this.client.request<void>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/templates/${id}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/templates/${encodeSegment(id)}`,
     });
   }
 }

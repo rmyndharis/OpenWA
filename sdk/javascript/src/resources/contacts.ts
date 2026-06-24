@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   CheckNumberResponse,
@@ -26,7 +27,7 @@ export class ContactsResource {
   list(sessionId: string, query?: ListContactsQuery): Promise<ContactRecord[]> {
     return this.client.request<ContactRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/contacts`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts`,
       query,
     });
   }
@@ -35,7 +36,7 @@ export class ContactsResource {
   get(sessionId: string, contactId: string): Promise<ContactRecord> {
     return this.client.request<ContactRecord>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/contacts/${contactId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}`,
     });
   }
 
@@ -43,7 +44,7 @@ export class ContactsResource {
   check(sessionId: string, number: string): Promise<CheckNumberResponse> {
     return this.client.request<CheckNumberResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/contacts/check/${number}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/check/${encodeSegment(number)}`,
     });
   }
 
@@ -51,7 +52,7 @@ export class ContactsResource {
   profilePicture(sessionId: string, contactId: string): Promise<ProfilePictureResponse> {
     return this.client.request<ProfilePictureResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/contacts/${contactId}/profile-picture`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/profile-picture`,
     });
   }
 
@@ -59,7 +60,7 @@ export class ContactsResource {
   phone(sessionId: string, contactId: string): Promise<ContactPhoneResponse> {
     return this.client.request<ContactPhoneResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/contacts/${contactId}/phone`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/phone`,
     });
   }
 
@@ -67,7 +68,7 @@ export class ContactsResource {
   block(sessionId: string, contactId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/contacts/${contactId}/block`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/block`,
     });
   }
 
@@ -75,7 +76,7 @@ export class ContactsResource {
   unblock(sessionId: string, contactId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/contacts/${contactId}/block`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/block`,
     });
   }
 }

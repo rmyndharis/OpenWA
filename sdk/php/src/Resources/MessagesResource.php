@@ -27,7 +27,7 @@ class MessagesResource
      */
     public function list(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/messages", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages", $query) ?? [];
     }
 
     /**
@@ -36,7 +36,7 @@ class MessagesResource
      */
     public function sendText(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-text", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-text", [], $body);
     }
 
     /**
@@ -75,49 +75,49 @@ class MessagesResource
     /** @return array<string,mixed> */
     private function sendMedia(string $sessionId, string $segment, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/{$segment}", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($segment)}", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendLocation(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-location", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-location", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendContact(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-contact", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-contact", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendTemplate(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-template", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-template", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function reply(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/reply", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/reply", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function forward(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/forward", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/forward", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function react(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/react", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/react", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function delete(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/delete", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/delete", [], $body);
     }
 
     /**
@@ -126,30 +126,30 @@ class MessagesResource
      */
     public function history(string $sessionId, string $chatId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/messages/{$chatId}/history", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/history", $query) ?? [];
     }
 
     /** @return array<int,array<string,mixed>> */
     public function reactions(string $sessionId, string $chatId, string $messageId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/messages/{$chatId}/{$messageId}/reactions") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/{$this->http->encodeSegment($chatId)}/{$this->http->encodeSegment($messageId)}/reactions") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function sendBulk(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-bulk", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-bulk", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function batchStatus(string $sessionId, string $batchId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/messages/batch/{$batchId}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/batch/{$this->http->encodeSegment($batchId)}");
     }
 
     /** @return array<string,mixed> */
     public function cancelBatch(string $sessionId, string $batchId): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/batch/{$batchId}/cancel");
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/batch/{$this->http->encodeSegment($batchId)}/cancel");
     }
 }

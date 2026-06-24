@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { HealthReadyResponse, HealthResponse } from '../types.js';
 

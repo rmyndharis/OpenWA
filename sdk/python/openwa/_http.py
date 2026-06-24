@@ -10,12 +10,21 @@ consumers intercept/observability-wrap outbound calls.
 from __future__ import annotations
 
 from typing import Any, Mapping
+from urllib.parse import quote
 
 import httpx
 
 from .errors import OpenWAApiError, OpenWATimeoutError, classify
 
 HttpMethod = str  # "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+
+
+def quote_segment(segment: Any) -> str:
+    """Percent-encode a single path segment so a value containing ``/``, ``#`` or
+    ``?`` can't break out of its path position. WhatsApp-id characters that are
+    already path-safe (``@``, ``:``, ``+``) are kept readable.
+    """
+    return quote(str(segment), safe="@:+")
 
 
 def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) -> str:

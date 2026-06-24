@@ -50,6 +50,20 @@ class TestClientCore:
         # A non-JSON 2xx body must surface as text, not raise a raw JSONDecodeError.
         assert client.sessions.list() == "plain text"
 
+    def test_path_segments_are_encoded(self):
+        backend = MockBackend().on("GET", "/history", body=[])
+        make_client(backend).messages.history("s", "weird/id#x")
+        assert "weird%2Fid%23x" in backend.last_call.url
+        backend2 = MockBackend().on("GET", "/history", body=[])
+        make_client(backend2).messages.history("s", "a@c.us")
+        assert "/messages/a@c.us/history" in backend2.last_call.url  # @ preserved
+
+    def test_raw_request_escape_hatch(self):
+        backend = MockBackend().on("GET", "/api/anything", body={"ok": True})
+        result = make_client(backend).request("GET", "/api/anything", query={"a": 1})
+        assert result == {"ok": True}
+        assert "a=1" in backend.last_call.url
+
     def test_does_not_follow_redirects(self):
         import httpx
 

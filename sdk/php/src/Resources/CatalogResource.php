@@ -26,7 +26,7 @@ class CatalogResource
     /** @return array<string,mixed> */
     public function info(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/catalog");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/catalog");
     }
 
     /**
@@ -37,13 +37,13 @@ class CatalogResource
      */
     public function products(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/catalog/products", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/catalog/products", $query) ?? [];
     }
 
     /** @return array<string,mixed> */
     public function product(string $sessionId, string $productId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/catalog/products/{$productId}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/catalog/products/{$this->http->encodeSegment($productId)}");
     }
 
     /**
@@ -54,7 +54,7 @@ class CatalogResource
      */
     public function sendProduct(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-product", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-product", [], $body);
     }
 
     /**
@@ -65,6 +65,6 @@ class CatalogResource
      */
     public function sendCatalog(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/messages/send-catalog", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-catalog", [], $body);
     }
 }

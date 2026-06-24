@@ -23,13 +23,13 @@ class WebhooksResource
     /** @return array<int,array<string,mixed>> */
     public function list(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/webhooks") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function get(string $sessionId, string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/webhooks/{$id}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}");
     }
 
     /**
@@ -38,7 +38,7 @@ class WebhooksResource
      */
     public function create(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/webhooks", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks", [], $body);
     }
 
     /**
@@ -47,17 +47,17 @@ class WebhooksResource
      */
     public function update(string $sessionId, string $id, array $body): array
     {
-        return $this->http->request('PUT', "/api/sessions/{$sessionId}/webhooks/{$id}", [], $body);
+        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}", [], $body);
     }
 
     public function delete(string $sessionId, string $id): void
     {
-        $this->http->request('DELETE', "/api/sessions/{$sessionId}/webhooks/{$id}");
+        $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}");
     }
 
     /** @return array<string,mixed> */
     public function test(string $sessionId, string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/webhooks/{$id}/test");
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/webhooks/{$this->http->encodeSegment($id)}/test");
     }
 }

@@ -27,7 +27,7 @@ class ChatsResource
      */
     public function list(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/chats", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats", $query) ?? [];
     }
 
     /**
@@ -36,24 +36,24 @@ class ChatsResource
      */
     public function markRead(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/chats/read", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/read", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function markUnread(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/chats/unread", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/unread", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function delete(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/chats/delete", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/delete", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendState(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/chats/typing", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/chats/typing", [], $body);
     }
 }

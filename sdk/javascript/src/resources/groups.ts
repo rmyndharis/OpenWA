@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { CreateGroupRequest, GroupInfo, GroupSummary, InviteCodeResponse, SuccessResult } from '../types.js';
 
@@ -20,7 +21,7 @@ export class GroupsResource {
   list(sessionId: string, query?: ListGroupsQuery): Promise<GroupSummary[]> {
     return this.client.request<GroupSummary[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/groups`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups`,
       query,
     });
   }
@@ -29,7 +30,7 @@ export class GroupsResource {
   get(sessionId: string, groupId: string): Promise<GroupInfo> {
     return this.client.request<GroupInfo>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/groups/${groupId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}`,
     });
   }
 
@@ -37,7 +38,7 @@ export class GroupsResource {
   create(sessionId: string, body: CreateGroupRequest): Promise<GroupInfo> {
     return this.client.request<GroupInfo>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups`,
       body,
     });
   }
@@ -46,7 +47,7 @@ export class GroupsResource {
   addParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/participants`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants`,
       body: { participants },
     });
   }
@@ -55,7 +56,7 @@ export class GroupsResource {
   removeParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/participants`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants`,
       body: { participants },
     });
   }
@@ -64,7 +65,7 @@ export class GroupsResource {
   promoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/participants/promote`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants/promote`,
       body: { participants },
     });
   }
@@ -73,7 +74,7 @@ export class GroupsResource {
   demoteParticipants(sessionId: string, groupId: string, participants: string[]): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/participants/demote`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/participants/demote`,
       body: { participants },
     });
   }
@@ -82,7 +83,7 @@ export class GroupsResource {
   setSubject(sessionId: string, groupId: string, subject: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'PUT',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/subject`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/subject`,
       body: { subject },
     });
   }
@@ -91,7 +92,7 @@ export class GroupsResource {
   setDescription(sessionId: string, groupId: string, description: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'PUT',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/description`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/description`,
       body: { description },
     });
   }
@@ -100,7 +101,7 @@ export class GroupsResource {
   leave(sessionId: string, groupId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/leave`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/leave`,
     });
   }
 
@@ -108,7 +109,7 @@ export class GroupsResource {
   inviteCode(sessionId: string, groupId: string): Promise<InviteCodeResponse> {
     return this.client.request<InviteCodeResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/invite-code`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/invite-code`,
     });
   }
 
@@ -116,7 +117,7 @@ export class GroupsResource {
   revokeInviteCode(sessionId: string, groupId: string): Promise<InviteCodeResponse> {
     return this.client.request<InviteCodeResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/groups/${groupId}/invite-code/revoke`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/invite-code/revoke`,
     });
   }
 }

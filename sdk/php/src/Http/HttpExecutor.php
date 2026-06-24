@@ -24,16 +24,24 @@ class HttpExecutor
     private float $timeout;
     private string $apiKey;
     private string $baseUrl;
+    /** @var array<string,string> */
+    private array $defaultHeaders;
 
+    /**
+     * @param array<string,string> $defaultHeaders Applied UNDER the auth/JSON headers
+     *                                             (which always win), on every request.
+     */
     public function __construct(
         string $baseUrl,
         string $apiKey,
         float $timeout = 30.0,
-        ?ClientInterface $httpClient = null
+        ?ClientInterface $httpClient = null,
+        array $defaultHeaders = []
     ) {
         $this->timeout = $timeout;
         $this->apiKey = $apiKey;
         $this->baseUrl = rtrim($baseUrl, '/');
+        $this->defaultHeaders = $defaultHeaders;
         // Auth/JSON headers are applied per-request (in request()). Request URLs
         // are built absolute (baseUrl . path) so a base path prefix (e.g. /v1
         // behind a reverse proxy) is preserved; base_uri is intentionally unset,
@@ -41,6 +49,16 @@ class HttpExecutor
         $this->http = $httpClient ?? new \GuzzleHttp\Client([
             'timeout' => $timeout,
         ]);
+    }
+
+    /**
+     * Percent-encode a single path segment (e.g. a chat/message id) so a value
+     * containing /, # or ? can't break out of its path position. WhatsApp-id
+     * characters that are already path-safe (@, :, +) are kept readable.
+     */
+    public function encodeSegment(string $segment): string
+    {
+        return str_replace(['%40', '%3A', '%2B'], ['@', ':', '+'], rawurlencode($segment));
     }
 
     /**
@@ -66,11 +84,12 @@ class HttpExecutor
             // Never auto-follow redirects: doing so would re-send the X-API-Key
             // header to the redirect target (potentially a different origin).
             'allow_redirects' => false,
-            'headers' => [
+            // Caller default headers first; auth/JSON win so they can't be clobbered.
+            'headers' => array_merge($this->defaultHeaders, [
                 'X-API-Key' => $this->apiKey,
                 'Content-Type' => 'application/json',
                 'Accept' => 'application/json',
-            ],
+            ]),
         ];
         // Build query string, skipping null values (so absent optionals aren't sent).
         $query = array_filter($query, fn ($v) => $v !== null);
@@ -120,8 +139,9 @@ class HttpExecutor
             $data = ($decoded === null && json_last_error() !== JSON_ERROR_NONE) ? $text : $decoded;
         }
 
-        // NestJS envelope: {statusCode, message, error}
-        $envelope = is_array($data) && isset($data['statusCode'], $data['message'], $data['error']) ? $data : null;
+        // NestJS envelope: {statusCode, message, error}. `error` is sometimes absent
+        // (e.g. some 500s), so detect on statusCode + message and treat error as optional.
+        $envelope = is_array($data) && isset($data['statusCode'], $data['message']) ? $data : null;
         $rawMessage = $envelope['message'] ?? $data;
         if (is_array($rawMessage)) {
             $messageText = implode(', ', array_map('strval', $rawMessage));

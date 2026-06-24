@@ -5,6 +5,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   ChannelMessageQuery,
@@ -21,7 +22,7 @@ export class ChannelsResource {
   list(sessionId: string): Promise<ChannelRecord[]> {
     return this.client.request<ChannelRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/channels`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels`,
     });
   }
 
@@ -29,7 +30,7 @@ export class ChannelsResource {
   get(sessionId: string, channelId: string): Promise<ChannelRecord> {
     return this.client.request<ChannelRecord>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/channels/${channelId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}`,
     });
   }
 
@@ -37,7 +38,7 @@ export class ChannelsResource {
   messages(sessionId: string, channelId: string, query?: ChannelMessageQuery): Promise<MessageRecord[]> {
     return this.client.request<MessageRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/channels/${channelId}/messages`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}/messages`,
       query,
     });
   }
@@ -46,7 +47,7 @@ export class ChannelsResource {
   subscribe(sessionId: string, body: SubscribeChannelRequest): Promise<ChannelRecord> {
     return this.client.request<ChannelRecord>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/channels/subscribe`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/subscribe`,
       body,
     });
   }
@@ -55,7 +56,7 @@ export class ChannelsResource {
   unsubscribe(sessionId: string, channelId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/channels/${channelId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}`,
     });
   }
 }

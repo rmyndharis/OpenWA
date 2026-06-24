@@ -44,6 +44,16 @@ export interface ClientConfig {
   fetch?: FetchLike;
 }
 
+/**
+ * Percent-encode a single path segment (e.g. a chat/message id) so a value
+ * containing `/`, `#`, `?` or whitespace can't break out of its path position.
+ * WhatsApp-id characters that are already path-safe (`@`, `:`, `+`) are kept
+ * readable.
+ */
+export function encodeSegment(segment: string | number): string {
+  return encodeURIComponent(String(segment)).replace(/%40/g, '@').replace(/%3A/g, ':').replace(/%2B/g, '+');
+}
+
 /** Build a URL with serialized query params, omitting `undefined`/`null` values. */
 export function buildUrl(baseUrl: string, path: string, query?: object): string {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;

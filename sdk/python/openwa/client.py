@@ -123,6 +123,19 @@ class OpenWAClient:
     def auth(self) -> AuthValidateResponse:
         return self._http.request("POST", "/api/auth/validate")
 
+    # ── Raw request escape hatch ─────────────────────────────────────
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: Mapping[str, Any] | None = None,
+        body: Any = None,
+    ) -> Any:
+        """Issue a raw request against the API (advanced use). ``path`` begins with ``/``."""
+        return self._http.request(method, path, query=query, body=body)
+
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def close(self) -> None:

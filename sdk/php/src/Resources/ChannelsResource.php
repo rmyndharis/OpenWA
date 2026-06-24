@@ -23,13 +23,13 @@ class ChannelsResource
     /** @return array<int,array<string,mixed>> */
     public function list(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/channels") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function get(string $sessionId, string $channelId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/channels/{$channelId}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
     }
 
     /**
@@ -40,7 +40,7 @@ class ChannelsResource
      */
     public function messages(string $sessionId, string $channelId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/channels/{$channelId}/messages", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}/messages", $query) ?? [];
     }
 
     /**
@@ -51,12 +51,12 @@ class ChannelsResource
      */
     public function subscribe(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/channels/subscribe", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/subscribe", [], $body);
     }
 
     /** Unsubscribe from a channel. Requires an OPERATOR-level key. */
     public function unsubscribe(string $sessionId, string $channelId): array
     {
-        return $this->http->request('DELETE', "/api/sessions/{$sessionId}/channels/{$channelId}");
+        return $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/channels/{$this->http->encodeSegment($channelId)}");
     }
 }

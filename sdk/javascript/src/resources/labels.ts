@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { AddLabelRequest, LabelRecord, SuccessResult } from '../types.js';
 
@@ -16,7 +17,7 @@ export class LabelsResource {
   list(sessionId: string): Promise<LabelRecord[]> {
     return this.client.request<LabelRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/labels`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/labels`,
     });
   }
 
@@ -24,7 +25,7 @@ export class LabelsResource {
   get(sessionId: string, labelId: string): Promise<LabelRecord> {
     return this.client.request<LabelRecord>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/labels/${labelId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/labels/${encodeSegment(labelId)}`,
     });
   }
 
@@ -32,7 +33,7 @@ export class LabelsResource {
   forChat(sessionId: string, chatId: string): Promise<LabelRecord[]> {
     return this.client.request<LabelRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/labels/chat/${chatId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/labels/chat/${encodeSegment(chatId)}`,
     });
   }
 
@@ -40,7 +41,7 @@ export class LabelsResource {
   addToChat(sessionId: string, chatId: string, body: AddLabelRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/labels/chat/${chatId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/labels/chat/${encodeSegment(chatId)}`,
       body,
     });
   }
@@ -49,7 +50,7 @@ export class LabelsResource {
   removeFromChat(sessionId: string, chatId: string, labelId: string): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/labels/chat/${chatId}/${labelId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/labels/chat/${encodeSegment(chatId)}/${encodeSegment(labelId)}`,
     });
   }
 }

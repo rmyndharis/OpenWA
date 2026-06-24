@@ -29,7 +29,7 @@ class SessionsResource
     /** @return array<string,mixed> */
     public function get(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$id}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}");
     }
 
     /**
@@ -43,31 +43,31 @@ class SessionsResource
 
     public function delete(string $id): void
     {
-        $this->http->request('DELETE', "/api/sessions/{$id}");
+        $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($id)}");
     }
 
     /** @return array<string,mixed> */
     public function start(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$id}/start");
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/start");
     }
 
     /** @return array<string,mixed> */
     public function stop(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$id}/stop");
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/stop");
     }
 
     /** @return array<string,mixed> */
     public function forceKill(string $id): array
     {
-        return $this->http->request('POST', "/api/sessions/{$id}/force-kill");
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/force-kill");
     }
 
     /** @return array<string,mixed> */
     public function getQrCode(string $id): array
     {
-        return $this->http->request('GET', "/api/sessions/{$id}/qr");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($id)}/qr");
     }
 
     /**
@@ -76,7 +76,7 @@ class SessionsResource
      */
     public function requestPairingCode(string $id, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$id}/pairing-code", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/pairing-code", [], $body);
     }
 
     /** @return array<string,mixed> */

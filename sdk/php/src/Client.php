@@ -67,7 +67,8 @@ class Client
      *     baseUrl:string,
      *     apiKey:string,
      *     timeout?:float,
-     *     httpClient?:?\GuzzleHttp\ClientInterface|null
+     *     httpClient?:?\GuzzleHttp\ClientInterface|null,
+     *     defaultHeaders?:array<string,string>
      * } $config
      *
      * @throws OpenWAException If baseUrl or apiKey is missing.
@@ -86,6 +87,7 @@ class Client
             $config['apiKey'],
             $config['timeout'] ?? 30.0,
             $config['httpClient'] ?? null,
+            $config['defaultHeaders'] ?? [],
         );
 
         $this->sessions = new SessionsResource($this->http);
@@ -106,5 +108,18 @@ class Client
     public function auth(): array
     {
         return $this->http->request('POST', '/api/auth/validate') ?? [];
+    }
+
+    /**
+     * Issue a raw request against the API (advanced use).
+     *
+     * @param string              $path   Path beginning with /, e.g. /api/sessions.
+     * @param array<string,mixed> $query  Query parameters (null values skipped).
+     * @param mixed|null          $body   JSON-serializable request body.
+     * @return mixed Decoded JSON, or null for empty/204 responses.
+     */
+    public function request(string $method, string $path, array $query = [], $body = null)
+    {
+        return $this->http->request($method, $path, $query, $body);
     }
 }

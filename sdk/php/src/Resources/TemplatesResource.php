@@ -24,13 +24,13 @@ class TemplatesResource
     /** @return array<int,array<string,mixed>> */
     public function list(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/templates") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/templates") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function get(string $sessionId, string $templateId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/templates/{$templateId}");
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/templates/{$this->http->encodeSegment($templateId)}");
     }
 
     /**
@@ -41,7 +41,7 @@ class TemplatesResource
      */
     public function create(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/templates", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/templates", [], $body);
     }
 
     /**
@@ -52,12 +52,12 @@ class TemplatesResource
      */
     public function update(string $sessionId, string $templateId, array $body): array
     {
-        return $this->http->request('PUT', "/api/sessions/{$sessionId}/templates/{$templateId}", [], $body);
+        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/templates/{$this->http->encodeSegment($templateId)}", [], $body);
     }
 
     /** Delete a template. Requires an OPERATOR-level key. */
     public function delete(string $sessionId, string $templateId): void
     {
-        $this->http->request('DELETE', "/api/sessions/{$sessionId}/templates/{$templateId}");
+        $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/templates/{$this->http->encodeSegment($templateId)}");
     }
 }

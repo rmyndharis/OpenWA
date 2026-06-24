@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { ChatSummary, DeleteChatRequest, MarkChatRequest, SendChatStateRequest, SuccessResult } from '../types.js';
 
@@ -23,7 +24,7 @@ export class ChatsResource {
   list(sessionId: string, query?: ListChatsQuery): Promise<ChatSummary[]> {
     return this.client.request<ChatSummary[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/chats`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats`,
       query,
     });
   }
@@ -32,7 +33,7 @@ export class ChatsResource {
   markRead(sessionId: string, body: MarkChatRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/chats/read`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/read`,
       body,
     });
   }
@@ -41,7 +42,7 @@ export class ChatsResource {
   markUnread(sessionId: string, body: MarkChatRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/chats/unread`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/unread`,
       body,
     });
   }
@@ -50,7 +51,7 @@ export class ChatsResource {
   delete(sessionId: string, body: DeleteChatRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/chats/delete`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/delete`,
       body,
     });
   }
@@ -59,7 +60,7 @@ export class ChatsResource {
   sendState(sessionId: string, body: SendChatStateRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/chats/typing`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/chats/typing`,
       body,
     });
   }

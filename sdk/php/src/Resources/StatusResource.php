@@ -24,13 +24,13 @@ class StatusResource
     /** @return array<string,mixed> */
     public function list(string $sessionId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/status") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status") ?? [];
     }
 
     /** @return array<string,mixed> */
     public function fromContact(string $sessionId, string $contactId): array
     {
-        return $this->http->request('GET', "/api/sessions/{$sessionId}/status/{$contactId}") ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/{$this->http->encodeSegment($contactId)}") ?? [];
     }
 
     /**
@@ -39,23 +39,23 @@ class StatusResource
      */
     public function sendText(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/status/send-text", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-text", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendImage(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/status/send-image", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-image", [], $body);
     }
 
     /** @return array<string,mixed> */
     public function sendVideo(string $sessionId, array $body): array
     {
-        return $this->http->request('POST', "/api/sessions/{$sessionId}/status/send-video", [], $body);
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-video", [], $body);
     }
 
     public function delete(string $sessionId, string $statusId): void
     {
-        $this->http->request('DELETE', "/api/sessions/{$sessionId}/status/{$statusId}");
+        $this->http->request('DELETE', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/{$this->http->encodeSegment($statusId)}");
     }
 }

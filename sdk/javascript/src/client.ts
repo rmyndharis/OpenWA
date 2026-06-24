@@ -23,7 +23,7 @@
  * @packageDocumentation
  */
 
-import { request, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
+import { request, encodeSegment, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
 import { CatalogResource } from './resources/catalog.js';
 import { ChannelsResource } from './resources/channels.js';
 import { ChatsResource } from './resources/chats.js';
@@ -104,7 +104,7 @@ export class OpenWAClient {
   sendMedia(sessionId: string, segment: string, body: SendMediaRequest): Promise<MessageResponse> {
     return this.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/${segment}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${segment}`,
       body,
     });
   }

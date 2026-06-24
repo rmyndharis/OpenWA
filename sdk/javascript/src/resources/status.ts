@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type { SendImageStatusRequest, SendTextStatusRequest, SendVideoStatusRequest, StatusRecord } from '../types.js';
 
@@ -16,7 +17,7 @@ export class StatusResource {
   list(sessionId: string): Promise<{ statuses: StatusRecord[] }> {
     return this.client.request<{ statuses: StatusRecord[] }>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/status`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status`,
     });
   }
 
@@ -24,7 +25,7 @@ export class StatusResource {
   fromContact(sessionId: string, contactId: string): Promise<{ statuses: StatusRecord[] }> {
     return this.client.request<{ statuses: StatusRecord[] }>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/status/${contactId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/${encodeSegment(contactId)}`,
     });
   }
 
@@ -32,7 +33,7 @@ export class StatusResource {
   sendText(sessionId: string, body: SendTextStatusRequest): Promise<StatusRecord> {
     return this.client.request<StatusRecord>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/status/send-text`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/send-text`,
       body,
     });
   }
@@ -41,7 +42,7 @@ export class StatusResource {
   sendImage(sessionId: string, body: SendImageStatusRequest): Promise<StatusRecord> {
     return this.client.request<StatusRecord>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/status/send-image`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/send-image`,
       body,
     });
   }
@@ -50,7 +51,7 @@ export class StatusResource {
   sendVideo(sessionId: string, body: SendVideoStatusRequest): Promise<StatusRecord> {
     return this.client.request<StatusRecord>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/status/send-video`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/send-video`,
       body,
     });
   }
@@ -59,7 +60,7 @@ export class StatusResource {
   delete(sessionId: string, statusId: string): Promise<void> {
     return this.client.request<void>({
       method: 'DELETE',
-      path: `/api/sessions/${sessionId}/status/${statusId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/${encodeSegment(statusId)}`,
     });
   }
 }

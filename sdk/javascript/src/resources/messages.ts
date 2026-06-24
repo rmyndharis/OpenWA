@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   BatchStatusResponse,
@@ -36,7 +37,7 @@ export class MessagesResource {
   list(sessionId: string, query?: ListMessagesQuery): Promise<MessageListResponse> {
     return this.client.request<MessageListResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/messages`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages`,
       query,
     });
   }
@@ -45,7 +46,7 @@ export class MessagesResource {
   sendText(sessionId: string, body: SendTextRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-text`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-text`,
       body,
     });
   }
@@ -79,7 +80,7 @@ export class MessagesResource {
   sendLocation(sessionId: string, body: SendLocationRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-location`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-location`,
       body,
     });
   }
@@ -88,7 +89,7 @@ export class MessagesResource {
   sendContact(sessionId: string, body: SendContactRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-contact`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-contact`,
       body,
     });
   }
@@ -97,7 +98,7 @@ export class MessagesResource {
   sendTemplate(sessionId: string, body: SendTemplateRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-template`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-template`,
       body,
     });
   }
@@ -106,7 +107,7 @@ export class MessagesResource {
   reply(sessionId: string, body: ReplyMessageRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/reply`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/reply`,
       body,
     });
   }
@@ -115,7 +116,7 @@ export class MessagesResource {
   forward(sessionId: string, body: ForwardMessageRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/forward`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/forward`,
       body,
     });
   }
@@ -124,7 +125,7 @@ export class MessagesResource {
   react(sessionId: string, body: ReactMessageRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/react`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/react`,
       body,
     });
   }
@@ -133,7 +134,7 @@ export class MessagesResource {
   delete(sessionId: string, body: DeleteMessageRequest): Promise<SuccessResult> {
     return this.client.request<SuccessResult>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/delete`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/delete`,
       body,
     });
   }
@@ -142,7 +143,7 @@ export class MessagesResource {
   history(sessionId: string, chatId: string, query?: MessageHistoryQuery): Promise<ChatHistoryMessage[]> {
     return this.client.request<ChatHistoryMessage[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/messages/${chatId}/history`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${encodeSegment(chatId)}/history`,
       query,
     });
   }
@@ -151,7 +152,7 @@ export class MessagesResource {
   reactions(sessionId: string, chatId: string, messageId: string): Promise<ReactionRecord[]> {
     return this.client.request<ReactionRecord[]>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/messages/${chatId}/${messageId}/reactions`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/${encodeSegment(chatId)}/${encodeSegment(messageId)}/reactions`,
     });
   }
 
@@ -162,7 +163,7 @@ export class MessagesResource {
   sendBulk(sessionId: string, body: SendBulkRequest): Promise<BulkMessageResponse> {
     return this.client.request<BulkMessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-bulk`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-bulk`,
       body,
     });
   }
@@ -171,7 +172,7 @@ export class MessagesResource {
   batchStatus(sessionId: string, batchId: string): Promise<BatchStatusResponse> {
     return this.client.request<BatchStatusResponse>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/messages/batch/${batchId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/batch/${encodeSegment(batchId)}`,
     });
   }
 
@@ -179,7 +180,7 @@ export class MessagesResource {
   cancelBatch(sessionId: string, batchId: string): Promise<BatchStatusResponse> {
     return this.client.request<BatchStatusResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/batch/${batchId}/cancel`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/batch/${encodeSegment(batchId)}/cancel`,
     });
   }
 }

@@ -44,6 +44,15 @@ describe('OpenWAClient', () => {
     expect(seenInit?.redirect).toBe('manual');
   });
 
+  it('percent-encodes path segments but keeps @ in JIDs readable', async () => {
+    const t = new MockTransport().on('GET', /\/history$/, { body: [] });
+    await client(t).messages.history('s', 'a@c.us');
+    expect(t.lastCall!.url).toContain('/messages/a@c.us/history'); // @ preserved
+    const t2 = new MockTransport().on('GET', /\/history$/, { body: [] });
+    await client(t2).messages.history('s', 'weird/id#x');
+    expect(t2.lastCall!.url).toContain('weird%2Fid%23x'); // path-breaking chars encoded
+  });
+
   it('serializes query params and skips null/undefined', async () => {
     const t = new MockTransport().on('GET', /\/messages/, { body: [] });
     await client(t).messages.list('s1', { chatId: 'a@c.us', from: undefined, limit: 10 });

@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   CatalogInfo,
@@ -27,7 +28,7 @@ export class CatalogResource {
   info(sessionId: string): Promise<CatalogInfo> {
     return this.client.request<CatalogInfo>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/catalog`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/catalog`,
     });
   }
 
@@ -35,7 +36,7 @@ export class CatalogResource {
   products(sessionId: string, query?: CatalogProductsQuery): Promise<PaginatedProducts> {
     return this.client.request<PaginatedProducts>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/catalog/products`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/catalog/products`,
       query,
     });
   }
@@ -44,7 +45,7 @@ export class CatalogResource {
   product(sessionId: string, productId: string): Promise<CatalogProduct> {
     return this.client.request<CatalogProduct>({
       method: 'GET',
-      path: `/api/sessions/${sessionId}/catalog/products/${productId}`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/catalog/products/${encodeSegment(productId)}`,
     });
   }
 
@@ -52,7 +53,7 @@ export class CatalogResource {
   sendProduct(sessionId: string, body: SendProductRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-product`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-product`,
       body,
     });
   }
@@ -61,7 +62,7 @@ export class CatalogResource {
   sendCatalog(sessionId: string, body: SendCatalogRequest): Promise<MessageResponse> {
     return this.client.request<MessageResponse>({
       method: 'POST',
-      path: `/api/sessions/${sessionId}/messages/send-catalog`,
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-catalog`,
       body,
     });
   }

@@ -33,6 +33,41 @@ class ClientTest extends TestCase
         $this->assertSame('application/json', $call['headers']['content-type'] ?? '');
     }
 
+    public function testDefaultHeadersApplledUnderAuth(): void
+    {
+        $backend = (new MockBackend())->on(200, []);
+        $client = new \OpenWA\Client([
+            'baseUrl' => 'http://x',
+            'apiKey' => 'REAL_KEY',
+            'httpClient' => $backend->httpClient(),
+            'defaultHeaders' => ['X-Trace' => 'keep', 'X-API-Key' => 'EVIL'],
+        ]);
+        $client->sessions->list();
+        $headers = $backend->lastCall()['headers'];
+        $this->assertSame('keep', $headers['x-trace'] ?? '');       // custom header forwarded
+        $this->assertSame('REAL_KEY', $headers['x-api-key'] ?? '');  // auth still wins
+    }
+
+    public function testPathSegmentsAreEncoded(): void
+    {
+        $backend = (new MockBackend())->on(200, ['id' => 'x']);
+        $backend->makeClient()->labels->get('s', 'weird/id#x');
+        $this->assertStringContainsString('/labels/weird%2Fid%23x', $backend->lastCall()['path']);
+
+        $backend2 = (new MockBackend())->on(200, ['id' => 'x']);
+        $backend2->makeClient()->labels->get('s', 'a@c.us');
+        $this->assertStringContainsString('/labels/a@c.us', $backend2->lastCall()['path']); // @ preserved
+    }
+
+    public function testRawRequestEscapeHatch(): void
+    {
+        $backend = (new MockBackend())->on(200, ['ok' => true]);
+        $result = $backend->makeClient()->request('GET', '/api/anything', ['a' => 1]);
+        $this->assertSame(['ok' => true], $result);
+        $this->assertSame('/api/anything', $backend->lastCall()['path']);
+        $this->assertStringContainsString('a=1', $backend->lastCall()['query']);
+    }
+
     public function testBaseUrlPathPrefixIsPreserved(): void
     {
         // A base URL with a path prefix (e.g. behind a reverse proxy at /v1) must
