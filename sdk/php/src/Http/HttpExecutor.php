@@ -63,6 +63,9 @@ class HttpExecutor
         // http_errors disabled so we translate status into typed SDK exceptions).
         $options = [
             'http_errors' => false,
+            // Never auto-follow redirects: doing so would re-send the X-API-Key
+            // header to the redirect target (potentially a different origin).
+            'allow_redirects' => false,
             'headers' => [
                 'X-API-Key' => $this->apiKey,
                 'Content-Type' => 'application/json',

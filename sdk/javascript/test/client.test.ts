@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OpenWAClient, OpenWAApiError, OpenWANotFoundError } from '../src';
+import type { FetchLike } from '../src';
 import { MockTransport } from './helpers';
 
 function client(transport: MockTransport): OpenWAClient {
@@ -28,6 +29,19 @@ describe('OpenWAClient', () => {
     const c = new OpenWAClient({ baseUrl: 'http://localhost:2785/', apiKey: 'k', fetch: t.asFetch() });
     await c.sessions.list();
     expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions');
+  });
+
+  it('does not auto-follow redirects (passes redirect: manual to fetch)', async () => {
+    // Auto-following a redirect would re-send X-API-Key to the redirect target,
+    // potentially a different origin. The SDK must not follow silently.
+    let seenInit: RequestInit | undefined;
+    const recordingFetch: FetchLike = async (_url, init) => {
+      seenInit = init as RequestInit;
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: recordingFetch });
+    await c.health.check();
+    expect(seenInit?.redirect).toBe('manual');
   });
 
   it('serializes query params and skips null/undefined', async () => {

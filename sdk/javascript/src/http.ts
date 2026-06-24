@@ -86,6 +86,10 @@ export async function request<T>(
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
+      // Never auto-follow redirects: doing so would re-send the X-API-Key header
+      // to the redirect target (potentially a different origin). A 3xx surfaces
+      // as a non-2xx error instead.
+      redirect: 'manual',
     });
   } catch (err) {
     clearTimeout(timer);

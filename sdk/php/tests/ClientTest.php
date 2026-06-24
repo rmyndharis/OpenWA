@@ -42,6 +42,18 @@ class ClientTest extends TestCase
         $this->assertStringContainsString('/v1/api/sessions', $backend->lastCall()['path']);
     }
 
+    public function testDoesNotFollowRedirects(): void
+    {
+        // A redirect must not be followed (which would re-send X-API-Key to the
+        // target origin). The 3xx body is returned and only one request is made.
+        $backend = new MockBackend();
+        $backend->on(302, ['redirected' => true], ['Location' => 'http://evil.example/x']);
+        $backend->on(200, ['followed' => true]); // only reached if a redirect were followed
+        $result = $backend->makeClient()->sessions->list();
+        $this->assertCount(1, $backend->calls());
+        $this->assertSame(['redirected' => true], $result);
+    }
+
     public function test204DeleteSucceedsWithNoBody(): void
     {
         $backend = (new MockBackend())->on(204);

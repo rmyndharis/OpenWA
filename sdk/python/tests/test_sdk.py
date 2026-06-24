@@ -50,6 +50,20 @@ class TestClientCore:
         # A non-JSON 2xx body must surface as text, not raise a raw JSONDecodeError.
         assert client.sessions.list() == "plain text"
 
+    def test_does_not_follow_redirects(self):
+        import httpx
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                302,
+                headers={"location": "http://evil.example/x", "content-type": "application/json"},
+                content=b'{"redirected": true}',
+            )
+
+        client = OpenWAClient(base_url="http://x", api_key="k", transport=httpx.MockTransport(handler))
+        # A redirect is NOT followed (which would re-send X-API-Key); the 3xx body is returned.
+        assert client.sessions.list() == {"redirected": True}
+
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])
         client = OpenWAClient(base_url="http://localhost:2785/", api_key="k", transport=backend.as_transport())

@@ -67,6 +67,10 @@ class HttpExecutor:
             "base_url": base_url.rstrip("/"),
             "headers": headers,
             "timeout": timeout,
+            # Never auto-follow redirects: doing so would re-send the X-API-Key
+            # header to the redirect target (potentially a different origin).
+            # (This is also httpx's default; set explicitly so it can't regress.)
+            "follow_redirects": False,
         }
         if transport is not None:
             client_kwargs["transport"] = transport
