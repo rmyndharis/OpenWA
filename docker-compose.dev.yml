@@ -51,9 +51,11 @@ services:
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
       - DATABASE_NAME=${DATABASE_NAME:-/app/data/openwa.sqlite}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-true}
-      # ENGINE_TYPE not pinned: the dashboard (Infrastructure > Engine) selects the active engine via
-      # data/.env.generated (default whatsapp-web.js). main.ts loads it with override:false, so a real
-      # env here would override the dashboard choice.
+      # Engine. Forwarded empty by default so the dashboard (Infrastructure > Engine) selects the
+      # active engine via data/.env.generated (default whatsapp-web.js); main.ts treats a blank
+      # ENGINE_TYPE as unset, so .env.generated wins. Set ENGINE_TYPE in your .env/host to pin an
+      # engine (e.g. baileys) — a real value flows through here and keeps top precedence.
+      - ENGINE_TYPE=${ENGINE_TYPE:-}
       - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}

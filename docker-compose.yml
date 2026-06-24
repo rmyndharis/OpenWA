@@ -88,10 +88,11 @@ services:
       # postgres service requires it (:?) when that profile is active.
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-false}
-      # Engine. ENGINE_TYPE is intentionally NOT pinned here so the dashboard
-      # (Infrastructure > Engine) can select the active engine via data/.env.generated
-      # (defaults to whatsapp-web.js). main.ts loads .env.generated with override:false, so a
-      # real container env here would silently win over the dashboard selection.
+      # Engine. Forwarded empty by default so the dashboard (Infrastructure > Engine) selects the
+      # active engine via data/.env.generated (defaults to whatsapp-web.js); main.ts treats a blank
+      # ENGINE_TYPE as unset, so .env.generated wins. Set ENGINE_TYPE in your .env/host to pin an
+      # engine (e.g. baileys) — a real value flows through here and keeps top precedence.
+      - ENGINE_TYPE=${ENGINE_TYPE:-}
       - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}

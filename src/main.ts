@@ -17,6 +17,7 @@ import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middl
 import { AuthService } from './modules/auth/auth.service';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
 import { writeSecretFile } from './common/utils/secret-file';
+import { clearBlankEnv } from './config/env-precedence';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -49,6 +50,12 @@ for (const secret of [generatedEnvPath, path.resolve(dataDir, '.api-key')]) {
     }
   }
 }
+
+// A compose `- ENGINE_TYPE=${ENGINE_TYPE:-}` line forwards a real operator engine choice into the
+// container, but renders an empty value when none is set. An empty process.env.ENGINE_TYPE would
+// still block .env / .env.generated (loaded below with override:false) from supplying one, silently
+// pinning the default and ignoring the dashboard's selection — so treat a blank value as unset.
+clearBlankEnv(process.env, ['ENGINE_TYPE']);
 
 // 2. User-managed .env (does not override real process env)
 if (fs.existsSync(userEnvPath)) {

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Infrastructure: configuration values saved from the dashboard are now rejected if they contain a line break, which could otherwise write an extra `KEY=value` line into `data/.env.generated` and inject an arbitrary environment variable on the next boot.
 - Infrastructure: data export/import (the documented backup and SQLite↔PostgreSQL migration flow) is now complete. It previously exported and restored only sessions, webhooks, messages, and message batches — so a restore silently lost all message templates and stored Baileys messages (cascade-deleted with the old sessions and never re-imported) and dropped every webhook's filters, causing a filtered webhook to come back firing on all events. Templates, stored Baileys messages, and webhook filters now round-trip intact.
+- Engine selection: pinning the engine from the environment works again after the v0.7.1 compose change. The bundled compose files forward `ENGINE_TYPE` into the container again (`- ENGINE_TYPE=${ENGINE_TYPE:-}`) and the app treats a blank value as unset, so an `.env`/host `ENGINE_TYPE=baileys` is honoured while the dashboard's Infrastructure > Engine selection still wins when no engine is pinned. `.env.example` no longer ships `ENGINE_TYPE` pre-pinned. **Upgrade note:** if you relied on `ENGINE_TYPE=baileys` in your `.env`, confirm the active engine after upgrading. (#453 — thanks @ulises2k)
 
 ## [0.7.1] - 2026-06-24
 
