@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openwa-sdk"
-version = "0.0.1"
+version = "0.1.0"
 description = "Official Python SDK for OpenWA WhatsApp API Gateway"
 readme = "README.md"
 license = { text = "MIT" }
@@ -23,3 +23,13 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rmyndharis/OpenWA"
+Repository = "https://github.com/rmyndharis/OpenWA"
+
+[tool.setuptools.packages.find]
+include = ["openwa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
