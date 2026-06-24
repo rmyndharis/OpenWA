@@ -55,6 +55,17 @@ describe('engine-selection env precedence (ENGINE_TYPE)', () => {
     dotenv.config({ path: genPath, override: false });
     expect(process.env[KEY]).toBe('whatsapp-web.js');
   });
+
+  // Production blindaje: the Pi's docker-compose.override.yml pins `- ENGINE_TYPE=baileys` while
+  // v0.7.1's dashboard may have written `whatsapp-web.js` into data/.env.generated as the default.
+  // The operator pin must win so the Pi never silently boots whatsapp-web.js (the v0.7.1 gotcha).
+  it('honours an operator ENGINE_TYPE=baileys over a whatsapp-web.js default in .env.generated', () => {
+    fs.writeFileSync(genPath, 'ENGINE_TYPE=whatsapp-web.js\n'); // dashboard-written default
+    process.env[KEY] = 'baileys'; // Pi override pin forwarded by compose
+    clearBlankEnv(process.env, [KEY]);
+    dotenv.config({ path: genPath, override: false });
+    expect(process.env[KEY]).toBe('baileys');
+  });
 });
 
 describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manages)', () => {
