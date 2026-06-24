@@ -231,6 +231,46 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
   });
 });
 
+describe('InfraController.saveConfig rejects values that would inject extra env vars', () => {
+  const newController = () =>
+    new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  // .env.generated is one KEY=value per line and is loaded on the next boot. A value carrying a
+  // newline would write a second `KEY=value` line — injecting an arbitrary env var (e.g. an admin
+  // key) the operator never set. Such a value must be refused outright, with nothing written.
+  it.each([
+    ['linefeed', '--no-sandbox\nADMIN_MASTER_KEY=attacker'],
+    ['carriage return', '--no-sandbox\rADMIN_MASTER_KEY=attacker'],
+  ])('does not persist a config value containing a %s', (_label, malicious) => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    const result = newController().saveConfig({ engine: { browserArgs: malicious } });
+
+    expect(result.saved).toBe(false);
+    expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('still persists a normal value with the same key', () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    const result = newController().saveConfig({ engine: { browserArgs: '--no-sandbox --disable-gpu' } });
+
+    expect(result.saved).toBe(true);
+    expect(fs.writeFileSync as jest.Mock).toHaveBeenCalled();
+  });
+});
+
 describe('InfraController.saveConfig engine selection (persist ENGINE_TYPE — Infrastructure tile)', () => {
   const engineFactory = {
     getAvailableEngines: () => [{ id: 'whatsapp-web.js' }, { id: 'baileys' }],

@@ -9,9 +9,6 @@ import {
   Loader2,
   CheckCircle,
   Trash2,
-  Globe,
-  Webhook,
-  Gauge,
   Cpu,
 } from 'lucide-react';
 import { infraApi, API_BASE_URL } from '../services/api';
@@ -76,27 +73,6 @@ interface QueueStats {
   failed: number;
 }
 
-interface ServerConfig {
-  port: string;
-  nodeEnv: 'production' | 'development';
-  domain: string;
-  dashboardPort: string;
-  baseUrl: string;
-  dashboardUrl: string;
-  corsOrigins: string;
-}
-
-interface WebhookConfig {
-  timeout: number;
-  maxRetries: number;
-  retryDelay: number;
-}
-
-interface RateLimitConfig {
-  ttl: number;
-  max: number;
-}
-
 export function Infrastructure() {
   const { t } = useTranslation();
   useDocumentTitle(t('infrastructure.title'));
@@ -159,27 +135,6 @@ export function Infrastructure() {
   const [queueEnabled, setQueueEnabled] = useState(false);
   const [pendingProfiles, setPendingProfiles] = useState<string[]>([]);
   const [previousProfiles, setPreviousProfiles] = useState<string[]>([]);
-
-  const [serverConfig, setServerConfig] = useState<ServerConfig>({
-    port: '2785',
-    nodeEnv: 'development',
-    domain: 'localhost',
-    dashboardPort: '2886',
-    baseUrl: '',
-    dashboardUrl: '',
-    corsOrigins: '*',
-  });
-
-  const [webhookConfig, setWebhookConfig] = useState<WebhookConfig>({
-    timeout: 10000,
-    maxRetries: 3,
-    retryDelay: 5000,
-  });
-
-  const [rateLimitConfig, setRateLimitConfig] = useState<RateLimitConfig>({
-    ttl: 60,
-    max: 100,
-  });
 
   useEffect(() => {
     if (!infraStatus) return;
@@ -278,12 +233,6 @@ export function Infrastructure() {
     setStorageConfig(prev => ({ ...prev, [key]: value }));
   const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) =>
     setEngineConfig(prev => ({ ...prev, [key]: value }));
-  const updateServerConfig = (key: keyof ServerConfig, value: string) =>
-    setServerConfig(prev => ({ ...prev, [key]: value }));
-  const updateWebhookConfig = (key: keyof WebhookConfig, value: number) =>
-    setWebhookConfig(prev => ({ ...prev, [key]: value }));
-  const updateRateLimitConfig = (key: keyof RateLimitConfig, value: number) =>
-    setRateLimitConfig(prev => ({ ...prev, [key]: value }));
 
   const handleSaveConfig = async () => {
     setSaving(true);
@@ -294,9 +243,6 @@ export function Infrastructure() {
         queue: { enabled: queueEnabled },
         storage: { ...storageConfig },
         engine: { ...engineConfig },
-        server: { ...serverConfig },
-        webhook: { ...webhookConfig },
-        rateLimit: { ...rateLimitConfig },
       };
 
       const result = await infraApi.saveConfig(payload);
@@ -375,156 +321,6 @@ export function Infrastructure() {
       <PageHeader title={t('infrastructure.title')} subtitle={t('infrastructure.subtitle')} />
 
       <div className="infra-sections">
-        {/* Server Configuration */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Globe size={20} />
-              <h2>{t('infrastructure.server.title')}</h2>
-            </div>
-            <span className={`status-indicator ${serverConfig.nodeEnv === 'production' ? 'connected' : 'sqlite'}`}>
-              ● {serverConfig.nodeEnv === 'production' ? t('infrastructure.server.production') : t('infrastructure.server.development')}
-            </span>
-          </div>
-
-          <div className="config-form">
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.server.environment')}</label>
-                <select
-                  value={serverConfig.nodeEnv}
-                  onChange={e => updateServerConfig('nodeEnv', e.target.value as 'production' | 'development')}
-                >
-                  <option value="production">{t('infrastructure.server.production')}</option>
-                  <option value="development">{t('infrastructure.server.development')}</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.domain')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.domain}
-                  onChange={e => updateServerConfig('domain', e.target.value)}
-                  placeholder="localhost"
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group small">
-                <label>{t('infrastructure.server.apiPort')}</label>
-                <input type="text" value={serverConfig.port} onChange={e => updateServerConfig('port', e.target.value)} />
-              </div>
-              <div className="form-group small">
-                <label>{t('infrastructure.server.dashboardPort')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.dashboardPort}
-                  onChange={e => updateServerConfig('dashboardPort', e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.corsOrigins')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.corsOrigins}
-                  onChange={e => updateServerConfig('corsOrigins', e.target.value)}
-                  placeholder={t('infrastructure.server.corsPlaceholder')}
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.server.publicApiUrl')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.baseUrl}
-                  onChange={e => updateServerConfig('baseUrl', e.target.value)}
-                  placeholder="https://api.yourdomain.com"
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.server.publicDashboardUrl')}</label>
-                <input
-                  type="text"
-                  value={serverConfig.dashboardUrl}
-                  onChange={e => updateServerConfig('dashboardUrl', e.target.value)}
-                  placeholder="https://dashboard.yourdomain.com"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Webhook & Rate Limiting */}
-        <section className="infra-card">
-          <div className="card-header">
-            <div className="header-left">
-              <Webhook size={20} />
-              <h2>{t('infrastructure.webhook.title')}</h2>
-            </div>
-          </div>
-
-          <div className="config-form">
-            <h3 style={{ margin: '0 0 1rem', fontSize: '0.9375rem', color: '#475569', fontWeight: 600 }}>
-              <Webhook size={16} style={{ marginInlineEnd: '0.5rem', verticalAlign: 'middle' }} />
-              {t('infrastructure.webhook.settings')}
-            </h3>
-            <div className="form-row">
-              <div className="form-group">
-                <label>{t('infrastructure.webhook.timeout')}</label>
-                <input
-                  type="number"
-                  value={webhookConfig.timeout}
-                  onChange={e => updateWebhookConfig('timeout', parseInt(e.target.value) || 10000)}
-                />
-              </div>
-              <div className="form-group small">
-                <label>{t('infrastructure.webhook.maxRetries')}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  value={webhookConfig.maxRetries}
-                  onChange={e => updateWebhookConfig('maxRetries', parseInt(e.target.value) || 3)}
-                />
-              </div>
-              <div className="form-group">
-                <label>{t('infrastructure.webhook.retryDelay')}</label>
-                <input
-                  type="number"
-                  value={webhookConfig.retryDelay}
-                  onChange={e => updateWebhookConfig('retryDelay', parseInt(e.target.value) || 5000)}
-                />
-              </div>
-            </div>
-
-            <div style={{ borderTop: '1px solid var(--border)', margin: '1.5rem 0', paddingTop: '1.5rem' }}>
-              <h3 style={{ margin: '0 0 1rem', fontSize: '0.9375rem', color: '#475569', fontWeight: 600 }}>
-                <Gauge size={16} style={{ marginInlineEnd: '0.5rem', verticalAlign: 'middle' }} />
-                {t('infrastructure.webhook.rateLimit')}
-              </h3>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>{t('infrastructure.webhook.window')}</label>
-                  <input
-                    type="number"
-                    value={rateLimitConfig.ttl}
-                    onChange={e => updateRateLimitConfig('ttl', parseInt(e.target.value) || 60)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>{t('infrastructure.webhook.maxReq')}</label>
-                  <input
-                    type="number"
-                    value={rateLimitConfig.max}
-                    onChange={e => updateRateLimitConfig('max', parseInt(e.target.value) || 100)}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* Database */}
         <section className="infra-card">
           <div className="card-header">

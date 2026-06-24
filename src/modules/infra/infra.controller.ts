@@ -447,6 +447,15 @@ export class InfraController {
         updates.PUPPETEER_ARGS = config.engine.browserArgs || '--no-sandbox --disable-gpu';
       }
 
+      // .env.generated is one KEY=value per line, loaded on the next boot. A value carrying a
+      // line break would write a second line and inject an arbitrary env var the operator never
+      // set, so refuse any such value before writing anything.
+      for (const [key, value] of Object.entries(updates)) {
+        if (/[\r\n]/.test(value)) {
+          throw new BadRequestException(`Invalid configuration value for ${key}: line breaks are not allowed`);
+        }
+      }
+
       // Existing values are the base; this payload's values win (secrets handled above).
       const merged: Record<string, string> = { ...existing, ...updates };
       // Drop keys made obsolete by a mode switch (postgres->sqlite, s3->local).

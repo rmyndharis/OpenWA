@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sessions (Baileys): when a session is logged out — unlinked from the phone or via the API — the now-invalid on-disk auth state is cleared, so re-linking shows a fresh QR instead of getting stuck silently reloading the dead credentials. (#453 — thanks @ulises2k)
 - Webhooks: registering a webhook (`POST /sessions/:id/webhooks`) to a host whose DNS lookup *rejects* (NXDOMAIN, or a transient `EAI_AGAIN`/`ESERVFAIL` under resolver pressure) now returns `400 Could not resolve host: <host> (<code>)` instead of a generic `500 Internal server error`. The SSRF guard's DNS deadline already mapped resolution *timeouts* and empty results to a 4xx; a rejected lookup leaked the raw DNS error, which surfaced as an intermittent 500 during back-to-back session-create → webhook-register flows.
+- Infrastructure: the dashboard config form no longer shows Server, Webhook, and Rate-Limit sections that were never persisted — they returned a fake "saved" while silently discarding every value. The form now exposes only the settings it actually writes (Database, Redis/Queue, Storage, Engine); the removed settings remain configurable via environment variables.
+
+### Security
+
+- Infrastructure: configuration values saved from the dashboard are now rejected if they contain a line break, which could otherwise write an extra `KEY=value` line into `data/.env.generated` and inject an arbitrary environment variable on the next boot.
 
 ## [0.7.1] - 2026-06-24
 
