@@ -199,9 +199,14 @@ describe('resolveSafeFetchTarget', () => {
     await expect(resolveSafeFetchTarget('https://rebind.example/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
-  it('propagates a DNS lookup failure (rejection) rather than hanging', async () => {
-    (dnsPromises.lookup as jest.Mock).mockRejectedValueOnce(new Error('ENOTFOUND'));
-    await expect(resolveSafeFetchTarget('https://nxdomain.example/hook')).rejects.toThrow(/ENOTFOUND/);
+  it('maps a DNS lookup failure (rejection) to SsrfBlockedError instead of leaking a raw error', async () => {
+    // A rejected lookup (NXDOMAIN, or a transient EAI_AGAIN under resolver pressure) must become a
+    // typed SsrfBlockedError so callers map it to a 4xx. A raw error here leaks as a generic 500 —
+    // the intermittent failure seen at webhook registration (POST /sessions/:id/webhooks).
+    (dnsPromises.lookup as jest.Mock).mockRejectedValueOnce(
+      Object.assign(new Error('getaddrinfo ENOTFOUND nxdomain.example'), { code: 'ENOTFOUND' }),
+    );
+    await expect(resolveSafeFetchTarget('https://nxdomain.example/hook')).rejects.toThrow(SsrfBlockedError);
   });
 
   it('rejects when DNS resolution exceeds the deadline (a hanging resolver cannot pin a worker)', async () => {

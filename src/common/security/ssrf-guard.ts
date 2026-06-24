@@ -182,8 +182,10 @@ function resolveDnsTimeoutMs(): number {
 /**
  * Resolve a host with `{ all: true }`, bounded by a deadline so a hanging/slow DNS resolver cannot
  * pin a worker indefinitely (the lookup is otherwise unbounded). The default deadline is generous
- * and overridable via SSRF_DNS_TIMEOUT_MS. On expiry it throws SsrfBlockedError; the in-flight lookup
- * is left to settle with its late result swallowed (no unhandledRejection).
+ * and overridable via SSRF_DNS_TIMEOUT_MS. On expiry — or on a rejected lookup (NXDOMAIN, transient
+ * EAI_AGAIN, ESERVFAIL, …) — it throws SsrfBlockedError; the in-flight lookup is left to settle with
+ * its late result swallowed (no unhandledRejection). Wrapping the rejection keeps every resolution
+ * failure typed, so callers map it to a 4xx instead of leaking a raw DNS error as a generic 500.
  */
 async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
   const lookupPromise = lookup(host, { all: true });
@@ -194,6 +196,10 @@ async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
   });
   try {
     return await Promise.race([lookupPromise, deadline]);
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) throw err; // deadline already produced a typed error
+    const code = (err as NodeJS.ErrnoException)?.code;
+    throw new SsrfBlockedError(`Could not resolve host: ${host}${code ? ` (${code})` : ''}`);
   } finally {
     if (timer) clearTimeout(timer);
   }

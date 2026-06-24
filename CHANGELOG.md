@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Sessions (Baileys): when a session is logged out — unlinked from the phone or via the API — the now-invalid on-disk auth state is cleared, so re-linking shows a fresh QR instead of getting stuck silently reloading the dead credentials. (#453 — thanks @ulises2k)
+- Webhooks: registering a webhook (`POST /sessions/:id/webhooks`) to a host whose DNS lookup *rejects* (NXDOMAIN, or a transient `EAI_AGAIN`/`ESERVFAIL` under resolver pressure) now returns `400 Could not resolve host: <host> (<code>)` instead of a generic `500 Internal server error`. The SSRF guard's DNS deadline already mapped resolution *timeouts* and empty results to a 4xx; a rejected lookup leaked the raw DNS error, which surfaced as an intermittent 500 during back-to-back session-create → webhook-register flows.
 
 ## [0.7.1] - 2026-06-24
 
