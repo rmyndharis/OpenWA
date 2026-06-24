@@ -25,8 +25,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "smoke": "node scripts/smoke.mjs",
-        "typecheck": "tsc --noEmit",
-        "lint": "eslint src/ test/"
+        "typecheck": "tsc --noEmit"
     },
     "keywords": [
         "whatsapp",

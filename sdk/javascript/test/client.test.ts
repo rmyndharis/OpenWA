@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { OpenWAClient, OpenWAApiError, OpenWANotFoundError } from '../src';
+import {
+  OpenWAClient,
+  OpenWAApiError,
+  OpenWAAuthError,
+  OpenWAForbiddenError,
+  OpenWANotFoundError,
+  OpenWAConflictError,
+  OpenWARateLimitError,
+  OpenWANotImplementedError,
+  OpenWATimeoutError,
+} from '../src';
 import type { FetchLike } from '../src';
 import { MockTransport } from './helpers';
 
@@ -90,5 +100,55 @@ describe('OpenWAClient', () => {
     await expect(client(t).messages.sendText('s', { chatId: 'a@c.us', text: 'hi' })).rejects.toBeInstanceOf(
       OpenWAApiError,
     );
+  });
+
+  it('maps each status code to its typed error subclass', async () => {
+    const cases: Array<[number, new (...a: never[]) => OpenWAApiError]> = [
+      [401, OpenWAAuthError],
+      [403, OpenWAForbiddenError],
+      [404, OpenWANotFoundError],
+      [409, OpenWAConflictError],
+      [429, OpenWARateLimitError],
+      [501, OpenWANotImplementedError],
+    ];
+    for (const [status, cls] of cases) {
+      const t = new MockTransport().on('GET', '/api/sessions', {
+        status,
+        body: { statusCode: status, message: 'x', error: 'E' },
+      });
+      await expect(client(t).sessions.list()).rejects.toBeInstanceOf(cls);
+    }
+  });
+
+  it('falls back to the generic OpenWAApiError (with .status) for an unmapped status', async () => {
+    const t = new MockTransport().on('GET', '/api/sessions', {
+      status: 418,
+      body: { statusCode: 418, message: 'teapot', error: 'Teapot' },
+    });
+    await expect(client(t).sessions.list()).rejects.toMatchObject({ status: 418 });
+    await expect(client(t).sessions.list()).rejects.toBeInstanceOf(OpenWAApiError);
+  });
+
+  it('throws OpenWATimeoutError when the request aborts', async () => {
+    const abortingFetch: FetchLike = async () => {
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      throw e;
+    };
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: abortingFetch });
+    await expect(c.sessions.list()).rejects.toBeInstanceOf(OpenWATimeoutError);
+  });
+
+  it('keeps X-API-Key winning over defaultHeaders', async () => {
+    const t = new MockTransport().on('GET', '/api/sessions', { body: [] });
+    const c = new OpenWAClient({
+      baseUrl: 'http://x',
+      apiKey: 'REAL',
+      defaultHeaders: { 'X-API-Key': 'EVIL', 'X-Trace': 'keep' },
+      fetch: t.asFetch(),
+    });
+    await c.sessions.list();
+    expect(t.lastCall!.headers['x-api-key']).toBe('REAL');
+    expect(t.lastCall!.headers['x-trace']).toBe('keep');
   });
 });
