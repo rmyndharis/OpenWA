@@ -33,6 +33,15 @@ class ClientTest extends TestCase
         $this->assertSame('application/json', $call['headers']['content-type'] ?? '');
     }
 
+    public function testBaseUrlPathPrefixIsPreserved(): void
+    {
+        // A base URL with a path prefix (e.g. behind a reverse proxy at /v1) must
+        // be kept; absolute request paths must not drop it.
+        $backend = (new MockBackend())->on(200, []);
+        $backend->makeClient('http://localhost:2785/v1')->sessions->list();
+        $this->assertStringContainsString('/v1/api/sessions', $backend->lastCall()['path']);
+    }
+
     public function test204DeleteSucceedsWithNoBody(): void
     {
         $backend = (new MockBackend())->on(204);

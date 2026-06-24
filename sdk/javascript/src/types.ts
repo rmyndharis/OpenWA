@@ -177,21 +177,56 @@ export type MessageDirection = 'incoming' | 'outgoing';
 /** Delivery status for a message. */
 export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
 
+/** A persisted message row, as returned by `GET /sessions/:id/messages`. */
 export interface MessageRecord {
   id: string;
   sessionId: string;
+  /** Engine/WhatsApp message id; may be null until a send is acked. */
+  waMessageId?: string | null;
   chatId: Jid;
-  messageId: string;
-  direction: MessageDirection;
-  type?: string;
-  status?: DeliveryStatus;
+  from: Jid;
+  to: Jid;
   body?: string | null;
-  fromMe?: boolean;
-  hasMedia?: boolean;
-  mediaUrl?: string | null;
-  timestamp?: string | number;
+  type: string;
+  direction: MessageDirection;
+  /** Unix timestamp in milliseconds. */
+  timestamp?: number | null;
+  metadata?: Record<string, unknown> | null;
+  status: DeliveryStatus;
   createdAt: string;
-  updatedAt: string;
+}
+
+/**
+ * A message read live from WhatsApp by `messages.history()`. This is the engine
+ * payload (richer and differently shaped than the persisted {@link MessageRecord}).
+ */
+export interface ChatHistoryMessage {
+  id: string;
+  from: Jid;
+  to: Jid;
+  chatId: Jid;
+  body: string;
+  type: string;
+  /** Unix timestamp in seconds. */
+  timestamp: number;
+  fromMe: boolean;
+  isGroup: boolean;
+  isStatusBroadcast?: boolean;
+  /** For group messages, the participant who sent it (`from` is the group JID). */
+  author?: Jid;
+  mentionedIds?: Jid[];
+  isLidSender?: boolean;
+  senderPhone?: string | null;
+  media?: {
+    mimetype: string;
+    filename?: string;
+    /** base64; absent when the payload was omitted (too large). */
+    data?: string;
+    omitted?: boolean;
+    sizeBytes?: number;
+  };
+  quotedMessage?: { id: string; body: string };
+  location?: { latitude: number; longitude: number; description?: string; address?: string; url?: string };
 }
 
 /** Paginated payload returned by `GET /sessions/:id/messages`. */
@@ -200,11 +235,17 @@ export interface MessageListResponse {
   total: number;
 }
 
-export interface ReactionRecord {
-  id?: string;
-  participant?: Jid;
+export interface ReactionSender {
+  senderId: Jid;
   emoji: string;
-  messageId?: string;
+  /** Unix timestamp in seconds. */
+  timestamp: number;
+}
+
+/** One emoji and everyone who reacted with it (server returns `MessageReaction[]`). */
+export interface ReactionRecord {
+  emoji: string;
+  senders: ReactionSender[];
 }
 
 // ── Bulk ──────────────────────────────────────────────────────────

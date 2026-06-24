@@ -23,6 +23,7 @@ class HttpExecutor
     private ClientInterface $http;
     private float $timeout;
     private string $apiKey;
+    private string $baseUrl;
 
     public function __construct(
         string $baseUrl,
@@ -32,11 +33,12 @@ class HttpExecutor
     ) {
         $this->timeout = $timeout;
         $this->apiKey = $apiKey;
-        // Auth/JSON headers are applied per-request (in request()) so they are
-        // correct regardless of whether a custom client is injected. When we
-        // build the default client we still set base_uri/timeout here.
+        $this->baseUrl = rtrim($baseUrl, '/');
+        // Auth/JSON headers are applied per-request (in request()). Request URLs
+        // are built absolute (baseUrl . path) so a base path prefix (e.g. /v1
+        // behind a reverse proxy) is preserved; base_uri is intentionally unset,
+        // because an absolute request path would otherwise replace it.
         $this->http = $httpClient ?? new \GuzzleHttp\Client([
-            'base_uri' => rtrim($baseUrl, '/'),
             'timeout' => $timeout,
         ]);
     }
@@ -77,7 +79,7 @@ class HttpExecutor
         }
 
         try {
-            $response = $this->http->request($method, $path, $options);
+            $response = $this->http->request($method, $this->baseUrl . $path, $options);
         } catch (ConnectException $e) {
             // cURL error 28 (CURLE_OPERATION_TIMEDOUT) is the canonical timeout
             // signal, surfaced via the handler context. We check errno first

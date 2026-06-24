@@ -10,7 +10,7 @@ Field names mirror the backend DTOs exactly (camelCase JSON).
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Optional, TypedDict
 
 Jid = str
 SessionStatus = Literal[
@@ -164,21 +164,75 @@ class MessageHistoryQuery(TypedDict, total=False):
     deep: bool
 
 
-class MessageRecord(TypedDict, total=False):
+# ``from`` is a Python keyword, so use the functional TypedDict form (and
+# Optional[...] rather than ``X | None`` so the runtime values stay 3.9-safe).
+MessageRecord = TypedDict(
+    "MessageRecord",
+    {
+        "id": str,
+        "sessionId": str,
+        "waMessageId": Optional[str],
+        "chatId": Jid,
+        "from": Jid,
+        "to": Jid,
+        "body": Optional[str],
+        "type": str,
+        "direction": MessageDirection,
+        "timestamp": Optional[int],
+        "metadata": dict,
+        "status": DeliveryStatus,
+        "createdAt": str,
+    },
+    total=False,
+)
+
+
+class ChatHistoryMedia(TypedDict, total=False):
+    mimetype: str
+    filename: str
+    data: str  # base64; absent when the payload was omitted (too large)
+    omitted: bool
+    sizeBytes: int
+
+
+class QuotedMessage(TypedDict, total=False):
     id: str
-    sessionId: str
-    chatId: Jid
-    messageId: str
-    direction: MessageDirection
-    type: str
-    status: DeliveryStatus
-    body: str | None
-    fromMe: bool
-    hasMedia: bool
-    mediaUrl: str | None
-    timestamp: str | int
-    createdAt: str
-    updatedAt: str
+    body: str
+
+
+class MessageLocation(TypedDict, total=False):
+    latitude: float
+    longitude: float
+    description: str
+    address: str
+    url: str
+
+
+# A message read live from WhatsApp by ``messages.history()`` — the engine
+# payload, richer and differently shaped than the persisted MessageRecord.
+ChatHistoryMessage = TypedDict(
+    "ChatHistoryMessage",
+    {
+        "id": str,
+        "from": Jid,
+        "to": Jid,
+        "chatId": Jid,
+        "body": str,
+        "type": str,
+        "timestamp": int,
+        "fromMe": bool,
+        "isGroup": bool,
+        "isStatusBroadcast": bool,
+        "author": Jid,
+        "mentionedIds": list,
+        "isLidSender": bool,
+        "senderPhone": Optional[str],
+        "media": ChatHistoryMedia,
+        "quotedMessage": QuotedMessage,
+        "location": MessageLocation,
+    },
+    total=False,
+)
 
 
 class MessageListResponse(TypedDict):
@@ -188,11 +242,17 @@ class MessageListResponse(TypedDict):
     total: int
 
 
-class ReactionRecord(TypedDict, total=False):
-    id: str
-    participant: Jid
+class ReactionSender(TypedDict, total=False):
+    senderId: Jid
     emoji: str
-    messageId: str
+    timestamp: int
+
+
+class ReactionRecord(TypedDict, total=False):
+    """One emoji and everyone who reacted with it (server returns MessageReaction[])."""
+
+    emoji: str
+    senders: list[ReactionSender]
 
 
 # ── Bulk ──────────────────────────────────────────────────────────
@@ -218,8 +278,12 @@ class BulkOptions(TypedDict, total=False):
     stopOnError: bool
 
 
-class SendBulkRequest(TypedDict):
+class _SendBulkRequired(TypedDict):
     messages: list[BulkMessageItem]
+
+
+class SendBulkRequest(_SendBulkRequired, total=False):
+    # `options` is optional; the backend applies defaults when omitted.
     options: BulkOptions
 
 

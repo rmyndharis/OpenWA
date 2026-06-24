@@ -58,7 +58,12 @@ describe('MessagesResource — exact paths', () => {
 
   it('list returns the {messages,total} wrapper the server actually sends', async () => {
     const t = new MockTransport().on('GET', /\/messages$/, {
-      body: { messages: [{ id: '1', sessionId: 's', chatId: 'a@c.us', messageId: 'm', direction: 'incoming', createdAt: '', updatedAt: '' }], total: 1 },
+      body: {
+        messages: [
+          { id: '1', sessionId: 's', chatId: 'a@c.us', from: 'a@c.us', to: 's', type: 'text', direction: 'incoming', status: 'delivered', createdAt: '' },
+        ],
+        total: 1,
+      },
     });
     const res = await client(t).messages.list('s', { chatId: 'a@c.us' });
     expect(res.total).toBe(1);

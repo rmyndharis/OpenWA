@@ -40,6 +40,16 @@ class TestClientCore:
         assert backend.last_call.headers["content-type"] == "application/json"
         assert backend.last_call.headers["x-trace"] == "keep"  # benign custom headers still pass through
 
+    def test_non_json_2xx_body_returns_text(self):
+        import httpx
+
+        def handler(_req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"plain text", headers={"content-type": "text/plain"})
+
+        client = OpenWAClient(base_url="http://x", api_key="k", transport=httpx.MockTransport(handler))
+        # A non-JSON 2xx body must surface as text, not raise a raw JSONDecodeError.
+        assert client.sessions.list() == "plain text"
+
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])
         client = OpenWAClient(base_url="http://localhost:2785/", api_key="k", transport=backend.as_transport())

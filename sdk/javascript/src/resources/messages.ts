@@ -10,12 +10,12 @@ import type { OpenWAClient } from '../client.js';
 import type {
   BatchStatusResponse,
   BulkMessageResponse,
+  ChatHistoryMessage,
   DeleteMessageRequest,
   ForwardMessageRequest,
   ListMessagesQuery,
   MessageHistoryQuery,
   MessageListResponse,
-  MessageRecord,
   MessageResponse,
   ReactionRecord,
   ReactMessageRequest,
@@ -138,9 +138,9 @@ export class MessagesResource {
     });
   }
 
-  /** Get the message history for a chat. */
-  history(sessionId: string, chatId: string, query?: MessageHistoryQuery): Promise<MessageRecord[]> {
-    return this.client.request<MessageRecord[]>({
+  /** Get the message history for a chat (read live from WhatsApp). */
+  history(sessionId: string, chatId: string, query?: MessageHistoryQuery): Promise<ChatHistoryMessage[]> {
+    return this.client.request<ChatHistoryMessage[]>({
       method: 'GET',
       path: `/api/sessions/${sessionId}/messages/${chatId}/history`,
       query,

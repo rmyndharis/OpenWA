@@ -94,4 +94,9 @@ class HttpExecutor:
             raise OpenWAApiError.from_response(res.status_code, res.text, context)
         if res.status_code == 204 or not res.content:
             return None
-        return res.json()
+        try:
+            return res.json()
+        except ValueError:
+            # A 2xx body that isn't JSON surfaces as text rather than a raw
+            # JSONDecodeError (mirrors the JS and PHP transports).
+            return res.text

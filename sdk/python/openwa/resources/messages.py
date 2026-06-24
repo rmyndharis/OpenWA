@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING
 from ..types import (
     BatchStatusResponse,
     BulkMessageResponse,
+    ChatHistoryMessage,
     DeleteMessageRequest,
     ForwardMessageRequest,
     ListMessagesQuery,
     MessageHistoryQuery,
     MessageListResponse,
     MessageResponse,
-    MessageRecord,
     ReactionRecord,
     ReactMessageRequest,
     ReplyMessageRequest,
@@ -85,7 +85,7 @@ class MessagesResource:
 
     def history(
         self, session_id: str, chat_id: str, query: MessageHistoryQuery | None = None
-    ) -> list[MessageRecord]:
+    ) -> list[ChatHistoryMessage]:
         return self._http.request(
             "GET", f"/api/sessions/{session_id}/messages/{chat_id}/history", query=query
         )

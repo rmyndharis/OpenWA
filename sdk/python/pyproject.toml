@@ -15,7 +15,7 @@ authors = [
 keywords = ["whatsapp", "api", "sdk", "openwa", "gateway"]
 
 dependencies = [
-    "httpx>=0.25.0",
+    "httpx>=0.25.0,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +30,11 @@ Repository = "https://github.com/rmyndharis/OpenWA"
 
 [tool.setuptools.packages.find]
 include = ["openwa*"]
+
+# Ship type information (PEP 561) so consumers get the bundled type hints.
+[tool.setuptools.package-data]
+openwa = ["py.typed"]
+"openwa.resources" = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
