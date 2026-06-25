@@ -10,9 +10,9 @@ describe('isUniqueConstraintError', () => {
   });
 
   it('recognizes a SQLite constraint error by message', () => {
-    expect(
-      isUniqueConstraintError(new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: messages.sessionId')),
-    ).toBe(true);
+    expect(isUniqueConstraintError(new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: messages.sessionId'))).toBe(
+      true,
+    );
   });
 
   it('returns false for a non-unique DB error (e.g. FK violation 23503)', () => {
@@ -25,6 +25,8 @@ describe('isUniqueConstraintError', () => {
   });
 
   it('does not false-positive on a non-unique code whose message contains the unique phrase', () => {
-    expect(isUniqueConstraintError({ driverError: { code: '23503', message: 'UNIQUE constraint failed: x' } })).toBe(false);
+    expect(isUniqueConstraintError({ driverError: { code: '23503', message: 'UNIQUE constraint failed: x' } })).toBe(
+      false,
+    );
   });
 });

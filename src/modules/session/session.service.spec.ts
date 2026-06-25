@@ -1182,16 +1182,30 @@ describe('SessionService', () => {
       (webhookService.dispatch as jest.Mock).mockClear();
       (messageRepository.insert as jest.Mock)
         .mockResolvedValueOnce(undefined) // first delivery: new row
-        .mockRejectedValueOnce({ driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE', message: 'UNIQUE constraint failed' } }); // re-fire
+        .mockRejectedValueOnce({
+          driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE', message: 'UNIQUE constraint failed' },
+        }); // re-fire
 
-      const msg = { id: 'wa-1', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'hi', type: 'text', timestamp: 1, fromMe: false, isGroup: false };
+      const msg = {
+        id: 'wa-1',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        chatId: 'peer@c.us',
+        body: 'hi',
+        type: 'text',
+        timestamp: 1,
+        fromMe: false,
+        isGroup: false,
+      };
       callbacks.onMessage?.(msg);
       await flush();
       callbacks.onMessage?.(msg); // re-fired engine event
       await flush();
 
       expect(messageRepository.insert).toHaveBeenCalledTimes(2);
-      expect((webhookService.dispatch as jest.Mock).mock.calls.filter(c => c[1] === 'message.received')).toHaveLength(1);
+      expect(
+        ((webhookService.dispatch as jest.Mock).mock.calls as unknown[][]).filter(c => c[1] === 'message.received'),
+      ).toHaveLength(1);
     });
 
     it('still dispatches message.received when the insert fails with a non-constraint error (fail-open)', async () => {
@@ -1200,10 +1214,22 @@ describe('SessionService', () => {
       (webhookService.dispatch as jest.Mock).mockClear();
       (messageRepository.insert as jest.Mock).mockRejectedValueOnce(new Error('db down'));
 
-      callbacks.onMessage?.({ id: 'wa-2', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'hi', type: 'text', timestamp: 1, fromMe: false, isGroup: false });
+      callbacks.onMessage?.({
+        id: 'wa-2',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        chatId: 'peer@c.us',
+        body: 'hi',
+        type: 'text',
+        timestamp: 1,
+        fromMe: false,
+        isGroup: false,
+      });
       await flush();
 
-      expect((webhookService.dispatch as jest.Mock).mock.calls.filter(c => c[1] === 'message.received')).toHaveLength(1);
+      expect(
+        ((webhookService.dispatch as jest.Mock).mock.calls as unknown[][]).filter(c => c[1] === 'message.received'),
+      ).toHaveLength(1);
     });
 
     // ── persistHistoryMessages collision tolerance ───────────────────
@@ -1211,14 +1237,29 @@ describe('SessionService', () => {
       it('uses an insert-or-ignore bulk insert so a colliding history row cannot abort the batch', async () => {
         const callbacks = await startAndCaptureCallbacks();
         const execute = jest.fn().mockResolvedValue({ identifiers: [] });
-        const qb = { insert: jest.fn().mockReturnThis(), values: jest.fn().mockReturnThis(), orIgnore: jest.fn().mockReturnThis(), execute };
+        const qb = {
+          insert: jest.fn().mockReturnThis(),
+          values: jest.fn().mockReturnThis(),
+          orIgnore: jest.fn().mockReturnThis(),
+          execute,
+        };
         (messageRepository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(qb);
         (messageRepository.find as jest.Mock).mockResolvedValue([]); // nothing pre-seen
         (messageRepository.create as jest.Mock).mockImplementation((data: Record<string, unknown>) => ({ ...data }));
         (messageRepository.save as jest.Mock).mockClear();
 
         callbacks.onHistoryMessages?.([
-          { id: 'h1', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'old', type: 'text', timestamp: 1, fromMe: false, isGroup: false },
+          {
+            id: 'h1',
+            from: 'peer@c.us',
+            to: 'me@c.us',
+            chatId: 'peer@c.us',
+            body: 'old',
+            type: 'text',
+            timestamp: 1,
+            fromMe: false,
+            isGroup: false,
+          },
         ]);
         await flush();
 

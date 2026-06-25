@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
@@ -489,7 +490,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Insert-or-ignore: a live onMessage insert can land between the `seen` SELECT above and this
         // write, colliding on UNIQUE(sessionId, waMessageId). orIgnore skips the collision instead of
         // throwing and aborting the whole batch (history is best-effort, persist-never-dispatch).
-        await this.messageRepository.createQueryBuilder().insert().values(rows).orIgnore().execute();
+        await this.messageRepository
+          .createQueryBuilder()
+          .insert()
+          .values(rows as unknown as QueryDeepPartialEntity<Message>[])
+          .orIgnore()
+          .execute();
         inserted += rows.length;
       }
     }
@@ -654,7 +660,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // message is never dropped by a transient DB failure.
             let isNewMessage = true;
             try {
-              await this.messageRepository.insert(dbMessage);
+              await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
             } catch (err) {
               if (isUniqueConstraintError(err)) {
                 isNewMessage = false;
