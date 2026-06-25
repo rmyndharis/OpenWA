@@ -411,7 +411,7 @@ docker compose down
 
 # 5. Update version in docker-compose.yml
 # Change: image: ghcr.io/rmyndharis/openwa:0.1.0
-# To:     image: ghcr.io/rmyndharis/openwa:0.2.0
+# To:     image: ghcr.io/rmyndharis/openwa:0.7.3
 
 # 6. Pull new image
 docker compose pull
@@ -444,7 +444,7 @@ curl -H "X-API-Key: $API_KEY" \
 ```bash
 # Correct version
 curl http://localhost:2785/api/health | jq '.version'
-# Expected: "0.2.0"
+# Expected: "0.7.3"
 
 # All tests pass
 ./scripts/smoke-test.sh

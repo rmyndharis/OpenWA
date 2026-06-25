@@ -242,7 +242,7 @@ CREATE TABLE sessions (
 > The SQL above is illustrative — the schema is defined by the TypeORM entity (`src/modules/session/entities/session.entity.ts`), and column types are dialect-portable (`jsonColumnType()` → `simple-json`, dates via `DateTransformer`). The `sessions` entity declares only the index implied by the `UNIQUE` constraint on `name`; there are no separate `status`/`phone`/`created_at` indexes.
 
 > [!NOTE]
-> Auth state is **not** stored in this table. `whatsapp-web.js` persists auth on the filesystem; Baileys persists its credential/message state to its own engine tables (see `baileys_stored_messages`).
+> Auth state is **not** stored in this table. Both engines persist credentials on the **filesystem** (`whatsapp-web.js` LocalAuth; Baileys `useMultiFileAuthState`). The `baileys_stored_messages` table holds only Baileys' serialized message store (the library ships none), not credentials.
 
 **Session Status Values:**
 
@@ -483,8 +483,8 @@ CREATE TABLE message_batches (
 
 The data connection also owns:
 
-- **`templates`** — reusable message templates (`src/modules/template/entities/template.entity.ts`), with a unique constraint on the template name.
-- **`baileys_stored_messages`** — Baileys engine message/credential store (`src/engine/adapters/baileys-stored-message.entity.ts`); present only when the Baileys engine is used.
+- **`templates`** — reusable message templates (`src/modules/template/entities/template.entity.ts`), with a unique constraint on `(sessionId, name)` — one template name per session.
+- **`baileys_stored_messages`** — Baileys engine message store — the serialized WAMessage proto (`src/engine/adapters/baileys-stored-message.entity.ts`); present only when the Baileys engine is used. (Credentials live on the filesystem, not here.)
 - **`lid_mappings`** — LID↔phone-number identity mappings (`src/engine/identity/lid-mapping.entity.ts`).
 
 > [!NOTE]

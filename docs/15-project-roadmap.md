@@ -313,7 +313,7 @@ gantt
     Message queue               :p2-18, after p2-17, 2d
 
     section Dashboard (Week 8-10)
-    React + shadcn/ui setup     :p2-19, after p2-18, 3d
+    React + bespoke-CSS setup   :p2-19, after p2-18, 3d
     Authentication UI           :p2-20, after p2-19, 3d
     Session management          :p2-21, after p2-20, 4d
     QR code display             :p2-22, after p2-21, 2d

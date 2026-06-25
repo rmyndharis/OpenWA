@@ -45,7 +45,7 @@ API keys carry one of three roles, ordered by privilege:
 
 `@RequireRole(role)` enforces a **minimum** role using the hierarchy `VIEWER < OPERATOR < ADMIN`: a key satisfies the guard if its own rank is ≥ the required rank (so an `admin` key passes an `OPERATOR`-guarded route). A route with no `@RequireRole` accepts any valid key, including `viewer`. A key whose role is below the requirement gets `403 Forbidden`; a missing or invalid key gets `401 Unauthorized`.
 
-A key may additionally be scoped to specific sessions (`allowedSessions`) and/or source IPs (`allowedIps`); when set, requests outside that scope are rejected even if the role would otherwise allow them.
+A key may additionally be scoped to specific sessions (`allowedSessions`) and/or source IPs (`allowedIps`). The scope/IP check runs in the guard **before** any role check, so a request outside that scope is rejected with `401` (not `403`) even if the role would otherwise allow it.
 
 ### API-Key Lifecycle
 
@@ -97,8 +97,8 @@ Validation failures (`statusCode: 400`) return `message` as an **array** of fiel
 | HTTP Status | Meaning | When |
 | --- | --- | --- |
 | `400` | Bad Request | DTO validation failed, unknown body field, or a business precondition not met (e.g. session not active, media over cap) |
-| `401` | Unauthorized | Missing or invalid `X-API-Key` (or `METRICS_TOKEN` for metrics) |
-| `403` | Forbidden | Valid key, but role below the route requirement, or session/IP out of the key's scope |
+| `401` | Unauthorized | Missing/invalid/expired/revoked `X-API-Key` (or `METRICS_TOKEN` for metrics), a blocked source IP, or a key used outside its `allowedSessions` scope |
+| `403` | Forbidden | A valid, in-scope key whose **role** is below the route's `@RequireRole` requirement |
 | `404` | Not Found | The addressed resource (session, message, webhook, batch, …) does not exist |
 | `409` | Conflict | A uniqueness constraint was violated (e.g. duplicate name) |
 | `413` | Payload Too Large | Base64 media exceeds the media byte cap (see §6.3) |
@@ -219,7 +219,7 @@ Get a single session by ID.
 }
 ```
 
-**Errors:** `401` missing/invalid key · `403` key not scoped to this session · `404` session not found
+**Errors:** `401` missing/invalid key, or key not scoped to this session · `404` session not found
 
 #### GET /api/sessions/:id/qr
 
@@ -667,7 +667,7 @@ Delete a session.
 
 **Response** `204` — empty body (`@HttpCode(204)`, returns void). A `findOne` lookup runs first, so a missing id yields `404`.
 
-**Errors:** `401` · `403` not OPERATOR / not scoped · `404` session not found
+**Errors:** `401` missing/invalid key, or key not scoped to this session · `403` key role below OPERATOR · `404` session not found
 
 ### 6.4.2 Messages
 
@@ -1384,7 +1384,7 @@ List all contacts for a session, returned as an in-memory paginated window.
 ]
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `403` key not permitted for session · `404` session not found
+**Errors:** `400` session is not started · `401` missing/invalid API key, or key not scoped to this session · `404` session not found
 
 #### GET /api/sessions/:sessionId/contacts/check/:number
 
@@ -2497,7 +2497,7 @@ List all labels defined for the session (WhatsApp Business accounts only).
 
 Bare array — raw return of `engine.getLabels()`; no envelope.
 
-**Errors:** `400` session is not started (no live engine), or the account is not a WhatsApp Business account · `401` missing/invalid API key · `404` session not found
+**Errors:** `400` session is not started (no live engine), or the account is not a WhatsApp Business account · `401` missing/invalid API key
 
 #### GET /api/sessions/:sessionId/labels/:labelId
 
@@ -2520,7 +2520,7 @@ Get a single label by its ID.
 
 The engine resolves `Label | null`; a `null` is mapped to `404` in the service, so a `200` always carries a label.
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found`, or session not found
+**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Label <labelId> not found`
 
 #### GET /api/sessions/:sessionId/labels/chat/:chatId
 
@@ -2545,7 +2545,7 @@ List the labels currently assigned to a specific chat.
 
 Bare array — raw return of `engine.getChatLabels(chatId)`.
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `404` session not found
+**Errors:** `400` session is not started · `401` missing/invalid API key
 
 #### POST /api/sessions/:sessionId/labels/chat/:chatId
 
@@ -2578,7 +2578,7 @@ Add a label to a chat.
 
 The handler always returns the literal `{ "success": true }`. NestJS POST default status is `201` (the Swagger doc says `200`; the runtime code is `201`).
 
-**Errors:** `400` validation failure (missing/empty/non-string `labelId`, or any unknown body field — strict whitelist), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found
+**Errors:** `400` validation failure (missing/empty/non-string `labelId`, or any unknown body field — strict whitelist), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role
 
 #### DELETE /api/sessions/:sessionId/labels/chat/:chatId/:labelId
 
@@ -2602,7 +2602,7 @@ Remove a label from a chat.
 
 The handler always returns `{ "success": true }`. DELETE default status is `200` (no `@HttpCode` override).
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found
+**Errors:** `400` session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role
 
 #### GET /api/sessions/:sessionId/status
 
@@ -2638,7 +2638,7 @@ Get all contact status updates (stories) visible to the session.
 
 The controller wraps the engine array in `{ statuses }`. `type` is one of `text | image | video`; `caption`, `mediaUrl`, `backgroundColor`, `font` are optional. `timestamp` and `expiresAt` serialize to ISO strings (these are `Date` values, not the epoch-number convention used by message timestamps).
 
-**Errors:** `401` missing/invalid API key · `403` insufficient access to the session · `404` `Session {id} not found or not connected`
+**Errors:** `401` missing/invalid API key, or key not scoped to this session · `404` `Session {id} not found or not connected`
 
 #### GET /api/sessions/:sessionId/status/:contactId
 
@@ -2674,7 +2674,7 @@ Get status updates posted by a specific contact.
 
 Same `{ statuses }` wrapper and `Status` shape as the list-all route.
 
-**Errors:** `401` missing/invalid API key · `403` insufficient access to the session · `404` session not found / not connected
+**Errors:** `401` missing/invalid API key, or key not scoped to this session · `404` session not found / not connected
 
 #### POST /api/sessions/:sessionId/status/send-text
 
@@ -3525,7 +3525,7 @@ Get application settings (environment-derived; `general`/`api`/`notifications` g
 {
   "general": {
     "apiBaseUrl": "http://localhost:2785",
-    "sessionTimeout": 5,
+    "sessionTimeout": 0,
     "autoReconnect": false,
     "debugMode": false
   },
@@ -3607,7 +3607,7 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
     "messages": { "pending": 0, "completed": 0, "failed": 0 },
     "webhooks": { "pending": 0, "completed": 0, "failed": 0 }
   },
-  "storage": { "type": "local", "path": "./data/media" },
+  "storage": { "type": "local", "path": "./uploads" },
   "engine": {
     "type": "whatsapp-web.js",
     "headless": true,
@@ -4460,7 +4460,7 @@ Every registered webhook receives an HTTP `POST` with a JSON body of this shape:
   "event": "message.received",
   "timestamp": "2026-02-02T10:00:00.000Z",
   "sessionId": "my-session",
-  "idempotencyKey": "msg_my-session_true_6281234567890@c.us_3EB0ABC123",
+  "idempotencyKey": "msg_my-session_3EB0ABC123",
   "deliveryId": "dlv_550e8400-e29b-41d4-a716-446655440000",
   "data": { }
 }
