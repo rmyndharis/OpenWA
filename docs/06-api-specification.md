@@ -1324,6 +1324,19 @@ GET /api/health/live
 
 OpenWA provides an idempotency mechanism to prevent duplicate processing on the client side.
 
+#### Delivery Semantics
+
+Webhook delivery is **at-least-once**. WhatsApp engines can re-fire an event for a single message, and
+failed deliveries are retried, so a consumer can receive the same event more than once. **Design your
+handler to be idempotent**, keyed on the `X-OpenWA-Idempotency-Key` header (or the `idempotencyKey`
+field) — that key is content-based, so every duplicate of the same message carries the identical value;
+prefer it over hashing the payload yourself.
+
+As a safety net, OpenWA de-duplicates inbound `message.received` **server-side**: a re-fired event for a
+message already persisted is dropped before dispatch, so one registered webhook normally receives each
+inbound message once. This guard is best-effort defense-in-depth and does not remove the need for
+consumer-side idempotency on the key above.
+
 #### Idempotency Headers & Fields
 
 | Field/Header | Description |
