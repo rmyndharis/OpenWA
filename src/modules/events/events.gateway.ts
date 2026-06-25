@@ -248,13 +248,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       timestamp: new Date().toISOString(),
     };
 
-    // Emit to specific session + event room
-    this.server.to(buildRoomName(sessionId, event)).emit('message', eventMessage);
-
-    // Emit to wildcard rooms
-    this.server.to(buildRoomName(sessionId, '*')).emit('message', eventMessage);
-    this.server.to(buildRoomName('*', event)).emit('message', eventMessage);
-    this.server.to(buildRoomName('*', '*')).emit('message', eventMessage);
+    // Emit once to the specific room + the three wildcard rooms. Chaining .to()
+    // unions the rooms into a single broadcast, so a socket joined to several of
+    // them receives the event exactly once (Socket.IO dedups recipients per
+    // broadcast). Four separate .emit() calls would deliver one copy per room.
+    this.server
+      .to(buildRoomName(sessionId, event))
+      .to(buildRoomName(sessionId, '*'))
+      .to(buildRoomName('*', event))
+      .to(buildRoomName('*', '*'))
+      .emit('message', eventMessage);
   }
 
   /**
@@ -262,6 +265,20 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   emitSessionStatus(sessionId: string, status: string, data?: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'session.status', { status, ...data });
+  }
+
+  /**
+   * Emit session authenticated (engine reached READY). Mirrors the webhook payload.
+   */
+  emitSessionAuthenticated(sessionId: string, data: { phone: string; pushName: string }) {
+    this.emitToRooms(sessionId, 'session.authenticated', data);
+  }
+
+  /**
+   * Emit session disconnected. Carries the `reason` that the session.status flip drops.
+   */
+  emitSessionDisconnected(sessionId: string, data: { reason: string }) {
+    this.emitToRooms(sessionId, 'session.disconnected', data);
   }
 
   /**

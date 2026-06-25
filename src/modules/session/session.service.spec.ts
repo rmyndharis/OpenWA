@@ -91,6 +91,8 @@ describe('SessionService', () => {
 
     eventsGateway = {
       emitSessionStatus: jest.fn(),
+      emitSessionAuthenticated: jest.fn(),
+      emitSessionDisconnected: jest.fn(),
       emitMessage: jest.fn(),
       emitMessageSent: jest.fn(),
       emitMessageAck: jest.fn(),
@@ -581,6 +583,32 @@ describe('SessionService', () => {
         'sess-uuid-1',
         expect.objectContaining({ status: SessionStatus.READY }),
       );
+    });
+
+    it('bridges session.authenticated to the socket when the live engine becomes ready', async () => {
+      const callbacks = await startAndCapture();
+      (eventsGateway.emitSessionAuthenticated as jest.Mock).mockClear();
+
+      callbacks.onReady?.('628123', 'Tester');
+
+      expect(eventsGateway.emitSessionAuthenticated).toHaveBeenCalledWith('sess-uuid-1', {
+        phone: '628123',
+        pushName: 'Tester',
+      });
+    });
+
+    it('bridges session.disconnected (with reason) to the socket from the live engine', async () => {
+      const callbacks = await startAndCapture();
+      // The live onDisconnected handler schedules a reconnect timer after emitting; neutralize
+      // it so the test leaves no pending timer (same pattern as the reconnect specs).
+      jest
+        .spyOn(service as unknown as { scheduleReconnect: (id: string, s: unknown) => void }, 'scheduleReconnect')
+        .mockImplementation(() => {});
+      (eventsGateway.emitSessionDisconnected as jest.Mock).mockClear();
+
+      callbacks.onDisconnected?.('socket closed');
+
+      expect(eventsGateway.emitSessionDisconnected).toHaveBeenCalledWith('sess-uuid-1', { reason: 'socket closed' });
     });
 
     it('ignores onReady from an engine that was torn down (post-stop window)', async () => {

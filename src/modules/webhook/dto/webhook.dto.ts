@@ -27,6 +27,11 @@ const FILTERS_API_EXAMPLE = {
   ],
 };
 
+// Reserved: valid webhook subscription targets that are not dispatched yet (no engine
+// emit source). Kept in WEBHOOK_EVENTS so existing subscriptions validate; tracked
+// separately so the catalog/emitter drift guard can whitelist them as intentional.
+export const WEBHOOK_RESERVED_EVENTS = ['group.join', 'group.leave', 'group.update'] as const;
+
 export const WEBHOOK_EVENTS = [
   'message.received',
   'message.sent',
@@ -38,10 +43,7 @@ export const WEBHOOK_EVENTS = [
   'session.qr',
   'session.authenticated',
   'session.disconnected',
-  // Reserved: accepted on subscribe but not dispatched yet (no engine emit source).
-  'group.join',
-  'group.leave',
-  'group.update',
+  ...WEBHOOK_RESERVED_EVENTS,
 ] as const;
 
 export type WebhookEventType = (typeof WEBHOOK_EVENTS)[number];

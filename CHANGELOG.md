@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- WebSocket events are now delivered exactly once to a client subscribed to overlapping rooms (for example both a specific event and the `*` wildcard for the same session). The real-time fan-out previously sent one copy per matching room, so such a client could receive the same event two to four times. The bundled dashboard was unaffected (its pages subscribe to disjoint rooms); this fixes duplicate delivery for custom WebSocket clients.
+- `session.authenticated` and `session.disconnected` are now emitted over the WebSocket (with `{ phone, pushName }` and `{ reason }` respectively), matching the existing webhook payloads. They were advertised as subscribable but were only ever delivered via webhooks, so socket subscribers never received them.
+
+### Changed
+
+- The WebSocket `group.join` / `group.leave` / `group.update` events are no longer accepted as socket subscriptions — they have no engine source and were never delivered on the socket. Subscribing to one now returns a clear validation error instead of silently never delivering. They remain reserved on the webhook side. Webhook subscriptions are unaffected.
+
 ## [0.7.3] - 2026-06-25
 
 ### Added

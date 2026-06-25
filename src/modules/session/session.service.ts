@@ -565,6 +565,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
 
         void this.webhookService.dispatch(id, 'session.authenticated', { sessionId: id, phone, pushName });
+        this.eventsGateway.emitSessionAuthenticated(id, { phone, pushName });
 
         // Execute hook for ready event
         void this.hookManager.execute(
@@ -880,6 +881,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
 
         void this.webhookService.dispatch(id, 'session.disconnected', { sessionId: id, reason });
+        this.eventsGateway.emitSessionDisconnected(id, { reason });
 
         // Execute hook for disconnected event
         void this.hookManager.execute(
