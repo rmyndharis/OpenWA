@@ -86,9 +86,9 @@ USER openwa
 # Expose port
 EXPOSE 2785
 
-# Health check
+# Health check (global API prefix is 'api'; readiness probes both databases)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s \
-    CMD curl -f http://localhost:2785/health || exit 1
+    CMD curl -f http://localhost:2785/api/health/ready || exit 1
 
 # Start app
 CMD ["node", "dist/main.js"]
@@ -173,11 +173,11 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - API_MASTER_KEY=${API_MASTER_KEY}
     volumes:
       - session-data:/app/.wwebjs_auth
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2785/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:2785/api/health/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -200,8 +200,14 @@ volumes:
     driver: local
 ```
 
-> [!NOTE]
-> If running more than 1 replica, use shared storage for `SESSION_DATA_PATH` (NFS/S3/CSI) and enable sticky sessions. Local volumes are not suitable for multi-replica setups.
+> [!IMPORTANT]
+> **Keep `replicas: 1`.** OpenWA is a single-process application: live engine state lives in an
+> in-memory `Map` in `SessionService` (`src/modules/session/session.service.ts`). Multi-replica is
+> **not** a supported topology — running two replicas against a shared `SESSION_DATA_PATH` makes two
+> browsers write the same WhatsApp LocalAuth directory and **corrupts the session** (forced logout /
+> ban). Shared storage and sticky sessions do **not** make multi-replica safe. See
+> [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) for the `replicas: 1` stance and the
+> (unimplemented) session-claim design that would be required first.
 
 ## 10.3 CI/CD Pipeline
 
@@ -362,6 +368,11 @@ flowchart TB
 
 ### Multi-Server Deployment
 
+> **Design sketch, not a supported topology.** OpenWA is single-process with in-memory engine state,
+> so the multi-`OpenWA` fan-out below would corrupt WhatsApp auth across replicas. It is retained only
+> as the target architecture once the session-claim design in
+> [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) is implemented. Deploy with `replicas: 1`.
+
 ```mermaid
 flowchart TB
     subgraph External["External"]
@@ -462,11 +473,10 @@ CACHE_MAX=1000
 # ===========================================
 ENGINE_TYPE=whatsapp-web.js
 # ENGINE_TYPE=baileys
-# ENGINE_TYPE=mock
+# ENGINE_TYPE=baileys   # whatsapp-web.js (default) | baileys; omit to use the dashboard selection
 
 # Session
 SESSION_DATA_PATH=./.wwebjs_auth
-MAX_SESSIONS=10
 
 # Puppeteer (for whatsapp-web.js)
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -477,8 +487,9 @@ PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox
 # SECURITY
 # ===========================================
 # Generate with: openssl rand -base64 32
-ENCRYPTION_KEY=your-32-byte-encryption-key-here
-API_KEY_MASTER=your-master-api-key
+API_MASTER_KEY=your-master-api-key
+# Optional HMAC pepper so a DB leak alone can't precompute key hashes
+API_KEY_PEPPER=optional-key-hashing-pepper
 
 # ===========================================
 # WEBHOOK
@@ -490,8 +501,9 @@ WEBHOOK_RETRY_DELAY=5000
 # ===========================================
 # RATE LIMITING
 # ===========================================
-RATE_LIMIT_WINDOW=60000
-RATE_LIMIT_MAX=100
+# Three global per-IP windows (short/medium/long); defaults shown
+RATE_LIMIT_MEDIUM_TTL=60000
+RATE_LIMIT_MEDIUM_LIMIT=100
 ```
 
 ### Configuration Service
@@ -507,12 +519,10 @@ export default () => ({
     url: process.env.REDIS_URL,
   },
   security: {
-    encryptionKey: process.env.ENCRYPTION_KEY,
-    masterApiKey: process.env.API_KEY_MASTER,
+    masterApiKey: process.env.API_MASTER_KEY,
   },
   session: {
     dataPath: process.env.SESSION_DATA_PATH || './.wwebjs_auth',
-    maxSessions: parseInt(process.env.MAX_SESSIONS, 10) || 10,
   },
   webhook: {
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT, 10) || 30000,
@@ -520,8 +530,12 @@ export default () => ({
     retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY, 10) || 5000,
   },
   rateLimit: {
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW, 10) || 60000,
-    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
+    shortTtl: parseInt(process.env.RATE_LIMIT_SHORT_TTL, 10) || 1000,
+    shortLimit: parseInt(process.env.RATE_LIMIT_SHORT_LIMIT, 10) || 10,
+    mediumTtl: parseInt(process.env.RATE_LIMIT_MEDIUM_TTL, 10) || 60000,
+    mediumLimit: parseInt(process.env.RATE_LIMIT_MEDIUM_LIMIT, 10) || 100,
+    longTtl: parseInt(process.env.RATE_LIMIT_LONG_TTL, 10) || 3600000,
+    longLimit: parseInt(process.env.RATE_LIMIT_LONG_LIMIT, 10) || 1000,
   },
   puppeteer: {
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -683,79 +697,65 @@ scrape_configs:
 
 ### Alert Rules
 
+These rules use the metric names OpenWA actually exports (`openwa_*`). The memory rule below uses a
+node-exporter metric — an **external** exporter, not the app — and is kept as a host-level example.
+
 ```yaml
 # monitoring/alerts.yml
 groups:
   - name: openwa-alerts
     rules:
-      # High Error Rate
-      - alert: HighErrorRate
-        expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m])) 
-          / sum(rate(http_requests_total[5m])) > 0.05
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High error rate detected"
-          description: "Error rate is {{ $value | humanizePercentage }} in last 5 minutes"
-
-      # API Response Time
-      - alert: HighResponseTime
-        expr: |
-          histogram_quantile(0.95, 
-            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
-          ) > 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High API response time"
-          description: "95th percentile response time is {{ $value }}s"
-
-      # Session Down
-      - alert: SessionDisconnected
-        expr: session_status{status="disconnected"} > 0
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "WhatsApp session disconnected"
-          description: "Session {{ $labels.session_id }} has been disconnected"
-
-      # Memory Usage
-      - alert: HighMemoryUsage
-        expr: |
-          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) 
-          / node_memory_MemTotal_bytes > 0.85
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory usage"
-          description: "Memory usage is {{ $value | humanizePercentage }}"
-
-      # Webhook Failures
-      - alert: WebhookDeliveryFailures
-        expr: |
-          sum(rate(webhook_deliveries_total{status="failed"}[5m])) 
-          / sum(rate(webhook_deliveries_total[5m])) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High webhook delivery failure rate"
-          description: "{{ $value | humanizePercentage }} webhooks failing"
-
-      # Service Down
+      # Service Down — openwa_up disappears (or the scrape fails)
       - alert: ServiceDown
-        expr: up{job="openwa"} == 0
+        expr: up{job="openwa"} == 0 or absent(openwa_up)
         for: 1m
         labels:
           severity: critical
         annotations:
           summary: "OpenWA service is down"
           description: "The OpenWA application is not responding"
+
+      # Session(s) disconnected
+      - alert: SessionDisconnected
+        expr: openwa_sessions{status="disconnected"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WhatsApp session disconnected"
+          description: "{{ $value }} session(s) in disconnected state"
+
+      # Failed messages climbing
+      - alert: FailedMessagesRising
+        expr: rate(openwa_messages_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages are failing"
+          description: "openwa_messages_failed_total is increasing over the last 5 minutes"
+
+      # Process memory growth (app-exported RSS; ~2GB example threshold)
+      - alert: HighProcessMemory
+        expr: openwa_process_resident_memory_bytes > 2e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High OpenWA process memory"
+          description: "RSS is {{ $value | humanize1024 }}B"
+
+      # Host memory pressure — EXTERNAL (node-exporter), not exported by OpenWA
+      - alert: HighHostMemoryUsage
+        expr: |
+          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)
+          / node_memory_MemTotal_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High host memory usage"
+          description: "Host memory usage is {{ $value | humanizePercentage }}"
 ```
 
 ### AlertManager Configuration
@@ -802,146 +802,109 @@ receivers:
 
 ### Health Check Endpoint
 
+All health endpoints are `@Public()` (no API key) and `@SkipThrottle()`, and live under the global
+`api` prefix. There is **no** `/health/detailed` endpoint.
+
+| Endpoint | Purpose | Body | Codes |
+|----------|---------|------|-------|
+| `GET /api/health` | Basic check | `{ status, timestamp, version }` (version from `package.json`) | 200 |
+| `GET /api/health/live` | Liveness (deliberately static — a transient dependency outage must not KILL the pod) | `{ status: 'ok' }` | 200 |
+| `GET /api/health/ready` | Readiness — probes **both** databases (`main` + `data`, `SELECT 1`, 3s timeout each) and reports 503 while draining (graceful shutdown) | `{ status, details: { mainDatabase, dataDatabase } }` | 200 / 503 |
+
 ```typescript
 // health/health.controller.ts
 @Controller('health')
+@Public()       // no API key required
+@SkipThrottle()
 export class HealthController {
   @Get()
-  async basic(): Promise<{ status: string; timestamp: string }> {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-    };
+  check(): { status: string; timestamp: string; version: string } {
+    return { status: 'ok', timestamp: new Date().toISOString(), version: APP_VERSION };
   }
 
-  // Requires API key (protected via auth guard/middleware)
-  @Get('detailed')
-  async detailed(): Promise<HealthCheckResult> {
-    return {
-      status: 'ok',
-      version: process.env.npm_package_version,
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: await this.checkDatabase(),
-        redis: await this.checkRedis(),
-        sessions: await this.getSessionStats(),
-      },
-    };
+  @Get('live')
+  liveness(): { status: string } {
+    return { status: 'ok' };
+  }
+
+  @Get('ready')
+  async readiness(): Promise<HealthCheckResult> {
+    // 503 while draining so the LB stops routing before teardown.
+    if (this.shutdownService.isShuttingDown()) {
+      throw new ServiceUnavailableException({ status: 'error', details: { shutdown: { status: 'draining' } } });
+    }
+    const [main, data] = await Promise.all([
+      this.probeDatabase(this.mainDataSource),
+      this.probeDatabase(this.dataDataSource),
+    ]);
+    const details = { mainDatabase: { status: main }, dataDatabase: { status: data } };
+    if (main === 'down' || data === 'down') {
+      throw new ServiceUnavailableException({ status: 'error', details });
+    }
+    return { status: 'ok', details };
   }
 }
 ```
 
 ### Prometheus Metrics Implementation
 
-```typescript
-// metrics/metrics.service.ts
-import { Injectable } from '@nestjs/common';
-import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from 'prom-client';
+The metrics surface is small, so OpenWA emits Prometheus text exposition format (v0.0.4) **by hand** —
+there is **no `prom-client` dependency** and **no `collectDefaultMetrics`**. `MetricsService` reads an
+aggregate overview from `StatsService` plus `process.memoryUsage()`, memoizes the rendered text for a
+short TTL (~5s, so back-to-back scrapes don't repeat the DB scan), and exposes it at
+`GET /api/metrics`.
 
+Access is **disabled by default**: the endpoint returns **404** unless `METRICS_TOKEN` is set. When
+set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSafeEqual`); a missing or
+wrong token returns 401. The token is **separate** from the API key — the route is `@Public()` (skips
+the API-key guard) and `@SkipThrottle()`.
+
+```typescript
+// metrics/metrics.service.ts (dependency-free; emits text v0.0.4 by hand)
 @Injectable()
 export class MetricsService {
-  private readonly registry: Registry;
-  
-  // Counters
-  readonly httpRequestsTotal: Counter;
-  readonly messagesSentTotal: Counter;
-  readonly webhookDeliveriesTotal: Counter;
-  
-  // Gauges
-  readonly activeSessions: Gauge;
-  readonly connectedSessions: Gauge;
-  readonly queueSize: Gauge;
-  
-  // Histograms
-  readonly httpRequestDuration: Histogram;
-  readonly messageSendDuration: Histogram;
-  readonly webhookDeliveryDuration: Histogram;
+  constructor(
+    private readonly config: ConfigService,
+    private readonly statsService: StatsService,
+  ) {}
 
-  constructor() {
-    this.registry = new Registry();
-    collectDefaultMetrics({ register: this.registry });
-
-    // HTTP Metrics
-    this.httpRequestsTotal = new Counter({
-      name: 'http_requests_total',
-      help: 'Total HTTP requests',
-      labelNames: ['method', 'path', 'status'],
-      registers: [this.registry],
-    });
-
-    this.httpRequestDuration = new Histogram({
-      name: 'http_request_duration_seconds',
-      help: 'HTTP request duration in seconds',
-      labelNames: ['method', 'path'],
-      buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
-      registers: [this.registry],
-    });
-
-    // Message Metrics
-    this.messagesSentTotal = new Counter({
-      name: 'messages_sent_total',
-      help: 'Total messages sent',
-      labelNames: ['session_id', 'type', 'status'],
-      registers: [this.registry],
-    });
-
-    this.messageSendDuration = new Histogram({
-      name: 'message_send_duration_seconds',
-      help: 'Message send duration in seconds',
-      labelNames: ['session_id', 'type'],
-      buckets: [0.1, 0.5, 1, 2, 5, 10],
-      registers: [this.registry],
-    });
-
-    // Session Metrics
-    this.activeSessions = new Gauge({
-      name: 'active_sessions_total',
-      help: 'Number of active sessions',
-      registers: [this.registry],
-    });
-
-    this.connectedSessions = new Gauge({
-      name: 'connected_sessions_total',
-      help: 'Number of connected sessions',
-      registers: [this.registry],
-    });
-
-    // Webhook Metrics
-    this.webhookDeliveriesTotal = new Counter({
-      name: 'webhook_deliveries_total',
-      help: 'Total webhook deliveries',
-      labelNames: ['event', 'status'],
-      registers: [this.registry],
-    });
-
-    this.webhookDeliveryDuration = new Histogram({
-      name: 'webhook_delivery_duration_seconds',
-      help: 'Webhook delivery duration in seconds',
-      labelNames: ['event'],
-      buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
-      registers: [this.registry],
-    });
-
-    // Queue Metrics
-    this.queueSize = new Gauge({
-      name: 'message_queue_size',
-      help: 'Current size of message queue',
-      labelNames: ['queue_name'],
-      registers: [this.registry],
-    });
-  }
-
-  getMetrics(): Promise<string> {
-    return this.registry.metrics();
+  async render(): Promise<string> {
+    const overview = await this.statsService.getOverview();
+    const mem = process.memoryUsage();
+    const lines: string[] = [];
+    // ... gauge() helper pushes `# HELP` / `# TYPE` / value lines ...
+    gauge('openwa_up', '...', 1);
+    gauge('openwa_process_uptime_seconds', '...', Math.round(process.uptime()));
+    gauge('openwa_process_resident_memory_bytes', '...', mem.rss);
+    gauge('openwa_process_heap_used_bytes', '...', mem.heapUsed);
+    gauge('openwa_sessions_total', '...', overview.sessions.total);
+    gauge('openwa_sessions_active', '...', overview.sessions.active);
+    // openwa_sessions{status="..."} — one line per status
+    // openwa_messages_total{direction="outgoing"|"incoming"}
+    // openwa_messages_failed_total
+    return lines.join('\n') + '\n';
   }
 }
 ```
 
+**Exported metric names** (the complete set — nothing else is emitted):
+
+| Metric | Type | Labels | Meaning |
+|--------|------|--------|---------|
+| `openwa_up` | gauge | — | Always `1` when scraped |
+| `openwa_process_uptime_seconds` | gauge | — | Process uptime |
+| `openwa_process_resident_memory_bytes` | gauge | — | RSS |
+| `openwa_process_heap_used_bytes` | gauge | — | V8 heap used |
+| `openwa_sessions_total` | gauge | — | Configured sessions |
+| `openwa_sessions_active` | gauge | — | READY (active) sessions |
+| `openwa_sessions` | gauge | `status` | Session count per status |
+| `openwa_messages_total` | counter | `direction` (`incoming`/`outgoing`) | Messages by direction |
+| `openwa_messages_failed_total` | counter | — | Messages in FAILED state |
+
 ### Grafana Dashboard Definition
 
 ```json
-// monitoring/grafana/dashboards/openwa.json
+// monitoring/grafana/dashboards/openwa.json — panels use the openwa_* metrics OpenWA exports
 {
   "title": "OpenWA Dashboard",
   "uid": "openwa-main",
@@ -951,7 +914,7 @@ export class MetricsService {
       "type": "stat",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
       "targets": [
-        { "expr": "active_sessions_total" }
+        { "expr": "openwa_sessions_active" }
       ]
     },
     {
@@ -959,61 +922,48 @@ export class MetricsService {
       "type": "stat",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
       "targets": [
-        { "expr": "sum(increase(messages_sent_total[24h]))" }
+        { "expr": "increase(openwa_messages_total{direction=\"outgoing\"}[24h])" }
       ]
     },
     {
-      "title": "Error Rate",
-      "type": "gauge",
+      "title": "Failed Messages",
+      "type": "stat",
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
       "targets": [
-        { 
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100"
-        }
+        { "expr": "openwa_messages_failed_total" }
       ]
     },
     {
-      "title": "Request Rate",
+      "title": "Sessions by Status",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
       "targets": [
-        { "expr": "sum(rate(http_requests_total[5m])) by (status)", "legendFormat": "{{status}}" }
+        { "expr": "openwa_sessions", "legendFormat": "{{status}}" }
       ]
     },
     {
-      "title": "Response Time (p95)",
+      "title": "Message Rate by Direction",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
       "targets": [
-        { 
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))"
-        }
+        { "expr": "rate(openwa_messages_total[5m])", "legendFormat": "{{direction}}" }
       ]
     },
     {
-      "title": "Messages by Type",
-      "type": "piechart",
-      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 8 },
-      "targets": [
-        { "expr": "sum(messages_sent_total) by (type)", "legendFormat": "{{type}}" }
-      ]
-    },
-    {
-      "title": "Webhook Delivery Success Rate",
+      "title": "Process Memory",
       "type": "timeseries",
-      "gridPos": { "x": 8, "y": 12, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "targets": [
-        { 
-          "expr": "sum(rate(webhook_deliveries_total{status=\"success\"}[5m])) / sum(rate(webhook_deliveries_total[5m])) * 100"
-        }
+        { "expr": "openwa_process_resident_memory_bytes / 1024 / 1024", "legendFormat": "RSS (MB)" },
+        { "expr": "openwa_process_heap_used_bytes / 1024 / 1024", "legendFormat": "Heap used (MB)" }
       ]
     },
     {
-      "title": "Memory Usage",
-      "type": "timeseries",
-      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
+      "title": "Uptime",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
       "targets": [
-        { "expr": "process_resident_memory_bytes / 1024 / 1024", "legendFormat": "Memory (MB)" }
+        { "expr": "openwa_process_uptime_seconds" }
       ]
     }
   ]
@@ -1082,17 +1032,25 @@ this.logger.log('Message sent', {
 
 ### Key Metrics to Monitor
 
-| Category | Metric | Description | Alert Threshold |
-|----------|--------|-------------|-----------------|
-| **API** | `http_requests_total` | Request count by status | Error rate > 5% |
-| **API** | `http_request_duration_seconds` | Request latency | p95 > 1s |
-| **Sessions** | `active_sessions_total` | Total sessions | Near limit |
-| **Sessions** | `connected_sessions_total` | Connected sessions | < active |
-| **Messages** | `messages_sent_total` | Messages sent | Sudden drop |
-| **Messages** | `message_send_duration_seconds` | Send latency | p95 > 5s |
-| **Webhooks** | `webhook_deliveries_total` | Delivery status | Failure > 10% |
-| **System** | `process_resident_memory_bytes` | Memory usage | > 80% |
-| **System** | `nodejs_eventloop_lag_seconds` | Event loop lag | > 100ms |
+These are the metrics OpenWA actually exports at `GET /api/metrics`:
+
+| Category | Metric | Description | Alert Idea |
+|----------|--------|-------------|------------|
+| **Liveness** | `openwa_up` | Always `1` when scraped (absence/scrape-failure = down) | Target down |
+| **Sessions** | `openwa_sessions_total` | Configured sessions | Near your expected session count |
+| **Sessions** | `openwa_sessions_active` | READY (active) sessions | Drops below expected |
+| **Sessions** | `openwa_sessions{status="..."}` | Per-status counts (e.g. `disconnected`, `failed`) | `disconnected`/`failed` > 0 |
+| **Messages** | `openwa_messages_total{direction="outgoing"}` | Outgoing messages | Sudden drop |
+| **Messages** | `openwa_messages_total{direction="incoming"}` | Incoming messages | Sudden drop |
+| **Messages** | `openwa_messages_failed_total` | Messages in FAILED state | Rising rate |
+| **System** | `openwa_process_resident_memory_bytes` | RSS | Growth / near limit |
+| **System** | `openwa_process_heap_used_bytes` | V8 heap used | Growth |
+| **System** | `openwa_process_uptime_seconds` | Process uptime | Frequent restarts (resets) |
+
+> OpenWA does **not** expose request-rate, latency-histogram, webhook, queue, or Node default
+> (`nodejs_*`) metrics. For host/container-level signals (CPU, memory pressure, event-loop), scrape
+> external exporters: `up` and `container_memory_usage_bytes` come from blackbox/cAdvisor, and
+> `node_*` from node-exporter — not from the app.
 
 
 ## 10.7 Backup & Recovery
@@ -1175,6 +1133,11 @@ echo "Restore completed"
 
 ### Vertical Scaling
 
+OpenWA scales **vertically** — add CPU/RAM to a single instance. The table below is **unbenchmarked
+starting guidance**, not measured figures; actual usage depends heavily on engine choice
+(whatsapp-web.js spawns a Chromium per session; Baileys is far lighter), message volume, and media.
+Size up from your own monitoring.
+
 | Sessions | RAM | CPU | Storage |
 |----------|-----|-----|---------|
 | 1-5 | 2GB | 2 cores | 20GB |
@@ -1182,14 +1145,13 @@ echo "Restore completed"
 | 10-20 | 8GB | 8 cores | 100GB |
 | 20+ | 16GB+ | 16+ cores | 200GB+ |
 
-### Horizontal Scaling Checklist
+### Horizontal Scaling
 
-- [ ] Shared PostgreSQL database
-- [ ] Redis for session affinity
-- [ ] Shared file storage (S3/NFS)
-- [ ] Load balancer with sticky sessions
-- [ ] Health check endpoints
-- [ ] Graceful shutdown handling
+**Not currently supported.** OpenWA is a single-process application with in-memory engine state, so
+multiple replicas against a shared session volume corrupt WhatsApp auth. Run exactly **one** API
+instance per session-data volume (`replicas: 1`). The DB-backed session registry / node-claim design
+that would be required to scale out is documented — as a future design sketch, not a shipped feature —
+in [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md).
 ---
 
 <div align="center">

@@ -519,11 +519,11 @@ groups:
 
 ### Health Check Endpoints
 
-| Endpoint               | Purpose                         |
-| ---------------------- | ------------------------------- |
-| `/api/health`          | Liveness probe                  |
-| `/api/health/ready`    | Readiness probe                 |
-| `/api/health/detailed` | Full status with DB/Redis check |
+| Endpoint            | Purpose                                                          |
+| ------------------- | ---------------------------------------------------------------- |
+| `/api/health`       | Basic health check — returns `status`, `timestamp`, `version`    |
+| `/api/health/live`  | Liveness probe (static `ok`; reflects process liveness only)     |
+| `/api/health/ready` | Readiness probe — verifies the main + data databases respond (returns 503 while draining or if a DB is down) |
 ---
 
 <div align="center">
