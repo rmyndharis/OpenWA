@@ -1205,6 +1205,28 @@ describe('SessionService', () => {
 
       expect((webhookService.dispatch as jest.Mock).mock.calls.filter(c => c[1] === 'message.received')).toHaveLength(1);
     });
+
+    // ── persistHistoryMessages collision tolerance ───────────────────
+    describe('persistHistoryMessages collision tolerance', () => {
+      it('uses an insert-or-ignore bulk insert so a colliding history row cannot abort the batch', async () => {
+        const callbacks = await startAndCaptureCallbacks();
+        const execute = jest.fn().mockResolvedValue({ identifiers: [] });
+        const qb = { insert: jest.fn().mockReturnThis(), values: jest.fn().mockReturnThis(), orIgnore: jest.fn().mockReturnThis(), execute };
+        (messageRepository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(qb);
+        (messageRepository.find as jest.Mock).mockResolvedValue([]); // nothing pre-seen
+        (messageRepository.create as jest.Mock).mockImplementation((data: Record<string, unknown>) => ({ ...data }));
+        (messageRepository.save as jest.Mock).mockClear();
+
+        callbacks.onHistoryMessages?.([
+          { id: 'h1', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'old', type: 'text', timestamp: 1, fromMe: false, isGroup: false },
+        ]);
+        await flush();
+
+        expect(qb.orIgnore).toHaveBeenCalled();
+        expect(execute).toHaveBeenCalled();
+        expect(messageRepository.save).not.toHaveBeenCalled(); // no longer the throwing path
+      });
+    });
   });
 
   // ── stop ──────────────────────────────────────────────────────────

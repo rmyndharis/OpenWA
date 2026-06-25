@@ -486,7 +486,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           return row;
         });
       if (rows.length) {
-        await this.messageRepository.save(rows);
+        // Insert-or-ignore: a live onMessage insert can land between the `seen` SELECT above and this
+        // write, colliding on UNIQUE(sessionId, waMessageId). orIgnore skips the collision instead of
+        // throwing and aborting the whole batch (history is best-effort, persist-never-dispatch).
+        await this.messageRepository.createQueryBuilder().insert().values(rows).orIgnore().execute();
         inserted += rows.length;
       }
     }
