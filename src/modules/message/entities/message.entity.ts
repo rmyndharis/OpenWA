@@ -9,7 +9,13 @@ import { jsonColumnType } from '../../../common/utils/column-types';
  */
 export const bigintToNumberTransformer: ValueTransformer = {
   to: (value: number | null | undefined): number | null | undefined => value,
-  from: (value: string | number | null): number | null => (value == null ? null : Number(value)),
+  from: (value: string | number | null): number | null => {
+    if (value == null) return null;
+    const n = Number(value);
+    // Defensive: a bigint column can only return null or a numeric value, so NaN is unreachable —
+    // but coerce a hypothetical non-numeric read to null rather than leak NaN into the contract.
+    return Number.isNaN(n) ? null : n;
+  },
 };
 
 export enum MessageDirection {

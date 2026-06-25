@@ -21,4 +21,9 @@ describe('bigintToNumberTransformer (message.timestamp)', () => {
     expect(bigintToNumberTransformer.to(1700000000)).toBe(1700000000);
     expect(bigintToNumberTransformer.to(null)).toBeNull();
   });
+
+  it('coerces a non-numeric read to null rather than leaking NaN (defensive)', () => {
+    // A bigint column cannot actually return this; the guard keeps NaN out of the number contract.
+    expect(bigintToNumberTransformer.from('not-a-number')).toBeNull();
+  });
 });
