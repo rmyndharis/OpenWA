@@ -663,7 +663,7 @@ Two escape hatches sit on the client itself:
 | Method | Signature | Description |
 | --- | --- | --- |
 | `auth` | `auth(): array` | `POST /api/auth/validate` — validate the configured key and resolve its role. |
-| `request` | `request(string $method, string $path, array $query = [], $body = null)` | Raw request against any path (advanced use); returns decoded JSON or `null` for empty/204. |
+| `request` | `request(string $method, string $path, array $query = [], mixed $body = null): mixed` | Raw request against any path (advanced use); returns decoded JSON or `null` for empty/204. |
 
 ### Client Configuration
 

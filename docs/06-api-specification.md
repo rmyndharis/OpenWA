@@ -3607,7 +3607,7 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
     "messages": { "pending": 0, "completed": 0, "failed": 0 },
     "webhooks": { "pending": 0, "completed": 0, "failed": 0 }
   },
-  "storage": { "type": "local", "path": "./uploads" },
+  "storage": { "type": "local", "path": "./data/media" },
   "engine": {
     "type": "whatsapp-web.js",
     "headless": true,
