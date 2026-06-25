@@ -550,26 +550,27 @@ vars are removed. Ships with a migration guide.
 
 #### Incremental themes — SDK, Developer Tools & Observability
 
-Delivered additively whenever ready (so they land in `0.2.x`/`0.3.x` per SemVer, not gated to one version):
+Delivered additively whenever ready, per SemVer (not gated to one version). The client SDKs and Prometheus metrics have **shipped** (v0.7.x); the rest remain open.
 
-| Feature                | Priority | Description                     |
-| ---------------------- | -------- | ------------------------------- |
-| JavaScript/Node.js SDK | P1       | Official client library         |
-| Python SDK             | P2       | Python client library           |
-| Docs Site              | P1       | Documentation website           |
-| Postman Collection     | P1       | Ready-to-use API collection     |
-| Video Tutorials        | P2       | Getting started video series    |
-| Example Projects       | P1       | Real-world integration examples |
+| Feature                | Priority | Status | Description                     |
+| ---------------------- | -------- | ------ | ------------------------------- |
+| JavaScript/Node.js SDK | P1       | ✅ Shipped (`@rmyndharis/openwa`) | Official client library |
+| Python SDK             | P2       | ✅ Shipped (`rmyndharis-openwa`) | Python client library |
+| PHP SDK                | P2       | ✅ Shipped (`rmyndharis/openwa`) | PHP client library |
+| Postman Collection     | P1       | ◐ cURL collection (doc 07); Postman export TBD | Ready-to-use API collection |
+| Docs Site              | P1       | ☐ Open | Documentation website |
+| Video Tutorials        | P2       | ☐ Open | Getting started video series    |
+| Example Projects       | P1       | ◐ A few under `docs/examples/` | Real-world integration examples |
 
 **Performance & Observability**
 
-| Feature                | Priority | Description                      |
-| ---------------------- | -------- | -------------------------------- |
-| Prometheus Metrics     | P1       | /metrics endpoint for monitoring |
-| Grafana Dashboard      | P2       | Pre-built monitoring dashboard   |
-| OpenTelemetry Tracing  | P2       | Distributed tracing support      |
-| Performance Benchmarks | P1       | Documented performance metrics   |
-| Memory Optimization    | P1       | Reduced memory per session       |
+| Feature                | Priority | Status | Description                      |
+| ---------------------- | -------- | ------ | -------------------------------- |
+| Prometheus Metrics     | P1       | ✅ Shipped (`GET /api/metrics`, `openwa_*`) | /metrics endpoint for monitoring |
+| Grafana Dashboard      | P2       | ☐ Open | Pre-built monitoring dashboard   |
+| OpenTelemetry Tracing  | P2       | ☐ Open | Distributed tracing support      |
+| Performance Benchmarks | P1       | ☐ Open | Documented performance metrics   |
+| Memory Optimization    | P1       | ☐ Open | Reduced memory per session       |
 
 ### v1.0.0 - Enterprise Ready
 
