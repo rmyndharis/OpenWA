@@ -57,6 +57,7 @@ describe('SessionService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
       save: jest.fn().mockResolvedValue(undefined),
+      insert: jest.fn().mockResolvedValue(undefined),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
@@ -607,7 +608,7 @@ describe('SessionService', () => {
     it('ignores onMessage from a superseded engine (no persist, no webhook)', async () => {
       const callbacks = await startAndCapture();
       enginesOf().set('sess-uuid-1', { marker: 'engine-B' });
-      (messageRepository.save as jest.Mock).mockClear();
+      (messageRepository.insert as jest.Mock).mockClear();
       (webhookService.dispatch as jest.Mock).mockClear();
 
       callbacks.onMessage?.({
@@ -623,7 +624,7 @@ describe('SessionService', () => {
       });
       await new Promise(resolve => setImmediate(resolve));
 
-      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(messageRepository.insert).not.toHaveBeenCalled();
       expect(webhookService.dispatch).not.toHaveBeenCalled();
     });
   });
@@ -1173,6 +1174,36 @@ describe('SessionService', () => {
         c => (c[2] as { status?: string }).status === SessionStatus.QR_READY,
       );
       expect(qrStatus).toHaveLength(1);
+    });
+
+    it('persists and dispatches message.received only once when the engine re-fires the same message', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockReset();
+      (webhookService.dispatch as jest.Mock).mockClear();
+      (messageRepository.insert as jest.Mock)
+        .mockResolvedValueOnce(undefined) // first delivery: new row
+        .mockRejectedValueOnce({ driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE', message: 'UNIQUE constraint failed' } }); // re-fire
+
+      const msg = { id: 'wa-1', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'hi', type: 'text', timestamp: 1, fromMe: false, isGroup: false };
+      callbacks.onMessage?.(msg);
+      await flush();
+      callbacks.onMessage?.(msg); // re-fired engine event
+      await flush();
+
+      expect(messageRepository.insert).toHaveBeenCalledTimes(2);
+      expect((webhookService.dispatch as jest.Mock).mock.calls.filter(c => c[1] === 'message.received')).toHaveLength(1);
+    });
+
+    it('still dispatches message.received when the insert fails with a non-constraint error (fail-open)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockReset();
+      (webhookService.dispatch as jest.Mock).mockClear();
+      (messageRepository.insert as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+
+      callbacks.onMessage?.({ id: 'wa-2', from: 'peer@c.us', to: 'me@c.us', chatId: 'peer@c.us', body: 'hi', type: 'text', timestamp: 1, fromMe: false, isGroup: false });
+      await flush();
+
+      expect((webhookService.dispatch as jest.Mock).mock.calls.filter(c => c[1] === 'message.received')).toHaveLength(1);
     });
   });
 

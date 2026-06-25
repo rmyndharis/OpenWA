@@ -14,6 +14,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { paginate, ListOptions } from '../../common/utils/paginate';
+import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -643,9 +644,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
-            void this.messageRepository.save(dbMessage).catch(err => {
-              this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
-            });
+            // De-duplicate at the source: the engine can re-fire `message` for one inbound message
+            // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
+            // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
+            // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
+            // message is never dropped by a transient DB failure.
+            let isNewMessage = true;
+            try {
+              await this.messageRepository.insert(dbMessage);
+            } catch (err) {
+              if (isUniqueConstraintError(err)) {
+                isNewMessage = false;
+              } else {
+                this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+              }
+            }
+            if (!isNewMessage) {
+              return; // duplicate re-fire — the original already persisted and dispatched
+            }
 
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);
