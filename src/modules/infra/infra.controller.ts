@@ -237,7 +237,9 @@ export class InfraController {
     const redisConnected = await this.cacheService.isAvailable();
 
     const storageType = this.configService.get<'local' | 's3'>('storage.type', 'local');
-    const storagePath = this.configService.get<string>('storage.path', './uploads');
+    // Read the key StorageService actually uses (`storage.localPath`, default `./data/media`).
+    // The old `storage.path` key never existed, so status always reported the `./uploads` fallback.
+    const storagePath = this.configService.get<string>('storage.localPath', './data/media');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
     // configuration.ts nests these under engine.puppeteer.{headless,args}; the old flat

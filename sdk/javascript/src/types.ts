@@ -87,7 +87,7 @@ export interface SessionStatsOverview {
 /** Returned by every send operation. */
 export interface MessageResponse {
   messageId: string;
-  /** Unix timestamp in milliseconds. */
+  /** Unix timestamp in seconds. */
   timestamp: number;
 }
 
@@ -191,7 +191,7 @@ export interface MessageRecord {
   body?: string | null;
   type: string;
   direction: MessageDirection;
-  /** Unix timestamp in milliseconds. */
+  /** Unix timestamp in seconds. */
   timestamp?: number | null;
   metadata?: Record<string, unknown> | null;
   status: DeliveryStatus;

@@ -618,6 +618,39 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
   });
 });
 
+describe('InfraController.getStatus storage (reads the real storage.localPath key)', () => {
+  const buildController = (map: Record<string, unknown>) => {
+    const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
+    const cache = { isAvailable: () => Promise.resolve(false) };
+    const ds = { isInitialized: true };
+    return new InfraController(
+      config as never,
+      ds as never,
+      ds as never,
+      {} as never,
+      {} as never,
+      cache as never,
+      {} as never,
+      {} as never,
+    );
+  };
+
+  it('reports the configured storage.localPath, not the ./uploads fallback', async () => {
+    // The bug: status read the non-existent `storage.path` key, so it always reported the
+    // `./uploads` fallback instead of the real path StorageService uses (`storage.localPath`).
+    const status = await buildController({
+      'storage.type': 'local',
+      'storage.localPath': '/srv/openwa/media',
+    }).getStatus();
+    expect(status.storage.path).toBe('/srv/openwa/media');
+  });
+
+  it('falls back to ./data/media (matching StorageService) when storage.localPath is unset', async () => {
+    const status = await buildController({ 'storage.type': 'local' }).getStatus();
+    expect(status.storage.path).toBe('./data/media');
+  });
+});
+
 describe('InfraController.exportStorage keeps the export import-able and sweeps it', () => {
   function buildController(storage: Partial<{ createExportStream: jest.Mock }>) {
     return new InfraController(

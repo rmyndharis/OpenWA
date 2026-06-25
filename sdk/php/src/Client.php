@@ -118,7 +118,7 @@ class Client
      * @param mixed|null          $body   JSON-serializable request body.
      * @return mixed Decoded JSON, or null for empty/204 responses.
      */
-    public function request(string $method, string $path, array $query = [], $body = null)
+    public function request(string $method, string $path, array $query = [], mixed $body = null): mixed
     {
         return $this->http->request($method, $path, $query, $body);
     }
