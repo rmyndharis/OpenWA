@@ -116,7 +116,10 @@ class HttpExecutor
         }
 
         $status = $response->getStatusCode();
-        if ($status >= 400) {
+        // Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed (so
+        // the API key is never re-sent to the target), making an unfollowed 3xx unusable rather than
+        // a success. Matches the JS (`!res.ok`) and Python (`>= 300`) transports.
+        if ($status >= 300) {
             throw $this->buildApiException($response, $method, $path);
         }
 

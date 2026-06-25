@@ -64,10 +64,13 @@ class TestClientCore:
         assert result == {"ok": True}
         assert "a=1" in backend.last_call.url
 
-    def test_does_not_follow_redirects(self):
+    def test_treats_unfollowed_redirect_as_error(self):
         import httpx
 
-        def handler(_req: httpx.Request) -> httpx.Response:
+        calls: list[httpx.URL] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            calls.append(req.url)
             return httpx.Response(
                 302,
                 headers={"location": "http://evil.example/x", "content-type": "application/json"},
@@ -75,8 +78,11 @@ class TestClientCore:
             )
 
         client = OpenWAClient(base_url="http://x", api_key="k", transport=httpx.MockTransport(handler))
-        # A redirect is NOT followed (which would re-send X-API-Key); the 3xx body is returned.
-        assert client.sessions.list() == {"redirected": True}
+        # A redirect is NOT followed (which would re-send X-API-Key to the target). An unfollowed 3xx
+        # is not a usable response, so it surfaces as an API error — matching the JS transport.
+        with pytest.raises(OpenWAApiError):
+            client.sessions.list()
+        assert len(calls) == 1  # the redirect target was never requested
 
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])

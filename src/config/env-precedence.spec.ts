@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
-import { clearBlankEnv } from './env-precedence';
+import { clearBlankEnv, BLANK_SHADOWED_ENV_KEYS } from './env-precedence';
 
 describe('clearBlankEnv', () => {
   it('deletes a key whose value is empty or whitespace-only', () => {
@@ -54,5 +54,48 @@ describe('engine-selection env precedence (ENGINE_TYPE)', () => {
     clearBlankEnv(process.env, [KEY]);
     dotenv.config({ path: genPath, override: false });
     expect(process.env[KEY]).toBe('whatsapp-web.js');
+  });
+});
+
+describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manages)', () => {
+  const withGenerated = (line: string, run: (genPath: string) => void): void => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-env-pw-'));
+    try {
+      const genPath = path.join(dir, '.env.generated');
+      fs.writeFileSync(genPath, `${line}\n`);
+      run(genPath);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const KEY = 'DATABASE_PASSWORD';
+  let saved: string | undefined;
+  beforeEach(() => (saved = process.env[KEY]));
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY];
+    else process.env[KEY] = saved;
+  });
+
+  it('covers DATABASE_PASSWORD (its compose forward renders blank and the dashboard saves it)', () => {
+    expect(BLANK_SHADOWED_ENV_KEYS).toContain('ENGINE_TYPE');
+    expect(BLANK_SHADOWED_ENV_KEYS).toContain('DATABASE_PASSWORD');
+  });
+
+  it('lets .env.generated supply the password when the forwarded DATABASE_PASSWORD is blank', () => {
+    withGenerated('DATABASE_PASSWORD=s3cret', genPath => {
+      process.env[KEY] = ''; // compose `${DATABASE_PASSWORD:-}` with nothing set on the host
+      clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+      dotenv.config({ path: genPath, override: false });
+      expect(process.env[KEY]).toBe('s3cret');
+    });
+  });
+
+  it('keeps a real host DATABASE_PASSWORD and ignores the .env.generated value', () => {
+    withGenerated('DATABASE_PASSWORD=from-file', genPath => {
+      process.env[KEY] = 'from-host';
+      clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+      dotenv.config({ path: genPath, override: false });
+      expect(process.env[KEY]).toBe('from-host');
+    });
   });
 });

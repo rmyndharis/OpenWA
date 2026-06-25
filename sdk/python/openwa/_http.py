@@ -102,7 +102,10 @@ class HttpExecutor:
             res = self._client.request(method, url, json=body if body is not None else None)
         except httpx.TimeoutException as e:
             raise OpenWATimeoutError(self._timeout) from e
-        if res.status_code >= 400:
+        # Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed
+        # (so the API key is never re-sent to the target), which makes an unfollowed 3xx unusable
+        # rather than a success. Matches the JS transport's `!res.ok`.
+        if res.status_code >= 300:
             context = f"{method} {path}"
             raise OpenWAApiError.from_response(res.status_code, res.text, context)
         if res.status_code == 204 or not res.content:

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OpenWA\Tests;
 
+use OpenWA\Exceptions\OpenWAApiException;
 use OpenWA\Exceptions\OpenWAAuthException;
 use OpenWA\Exceptions\OpenWANotFoundException;
 use OpenWA\Exceptions\OpenWATimeoutException;
@@ -77,16 +78,22 @@ class ClientTest extends TestCase
         $this->assertStringContainsString('/v1/api/sessions', $backend->lastCall()['path']);
     }
 
-    public function testDoesNotFollowRedirects(): void
+    public function testTreatsUnfollowedRedirectAsError(): void
     {
-        // A redirect must not be followed (which would re-send X-API-Key to the
-        // target origin). The 3xx body is returned and only one request is made.
+        // A redirect must not be followed (which would re-send X-API-Key to the target origin).
+        // An unfollowed 3xx is not a usable response, so it surfaces as an API error rather than a
+        // fake success — matching the JS and Python transports. Only one request is made.
         $backend = new MockBackend();
         $backend->on(302, ['redirected' => true], ['Location' => 'http://evil.example/x']);
         $backend->on(200, ['followed' => true]); // only reached if a redirect were followed
-        $result = $backend->makeClient()->sessions->list();
-        $this->assertCount(1, $backend->calls());
-        $this->assertSame(['redirected' => true], $result);
+        $threw = false;
+        try {
+            $backend->makeClient()->sessions->list();
+        } catch (OpenWAApiException $e) {
+            $threw = true;
+        }
+        $this->assertTrue($threw, 'an unfollowed 3xx must surface as an API error');
+        $this->assertCount(1, $backend->calls()); // the redirect target was never requested
     }
 
     public function test204DeleteSucceedsWithNoBody(): void

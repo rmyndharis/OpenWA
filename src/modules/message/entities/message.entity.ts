@@ -1,5 +1,16 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index, ValueTransformer } from 'typeorm';
 import { jsonColumnType } from '../../../common/utils/column-types';
+
+/**
+ * A `bigint` column reads back as a string on PostgreSQL (pg avoids >2^53 precision loss) but as a
+ * number on SQLite. WhatsApp epoch-seconds are far below 2^53, so coerce reads to a number for a
+ * consistent REST/SDK/MCP contract (entity, DTO, all three SDKs, and dashboard declare `number`).
+ * Writes pass through unchanged; null stays null.
+ */
+export const bigintToNumberTransformer: ValueTransformer = {
+  to: (value: number | null | undefined): number | null | undefined => value,
+  from: (value: string | number | null): number | null => (value == null ? null : Number(value)),
+};
 
 export enum MessageDirection {
   INCOMING = 'incoming',
@@ -52,7 +63,7 @@ export class Message {
   })
   direction: MessageDirection;
 
-  @Column({ type: 'bigint', nullable: true })
+  @Column({ type: 'bigint', nullable: true, transformer: bigintToNumberTransformer })
   timestamp: number;
 
   @Column({ type: jsonColumnType(), nullable: true })

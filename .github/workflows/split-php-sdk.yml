@@ -29,8 +29,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    name: PHP SDK tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/php
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - run: composer install --no-interaction --no-progress
+      - run: ./vendor/bin/phpunit
+
   split:
     name: Mirror sdk/php -> rmyndharis/openwa-php
+    # Never mirror an untested (red) SDK to Packagist dev-main.
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

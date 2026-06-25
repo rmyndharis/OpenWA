@@ -481,6 +481,26 @@ describe('SessionService', () => {
       expect(mockEngine.destroy).toHaveBeenCalled();
       expect(i.engines.has('sess-uuid-1')).toBe(false);
     });
+
+    it('still re-initializes when the old engine destroy() hangs (time-bounded teardown)', async () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        // A wedged Chromium: destroy() never resolves — the exact condition that triggers a reconnect.
+        const stuck = { destroy: jest.fn(() => new Promise<void>(() => undefined)) };
+        i.engines.set('sess-uuid-1', stuck);
+
+        const done = i.executeReconnect('sess-uuid-1', createMockSession(), reconnectState);
+        await jest.advanceTimersByTimeAsync(10_000); // teardown timeout elapses
+
+        // The hang no longer blocks reconnection: re-init proceeded instead of wedging forever.
+        expect(stuck.destroy).toHaveBeenCalledTimes(1);
+        expect(engineFactory.create).toHaveBeenCalled();
+        await done;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('engine onError', () => {

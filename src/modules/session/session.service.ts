@@ -989,10 +989,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
     try {
-      // Clean up old engine
+      // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
+      // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
+      // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
+      // (after 10s on a hang), so reconnection proceeds either way.
       const oldEngine = this.engines.get(id);
       if (oldEngine) {
-        await oldEngine.destroy();
+        await this.teardownEngineSafely(id, oldEngine, e => e.destroy(), 'destroy');
         this.engines.delete(id);
       }
 
@@ -1004,7 +1007,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (this.stoppingSessions.has(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
-          await resurrected.destroy();
+          await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
           this.engines.delete(id);
         }
         return;

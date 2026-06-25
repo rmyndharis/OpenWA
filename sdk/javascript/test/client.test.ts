@@ -54,6 +54,15 @@ describe('OpenWAClient', () => {
     expect(seenInit?.redirect).toBe('manual');
   });
 
+  it('treats an unfollowed redirect (3xx) as an error', async () => {
+    // Redirects are never followed, so a 3xx is not a usable response — it must throw, keeping the
+    // JS transport aligned with the Python and PHP SDKs (which now also error on >= 300).
+    const redirectingFetch: FetchLike = async () =>
+      new Response('{"redirected":true}', { status: 302, headers: { location: 'http://evil.example/x' } });
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: redirectingFetch });
+    await expect(c.sessions.list()).rejects.toThrow();
+  });
+
   it('percent-encodes path segments but keeps @ in JIDs readable', async () => {
     const t = new MockTransport().on('GET', /\/history$/, { body: [] });
     await client(t).messages.history('s', 'a@c.us');
