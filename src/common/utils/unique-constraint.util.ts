@@ -10,5 +10,6 @@ export function isUniqueConstraintError(err: unknown): boolean {
   const message = e.driverError?.message ?? e.message ?? '';
   if (code === '23505') return true; // PostgreSQL unique_violation
   if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) return true; // SQLite
+  if (code != null) return false; // a decisive non-unique code wins over a misleading message
   return /UNIQUE constraint failed/i.test(message); // SQLite fallback (message only)
 }

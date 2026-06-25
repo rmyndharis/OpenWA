@@ -23,4 +23,8 @@ describe('isUniqueConstraintError', () => {
     expect(isUniqueConstraintError(new Error('boom'))).toBe(false);
     expect(isUniqueConstraintError(null)).toBe(false);
   });
+
+  it('does not false-positive on a non-unique code whose message contains the unique phrase', () => {
+    expect(isUniqueConstraintError({ driverError: { code: '23503', message: 'UNIQUE constraint failed: x' } })).toBe(false);
+  });
 });
