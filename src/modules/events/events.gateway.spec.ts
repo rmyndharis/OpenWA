@@ -257,9 +257,7 @@ describe('event catalog ⇔ emitter invariants (drift guard)', () => {
     (gateway as unknown as { server: unknown }).server = { to: () => op };
 
     const proto = Object.getPrototypeOf(gateway) as object;
-    const emitMethods = Object.getOwnPropertyNames(proto).filter(
-      n => n.startsWith('emit') && n !== 'emitToRooms' && n !== 'emitWebhookStatus',
-    );
+    const emitMethods = Object.getOwnPropertyNames(proto).filter(n => n.startsWith('emit') && n !== 'emitToRooms');
     for (const name of emitMethods) {
       (gateway as unknown as Record<string, (...a: unknown[]) => void>)[name]('sess-1', {});
     }

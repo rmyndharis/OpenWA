@@ -88,7 +88,7 @@ QUEUE_ENABLED=false
 # Storage (Local filesystem)
 STORAGE_TYPE=local
 MINIO_BUILTIN=false
-STORAGE_PATH=./data/media
+STORAGE_LOCAL_PATH=./data/media
 
 # Docker Profiles: none (minimal setup)
 `;

@@ -4,18 +4,7 @@ import { Repository } from 'typeorm';
 import { Template } from './entities/template.entity';
 import { CreateTemplateDto, UpdateTemplateDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
-
-/** True for a UNIQUE-constraint violation across both the SQLite and PostgreSQL drivers. */
-function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; message?: string; driverError?: { code?: string } };
-  return (
-    e?.code === '23505' || // PostgreSQL unique_violation
-    e?.driverError?.code === '23505' ||
-    e?.code === 'SQLITE_CONSTRAINT' ||
-    e?.driverError?.code === 'SQLITE_CONSTRAINT' ||
-    (typeof e?.message === 'string' && /unique constraint/i.test(e.message))
-  );
-}
+import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 
 @Injectable()
 export class TemplateService {
@@ -40,7 +29,7 @@ export class TemplateService {
       this.logger.log('Template created', { sessionId, templateId: saved.id, name: saved.name });
       return saved;
     } catch (err) {
-      if (isUniqueViolation(err)) {
+      if (isUniqueConstraintError(err)) {
         throw new ConflictException(`A template named '${dto.name}' already exists for this session`);
       }
       throw err;
@@ -100,7 +89,7 @@ export class TemplateService {
     try {
       return await this.templateRepository.save(template);
     } catch (err) {
-      if (isUniqueViolation(err)) {
+      if (isUniqueConstraintError(err)) {
         throw new ConflictException(`A template named '${template.name}' already exists for this session`);
       }
       throw err;
