@@ -311,6 +311,13 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
 
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
 
+      // A plugin that subscribed hooks before its onLoad/onEnable threw would otherwise leave those
+      // registrations live: a later successful enable re-registers them, so each event then dispatches
+      // to the plugin once per failed attempt. Drop them here. Safe on this path only — an
+      // already-enabled plugin returns early above, so the catch only runs for an enable that never
+      // went live, which owns no hooks worth keeping. (Idempotent: no-ops when none were registered.)
+      this.hookManager.unregisterPlugin(pluginId);
+
       throw error;
     } finally {
       this.enabling.delete(pluginId);

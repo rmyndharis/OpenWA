@@ -75,7 +75,7 @@ import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { HookManager } from '../hooks';
 import { PluginStorageService } from './plugin-storage.service';
-import { IPlugin, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
+import { IPlugin, PluginContext, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
 
 describe('PluginLoaderService.registerBuiltInPlugin config', () => {
   function makeLoader(): PluginLoaderService {
@@ -370,5 +370,47 @@ describe('PluginLoaderService — graceful shutdown (onModuleDestroy)', () => {
     // The failing plugin's onDisable error didn't block the other from being disabled.
     expect(okDisable).toHaveBeenCalledTimes(1);
     expect(loader.getPlugin('ok-plg')?.status).toBe(PluginStatus.DISABLED);
+  });
+});
+
+describe('PluginLoaderService — enable-failure hook cleanup', () => {
+  let tmpDir: string;
+  let hooks: HookManager;
+  let loader: PluginLoaderService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-enfail-'));
+    const config = { get: (k: string) => (k === 'dataDir' ? tmpDir : undefined) } as unknown as ConfigService;
+    hooks = new HookManager();
+    loader = new PluginLoaderService(config, hooks, new PluginStorageService(config), {} as unknown as ModuleRef);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('does not leak hook registrations when an enable attempt fails, so a later enable does not double-dispatch', async () => {
+    let shouldThrow = true;
+    const instance = {
+      onEnable: (ctx: PluginContext): Promise<void> => {
+        // The plugin subscribes a hook, then its enable fails (e.g. a transient connect timeout).
+        ctx.registerHook('message:received', () => Promise.resolve({ continue: true }));
+        return shouldThrow ? Promise.reject(new Error('transient onEnable failure')) : Promise.resolve();
+      },
+    } as unknown as IPlugin;
+    loader.registerBuiltInPlugin(
+      { id: 'flaky-plg', name: 'Flaky', version: '1.0.0', type: PluginType.EXTENSION, main: 'index.js' },
+      instance,
+    );
+
+    // First enable fails AFTER the hook was registered → the registration must not survive.
+    await expect(loader.enablePlugin('flaky-plg')).rejects.toThrow(/transient/);
+    expect(loader.getPlugin('flaky-plg')?.status).toBe(PluginStatus.ERROR);
+
+    // Retry succeeds.
+    shouldThrow = false;
+    await loader.enablePlugin('flaky-plg');
+    expect(loader.getPlugin('flaky-plg')?.status).toBe(PluginStatus.ENABLED);
+
+    // Exactly one handler — the failed attempt left nothing behind. Without cleanup this is 2,
+    // and every message:received would dispatch to the plugin twice.
+    expect(hooks.getHookCount('message:received')).toBe(1);
   });
 });
