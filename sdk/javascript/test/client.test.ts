@@ -63,6 +63,17 @@ describe('OpenWAClient', () => {
     await expect(c.sessions.list()).rejects.toThrow();
   });
 
+  it('surfaces a real opaque unfollowed redirect (status 0) as a clear OpenWAApiError', async () => {
+    // With `redirect: 'manual'` the runtime returns an opaque response with status 0 (not a 3xx);
+    // this is the actual shape the no-redirect guard produces, and it must throw a clear error.
+    const opaqueRedirectFetch: FetchLike = async () => Response.error();
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', fetch: opaqueRedirectFetch });
+    const err = await c.sessions.list().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OpenWAApiError);
+    expect((err as OpenWAApiError).status).toBe(0);
+    expect((err as OpenWAApiError).message).toMatch(/redirect/i);
+  });
+
   it('percent-encodes path segments but keeps @ in JIDs readable', async () => {
     const t = new MockTransport().on('GET', /\/history$/, { body: [] });
     await client(t).messages.history('s', 'a@c.us');
@@ -158,6 +169,20 @@ describe('OpenWAClient', () => {
     });
     await c.sessions.list();
     expect(t.lastCall!.headers['x-api-key']).toBe('REAL');
+    expect(t.lastCall!.headers['x-trace']).toBe('keep');
+  });
+
+  it('keeps the JSON Content-Type winning over a defaultHeaders override', async () => {
+    const t = new MockTransport().on('GET', '/api/sessions', { body: [] });
+    const c = new OpenWAClient({
+      baseUrl: 'http://x',
+      apiKey: 'k',
+      defaultHeaders: { 'Content-Type': 'text/plain', 'X-Trace': 'keep' },
+      fetch: t.asFetch(),
+    });
+    await c.sessions.list();
+    // JSON wins (matches the Python/PHP SDKs), but an unrelated default header is still preserved.
+    expect(t.lastCall!.headers['content-type']).toBe('application/json');
     expect(t.lastCall!.headers['x-trace']).toBe('keep');
   });
 });

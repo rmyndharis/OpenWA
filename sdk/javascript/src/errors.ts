@@ -41,6 +41,16 @@ export class OpenWAApiError extends OpenWAError {
 
   /** Build an {@link OpenWAApiError} from a fetch Response, awaiting its body. */
   static async fromResponse(res: Response, context: string): Promise<OpenWAApiError> {
+    // An opaque unfollowed redirect (we set `redirect: 'manual'`) surfaces as status 0, not a 3xx.
+    // Give it a clear message instead of "OpenWA API 0": the redirect was deliberately not followed
+    // so the API key is never re-sent to the redirect target.
+    if (res.status === 0) {
+      return new OpenWAApiError(
+        `Unexpected redirect (not followed; the API key is never re-sent to a redirect target) — ${context}`,
+        0,
+        undefined,
+      );
+    }
     let body: unknown = undefined;
     const text = await res.text().catch(() => '');
     if (text) {

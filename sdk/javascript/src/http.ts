@@ -82,10 +82,13 @@ export async function request<T>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  // Auth and JSON content-type WIN over caller-supplied defaults/per-request headers — the SDK only
+  // ever sends a JSON body, and this matches the Python and PHP SDKs (which force JSON) and the
+  // documented "JSON headers win" contract. Put them last so a defaultHeaders Content-Type can't clobber.
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...config.defaultHeaders,
     ...options.headers,
+    'Content-Type': 'application/json',
     'X-API-Key': config.apiKey,
   };
 

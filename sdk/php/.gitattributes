@@ -1,0 +1,8 @@
+# Keep the published Packagist package lean: Packagist builds its dist archive with `git archive`,
+# which honors `export-ignore`, so dev-only files are excluded from what consumers download.
+/tests              export-ignore
+/phpunit.xml        export-ignore
+/.phpunit.cache     export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/composer.lock      export-ignore
