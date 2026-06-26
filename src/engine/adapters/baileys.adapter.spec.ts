@@ -561,10 +561,11 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
-  it('getNumberId resolves via onWhatsApp and returns the jid when it exists', async () => {
+  it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
-    await expect(adapter.getNumberId('628111')).resolves.toBe('628111@s.whatsapp.net');
+    // Must cross the engine boundary in the neutral dialect, matching whatsapp-web.js (<phone>@c.us).
+    await expect(adapter.getNumberId('628111')).resolves.toBe('628111@c.us');
     await expect(adapter.checkNumberExists('628111')).resolves.toBe(true);
   });
 
