@@ -162,7 +162,9 @@ async function bootstrap() {
           // allow those origins or the @import'd fonts are blocked and the UI falls back to system fonts.
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           scriptSrc: ["'self'"],
-          imgSrc: ["'self'", 'data:', 'https:'],
+          // `blob:` is needed for the outgoing image-attachment preview, which the dashboard renders
+          // from a URL.createObjectURL(file) blob before the message is sent (Chats.tsx).
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
           // Chat media (voice notes, video) is served to the dashboard as data: URIs. Without an
           // explicit media-src, <audio>/<video> fall back to default-src 'self' and are blocked.
           // Mirror imgSrc so audio/video render the same way images already do.
