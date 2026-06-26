@@ -1,8 +1,9 @@
 import { DataSource } from 'typeorm';
-import { config } from 'dotenv';
+import { loadCliEnv } from './load-cli-env';
 
-// Load environment variables
-config();
+// Load env with the same precedence as the app (process.env > .env > data/.env.generated), so the
+// migration CLI targets the SAME database the dashboard configured — not the default SQLite DB.
+loadCliEnv();
 
 const dbType = process.env.DATABASE_TYPE || 'sqlite';
 

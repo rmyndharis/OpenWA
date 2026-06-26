@@ -1,8 +1,8 @@
 import { DataSource } from 'typeorm';
-import { config } from 'dotenv';
+import { loadCliEnv } from './load-cli-env';
 
-// Load environment variables (mirrors data-source.ts).
-config();
+// Load environment variables with the app's precedence (mirrors data-source.ts / main.ts).
+loadCliEnv();
 
 /**
  * Standalone TypeORM CLI DataSource for the MAIN connection (auth + audit).
