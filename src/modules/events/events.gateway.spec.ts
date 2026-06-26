@@ -138,6 +138,65 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(res.events).toEqual(['message.received']);
     expect(sock.join).toHaveBeenCalledWith(buildRoomName('sess-1', 'message.received'));
   });
+
+  // Cross-tenant guard (#221): a session-scoped key must not subscribe to a foreign session or '*'.
+  // The pure predicate is covered above; these drive it through handleSubscribe so a regression that
+  // drops the check (or reads the stale connect-time key) is caught end-to-end.
+  it('forbids a session-scoped key from subscribing to a session outside its allowlist', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-2', ['*']))) as WSErrorResponse;
+
+    expect(res.type).toBe('error');
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+
+  it('forbids a session-scoped key from subscribing to the * wildcard', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('*', ['message.received']),
+    )) as WSErrorResponse;
+
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+
+  it('allows a session-scoped key to subscribe to a session in its allowlist', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-1', ['message.received']),
+    )) as WSSubscribedResponse;
+
+    expect(res.type).toBe('subscribed');
+    expect(sock.join).toHaveBeenCalledWith(buildRoomName('sess-1', 'message.received'));
+  });
+
+  it('enforces scope using the FRESH re-validated key, not the connect-time key', async () => {
+    // Connect with an unrestricted key, but the key is narrowed to ['sess-1'] by the subscribe re-check.
+    authService.validateApiKey.mockResolvedValueOnce({ name: 'k', allowedSessions: null }); // connect
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    authService.validateApiKey.mockResolvedValueOnce({ name: 'k', allowedSessions: ['sess-1'] }); // subscribe re-check
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-2', ['message.received']),
+    )) as WSErrorResponse;
+
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
 });
 
 // A capturing, chainable Socket.IO server stub: server.to(r1).to(r2)...emit(...) all
