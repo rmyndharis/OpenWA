@@ -21,10 +21,12 @@ interface MessageEvent {
 
 interface MessageAckEvent {
   sessionId: string;
+  id: string;
   messageId: string;
   // Neutral delivery status emitted by the backend (engine-agnostic), not a raw wwebjs ack integer.
   status: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
-  chatId?: string;
+  // Deprecated legacy numeric ack kept for backward compatibility; prefer `status`.
+  ack?: number;
   timestamp?: string;
 }
 
@@ -191,9 +193,10 @@ export function useWebSocket(events: WebSocketEvents = {}) {
         case 'message.ack':
           events.onMessageAck?.({
             sessionId,
+            id: String(data.id),
             messageId: String(data.messageId),
             status: data.status as MessageAckEvent['status'],
-            chatId: data.chatId as string | undefined,
+            ack: typeof data.ack === 'number' ? data.ack : undefined,
             timestamp: msg.timestamp,
           });
           break;

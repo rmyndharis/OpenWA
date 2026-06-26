@@ -777,6 +777,22 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.sent')).toHaveLength(0);
     });
 
+    it('emits an identical message.ack payload over the socket and the webhook (parity)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageAck!('wa-out-1', 'read');
+      await flush();
+
+      const ackCalls = (eventsGateway.emitMessageAck as jest.Mock).mock.calls as unknown[][];
+      const socketPayload = ackCalls[0][1] as Record<string, unknown>;
+      const webhookPayload = dispatchedEvents('message.ack')[0][2] as Record<string, unknown>;
+
+      // A socket client coded against the webhook/doc ack shape must see the same fields.
+      expect(socketPayload).toEqual(webhookPayload);
+      expect(socketPayload).toMatchObject({ id: 'wa-out-1', messageId: 'wa-out-1', status: 'read' });
+      expect(socketPayload.ack).toBeDefined();
+    });
+
     it("reflects delivery on the stored message: 'delivered' updates status to DELIVERED (#220)", async () => {
       const callbacks = await startAndCaptureCallbacks();
 
