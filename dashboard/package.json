@@ -16,6 +16,8 @@
     "@tanstack/react-table": "^8.21.3",
     "i18next": "^26.3.1",
     "i18next-browser-languagedetector": "^8.2.1",
+    "linkify-react": "^4.3.3",
+    "linkifyjs": "^4.3.3",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -23,7 +25,8 @@
     "react-is": "^19.2.7",
     "react-router-dom": "^7.18.0",
     "recharts": "^3.9.0",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "yet-another-react-lightbox": "^3.32.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

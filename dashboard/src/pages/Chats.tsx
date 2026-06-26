@@ -21,10 +21,9 @@ import {
   asMessageType,
   type Session,
   type Chat,
-  type ChatMessage,
   type MessageType,
 } from '../services/api';
-import { mapEngineHistoryMessage, mergeChatMessages } from '../utils/chatMessages';
+import { mapEngineHistoryMessage, mergeChatMessages, type ChatMessageView } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
@@ -33,14 +32,6 @@ import { PageHeader } from '../components/PageHeader';
 import './Chats.css';
 
 type MessageMedia = { mimetype: string; filename?: string; data?: string };
-
-interface ChatMessageView extends ChatMessage {
-  metadata?: {
-    media?: MessageMedia;
-    quotedMessage?: { id: string; body: string };
-    reactions?: Record<string, string>;
-  };
-}
 
 // Delivery acks must only ADVANCE the tick, never regress it. The backend DB update is forward-only
 // (ackStatusTransitionFrom), but the live websocket ack fires on every receipt (incl. pending/sent)

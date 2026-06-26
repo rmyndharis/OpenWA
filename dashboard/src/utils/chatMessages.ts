@@ -35,3 +35,71 @@ export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): Ch
   for (const m of db) byId.set(msgKey(m), m); // DB overwrites the engine copy (authoritative status)
   return [...byId.values()].sort((a, b) => msgTime(a) - msgTime(b) || a.createdAt.localeCompare(b.createdAt));
 }
+
+// ChatMessageView extends ChatMessage with the view-only fields the chat page renders.
+// Lifted from Chats.tsx so hooks/utils can share the same shape.
+type MessageMedia = { mimetype: string; filename?: string; data?: string };
+
+export interface ChatMessageView extends ChatMessage {
+  metadata?: {
+    media?: MessageMedia;
+    quotedMessage?: { id: string; body: string };
+    reactions?: Record<string, string>;
+  };
+}
+
+/**
+ * Append `incoming` to `list`. If an entry with the same id exists, replace it in place.
+ * Returns a new array — does not mutate the input.
+ */
+export function mergeOrAppend(
+  list: ChatMessageView[],
+  incoming: ChatMessageView,
+): ChatMessageView[] {
+  const idx = list.findIndex(m => m.id === incoming.id);
+  if (idx === -1) return [...list, incoming];
+  const next = list.slice();
+  next[idx] = incoming;
+  return next;
+}
+
+/**
+ * Swap the entry whose id === `oldId` with `replacement`. No-op if not found.
+ */
+export function replaceMessageById(
+  list: ChatMessageView[],
+  oldId: string,
+  replacement: ChatMessageView,
+): ChatMessageView[] {
+  const idx = list.findIndex(m => m.id === oldId);
+  if (idx === -1) return list;
+  const next = list.slice();
+  next[idx] = replacement;
+  return next;
+}
+
+/**
+ * Apply a partial patch to the entry whose id matches. No-op if not found.
+ */
+export function updateMessageById(
+  list: ChatMessageView[],
+  id: string,
+  patch: Partial<ChatMessageView>,
+): ChatMessageView[] {
+  const idx = list.findIndex(m => m.id === id);
+  if (idx === -1) return list;
+  const next = list.slice();
+  next[idx] = { ...next[idx], ...patch };
+  return next;
+}
+
+/**
+ * Filter out the entry with the matching id. No-op if not found.
+ */
+export function removeMessageById(
+  list: ChatMessageView[],
+  id: string,
+): ChatMessageView[] {
+  if (!list.some(m => m.id === id)) return list;
+  return list.filter(m => m.id !== id);
+}

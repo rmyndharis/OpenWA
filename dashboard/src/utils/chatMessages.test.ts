@@ -68,3 +68,88 @@ test('mergeChatMessages: returns ascending by timestamp (oldest first, newest la
   const merged = mergeChatMessages([], [newer, older]);
   assert.deepEqual(merged.map(m => m.id), ['a', 'b']);
 });
+
+import {
+  mergeOrAppend,
+  replaceMessageById,
+  updateMessageById,
+  removeMessageById,
+  type ChatMessageView,
+} from './chatMessages.ts';
+
+const msg = (over: Partial<ChatMessageView> = {}): ChatMessageView => ({
+  id: 'm-1',
+  waMessageId: 'true_g@g.us_AAA',
+  chatId: 'g@g.us',
+  from: 'me',
+  to: 'g@g.us',
+  body: 'hello',
+  type: 'text',
+  direction: 'outgoing',
+  status: 'sent',
+  timestamp: 1782053999,
+  createdAt: '2026-06-23T11:16:34.000Z',
+  ...over,
+});
+
+test('mergeOrAppend appends when id is new', () => {
+  const before = [msg({ id: 'm-1' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-2', body: 'world' }));
+  assert.equal(after.length, 2);
+  assert.equal(after[1].body, 'world');
+});
+
+test('mergeOrAppend replaces in place when id matches', () => {
+  const before = [msg({ id: 'm-1', body: 'old' }), msg({ id: 'm-2' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-1', body: 'new' }));
+  assert.equal(after.length, 2);
+  assert.equal(after[0].body, 'new');
+  assert.equal(after[1].id, 'm-2');
+});
+
+test('mergeOrAppend does not mutate the input array', () => {
+  const before = [msg({ id: 'm-1' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-2' }));
+  assert.notEqual(after, before);
+  assert.equal(before.length, 1);
+});
+
+test('replaceMessageById swaps the entry with matching id', () => {
+  const before = [msg({ id: 'temp-1', status: 'sending' }), msg({ id: 'm-2' })];
+  const after = replaceMessageById(before, 'temp-1', msg({ id: 'real-1', status: 'sent' }));
+  assert.equal(after.length, 2);
+  assert.equal(after[0].id, 'real-1');
+  assert.equal(after[0].status, 'sent');
+});
+
+test('replaceMessageById is a no-op when oldId is not present', () => {
+  const before = [msg({ id: 'm-1' })];
+  const after = replaceMessageById(before, 'missing', msg({ id: 'real' }));
+  assert.deepEqual(after, before);
+});
+
+test('updateMessageById applies a partial patch by id', () => {
+  const before = [msg({ id: 'm-1', status: 'sending' })];
+  const after = updateMessageById(before, 'm-1', { status: 'failed' });
+  assert.equal(after[0].status, 'failed');
+  assert.equal(after[0].body, 'hello');  // other fields unchanged
+});
+
+test('updateMessageById is a no-op when id is not present', () => {
+  const before = [msg({ id: 'm-1' })];
+  const after = updateMessageById(before, 'missing', { status: 'failed' });
+  assert.deepEqual(after, before);
+});
+
+test('removeMessageById filters out the matching id', () => {
+  const before = [msg({ id: 'm-1' }), msg({ id: 'm-2' })];
+  const after = removeMessageById(before, 'm-1');
+  assert.equal(after.length, 1);
+  assert.equal(after[0].id, 'm-2');
+});
+
+test('removeMessageById is a no-op when id is not present', () => {
+  const before = [msg({ id: 'm-1' })];
+  const after = removeMessageById(before, 'missing');
+  assert.deepEqual(after, before);
+});
