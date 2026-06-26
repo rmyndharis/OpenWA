@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, Skull } from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
+import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -14,6 +16,7 @@ export function Sessions() {
   useDocumentTitle(t('sessions.title'));
   const toast = useToast();
   const { canWrite } = useRole();
+  const queryClient = useQueryClient();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +35,10 @@ export function Sessions() {
       setLoading(true);
       const data = await sessionApi.list();
       setSessions(data);
+      // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
+      // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
+      // Dashboard shows stale session counts/status. Prefix-matches both `sessions` and `sessionStats`.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
       return data;
     } catch (err) {
       setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
@@ -39,7 +46,7 @@ export function Sessions() {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, queryClient]);
 
   const { isConnected, subscribe } = useWebSocket({
     onSessionStatus: useCallback(
