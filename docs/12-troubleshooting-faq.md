@@ -760,6 +760,47 @@ server {
 }
 ```
 
+**Q: How to run behind Traefik / Coolify?**
+
+Traefik forwards WebSocket upgrades automatically, so OpenWA's single-port Socket.IO channel works with a normal HTTP router. Two things keep a public deployment stable:
+
+**1. Let Traefik reach the container over the Docker network — don't _also_ publish the host port.** This is the most common cause of intermittent `504`s on Coolify/Traefik. If OpenWA publishes its port to the host (`ports: ["2785:2785"]`) **and** Traefik also routes to it, every request additionally traverses Docker's userland `docker-proxy`. OpenWA holds a long-lived Socket.IO connection per client (HTTP long-poll → WebSocket upgrade), so those held-open connections accumulate across both hops and gradually exhaust the connection pool to the single upstream — the Dashboard, API, and real-time channel then `504` together "after some time", while `curl http://localhost:2785/api/health/ready` keeps returning `200`. Front it with Traefik on a shared network and **expose** the port internally instead of **publishing** it:
+
+```yaml
+services:
+  openwa:
+    image: ghcr.io/rmyndharis/openwa:latest
+    expose:
+      - '2785' # internal only — drop any public `ports:` mapping when Traefik is on this network
+    networks: [proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.openwa.rule=Host(`api.example.com`)
+      - traefik.http.routers.openwa.entrypoints=websecure
+      - traefik.http.routers.openwa.tls.certresolver=le
+      - traefik.http.services.openwa.loadbalancer.server.port=2785
+networks:
+  proxy:
+    external: true # the network your Traefik already runs on
+```
+
+On **Coolify**, this means not mapping the port to the host and letting Coolify's built-in Traefik route to the service over its proxy network. (The bundled `docker-compose.yml` binds to `127.0.0.1:2785` for _local_ access only — fine for a single box, but for a Traefik-fronted public deployment use the network path above.)
+
+**2. Generous idle timeouts**, so Traefik doesn't cut the persistent Socket.IO connection — raise the entrypoint's responding/idle timeouts:
+
+```yaml
+# traefik static config
+entryPoints:
+  websecure:
+    address: ':443'
+    transport:
+      respondingTimeouts:
+        readTimeout: 600s
+        idleTimeout: 600s
+```
+
+Remember OpenWA is **single-port**: the Dashboard, REST API, and Socket.IO all share `:2785` behind one router, so a choked upstream takes all three down at once. A Dashboard stuck on "Connecting…" while `localhost` is healthy is the proxy hop, not the app.
+
 **Q: How to backup sessions automatically?**
 ```bash
 #!/bin/bash

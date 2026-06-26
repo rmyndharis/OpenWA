@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Added a Traefik / Coolify reverse-proxy guide to the troubleshooting FAQ: WebSocket forwarding, the `docker-proxy` double-hop that causes intermittent `504`s behind Coolify (held-open Socket.IO connections exhausting the pool to the single-port upstream), and idle-timeout tuning. (#467)
+
 ## [0.7.4] - 2026-06-25
 
 ### Fixed
