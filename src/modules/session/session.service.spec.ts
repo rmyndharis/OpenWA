@@ -504,6 +504,30 @@ describe('SessionService', () => {
         jest.useRealTimers();
       }
     });
+
+    it('does not stack reconnect timers when scheduled twice back-to-back', () => {
+      jest.useFakeTimers();
+      try {
+        const i = service as unknown as {
+          reconnectStates: Map<
+            string,
+            { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }
+          >;
+          scheduleReconnect: (id: string, s: Session) => void;
+        };
+        i.reconnectStates.set('sess-uuid-1', { attempts: 0, timer: null, maxAttempts: 5, baseDelay: 5000 });
+
+        // Two disconnect events in a row each schedule a reconnect. The second must clear the
+        // first timer, leaving exactly one pending — otherwise both fire and double-init the engine.
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+
+        expect(jest.getTimerCount()).toBe(1);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('engine onError', () => {
@@ -555,6 +579,25 @@ describe('SessionService', () => {
       const result = await service.findOne('sess-uuid-1');
 
       expect(result.lastError).toBeUndefined();
+    });
+
+    it('cancels a pending reconnect timer when the engine then errors terminally', async () => {
+      const callbacks = await startAndCapture();
+      jest.useFakeTimers();
+      try {
+        const i = service as unknown as { scheduleReconnect: (id: string, s: Session) => void };
+        // A prior onDisconnected scheduled a reconnect…
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+        expect(jest.getTimerCount()).toBe(1);
+
+        // …then a terminal failure arrives. It must cancel the pending reconnect so the timer
+        // can't resurrect a session the operator has to manually restart.
+        callbacks.onError?.('fatal browser crash');
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
     });
   });
 

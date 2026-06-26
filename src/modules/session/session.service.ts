@@ -926,6 +926,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // scheduled (unlike onDisconnected), since re-scanning is required.
         this.sessionErrors.set(id, reason);
 
+        // A prior onDisconnected may have scheduled a reconnect. This failure is terminal
+        // (re-scan required), so cancel it — otherwise the pending timer would resurrect a
+        // session the operator must manually restart.
+        this.cancelReconnect(id);
+
         void this.hookManager.execute(
           'session:error',
           { reason },
@@ -1005,6 +1010,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       },
     );
 
+    // Clear any timer a prior scheduleReconnect left pending so two back-to-back disconnects
+    // don't stack two timers (which would run executeReconnect twice and double-init the engine).
+    if (state.timer) clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       void this.executeReconnect(id, session, state);
     }, delay);
