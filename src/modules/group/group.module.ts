@@ -7,5 +7,6 @@ import { SessionModule } from '../session/session.module';
   imports: [SessionModule],
   controllers: [GroupController],
   providers: [GroupService],
+  exports: [GroupService],
 })
 export class GroupModule {}

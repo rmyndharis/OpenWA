@@ -33,7 +33,7 @@ export default tseslint.config(
     },
   },
   {
-    // Architecture guard (M1): HTTP controllers must go through a per-capability service and
+    // Architecture guard: HTTP controllers must go through a per-capability service and
     // never reach for the raw WhatsApp engine. This keeps the "session not started" guard,
     // error mapping, and business rules behind the service boundary instead of leaking into
     // controllers. `.getEngine(` (not `.getEngines()`) and the `IWhatsAppEngine` type are banned.
@@ -44,7 +44,7 @@ export default tseslint.config(
         {
           selector: "CallExpression[callee.property.name='getEngine']",
           message:
-            'Controllers must not call getEngine(). Add a method to the capability service (e.g. GroupService) and call that instead (M1).',
+            'Controllers must not call getEngine(). Add a method to the capability service (e.g. GroupService) and call that instead.',
         },
       ],
       'no-restricted-imports': [
@@ -57,7 +57,7 @@ export default tseslint.config(
               group: ['**/engine/interfaces/whatsapp-engine.interface'],
               importNames: ['IWhatsAppEngine'],
               message:
-                'Controllers must not import IWhatsAppEngine. Keep engine types behind a capability service (M1).',
+                'Controllers must not import IWhatsAppEngine. Keep engine types behind a capability service.',
             },
           ],
         },

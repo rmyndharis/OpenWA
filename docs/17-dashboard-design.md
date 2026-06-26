@@ -9,27 +9,33 @@ The dashboard is a web-based management interface for OpenWA that lets users man
 ```mermaid
 flowchart LR
     subgraph Frontend
-        REACT[React 18]
-        VITE[Vite 5]
+        REACT[React 19]
+        VITE[Vite 8]
         TS[TypeScript]
-        TW[Tailwind CSS]
-        SHADCN[shadcn/ui]
-        LUCIDE[Lucide Icons]
+        CSS[Hand-written per-page CSS]
+        LUCIDE[lucide-react Icons]
     end
 
     subgraph State
         TANSTACK[TanStack Query]
-        ZUSTAND[Zustand]
+        CTX[React Context]
     end
 
     subgraph Backend
         API[OpenWA API]
-        WS[WebSocket]
+        WS[socket.io WebSocket]
     end
 
     Frontend --> State
     State --> Backend
 ```
+
+The styling foundation is **plain CSS** — there is no Tailwind, no shadcn/ui, and no CSS-in-JS.
+Each page and shared component ships its own stylesheet colocated beside the source
+(`Sessions.tsx` + `Sessions.css`, `Layout.tsx` + `Layout.css`, ...), imported directly by the
+component. Icons come from `lucide-react`; charts from `recharts`; i18n from `react-i18next`.
+Client state is **TanStack Query** for server data (see `src/hooks/queries.ts`) plus a couple of
+small React Context providers (`useRole`, `useTheme`) — there is no Zustand store.
 
 ### Design Principles
 
@@ -41,58 +47,56 @@ flowchart LR
 
 ## 17.2 Information Architecture
 
+The dashboard is a **flat, single-level route table** (see `src/App.tsx`). Each sidebar entry maps
+to one top-level page — there are no nested detail/`:id` routes; a session or chat is opened in-place
+(modals / split panes) rather than via its own URL.
+
 ```mermaid
 flowchart TB
-    subgraph Dashboard
-        HOME[Dashboard Home]
-        SESSIONS[Sessions]
-        WEBHOOKS[Webhooks]
-        APIKEYS[API Keys]
-        LOGS[Logs]
-        SETTINGS[Settings]
+    subgraph "Always visible"
+        HOME[Dashboard /]
+        SESSIONS[Sessions /sessions]
+        CHATS[Chats /chats]
+        WEBHOOKS[Webhooks /webhooks]
+        TEMPLATES[Templates /templates]
+        TESTER[Message Tester /message-tester]
+        LOGS[Logs /logs]
     end
 
-    HOME --> |Quick Actions| SESSIONS
-    HOME --> |View Stats| LOGS
-
-    subgraph Sessions Pages
-        LIST[Session List]
-        DETAIL[Session Detail]
-        QR[QR Scanner]
-        CHAT[Test Chat]
+    subgraph "Admin-only"
+        APIKEYS[API Keys /api-keys]
+        INFRA[Infrastructure /infrastructure]
+        PLUGINS[Plugins /plugins]
     end
 
-    SESSIONS --> LIST
-    LIST --> DETAIL
-    DETAIL --> QR
-    DETAIL --> CHAT
-
-    subgraph Webhooks Pages
-        WH_LIST[Webhook List]
-        WH_DETAIL[Webhook Detail]
-        WH_LOGS[Webhook Logs]
-    end
-
-    WEBHOOKS --> WH_LIST
-    WH_LIST --> WH_DETAIL
-    WH_DETAIL --> WH_LOGS
+    HOME --> SESSIONS
+    HOME --> CHATS
+    SESSIONS --> CHATS
 ```
 
 ### Navigation Structure
 
+The route table lives in `src/App.tsx`; the sidebar items in `src/components/Layout.tsx`. Routes
+guarded by `role === 'admin'` are only mounted (and only shown in the sidebar) for an admin key —
+a non-admin hitting the path falls through to the `*` redirect.
+
 ```
-/                       → Dashboard Home
-/sessions               → Session List
-/sessions/:id           → Session Detail
-/sessions/:id/chat      → Test Chat Interface
-/webhooks               → Webhook List
-/webhooks/:id           → Webhook Detail
-/api-keys               → API Keys Management
-/logs                   → Activity Logs
-/settings               → Settings
-/settings/profile       → Profile Settings
-/settings/appearance    → Theme Settings
+/                  → Dashboard (overview + charts)
+/sessions          → Sessions (create / start / stop / QR / delete)
+/chats             → Chats (chat list + message thread, live via WebSocket)
+/webhooks          → Webhooks (per-session webhook endpoints)
+/templates         → Message Templates
+/message-tester    → Message Tester (ad-hoc send-* + check-number)
+/logs              → Activity / Audit Logs
+/api-keys          → API Keys Management              [admin only]
+/infrastructure    → Infrastructure status & config   [admin only]
+/plugins           → Plugins (install / enable / configure) [admin only]
+*                  → redirect to /
 ```
+
+> There is **no Settings page** and no `/sessions/:id`, `/sessions/:id/chat`, or `/webhooks/:id`
+> route. Theme (light/dark/system) and color-palette selection live in a popover menu in the sidebar
+> footer (`Layout.tsx`), persisted client-side by the `useTheme` hook.
 
 ## 17.3 Wireframes
 
@@ -339,618 +343,300 @@ flowchart TB
 
 ## 17.4 Component Library
 
-### Using shadcn/ui
+> **No component framework is installed.** shadcn/ui is *not* adopted — there is no `npx shadcn`
+> init, no `components/ui/` directory, no `cn()` utility, and no `@/components` import alias. The
+> wireframes above are design intent; the implementation is hand-written.
 
-```bash
-# Initialize shadcn/ui
-npx shadcn-ui@latest init
+### Bespoke components
 
-# Add components
-npx shadcn-ui@latest add button
-npx shadcn-ui@latest add card
-npx shadcn-ui@latest add dialog
-npx shadcn-ui@latest add dropdown-menu
-npx shadcn-ui@latest add input
-npx shadcn-ui@latest add table
-npx shadcn-ui@latest add tabs
-npx shadcn-ui@latest add toast
-npx shadcn-ui@latest add avatar
-npx shadcn-ui@latest add badge
-npx shadcn-ui@latest add skeleton
-```
+The UI is built from a small set of project-specific components under `dashboard/src/components/`,
+each with a colocated CSS file. There is no design-system package to pull from.
 
-### Custom Components
+| Component | File | Responsibility |
+| --- | --- | --- |
+| `Layout` | `components/Layout.tsx` | App shell: collapsible sidebar nav, mobile drawer, language menu, theme/palette popover, logout, live version badge |
+| `ToastProvider` / `useToast` | `components/Toast.tsx` | Context-based toast notifications (success/error/warning/info) with de-dup keys |
+| `PageHeader` | `components/PageHeader.tsx` | Shared page title / subtitle / badge / actions header |
+| `DashboardCharts` | `components/DashboardCharts.tsx` | `recharts`-based message-volume / activity charts on the Dashboard |
+| `FilterBuilder` | `components/FilterBuilder.tsx` | Visual condition builder for webhook event filters |
+| `ErrorBoundary` | `components/ErrorBoundary.tsx` | Top-level React error boundary wrapping the whole app |
+| `GithubIcon` | `components/GithubIcon.tsx` | Inline brand SVG |
+
+Pages live under `dashboard/src/pages/`, each as a `*.tsx` + `*.css` pair (e.g. `Sessions.tsx` +
+`Sessions.css`). Pages are lazy-loaded in `App.tsx` via `React.lazy` + `Suspense`.
+
+A representative bespoke component — the shared page header — shows the actual conventions
+(plain props, a colocated stylesheet, BEM-ish class names, no utility classes):
 
 ```typescript
-// components/ui/status-badge.tsx
+// components/PageHeader.tsx
+import type { ReactNode } from 'react';
+import './PageHeader.css';
 
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
-
-type SessionStatus = 'CONNECTED' | 'DISCONNECTED' | 'INITIALIZING' | 'SCAN_QR';
-
-interface StatusBadgeProps {
-  status: SessionStatus;
-  className?: string;
+interface PageHeaderProps {
+  title: string;
+  subtitle?: string;
+  badge?: ReactNode;
+  actions?: ReactNode;
 }
 
-const statusConfig: Record<SessionStatus, { label: string; variant: string; dot: string }> = {
-  CONNECTED: {
-    label: 'Connected',
-    variant: 'success',
-    dot: 'bg-green-500',
-  },
-  DISCONNECTED: {
-    label: 'Disconnected',
-    variant: 'destructive',
-    dot: 'bg-red-500',
-  },
-  INITIALIZING: {
-    label: 'Initializing',
-    variant: 'warning',
-    dot: 'bg-yellow-500',
-  },
-  SCAN_QR: {
-    label: 'Scan QR',
-    variant: 'secondary',
-    dot: 'bg-blue-500 animate-pulse',
-  },
-};
-
-export function StatusBadge({ status, className }: StatusBadgeProps) {
-  const config = statusConfig[status];
-
+export function PageHeader({ title, subtitle, badge, actions }: PageHeaderProps) {
   return (
-    <Badge variant={config.variant as any} className={cn('gap-1.5', className)}>
-      <span className={cn('h-2 w-2 rounded-full', config.dot)} />
-      {config.label}
-    </Badge>
+    <header className="page-header">
+      <div className="page-header__title-group">
+        <h1>{title}</h1>
+        {badge && <span className="page-header__badge">{badge}</span>}
+      </div>
+      {actions && <div className="page-header__actions">{actions}</div>}
+      {subtitle && <p className="page-header__subtitle">{subtitle}</p>}
+    </header>
   );
 }
 ```
 
-```typescript
-// components/ui/session-card.tsx
-
-import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
-import { StatusBadge } from '@/components/ui/status-badge';
-import { MessageSquare, QrCode, Settings, Trash2 } from 'lucide-react';
-import { Session } from '@/types';
-import { formatDistanceToNow } from 'date-fns';
-
-interface SessionCardProps {
-  session: Session;
-  onQr: () => void;
-  onChat: () => void;
-  onSettings: () => void;
-  onDelete: () => void;
-}
-
-export function SessionCard({
-  session,
-  onQr,
-  onChat,
-  onSettings,
-  onDelete,
-}: SessionCardProps) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center gap-4">
-        <Avatar className="h-12 w-12">
-          <AvatarImage src={session.profilePicture} />
-          <AvatarFallback>
-            {session.name.slice(0, 2).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold">{session.name}</h3>
-            <StatusBadge status={session.status} />
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {session.phoneNumber || 'Not connected'}
-          </p>
-        </div>
-      </CardHeader>
-
-      <CardContent>
-        <div className="flex justify-between text-sm text-muted-foreground">
-          <span>{session.stats?.messagesSent || 0} messages</span>
-          <span>
-            {session.lastSeen
-              ? `Active ${formatDistanceToNow(new Date(session.lastSeen))} ago`
-              : 'Never active'}
-          </span>
-        </div>
-      </CardContent>
-
-      <CardFooter className="gap-2">
-        {session.status === 'CONNECTED' ? (
-          <>
-            <Button variant="outline" size="sm" onClick={onChat}>
-              <MessageSquare className="mr-2 h-4 w-4" />
-              Chat
-            </Button>
-          </>
-        ) : (
-          <Button variant="outline" size="sm" onClick={onQr}>
-            <QrCode className="mr-2 h-4 w-4" />
-            Scan QR
-          </Button>
-        )}
-        <Button variant="ghost" size="sm" onClick={onSettings}>
-          <Settings className="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onDelete}>
-          <Trash2 className="h-4 w-4 text-destructive" />
-        </Button>
-      </CardFooter>
-    </Card>
-  );
-}
-```
-
-```typescript
-// components/ui/qr-code-display.tsx
-
-import { useEffect, useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { RefreshCw } from 'lucide-react';
-import QRCode from 'qrcode';
-
-interface QrCodeDisplayProps {
-  qrData: string | null;
-  expiresAt: string | null;
-  onRefresh: () => void;
-  isLoading: boolean;
-}
-
-export function QrCodeDisplay({
-  qrData,
-  expiresAt,
-  onRefresh,
-  isLoading,
-}: QrCodeDisplayProps) {
-  const [qrImage, setQrImage] = useState<string | null>(null);
-  const [countdown, setCountdown] = useState<number>(0);
-
-  useEffect(() => {
-    if (qrData) {
-      QRCode.toDataURL(qrData, {
-        width: 256,
-        margin: 2,
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
-      }).then(setQrImage);
-    }
-  }, [qrData]);
-
-  useEffect(() => {
-    if (expiresAt) {
-      const interval = setInterval(() => {
-        const remaining = Math.max(
-          0,
-          Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000)
-        );
-        setCountdown(remaining);
-
-        if (remaining === 0) {
-          clearInterval(interval);
-        }
-      }, 1000);
-
-      return () => clearInterval(interval);
-    }
-  }, [expiresAt]);
-
-  return (
-    <Card className="w-fit mx-auto">
-      <CardContent className="pt-6 text-center">
-        {isLoading ? (
-          <Skeleton className="h-64 w-64 mx-auto" />
-        ) : qrImage ? (
-          <>
-            <img
-              src={qrImage}
-              alt="QR Code"
-              className="mx-auto rounded-lg"
-              width={256}
-              height={256}
-            />
-            <p className="mt-4 text-sm text-muted-foreground">
-              Expires in: {Math.floor(countdown / 60)}:
-              {(countdown % 60).toString().padStart(2, '0')}
-            </p>
-          </>
-        ) : (
-          <div className="h-64 w-64 flex items-center justify-center bg-muted rounded-lg">
-            <p className="text-muted-foreground">QR Code expired</p>
-          </div>
-        )}
-
-        <Button
-          variant="outline"
-          className="mt-4"
-          onClick={onRefresh}
-          disabled={isLoading}
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Refresh QR
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-```
+Icons are imported individually from `lucide-react`; there is no `Avatar`/`Card`/`Badge` primitive
+library — those visuals are composed directly with `div`s and the page's own CSS.
 
 ## 17.5 State Management
 
-### Zustand Store
+There is **no Zustand store** (and no global client-state library). Server data is owned by
+**TanStack Query** (`@tanstack/react-query`); the only other shared state is two small React Context
+providers — `useRole` (the authenticated key's role) and `useTheme` (mode + palette, persisted to
+`localStorage`).
+
+### API client — raw payloads, no `{ data }` envelope
+
+The client lives in `src/services/api.ts`. A single `request<T>()` helper attaches the `X-API-Key`
+header from `sessionStorage`, then returns **the parsed JSON body as-is** — the backend sends the
+raw handler payload, so `request<Session[]>('/sessions')` resolves to a bare `Session[]`, not
+`{ data: Session[] }`. (A `204 No Content` resolves to `undefined`; a `401` clears the stored key
+and redirects to login.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
+`templateApi`, `apiKeyApi`, `auditApi`, `messageApi`, `infraApi`, `pluginsApi`, `statsApi`, ...
 
 ```typescript
-// stores/session-store.ts
+// src/services/api.ts (abridged)
+export const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
 
-import { create } from 'zustand';
-import { Session } from '@/types';
-
-interface SessionState {
-  sessions: Session[];
-  selectedSession: Session | null;
-  isLoading: boolean;
-  error: string | null;
-
-  // Actions
-  setSessions: (sessions: Session[]) => void;
-  addSession: (session: Session) => void;
-  updateSession: (id: string, updates: Partial<Session>) => void;
-  removeSession: (id: string) => void;
-  selectSession: (session: Session | null) => void;
-  setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+      ...options.headers,
+    },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || `HTTP ${response.status}`);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json(); // ← the raw payload, no unwrapping
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
-  sessions: [],
-  selectedSession: null,
-  isLoading: false,
-  error: null,
-
-  setSessions: (sessions) => set({ sessions }),
-
-  addSession: (session) =>
-    set((state) => ({
-      sessions: [...state.sessions, session],
-    })),
-
-  updateSession: (id, updates) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, ...updates } : s
-      ),
-      selectedSession:
-        state.selectedSession?.id === id
-          ? { ...state.selectedSession, ...updates }
-          : state.selectedSession,
-    })),
-
-  removeSession: (id) =>
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== id),
-      selectedSession:
-        state.selectedSession?.id === id ? null : state.selectedSession,
-    })),
-
-  selectSession: (session) => set({ selectedSession: session }),
-
-  setLoading: (isLoading) => set({ isLoading }),
-
-  setError: (error) => set({ error }),
-}));
+export const sessionApi = {
+  list: () => request<Session[]>('/sessions'),          // bare array
+  get: (id: string) => request<Session>(`/sessions/${id}`),
+  create: (name: string) =>
+    request<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name }) }),
+  delete: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
+  // QR returns a raw { qrCode, status } object — not { qr, expiresAt }, and there is no expiry timer.
+  getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
+};
 ```
 
-### TanStack Query Hooks
+### TanStack Query hooks
+
+Hooks wrap those namespaces in `src/hooks/queries.ts` — each returns the raw payload directly (no
+`.data.data`). Cache invalidation, not a store, keeps the UI in sync after a mutation.
 
 ```typescript
-// hooks/use-sessions.ts
-
+// src/hooks/queries.ts (abridged)
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
-import { Session, CreateSessionInput } from '@/types';
-import { useSessionStore } from '@/stores/session-store';
+import { sessionApi, webhookApi } from '../services/api';
 
-export function useSessions() {
-  const { setSessions, setError } = useSessionStore();
+export const queryKeys = {
+  sessions: ['sessions'] as const,
+  webhooks: ['webhooks'] as const,
+  // ...
+};
 
+export function useSessionsQuery() {
   return useQuery({
-    queryKey: ['sessions'],
-    queryFn: async () => {
-      const response = await api.get<{ data: Session[] }>('/api/sessions');
-      return response.data.data;
-    },
-    onSuccess: (data) => {
-      setSessions(data);
-    },
-    onError: (error: Error) => {
-      setError(error.message);
-    },
+    queryKey: queryKeys.sessions,
+    queryFn: sessionApi.list, // resolves to Session[] directly
+    staleTime: 30_000,
   });
 }
 
-export function useSession(id: string) {
-  return useQuery({
-    queryKey: ['sessions', id],
-    queryFn: async () => {
-      const response = await api.get<{ data: Session }>(`/api/sessions/${id}`);
-      return response.data.data;
-    },
-    enabled: !!id,
-  });
-}
-
-export function useCreateSession() {
+export function useStopSessionMutation() {
   const queryClient = useQueryClient();
-  const { addSession } = useSessionStore();
-
   return useMutation({
-    mutationFn: async (input: CreateSessionInput) => {
-      const response = await api.post<{ data: Session }>('/api/sessions', input);
-      return response.data.data;
-    },
-    onSuccess: (data) => {
-      addSession(data);
-      queryClient.invalidateQueries({ queryKey: ['sessions'] });
-    },
-  });
-}
-
-export function useDeleteSession() {
-  const queryClient = useQueryClient();
-  const { removeSession } = useSessionStore();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      await api.delete(`/api/sessions/${id}`);
-      return id;
-    },
-    onSuccess: (id) => {
-      removeSession(id);
-      queryClient.invalidateQueries({ queryKey: ['sessions'] });
-    },
-  });
-}
-
-export function useSessionQr(id: string) {
-  return useQuery({
-    queryKey: ['sessions', id, 'qr'],
-    queryFn: async () => {
-      const response = await api.get<{ data: { qr: string; expiresAt: string } }>(
-        `/api/sessions/${id}/qr`
-      );
-      return response.data.data;
-    },
-    enabled: !!id,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    mutationFn: (id: string) => sessionApi.stop(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
   });
 }
 ```
+
+> **There is no `useSessionQr` polling hook.** QR codes are not fetched on a 30 s
+> `refetchInterval`. The Sessions page fetches the current QR imperatively via `sessionApi.getQR()`
+> and then receives fresh codes pushed over the WebSocket (`session.qr` events, see §17.6).
 
 ## 17.6 WebSocket Integration
 
+Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `WebSocket`. The hook is
+`src/hooks/useWebSocket.ts`. Key facts:
+
+- **Namespace `/events`** (not `/ws`). The client connects to
+  `${VITE_WS_URL || window.location.origin}/events` — same-origin by default; `VITE_WS_URL` only
+  overrides it for split-origin deployments.
+- **API key via the socket.io `auth` payload (and an `X-API-Key` header for proxies), deliberately
+  *not* in the query string** — a key in the handshake URL would leak into access logs / `Referer`.
+- **Reconnection is socket.io's built-in mechanism** — `reconnectionAttempts: 5`,
+  `reconnectionDelay: 1000` — not a hand-rolled `setTimeout(connect, 3000)`. When all attempts are
+  exhausted the manager fires `reconnect_failed`; the hook surfaces that as `connectionFailed` so the
+  UI can offer a manual `reconnect()`.
+- **Server → client envelope.** Every push arrives as a single `message` event whose payload is
+  `{ type: 'event', timestamp, payload: { event, sessionId, data } }`. The hook registers one
+  handler, switches on `payload.event`, and fans out to typed callbacks.
+- **Subscriptions** are sent with `socket.emit('message', { type: 'subscribe' | 'unsubscribe', ... })`.
+
 ```typescript
-// lib/websocket.ts
+// src/hooks/useWebSocket.ts (abridged)
+import { useEffect, useRef, useCallback, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
 
-import { useEffect, useRef, useCallback } from 'react';
-import { useSessionStore } from '@/stores/session-store';
+const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 
-type EventType =
-  | 'session.status'
-  | 'session.qr'
-  | 'message.received'
-  | 'message.ack'
-  | 'session.authenticated'
-  | 'session.disconnected';
-
-interface WebSocketMessage {
-  event: EventType;
-  sessionId: string;
-  data: any;
+interface ServerEventEnvelope {
+  type: string;        // 'event'
+  timestamp: string;
+  payload?: { event: string; sessionId: string; data: Record<string, unknown> };
 }
 
-export function useWebSocket(apiKey: string) {
-  const ws = useRef<WebSocket | null>(null);
-  const { updateSession } = useSessionStore();
+export function useWebSocket(events: WebSocketEvents = {}) {
+  const socketRef = useRef<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionFailed, setConnectionFailed] = useState(false);
 
   const connect = useCallback(() => {
-    const wsUrl = `${import.meta.env.VITE_WS_URL || 'ws://localhost:2785'}/ws?apiKey=${apiKey}`;
-    ws.current = new WebSocket(wsUrl);
+    if (socketRef.current?.connected) return;
+    const apiKey = sessionStorage.getItem('openwa_api_key');
+    if (!apiKey) return;
 
-    ws.current.onopen = () => {
-      console.log('WebSocket connected');
-    };
+    socketRef.current = io(`${SOCKET_URL}/events`, {
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      auth: { apiKey },                       // key in the handshake auth, NOT the URL
+      extraHeaders: { 'X-API-Key': apiKey },  // header copy for proxies
+    });
 
-    ws.current.onmessage = (event) => {
-      const message: WebSocketMessage = JSON.parse(event.data);
-
-      switch (message.event) {
-        case 'session.status':
-          updateSession(message.sessionId, {
-            status: message.data.status,
-          });
-          break;
-
-        case 'session.authenticated':
-          updateSession(message.sessionId, {
-            status: 'CONNECTED',
-            phoneNumber: message.data.phoneNumber,
-            profileName: message.data.profileName,
-          });
-          break;
-
-        case 'session.disconnected':
-          updateSession(message.sessionId, {
-            status: 'DISCONNECTED',
-          });
-          break;
-
-        case 'session.qr':
-          // Handle QR update via query invalidation
-          break;
-
-        default:
-          console.log('Unknown event:', message.event);
-      }
-    };
-
-    ws.current.onclose = () => {
-      console.log('WebSocket disconnected, reconnecting...');
-      setTimeout(connect, 3000);
-    };
-
-    ws.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-  }, [apiKey, updateSession]);
+    socketRef.current.on('connect', () => { setIsConnected(true); setConnectionFailed(false); });
+    socketRef.current.on('disconnect', () => setIsConnected(false));
+    socketRef.current.io.on('reconnect_failed', () => setConnectionFailed(true));
+  }, []);
 
   useEffect(() => {
     connect();
-
-    return () => {
-      ws.current?.close();
+    const socket = socketRef.current;
+    const handle = (msg: ServerEventEnvelope) => {
+      if (!msg || msg.type !== 'event' || !msg.payload) return;
+      const { event, sessionId, data } = msg.payload;
+      switch (event) {
+        case 'session.status':
+          events.onSessionStatus?.({ sessionId, status: String(data.status), timestamp: msg.timestamp });
+          break;
+        case 'session.qr':
+          events.onQRCode?.({ sessionId, qrCode: String(data.qrCode), timestamp: msg.timestamp });
+          break;
+        case 'message.received':
+        case 'message.sent':
+          events.onMessage?.({ sessionId, message: data, timestamp: msg.timestamp });
+          break;
+        // ...message.ack, message.reaction, message.revoked
+      }
     };
-  }, [connect]);
+    socket?.on('message', handle);
+    return () => { socket?.off('message', handle); };
+  }, [connect, events]);
 
-  const send = useCallback((event: string, data: any) => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ event, data }));
-    }
-  }, []);
-
-  return { send };
+  return { isConnected, connectionFailed, reconnect, subscribe, unsubscribe };
 }
 ```
 
 ## 17.7 Theme Configuration
 
+Theming is **not** shadcn HSL design tokens. It is a plain `useTheme` hook (`src/hooks/useTheme.ts`)
+that toggles two attributes on `<html>` and lets the CSS do the rest. The values are persisted to
+`localStorage` under `openwa_theme` and `openwa_palette`:
+
+- **Mode** — `light | dark | system`. `system` removes `data-theme` so a `prefers-color-scheme`
+  media query in the global CSS takes over; otherwise `data-theme="light|dark"` is set explicitly.
+- **Palette** — one of seven accent palettes (`openwa`, `blue`, `graphite`, `indigo`, `amber`,
+  `rose`, `teal`), applied as `data-palette="…"`. Each palette is a set of CSS custom properties
+  scoped to that attribute selector.
+
+The mode/palette pickers render in the sidebar footer popover (`Layout.tsx`); there is no
+`ThemeProvider` context wrapper — it's a hook consumed directly where needed.
+
 ```typescript
-// lib/theme.ts
+// src/hooks/useTheme.ts (abridged)
+export type Theme = 'light' | 'dark' | 'system';
+export type ThemePalette = 'openwa' | 'blue' | 'graphite' | 'indigo' | 'amber' | 'rose' | 'teal';
 
-export const themes = {
-  light: {
-    background: '0 0% 100%',
-    foreground: '222.2 84% 4.9%',
-    card: '0 0% 100%',
-    'card-foreground': '222.2 84% 4.9%',
-    primary: '222.2 47.4% 11.2%',
-    'primary-foreground': '210 40% 98%',
-    secondary: '210 40% 96.1%',
-    'secondary-foreground': '222.2 47.4% 11.2%',
-    muted: '210 40% 96.1%',
-    'muted-foreground': '215.4 16.3% 46.9%',
-    accent: '210 40% 96.1%',
-    'accent-foreground': '222.2 47.4% 11.2%',
-    destructive: '0 84.2% 60.2%',
-    'destructive-foreground': '210 40% 98%',
-    border: '214.3 31.8% 91.4%',
-    input: '214.3 31.8% 91.4%',
-    ring: '222.2 84% 4.9%',
-  },
-  dark: {
-    background: '222.2 84% 4.9%',
-    foreground: '210 40% 98%',
-    card: '222.2 84% 4.9%',
-    'card-foreground': '210 40% 98%',
-    primary: '210 40% 98%',
-    'primary-foreground': '222.2 47.4% 11.2%',
-    secondary: '217.2 32.6% 17.5%',
-    'secondary-foreground': '210 40% 98%',
-    muted: '217.2 32.6% 17.5%',
-    'muted-foreground': '215 20.2% 65.1%',
-    accent: '217.2 32.6% 17.5%',
-    'accent-foreground': '210 40% 98%',
-    destructive: '0 62.8% 30.6%',
-    'destructive-foreground': '210 40% 98%',
-    border: '217.2 32.6% 17.5%',
-    input: '217.2 32.6% 17.5%',
-    ring: '212.7 26.8% 83.9%',
-  },
-};
-
-// Theme provider component
-// components/theme-provider.tsx
-
-import { createContext, useContext, useEffect, useState } from 'react';
-
-type Theme = 'light' | 'dark' | 'system';
-
-interface ThemeContextType {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
-}
-
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem('theme') as Theme;
-    return stored || 'system';
-  });
+export function useTheme() {
+  const [theme, setTheme] = useState<Theme>(/* localStorage 'openwa_theme' ?? 'system' */);
+  const [palette, setPalette] = useState<ThemePalette>(/* localStorage 'openwa_palette' ?? 'openwa' */);
 
   useEffect(() => {
     const root = document.documentElement;
-
-    root.classList.remove('light', 'dark');
-
-    if (theme === 'system') {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark'
-        : 'light';
-      root.classList.add(systemTheme);
-    } else {
-      root.classList.add(theme);
-    }
-
-    localStorage.setItem('theme', theme);
+    if (theme === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', theme);
+    localStorage.setItem('openwa_theme', theme);
   }, [theme]);
 
-  return (
-    <ThemeContext.Provider value={{ theme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
-}
+  useEffect(() => {
+    document.documentElement.setAttribute('data-palette', palette);
+    localStorage.setItem('openwa_palette', palette);
+  }, [palette]);
 
-export function useTheme() {
-  const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider');
-  }
-  return context;
+  return { theme, setTheme, palette, setPalette, /* resolvedTheme, paletteOptions, ... */ };
 }
 ```
+
+The actual colors live in the global CSS as variables keyed off `[data-theme]` / `[data-palette]` —
+e.g. `:root { --color-accent: #25d366; } [data-palette='blue'] { --color-accent: #2563eb; }` — so
+switching mode or palette is a single attribute write with no re-render of the tree.
 
 ## 17.8 Build & Deployment
 
 ### Vite Configuration
 
+The dev server listens on **2886** and proxies `/api` to the API on `2785`. The WebSocket proxy is
+on **`/socket.io`** (socket.io's transport path) with `ws: true` — *not* `/ws`. There is no `@`
+import alias and no custom `manualChunks`/Radix vendor split; code-splitting is handled by the
+per-page `React.lazy` imports in `App.tsx`. The build-time version (`__APP_VERSION__`) is injected
+from `package.json` via `define`.
+
 ```typescript
 // vite.config.ts
-
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+
+const { version: pkgVersion } = JSON.parse(
+  readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'),
+) as { version: string };
 
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+  appType: 'spa', // SPA fallback for client-side routing
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env.APP_VERSION || pkgVersion),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   server: {
     port: 2886,
@@ -958,22 +644,13 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:2785',
         changeOrigin: true,
+        secure: false,
       },
-      '/ws': {
-        target: 'ws://localhost:2785',
+      // socket.io transport — NOT '/ws'
+      '/socket.io': {
+        target: 'http://localhost:2785',
         ws: true,
-      },
-    },
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          ui: ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu'],
-        },
+        changeOrigin: true,
       },
     },
   },

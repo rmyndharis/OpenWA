@@ -1,4 +1,4 @@
-import { LoggerService, LogLevel, createLogger } from './logger.service';
+import { LoggerService, LogLevel, LogFormat, createLogger } from './logger.service';
 
 interface LogEntry {
   timestamp: string;
@@ -16,6 +16,12 @@ function getLogOutput(spy: jest.SpyInstance): LogEntry {
   return JSON.parse(calls[0][0]) as LogEntry;
 }
 
+// Helper to read the raw (unparsed) string a spy was called with.
+function getRawOutput(spy: jest.SpyInstance): string {
+  const calls = spy.mock.calls as string[][];
+  return calls[0][0];
+}
+
 describe('LoggerService', () => {
   let logger: LoggerService;
   let consoleSpy: jest.SpyInstance;
@@ -23,6 +29,8 @@ describe('LoggerService', () => {
   beforeEach(() => {
     logger = new LoggerService();
     logger.setContext('TestContext');
+    // Pin JSON so structured-output assertions are deterministic regardless of TTY/LOG_FORMAT.
+    LoggerService.setLogFormat(LogFormat.JSON);
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
     jest.spyOn(console, 'warn').mockImplementation();
     jest.spyOn(console, 'error').mockImplementation();
@@ -30,6 +38,8 @@ describe('LoggerService', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    LoggerService.setLogFormat(null);
+    LoggerService.setLogLevel(LogLevel.INFO);
   });
 
   describe('log', () => {
@@ -91,6 +101,44 @@ describe('LoggerService', () => {
       logger.debug('Debug message');
 
       expect(consoleSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('pretty format', () => {
+    beforeEach(() => {
+      LoggerService.setLogFormat(LogFormat.PRETTY);
+    });
+
+    it('should render a NestJS-style human-readable line instead of JSON', () => {
+      logger.log('Test message');
+
+      const output = getRawOutput(consoleSpy);
+      // Not JSON.
+      expect(() => {
+        JSON.parse(output);
+      }).toThrow();
+      // NestJS-style prefix, level label, context and message all present.
+      expect(output).toContain('[OpenWA]');
+      expect(output).toContain('LOG');
+      expect(output).toContain('[TestContext]');
+      expect(output).toContain('Test message');
+    });
+
+    it('should append metadata as key=value pairs', () => {
+      logger.log('Test message', { sessionId: '123', action: 'test' });
+
+      const output = getRawOutput(consoleSpy);
+      expect(output).toContain('sessionId=123');
+      expect(output).toContain('action=test');
+    });
+
+    it('should append the stack trace on a new line for errors', () => {
+      const errorSpy = jest.spyOn(console, 'error');
+      logger.error('Error message', 'stack trace line');
+
+      const output = getRawOutput(errorSpy);
+      expect(output).toContain('Error message');
+      expect(output).toContain('\nstack trace line');
     });
   });
 

@@ -1,5 +1,5 @@
 # OpenWA - Docker Compose Configuration (migrado a la nueva arquitectura del repo)
-# Base: docker-compose.yml oficial de rmyndharis/OpenWA (rama main)
+# Base: docker-compose.yml oficial de rmyndharis/OpenWA (rama main) tras sync
 # Cambios respecto al original: se agregaron labels de Traefik para mantener
 # el dominio público openwa.delega2.cloud que ya tenías configurado en Dokploy.
 
@@ -9,6 +9,9 @@ services:
     image: tecnativa/docker-socket-proxy
     container_name: openwa-docker-proxy
     restart: unless-stopped
+    # Only on the isolated internal network — reachable solely by openwa-api, NOT the
+    # dashboard or any other peer. `internal: true` also denies the proxy
+    # outbound access; it only needs the locally-mounted docker socket.
     networks:
       - internal-docker
     volumes:
@@ -36,6 +39,12 @@ services:
       - openwa-network
       - internal-docker
       - dokploy-network    # AGREGADO: necesario para que Traefik (dokploy-network) lo enrute
+    # Container hardening: Chromium runs with --no-sandbox, so the
+    # container itself is the confinement boundary. cap_drop ALL + a minimal re-add
+    # ONLY for the root entrypoint's chown + gosu privilege-drop; once gosu setuids to
+    # the openwa user the node/Chromium process keeps NO effective capabilities.
+    # read_only rootfs (Chromium's profile lives on the writable /app/data volume;
+    # HOME=/tmp + tmpfs absorb stray writes). no-new-privileges blocks setuid escalation.
     security_opt:
       - 'no-new-privileges:true'
     cap_drop:
@@ -67,16 +76,29 @@ services:
       - DATABASE_HOST=${DATABASE_HOST:-postgres}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USERNAME=${DATABASE_USERNAME:-openwa}
+      # No committed default secret. Empty for the default sqlite setup; the
+      # postgres service requires it (:?) when that profile is active.
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-false}
+      # Engine. El autor cambió el default a vacío porque ahora el motor se puede elegir
+      # desde el dashboard (Infrastructure > Engine), guardado en data/.env.generated.
+      # AJUSTADO: fijamos explícitamente whatsapp-web.js porque ya tienes una sesión
+      # activa con ese motor — evita que el nuevo comportamiento automático la cambie.
       - ENGINE_TYPE=${ENGINE_TYPE:-whatsapp-web.js}
-      - SESSION_DATA_PATH=/app/data/sessions
+      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
       - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
       - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
+      # Optional WhatsApp Web version override. Leave empty for whatsapp-web.js auto-selection.
+      # If a session hangs at "authenticating", set WWEBJS_WEB_VERSION to a known-good cached build
+      # from wppconnect-team/wa-version; latest|auto|off also forces auto-selection.
       - WWEBJS_WEB_VERSION=${WWEBJS_WEB_VERSION:-}
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
+      # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots — e.g. WSL2 or
+      # low-resource hosts where the QR can time out before WA Web loads. Empty = default.
+      - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
+      # Storage
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
-      - STORAGE_LOCAL_PATH=/app/data/media
+      - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
       - S3_SECRET_KEY=${S3_SECRET_KEY:-}
@@ -90,7 +112,8 @@ services:
       - RATE_LIMIT_TTL=${RATE_LIMIT_TTL:-60}
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
       - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
-      - PLUGINS_DIR=/app/data/plugins
+      - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
+      # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}
       - DOCKER_HOST=tcp://docker-proxy:2375
     volumes:
@@ -132,8 +155,6 @@ services:
 
   # El dashboard SPA ahora viene incluido en la imagen de openwa-api y se sirve
   # en el mismo puerto (2785). Ya no existe un contenedor "dashboard" separado.
-  # NOTA: el dominio openwa-dashboard.delega2.cloud que usabas antes queda sin
-  # contenedor al que apuntar. Decide si lo apagas o lo rediriges a openwa.delega2.cloud.
 
   # ===== OPCIONAL: PostgreSQL incluido (no activo a menos que uses el profile) =====
   postgres:

@@ -5,7 +5,7 @@
 > **OpenWA is currently a single-process, single-instance application.** Live WhatsApp
 > engine state (browser + WebSocket + reconnect/error state) lives in an in-memory `Map`
 > in `SessionService`; there is **no** DB-backed session registry, **no** node-claim/lease,
-> and **no** Socket.IO Redis adapter (findings H1/H11).
+> and **no** Socket.IO Redis adapter.
 >
 > **Supported topology:** exactly **one** API instance per session-data volume. Running
 > multiple replicas against a shared session volume — as the multi-node examples below
@@ -107,7 +107,7 @@ services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:0.4.6
     deploy:
-      replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth (H1/H11)
+      replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth
       update_config:
         parallelism: 1
         delay: 30s
@@ -252,7 +252,7 @@ metadata:
   namespace: openwa
 spec:
   serviceName: openwa
-  replicas: 1 # MUST stay 1 until session-claim is implemented (H1/H11) — see the warning at the top of this guide
+  replicas: 1 # MUST stay 1 until session-claim is implemented — see the warning at the top of this guide
   selector:
     matchLabels:
       app: openwa
@@ -519,11 +519,11 @@ groups:
 
 ### Health Check Endpoints
 
-| Endpoint               | Purpose                         |
-| ---------------------- | ------------------------------- |
-| `/api/health`          | Liveness probe                  |
-| `/api/health/ready`    | Readiness probe                 |
-| `/api/health/detailed` | Full status with DB/Redis check |
+| Endpoint            | Purpose                                                          |
+| ------------------- | ---------------------------------------------------------------- |
+| `/api/health`       | Basic health check — returns `status`, `timestamp`, `version`    |
+| `/api/health/live`  | Liveness probe (static `ok`; reflects process liveness only)     |
+| `/api/health/ready` | Readiness probe — verifies the main + data databases respond (returns 503 while draining or if a DB is down) |
 ---
 
 <div align="center">

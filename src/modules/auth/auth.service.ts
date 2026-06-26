@@ -29,6 +29,19 @@ export function resolveSeedApiKey(): string {
   return `owa_k1_${randomBytes(32).toString('hex')}`;
 }
 
+/**
+ * The line to print for the API key in the startup banner. The full raw key is shown ONLY when it was
+ * just created (first run, when the operator needs to capture it once). On every subsequent boot the
+ * key is masked to a short non-secret fingerprint, so the live admin key is not re-written to the log
+ * pipeline (Docker/Loki/CloudWatch) on each restart — it stays in `data/.api-key` (0600) and the
+ * dashboard. A placeholder (e.g. "(check dashboard for keys)") is passed through unchanged.
+ */
+export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
+  if (isNewKey) return displayKey;
+  if (displayKey.startsWith('(')) return displayKey;
+  return `${displayKey.slice(0, 8)}… (full key in data/.api-key or the dashboard)`;
+}
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = createLogger('AuthService');
@@ -93,7 +106,7 @@ export class AuthService implements OnModuleInit {
     } else {
       this.logger.log('  🔑 API Key:');
     }
-    this.logger.log(`     ${displayKey}`);
+    this.logger.log(`     ${bannerKeyLine(displayKey, isNewKey)}`);
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');

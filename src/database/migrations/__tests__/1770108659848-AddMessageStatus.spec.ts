@@ -22,6 +22,11 @@ describe('AddMessageStatus baseline migration', () => {
     expect(await runner.hasTable('messages')).toBe(true);
     expect(await runner.hasTable('message_batches')).toBe(true);
 
+    // api_keys / audit_logs belong to the separate 'main' (auth/audit) connection. The data
+    // baseline must NOT create them here — they were dead, unused tables on the data DB.
+    expect(await runner.hasTable('api_keys')).toBe(false);
+    expect(await runner.hasTable('audit_logs')).toBe(false);
+
     await runner.release();
   });
 

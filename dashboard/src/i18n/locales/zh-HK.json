@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "伺服器連線已中斷",
+      "message": "無法連接到後端伺服器。請檢查伺服器是否正在執行。"
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",
@@ -137,7 +143,8 @@
       "activeSessions": "活躍工作階段",
       "messagesToday": "今日訊息",
       "webhooksConfigured": "已設定 Webhook",
-      "apiCalls": "API 呼叫（24 小時）"
+      "apiCalls": "API 呼叫（24 小時）",
+      "totalMessages": "訊息總數"
     },
     "sessionsOverview": "工作階段概覽",
     "showingSessions": "顯示 {{shown}} / {{total}} 個工作階段",
@@ -152,7 +159,22 @@
     "view": "查看",
     "disconnect": "中斷連線",
     "errorPrefix": "錯誤：{{message}}",
-    "loadError": "載入資料失敗"
+    "loadError": "載入資料失敗",
+    "charts": {
+      "title": "訊息分析",
+      "period": {
+        "24h": "24小時",
+        "7d": "7天",
+        "30d": "30天"
+      },
+      "overTime": "訊息趨勢",
+      "byType": "按類型分類的訊息",
+      "topChats": "熱門聊天",
+      "sent": "已傳送",
+      "received": "已接收",
+      "messages": "訊息",
+      "empty": "此期間沒有訊息活動。"
+    }
   },
   "sessionStatus": {
     "created": "新增",
@@ -270,6 +292,36 @@
     "events": "事件",
     "available": "可用事件",
     "saveChanges": "儲存變更",
+    "filters": {
+      "title": "篩選條件（選填）",
+      "hint": "僅當所有條件都符合時才觸發。適用於訊息事件。",
+      "badge": "{{count}} 個篩選條件",
+      "badge_other": "{{count}} 個篩選條件",
+      "addCondition": "新增條件",
+      "removeCondition": "移除條件",
+      "caseSensitive": "區分大小寫",
+      "contactPlaceholder": "號碼或 WhatsApp ID...",
+      "textPlaceholder": "要符合的文字...",
+      "addValue": "新增 \"{{value}}\"",
+      "yes": "是",
+      "no": "否",
+      "fields": {
+        "sender": "傳送者",
+        "recipient": "接收者",
+        "body": "訊息內容",
+        "type": "訊息類型",
+        "isGroup": "是群組聊天",
+        "fromMe": "由我傳送",
+        "hasMedia": "包含媒體",
+        "mentions": "提及"
+      },
+      "operators": {
+        "is": "是",
+        "isNot": "不是",
+        "contains": "包含",
+        "equals": "等於"
+      }
+    },
     "columns": {
       "url": "URL",
       "events": "事件",
@@ -516,6 +568,17 @@
       "migrationsStatus": "結構會透過 TypeORM 自動同步",
       "migrationsHint": "遷移會自動管理。手動遷移請使用 CLI。"
     },
+    "engine": {
+      "title": "WhatsApp 引擎",
+      "subtitle": "選擇並設定 WhatsApp 連線引擎。",
+      "builtIn": "內置",
+      "headless": "無頭模式",
+      "headlessDesc": "在沒有可見介面的情況下執行瀏覽器（建議用於生產環境）。",
+      "sessionDataPath": "工作階段資料路徑",
+      "browserArgs": "瀏覽器參數",
+      "noBrowser": "此引擎透過 WebSocket 連線——沒有瀏覽器，因此沒有無頭模式或瀏覽器參數設定。使用中的引擎會在重新啟動後生效。",
+      "restartNote": "切換引擎會在伺服器重新啟動後生效。"
+    },
     "redis": {
       "title": "Redis",
       "enable": "啟用 Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "外掛",
-    "subtitle": "管理引擎、儲存後端和擴充功能",
+    "subtitle": "安裝、設定和管理擴充功能",
     "refresh": "重新整理",
     "engineCard": "目前 WhatsApp 引擎",
     "running": "執行中",
@@ -593,6 +656,11 @@
     "disable": "停用",
     "healthCheck": "健康檢查",
     "configure": "設定",
+    "available": "可用",
+    "install": "安裝外掛",
+    "uninstall": "解除安裝",
+    "uninstallConfirm": "解除安裝「{{name}}」？此操作會刪除其檔案。",
+    "engineSwitchHint": "在「設定」中設為使用中的引擎，然後重新啟動",
     "empty": {
       "title": "找不到外掛",
       "description": "安裝外掛以擴展 OpenWA 功能"
@@ -606,7 +674,23 @@
       "sessionDataPath": "工作階段資料路徑",
       "browserArgs": "瀏覽器參數",
       "noOptions": "此外掛沒有可用設定選項",
-      "save": "儲存設定"
+      "save": "儲存設定",
+      "addItem": "新增",
+      "tabConfig": "設定",
+      "tabSessions": "工作階段"
+    },
+    "rail": {
+      "engine": "使用中的引擎",
+      "enabled": "已啟用",
+      "installed": "已安裝",
+      "active": "活躍外掛",
+      "none": "尚未啟用任何外掛"
+    },
+    "installModal": {
+      "title": "安裝外掛",
+      "hint": "上載打包成 .zip 的外掛（內含 manifest.json）。啟用後會以沙盒方式執行。",
+      "choose": "選擇 .zip 檔案…",
+      "tooLarge": "檔案超出 5 MB 上限。"
     },
     "toasts": {
       "errorTitle": "外掛錯誤",
@@ -616,7 +700,24 @@
       "healthError": "健康檢查錯誤",
       "savedTitle": "設定已儲存",
       "savedDesc": "需要重新啟動伺服器以套用變更。",
-      "saveFailed": "儲存失敗"
+      "saveFailed": "儲存失敗",
+      "installed": "外掛已安裝",
+      "installFailed": "安裝失敗",
+      "uninstalled": "外掛已解除安裝",
+      "uninstallFailed": "解除安裝失敗"
+    },
+    "sessions": {
+      "activationTitle": "執行對象",
+      "activationDesc": "選擇此外掛程式要為哪些工作階段執行。",
+      "allSessions": "所有工作階段",
+      "specificSessions": "指定工作階段",
+      "noSessions": "尚無工作階段。",
+      "saveActivation": "儲存啟用設定",
+      "perSessionTitle": "個別工作階段設定",
+      "perSessionDesc": "為某個工作階段覆寫全域設定;未變更的欄位會沿用全域數值。",
+      "selectSession": "選擇工作階段…",
+      "saveOverride": "儲存覆寫",
+      "clearOverride": "清除覆寫"
     }
   }
 }

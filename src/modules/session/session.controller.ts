@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
+import { Controller, Get, Post, Delete, Param, Query, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { SessionService } from './session.service';
 import {
   CreateSessionDto,
@@ -15,31 +15,22 @@ import { Session } from './entities/session.entity';
 import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { RequireRole, CurrentApiKey, SessionScoped } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('sessions')
 @Controller('sessions')
+// The `:id` route param here is a WhatsApp session id, so the ApiKeyGuard enforces a key's
+// allowedSessions scope against it (other controllers' `:id` is an unrelated resource id).
+@SessionScoped()
 export class SessionController {
   constructor(
     private readonly sessionService: SessionService,
     private readonly auditService: AuditService,
   ) {}
 
-  // Transform entity to DTO with lastActive field name
   private transformSession(session: Session): SessionResponseDto {
-    return {
-      id: session.id,
-      name: session.name,
-      status: session.status,
-      phone: session.phone,
-      pushName: session.pushName,
-      connectedAt: session.connectedAt,
-      lastActive: session.lastActiveAt,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      lastError: session.lastError ?? null,
-    };
+    return SessionResponseDto.fromEntity(session);
   }
 
   @Post()
@@ -209,18 +200,36 @@ export class SessionController {
   })
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async getGroups(@Param('id') id: string): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
-    return this.sessionService.getGroups(id);
+  @ApiQuery({ name: 'limit', required: false, description: 'Max groups to return (1–1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
+  async getGroups(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
+    return this.sessionService.getGroups(id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Get(':id/chats')
   @ApiOperation({ summary: 'Get active chats for a session' })
   @ApiParam({ name: 'id', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'List of active chats' })
+  @ApiResponse({ status: 200, description: 'List of active chats (most recent first)' })
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async getChats(@Param('id') id: string): Promise<ChatSummary[]> {
-    return this.sessionService.getChats(id);
+  @ApiQuery({ name: 'limit', required: false, description: 'Max chats to return (1–1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of chats to skip (for paging)' })
+  async getChats(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<ChatSummary[]> {
+    return this.sessionService.getChats(id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Post(':id/chats/read')
@@ -232,6 +241,18 @@ export class SessionController {
   @ApiResponse({ status: 404, description: 'Session not found' })
   async markChatRead(@Param('id') id: string, @Body() dto: MarkChatReadDto): Promise<{ success: boolean }> {
     const success = await this.sessionService.sendSeen(id, dto.chatId);
+    return { success };
+  }
+
+  @Post(':id/chats/unread')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Mark a chat as unread' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async markChatUnread(@Param('id') id: string, @Body() dto: MarkChatReadDto): Promise<{ success: boolean }> {
+    const success = await this.sessionService.markUnread(id, dto.chatId);
     return { success };
   }
 
@@ -266,7 +287,7 @@ export class SessionController {
     status: 200,
     description: 'Session statistics including counts and memory usage',
   })
-  async getStats(): Promise<{
+  async getStats(@CurrentApiKey() apiKey?: ApiKey): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -274,6 +295,8 @@ export class SessionController {
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    return this.sessionService.getStats();
+    // Scope aggregate stats to the key's allowedSessions so a session-restricted key cannot enumerate
+    // global session counts/status (the route carries no :id for the guard to scope against).
+    return this.sessionService.getStats(apiKey?.allowedSessions);
   }
 }

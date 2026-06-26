@@ -85,11 +85,8 @@ export interface IncomingMessage {
    * populated for `isLidSender` messages.
    */
   senderPhone?: string | null;
-  /** Sender display info, best-effort from the WhatsApp Web contact cache. */
-  contact?: {
-    name?: string;
-    pushName?: string;
-  };
+  /** Sender contact info, best-effort from the WhatsApp Web cache. Sync fields only (no network). */
+  contact?: MessageContact;
   media?: {
     mimetype: string;
     filename?: string;
@@ -110,6 +107,37 @@ export interface IncomingMessage {
     address?: string;
     url?: string;
   };
+}
+
+/**
+ * Synchronous (already-resolved, no network call) fields of a sender contact, surfaced on
+ * {@link IncomingMessage}. Async getters (profile pic / about / formatted number) are intentionally
+ * NOT included — they hit WhatsApp servers per message and risk rate-limit/ban. All optional; a key
+ * is present only when the engine populated it.
+ */
+export interface MessageContact {
+  /** Sender JID (`…@c.us` or a `…@lid` privacy id). */
+  id?: string;
+  /** Phone digits, best-effort. For `@lid` senders the authoritative number is `IncomingMessage.senderPhone`. */
+  number?: string;
+  name?: string;
+  pushName?: string;
+  shortName?: string;
+  /** whatsapp-web.js contact type token. */
+  type?: string;
+  /** Saved in the account's address book. */
+  isMyContact?: boolean;
+  /** Is a WhatsApp user. */
+  isWAContact?: boolean;
+  isBusiness?: boolean;
+  isEnterprise?: boolean;
+  /** Business verified name. */
+  verifiedName?: string;
+  /** Business verification level. */
+  verifiedLevel?: number;
+  isBlocked?: boolean;
+  /** Label IDs (CRM). Names are not resolved — that would need a network call. */
+  labels?: string[];
 }
 
 export interface Contact {
@@ -332,6 +360,11 @@ export interface EngineEventCallbacks {
   onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
+  /**
+   * Bulk historical messages from an engine's initial sync (e.g. Baileys `messaging-history.set`).
+   * They predate the live session, so consumers persist them for the chat view but must not dispatch.
+   */
+  onHistoryMessages?: (messages: IncomingMessage[]) => void;
   onDisconnected?: (reason: string) => void;
   onStateChanged?: (state: EngineStatus) => void;
   /**
@@ -388,8 +421,9 @@ export interface IWhatsAppEngine {
   getContactById(contactId: string): Promise<Contact | null>;
   checkNumberExists(number: string): Promise<boolean>;
   /**
-   * Resolve a phone number to its canonical chat id in the engine's native format, or null if the
-   * number is not registered. The engine owns the JID scheme, so callers never build it themselves.
+   * Resolve a phone number to its canonical chat id in the neutral dialect (`<phone>@c.us`), or null
+   * if the number is not registered. The engine owns the JID scheme and returns it already neutralized,
+   * so the value is engine-agnostic and round-trips back to a send on any engine.
    */
   getNumberId(number: string): Promise<string | null>;
   /**
@@ -456,6 +490,7 @@ export interface IWhatsAppEngine {
   // Chats
   getChats(): Promise<ChatSummary[]>;
   sendSeen(chatId: string): Promise<boolean>;
+  markUnread(chatId: string): Promise<boolean>;
   deleteChat(chatId: string): Promise<boolean>;
   /**
    * Send a typing/recording presence indicator to a chat, or clear it (`paused`).

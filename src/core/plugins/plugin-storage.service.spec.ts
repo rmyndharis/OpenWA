@@ -1,3 +1,7 @@
+// Spread the real fs so every method passes through, but as configurable props the test can spy on
+// (the bare `import * as fs` namespace is non-configurable, so jest.spyOn can't redefine its methods).
+jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('fs')>('fs') }));
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -28,6 +32,36 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(await storage.get('state')).toEqual({ a: 1 });
     await storage.delete('state');
     expect(await storage.get('state')).toBeNull();
+  });
+
+  it('creates the per-plugin dir 0o700 and data files 0o600 (persisted secrets not world-readable)', async () => {
+    await storage.set('secret', { token: 'shh' });
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    expect(fs.statSync(pluginDataDir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(pluginDataDir, 'secret.json')).mode & 0o777).toBe(0o600);
+  });
+
+  it('is atomic: a write that fails mid-way leaves the previous file intact (no partial overwrite)', async () => {
+    await storage.set('state', { good: true });
+    // Simulate a crash after the temp file is written but before the rename — the target must keep its
+    // old value, never a truncated/partial one. (A bare writeFileSync would corrupt it here.)
+    const spy = jest.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      throw new Error('simulated crash before rename');
+    });
+    await expect(storage.set('state', { bad: true })).rejects.toThrow();
+    spy.mockRestore();
+    expect(await storage.get('state')).toEqual({ good: true });
+    // And no temp file is left behind.
+    const tmps: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.includes('.tmp')) tmps.push(p);
+      }
+    };
+    walk(dataDir);
+    expect(tmps).toEqual([]);
   });
 
   it('preserves JID-style keys containing : @ . -', async () => {

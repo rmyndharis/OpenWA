@@ -1,12 +1,16 @@
-import { MessageMedia } from 'whatsapp-web.js';
+import { MessageMedia, WAState } from 'whatsapp-web.js';
+import { EventEmitter } from 'events';
 import {
   WhatsAppWebJsAdapter,
   extractLinkedParentJID,
+  isHttpUrl,
   isSupportedProxyUrl,
   loadRemoteMedia,
+  resolveAuthTimeoutMs,
   resolveWebVersionPin,
   wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
+import * as fs from 'fs';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -33,6 +37,22 @@ describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus bo
   ])('maps wwebjs ack %i -> %s', (ack, expected) => {
     expect(wwebjsAckToDeliveryStatus(ack)).toBe(expected);
   });
+});
+
+describe('isHttpUrl (remote-media detection, case-insensitive like Baileys)', () => {
+  it.each(['http://x/y.png', 'https://x/y.png', 'HTTP://X/Y.PNG', 'Https://x/y.png', 'hTtPs://x'])(
+    'treats %s as a remote URL',
+    url => {
+      expect(isHttpUrl(url)).toBe(true);
+    },
+  );
+
+  it.each(['data:image/png;base64,iVBOR', 'iVBORw0KGgoAAAANSU', 'ftp://x/y', 'httpserver-not-a-url'])(
+    'treats %s as non-URL (base64 / other)',
+    s => {
+      expect(isHttpUrl(s)).toBe(false);
+    },
+  );
 });
 
 describe('isSupportedProxyUrl', () => {
@@ -274,6 +294,304 @@ describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', (
   });
 });
 
+describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });
+  type FakeClient = EventEmitter & {
+    info?: { wid?: { user?: string }; pushname?: string };
+    getState: jest.Mock;
+    pupPage: { evaluate: jest.Mock };
+    destroy?: jest.Mock;
+    logout?: jest.Mock;
+    pupBrowser?: { process?: jest.Mock };
+  };
+  const attachFakeClient = (
+    adapter: WhatsAppWebJsAdapter,
+    overrides: Partial<FakeClient> = {},
+  ): { client: FakeClient; onReady: jest.Mock; onStateChanged: jest.Mock } => {
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: {
+        evaluate: jest.fn().mockResolvedValue(true),
+      },
+      ...overrides,
+    }) as FakeClient;
+    const onReady = jest.fn();
+    const onStateChanged = jest.fn();
+
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onReady, onStateChanged };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    return { client, onReady, onStateChanged };
+  };
+  const deferredVoid = (): { promise: Promise<void>; resolve: () => void } => {
+    let resolve = (): void => undefined;
+    const promise = new Promise<void>(res => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+  const expectNoReadyDuringTeardown = async (
+    configureClient: (client: FakeClient, teardownWait: Promise<void>) => void,
+    startTeardown: (adapter: WhatsAppWebJsAdapter) => Promise<void>,
+  ): Promise<void> => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const teardownWait = deferredVoid();
+    const { client, onReady, onStateChanged } = attachFakeClient(adapter);
+    configureClient(client, teardownWait.promise);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(jest.getTimerCount()).toBe(1);
+
+    const teardown = startTeardown(adapter);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onStateChanged).toHaveBeenLastCalledWith(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    client.emit('ready');
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+
+    teardownWait.resolve();
+    await teardown;
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('marks the adapter ready when authenticated runtime is connected but the ready event is missed', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(onReady).toHaveBeenCalledWith('628123', 'Tester');
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not promote while the runtime is connected but client info is not populated yet', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter, { info: undefined });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(2100);
+
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(onReady).not.toHaveBeenCalled();
+
+    client.emit('auth_failure', 'stop test timer');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('deduplicates the genuine ready event after reconciliation promotes the adapter', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(2100);
+    client.emit('ready');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['disconnected', EngineStatus.DISCONNECTED] as const, ['auth_failure', EngineStatus.FAILED] as const])(
+    'does not promote if %s fires during an in-flight probe tick',
+    async (event, expectedStatus) => {
+      jest.useFakeTimers();
+
+      const adapter = newAdapter();
+      const { client, onReady } = attachFakeClient(adapter);
+      client.pupPage.evaluate.mockImplementation(() => {
+        client.emit(event, 'test teardown');
+        return Promise.resolve(true);
+      });
+
+      client.emit('authenticated');
+      await jest.advanceTimersByTimeAsync(2100);
+
+      expect(adapter.getStatus()).toBe(expectedStatus);
+      expect(onReady).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('keeps repeated authenticated events to one timer chain and ignores authenticated after ready', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client, onReady } = attachFakeClient(adapter);
+
+    client.emit('authenticated');
+    expect(jest.getTimerCount()).toBe(1);
+    client.emit('authenticated');
+    expect(jest.getTimerCount()).toBe(1);
+
+    await jest.advanceTimersByTimeAsync(2100);
+    client.emit('authenticated');
+
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables ready reconciliation before disconnect awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.disconnect(),
+    );
+  });
+
+  it('disables ready reconciliation before logout awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.logout = jest.fn().mockReturnValue(teardownWait);
+        client.destroy = jest.fn().mockResolvedValue(undefined);
+      },
+      adapter => adapter.logout(),
+    );
+  });
+
+  it('disables ready reconciliation before destroy awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.destroy(),
+    );
+  });
+
+  it('disables ready reconciliation before forceDestroy awaits client teardown', async () => {
+    await expectNoReadyDuringTeardown(
+      (client, teardownWait) => {
+        client.pupBrowser = { process: jest.fn().mockReturnValue({ kill: jest.fn() }) };
+        client.destroy = jest.fn().mockReturnValue(teardownWait);
+      },
+      adapter => adapter.forceDestroy(),
+    );
+  });
+
+  // A re-fired 'authenticated' (whatsapp-web.js can emit it again on a resume/resync before 'ready')
+  // must NOT restart the 90s reconcile window, or a flapping link keeps the probe alive forever.
+  it('does not reset the 90s reconcile deadline when authenticated re-fires mid-probe', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    // Runtime never reports the WWebJS global, so the probe never promotes and ticks to the deadline.
+    const { client } = attachFakeClient(adapter, { pupPage: { evaluate: jest.fn().mockResolvedValue(false) } });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(80_000);
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    client.emit('authenticated'); // re-fire 80s in — must not restart the window
+    await jest.advanceTimersByTimeAsync(11_000); // 91s total since the FIRST authenticated
+
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+    expect(jest.getTimerCount()).toBe(0); // gave up at 90s; not reset by the re-fire
+  });
+
+  // beginClientTeardown sets DISCONNECTED before the awaited destroy/logout; an 'authenticated' event
+  // arriving in that window must not resurrect the adapter to AUTHENTICATING.
+  it('ignores an authenticated event fired during teardown (status stays disconnected)', async () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const teardownWait = deferredVoid();
+    const { client, onReady } = attachFakeClient(adapter);
+    client.destroy = jest.fn().mockReturnValue(teardownWait.promise);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.AUTHENTICATING);
+
+    const teardown = adapter.disconnect();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    client.emit('authenticated'); // must NOT revive to AUTHENTICATING / re-arm the probe
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0);
+
+    teardownWait.resolve();
+    await teardown;
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
+  // A wedged page can make getState() hang (the exact #251/#273 condition). The probe must keep its
+  // own cadence (a hung probe can't stall the loop) and still honor the 90s give-up deadline.
+  it('keeps probing and self-heals (clears auth + disconnects) when getState hangs past the deadline', async () => {
+    jest.useFakeTimers();
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter, {
+      getState: jest.fn().mockReturnValue(new Promise<never>(() => {})),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: { onDisconnected?: jest.Mock } }).callbacks.onDisconnected = onDisconnected;
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(50_000);
+    expect(jest.getTimerCount()).toBe(1); // chain still alive despite the hung probe
+
+    await jest.advanceTimersByTimeAsync(45_000); // ~95s total
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED); // never falsely promoted; self-healed
+    expect(jest.getTimerCount()).toBe(0); // gave up at the 90s deadline
+    expect(client.getState).toHaveBeenCalledTimes(1); // at-most-one-in-flight guard held
+    // Self-heal: the broken auth is cleared and a disconnect surfaced so the lifecycle re-pairs (QR).
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('session-sess-1'), { recursive: true, force: true });
+    expect(onDisconnected).toHaveBeenCalled();
+
+    rmSpy.mockRestore();
+  });
+
+  it('fails terminally on a second stuck-auth cycle (no QR -> timeout -> clear loop)', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    const onError = jest.fn();
+    (adapter as unknown as { callbacks: { onError?: jest.Mock } }).callbacks = { onError };
+    const recover = (adapter as unknown as { recoverFromStuckAuth: () => Promise<void> }).recoverFromStuckAuth.bind(
+      adapter,
+    );
+
+    await recover(); // first stuck cycle: clears + disconnects
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    await recover(); // second: terminal failure, not another clear
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalled();
+    expect(rmSpy).toHaveBeenCalledTimes(1); // auth cleared only once
+    rmSpy.mockRestore();
+  });
+});
+
 describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () => {
   // Stub a "ready" adapter with a fake client so we exercise the mapping without a real browser.
   const readyAdapter = (getContactLidAndPhone: jest.Mock): WhatsAppWebJsAdapter => {
@@ -310,23 +628,24 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
     else process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = orig.p;
   });
 
-  it('returns undefined (default auto-version) when unset / "latest" / "off"', () => {
+  it('returns undefined (default auto-version) when unset / "latest" / "off" / "auto"', () => {
     delete process.env.WWEBJS_WEB_VERSION;
     expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'latest';
-    expect(resolveWebVersionPin()).toBeUndefined();
-    process.env.WWEBJS_WEB_VERSION = 'off';
-    expect(resolveWebVersionPin()).toBeUndefined();
+    for (const value of ['latest', 'off', 'auto']) {
+      process.env.WWEBJS_WEB_VERSION = value;
+      expect(resolveWebVersionPin()).toBeUndefined();
+    }
   });
 
   it('pins a remote webVersionCache from the version when set', () => {
     delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
-    process.env.WWEBJS_WEB_VERSION = '2.3000.1023204257';
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
     expect(resolveWebVersionPin()).toEqual({
-      webVersion: '2.3000.1023204257',
+      webVersion: '2.3000.1041203030-alpha',
       webVersionCache: {
         type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023204257.html',
+        remotePath:
+          'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041203030-alpha.html',
       },
     });
   });
@@ -335,5 +654,45 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
     process.env.WWEBJS_WEB_VERSION = '2.9999.0';
     process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = 'https://cdn.example.com/wa/{version}.html';
     expect(resolveWebVersionPin()?.webVersionCache.remotePath).toBe('https://cdn.example.com/wa/2.9999.0.html');
+  });
+});
+
+describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', () => {
+  const orig = process.env.WWEBJS_AUTH_TIMEOUT_MS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
+    else process.env.WWEBJS_AUTH_TIMEOUT_MS = orig;
+  });
+
+  it('returns undefined (wwebjs default) when unset', () => {
+    delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
+    expect(resolveAuthTimeoutMs()).toBeUndefined();
+  });
+
+  it('parses a positive integer milliseconds value', () => {
+    process.env.WWEBJS_AUTH_TIMEOUT_MS = '120000';
+    expect(resolveAuthTimeoutMs()).toBe(120000);
+  });
+
+  it('ignores non-positive-integer values (falls back to the default)', () => {
+    for (const bad of ['', '  ', '0', '-5', '1.5', 'abc', '60s']) {
+      process.env.WWEBJS_AUTH_TIMEOUT_MS = bad;
+      expect(resolveAuthTimeoutMs()).toBeUndefined();
+    }
+  });
+
+  it('ignores all-digit values that are not finite safe integers (falls back to the default)', () => {
+    // A huge digit string coerces to Infinity; MAX_SAFE_INTEGER + 1 is a finite but unsafe integer.
+    // Both pass the /^\d+$/ shape check, so without a numeric guard they would reach whatsapp-web.js
+    // as an effectively unbounded inject wait.
+    for (const bad of ['9'.repeat(352), String(Number.MAX_SAFE_INTEGER + 1)]) {
+      process.env.WWEBJS_AUTH_TIMEOUT_MS = bad;
+      expect(resolveAuthTimeoutMs()).toBeUndefined();
+    }
+  });
+
+  it('accepts large but safe integer millisecond values', () => {
+    process.env.WWEBJS_AUTH_TIMEOUT_MS = '600000';
+    expect(resolveAuthTimeoutMs()).toBe(600000);
   });
 });

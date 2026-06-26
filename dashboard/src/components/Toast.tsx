@@ -11,7 +11,16 @@ interface Toast {
   title: string;
   message?: string;
   duration?: number;
+  /** Stable, non-rendered key for de-duplicating recurring toasts. Independent of the (translated) title. */
+  dedupeKey?: string;
 }
+
+// A toast id needs no cryptographic strength; crypto.randomUUID is undefined over plain HTTP on a LAN IP.
+const createToastId = (): string => crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+// De-dupe sentinel for the "backend unreachable" toast. Kept separate from the displayed title so
+// translating the title never silently breaks the de-dupe.
+const CONNECTION_LOST_DEDUPE_KEY = 'connection-lost';
 
 interface ToastContextValue {
   toasts: Toast[];
@@ -38,6 +47,7 @@ interface ToastProviderProps {
 }
 
 export function ToastProvider({ children }: ToastProviderProps) {
+  const { t } = useTranslation();
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const removeToast = useCallback((id: string) => {
@@ -46,10 +56,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const addToast = useCallback(
     (toast: Omit<Toast, 'id'>) => {
-      // crypto.randomUUID() is only defined in a secure context (HTTPS / localhost). Over plain
-      // HTTP on a LAN IP it is undefined, which previously threw "crypto.randomUUID is not a
-      // function" on every toast — fall back to a non-crypto id (a toast key needs no strength).
-      const id = crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const id = createToastId();
       const newToast = { ...toast, id };
       setToasts(prev => [...prev, newToast]);
 
@@ -71,9 +78,41 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const error = useCallback(
     (title: string, message?: string) => {
+      const isConnectionError =
+        message?.toLowerCase().includes('failed to fetch') ||
+        message?.toLowerCase().includes('networkerror') ||
+        message?.toLowerCase().includes('http 502') ||
+        message?.toLowerCase().includes('http 503') ||
+        title.toLowerCase().includes('failed to fetch') ||
+        title.toLowerCase().includes('networkerror');
+
+      if (isConnectionError) {
+        // De-dupe on the stable key (not the translated title) so a downed backend shows one toast.
+        // The auto-dismiss timer is scheduled OUTSIDE the updater: state updaters must be
+        // side-effect-free (React Strict Mode runs them twice, which would schedule two timers).
+        // If this is a duplicate the id is never committed, so removeToast(id) later is a harmless no-op.
+        const id = createToastId();
+        setToasts(prev =>
+          prev.some(t => t.dedupeKey === CONNECTION_LOST_DEDUPE_KEY)
+            ? prev
+            : [
+                ...prev,
+                {
+                  id,
+                  type: 'error',
+                  dedupeKey: CONNECTION_LOST_DEDUPE_KEY,
+                  title: t('toast.connectionLost.title'),
+                  message: t('toast.connectionLost.message'),
+                  duration: 6000,
+                },
+              ],
+        );
+        setTimeout(() => removeToast(id), 6000);
+        return;
+      }
       addToast({ type: 'error', title, message, duration: 6000 });
     },
-    [addToast],
+    [addToast, removeToast, t],
   );
 
   const warning = useCallback(

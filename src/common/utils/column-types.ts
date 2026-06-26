@@ -18,9 +18,16 @@
 const isPostgres = (): boolean => process.env.DATABASE_TYPE === 'postgres';
 
 /**
- * Returns 'jsonb' for PostgreSQL, 'simple-json' for SQLite.
+ * Always 'simple-json' (TypeORM JSON.stringify/parse over a `text` column), on BOTH dialects.
+ *
+ * The baseline migration created these columns as `text` on Postgres too (never `jsonb`). The pg
+ * driver only auto-parses real json/jsonb columns, so a `jsonb`-typed entity reading the actual
+ * `text` column hands back a RAW string — e.g. webhook.events comes through as the string
+ * '["message.received"]', and the dashboard's events.map() throws (full-page crash). 'simple-json'
+ * parses on read regardless of dialect, matching the real columns. No native jsonb queries exist
+ * (all JSON filtering is done in JS), so nothing is lost.
  */
-export const jsonColumnType = (): 'jsonb' | 'simple-json' => (isPostgres() ? 'jsonb' : 'simple-json');
+export const jsonColumnType = (): 'simple-json' => 'simple-json';
 
 /**
  * Returns 'timestamp' for PostgreSQL, 'text' for SQLite.

@@ -10,6 +10,9 @@ import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
+import { evaluateFilters } from './filters/filter-evaluator';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { userPart } from '../../engine/identity/wa-id';
 import {
   assertSafeFetchUrl,
   withSafeFetch,
@@ -49,6 +52,8 @@ export class WebhookService {
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
+    @Optional()
     @InjectQueue(QUEUE_NAMES.WEBHOOK)
     private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
@@ -80,6 +85,7 @@ export class WebhookService {
       events: dto.events || ['message.received'],
       secret: dto.secret || null,
       headers: dto.headers || {},
+      filters: dto.filters ?? null,
       retryCount: dto.retryCount ?? 3,
     });
 
@@ -125,6 +131,7 @@ export class WebhookService {
     // not a stored blank that silently disables signing while looking configured.
     if (dto.secret !== undefined) webhook.secret = dto.secret || null;
     if (dto.headers !== undefined) webhook.headers = dto.headers;
+    if (dto.filters !== undefined) webhook.filters = dto.filters;
     if (dto.active !== undefined) webhook.active = dto.active;
     if (dto.retryCount !== undefined) webhook.retryCount = dto.retryCount;
 
@@ -205,7 +212,12 @@ export class WebhookService {
       return;
     }
 
-    const matchingWebhooks = webhooks.filter(w => w.events.includes(event) || w.events.includes('*'));
+    // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
+    // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
+    const resolveLid = (jid: string): string | null => this.lidMappingStore?.getCached(userPart(jid)) ?? null;
+    const matchingWebhooks = webhooks.filter(
+      w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
+    );
 
     // Generate idempotency key (same for all webhooks receiving this event). occurredAt is captured
     // once here and reused for every retry of this dispatch, so recurring lifecycle events get a
@@ -242,8 +254,9 @@ export class WebhookService {
         continue;
       }
 
-      // Use potentially modified payload
-      const finalPayload = (hookResult as { payload: WebhookPayload }).payload;
+      // Use the plugin-modified payload, falling back to the original if a before-hook returned a
+      // result without a `payload` key — otherwise we'd POST an `undefined` body.
+      const finalPayload = (hookResult as { payload?: WebhookPayload }).payload ?? payload;
 
       // Build headers — custom headers FIRST so the system headers below always win.
       const headers: Record<string, string> = {
@@ -258,24 +271,28 @@ export class WebhookService {
 
       // Use queue if available, otherwise fallback to direct delivery
       if (this.queueEnabled && this.webhookQueue) {
-        const signature = webhook.secret ? this.generateSignature(JSON.stringify(finalPayload), webhook.secret) : '';
-
-        if (webhook.secret) {
-          headers['X-OpenWA-Signature'] = signature;
-        }
-
-        const jobData: WebhookJobData = {
-          webhookId: webhook.id,
-          url: webhook.url,
-          event,
-          payload: finalPayload,
-          signature,
-          headers,
-          attempt: 1,
-          maxRetries: webhook.retryCount,
-        };
-
         try {
+          // finalPayload comes from the (untrusted) webhook:before hook result, so JSON.stringify can
+          // throw (BigInt / circular). Keep serialization + signing INSIDE the try so a poisoned payload
+          // is caught here (one webhook dropped + logged) instead of aborting the whole dispatch loop
+          // and rejecting the fire-and-forget dispatch() promise.
+          const signature = webhook.secret ? this.generateSignature(JSON.stringify(finalPayload), webhook.secret) : '';
+
+          if (webhook.secret) {
+            headers['X-OpenWA-Signature'] = signature;
+          }
+
+          const jobData: WebhookJobData = {
+            webhookId: webhook.id,
+            url: webhook.url,
+            event,
+            payload: finalPayload,
+            signature,
+            headers,
+            attempt: 1,
+            maxRetries: webhook.retryCount,
+          };
+
           await this.webhookQueue.add(`webhook-${webhook.id}`, jobData, {
             attempts: webhook.retryCount,
             backoff: {

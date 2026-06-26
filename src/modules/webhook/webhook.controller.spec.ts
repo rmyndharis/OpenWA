@@ -22,6 +22,7 @@ function createSecretWebhook(overrides: Partial<Webhook> = {}): Webhook {
     events: ['message.received'],
     secret: 's3cr3t-hmac-key',
     headers: { Authorization: 'Bearer receiver-token' },
+    filters: null,
     active: true,
     retryCount: 3,
     lastTriggeredAt: null,

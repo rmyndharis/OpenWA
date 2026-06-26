@@ -25,7 +25,7 @@ OpenWA supports two database backends that can be selected at deployment time:
 > SQLite can be used in production with limitations:
 >
 > - Maximum ~5 concurrent sessions (due to single-writer limitation)
-> - No table partitioning support (requires auto-cleanup for messages)
+> - Single-file storage — back up `./data/*.sqlite` rather than relying on a dump tool
 > - No horizontal scaling support
 > - Ideal for: personal bots, small businesses with 1-3 WhatsApp numbers
 >
@@ -46,7 +46,8 @@ OpenWA v0.2+ implements a **dual-database architecture** that separates boot con
 │ • audit_logs                │ • webhooks                        │
 │                             │ • messages                        │
 │                             │ • message_batches                 │
-│                             │ • contacts                        │
+│                             │ • templates                       │
+│                             │ • (engine: baileys_stored_messages, lid_mappings) │
 └─────────────────────────────┴───────────────────────────────────┘
 ```
 
@@ -132,11 +133,6 @@ connectedAt: Date | null;
 erDiagram
     SESSION ||--o{ WEBHOOK : has
     SESSION ||--o{ MESSAGE : contains
-    SESSION ||--o{ CONTACT : stores
-    SESSION ||--o{ SESSION_LOG : generates
-    API_KEY ||--o{ SESSION : manages
-    API_KEY ||--o{ API_KEY_LOG : generates
-    WEBHOOK ||--o{ WEBHOOK_LOG : generates
 
     SESSION {
         uuid id PK
@@ -145,8 +141,10 @@ erDiagram
         varchar phone
         varchar push_name
         json config
-        json auth_state
+        varchar proxy_url
+        varchar proxy_type
         timestamp connected_at
+        timestamp last_active_at
         timestamp created_at
         timestamp updated_at
     }
@@ -158,6 +156,7 @@ erDiagram
         json events
         varchar secret
         json headers
+        json filters
         boolean active
         int retry_count
         timestamp last_triggered_at
@@ -168,75 +167,50 @@ erDiagram
     MESSAGE {
         uuid id PK
         uuid session_id FK
-        varchar wa_message_id UK
+        varchar wa_message_id
         varchar chat_id
-        varchar from_number
-        varchar to_number
-        varchar type
+        varchar from
+        varchar to
         text body
-        json media
-        int ack
-        boolean from_me
-        boolean is_group
-        timestamp wa_timestamp
+        varchar type
+        varchar direction
+        bigint timestamp
+        json metadata
+        varchar status
         timestamp created_at
-    }
-
-    CONTACT {
-        uuid id PK
-        uuid session_id FK
-        varchar wa_contact_id UK
-        varchar name
-        varchar push_name
-        varchar phone
-        boolean is_my_contact
-        boolean is_blocked
-        varchar profile_pic_url
-        timestamp created_at
-        timestamp updated_at
     }
 
     API_KEY {
         uuid id PK
-        varchar key_hash UK
         varchar name
-        json permissions
-        boolean active
+        varchar key_hash UK
+        varchar key_prefix
+        varchar role
+        simple_array allowed_ips
+        simple_array allowed_sessions
+        boolean is_active
         timestamp expires_at
         timestamp last_used_at
+        int usage_count
         timestamp created_at
+        timestamp updated_at
     }
 
-    SESSION_LOG {
+    AUDIT_LOG {
         uuid id PK
-        uuid session_id FK
-        varchar event
-        varchar status
-        json data
-        timestamp created_at
-    }
-
-    WEBHOOK_LOG {
-        uuid id PK
-        uuid webhook_id FK
-        varchar event
-        int status_code
-        int attempt
-        json payload
-        json response
-        text error
-        timestamp created_at
-    }
-
-    API_KEY_LOG {
-        uuid id PK
-        uuid api_key_id FK
-        varchar endpoint
-        varchar method
+        varchar action
+        varchar severity
+        varchar api_key_id
+        varchar api_key_name
+        varchar session_id
+        varchar session_name
         varchar ip_address
-        text user_agent
+        varchar user_agent
+        varchar method
+        varchar path
         int status_code
-        int response_time
+        json metadata
+        text error_message
         timestamp created_at
     }
 ```
@@ -255,20 +229,20 @@ CREATE TABLE sessions (
     phone VARCHAR(20),
     push_name VARCHAR(100),
     config JSONB NOT NULL DEFAULT '{}',
-    auth_state JSONB,
+    proxy_url VARCHAR(255),
+    proxy_type VARCHAR(10),
     connected_at TIMESTAMP WITH TIME ZONE,
+    last_active_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-
--- Indexes
-CREATE INDEX idx_sessions_status ON sessions(status);
-CREATE INDEX idx_sessions_phone ON sessions(phone);
-CREATE INDEX idx_sessions_created_at ON sessions(created_at);
 ```
 
 > [!NOTE]
-> `auth_state` is optional and engine-specific. By default, `whatsapp-web.js` stores auth state on the filesystem, while Baileys can store an encrypted blob in the database when enabled. This column can store the blob or an encrypted pointer/path.
+> The SQL above is illustrative — the schema is defined by the TypeORM entity (`src/modules/session/entities/session.entity.ts`), and column types are dialect-portable (`jsonColumnType()` → `simple-json`, dates via `DateTransformer`). The `sessions` entity declares only the index implied by the `UNIQUE` constraint on `name`; there are no separate `status`/`phone`/`created_at` indexes.
+
+> [!NOTE]
+> Auth state is **not** stored in this table. Both engines persist credentials on the **filesystem** (`whatsapp-web.js` LocalAuth; Baileys `useMultiFileAuthState`). The `baileys_stored_messages` table holds only Baileys' serialized message store (the library ships none), not credentials.
 
 **Session Status Values:**
 
@@ -329,16 +303,13 @@ CREATE TABLE webhooks (
     events JSONB NOT NULL DEFAULT '["message.received"]',
     secret VARCHAR(255),
     headers JSONB DEFAULT '{}',
+    filters JSONB,                       -- optional smart pre-filter; null = fire on every subscribed event
     active BOOLEAN NOT NULL DEFAULT true,
     retry_count INTEGER NOT NULL DEFAULT 3,
     last_triggered_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
-
--- Indexes
-CREATE INDEX idx_webhooks_session_id ON webhooks(session_id);
-CREATE INDEX idx_webhooks_active ON webhooks(active);
 ```
 
 **Events Schema (allowed values):**
@@ -364,298 +335,139 @@ CREATE INDEX idx_webhooks_active ON webhooks(active);
 
 ### 5.3.3 messages
 
-Stores message history (optional, can be disabled).
-
-```sql
--- Main table with partitioning support (PostgreSQL 12+)
-CREATE TABLE messages (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL,
-    wa_message_id VARCHAR(100) NOT NULL,
-    chat_id VARCHAR(100) NOT NULL,
-    from_number VARCHAR(50) NOT NULL,
-    to_number VARCHAR(50),
-    type VARCHAR(50) NOT NULL,
-    body TEXT,
-    media JSONB,
-    ack INTEGER DEFAULT 0,
-    from_me BOOLEAN NOT NULL DEFAULT false,
-    is_group BOOLEAN NOT NULL DEFAULT false,
-    wa_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    PRIMARY KEY (id, created_at),
-    UNIQUE(session_id, wa_message_id, created_at)
-) PARTITION BY RANGE (created_at);
-
-> [!NOTE]
-> In PostgreSQL, UNIQUE on a partitioned table must include the partition key (`created_at`), so uniqueness applies per partition. If you need global uniqueness for `wa_message_id`, use a separate reference table or store messages in a non-partitioned table.
-
--- Create partitions for each month (automated via pg_cron or application)
-CREATE TABLE messages_y2025m01 PARTITION OF messages
-    FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
-CREATE TABLE messages_y2025m02 PARTITION OF messages
-    FOR VALUES FROM ('2025-02-01') TO ('2025-03-01');
-CREATE TABLE messages_y2025m03 PARTITION OF messages
-    FOR VALUES FROM ('2025-03-01') TO ('2025-04-01');
--- Continue for other months...
-
--- Default partition for future data
-CREATE TABLE messages_default PARTITION OF messages DEFAULT;
-
--- Indexes (created on each partition automatically)
-CREATE INDEX idx_messages_session_id ON messages(session_id);
-CREATE INDEX idx_messages_chat_id ON messages(chat_id);
-CREATE INDEX idx_messages_wa_timestamp ON messages(wa_timestamp);
-CREATE INDEX idx_messages_session_chat ON messages(session_id, chat_id);
-CREATE INDEX idx_messages_type ON messages(type);
-CREATE INDEX idx_messages_from_me ON messages(from_me) WHERE from_me = true;
-
--- Function to auto-create partitions
-CREATE OR REPLACE FUNCTION create_messages_partition()
-RETURNS void AS $$
-DECLARE
-    partition_date DATE;
-    partition_name TEXT;
-    start_date DATE;
-    end_date DATE;
-BEGIN
-    -- Create partition for next month
-    partition_date := DATE_TRUNC('month', NOW() + INTERVAL '1 month');
-    partition_name := 'messages_y' || TO_CHAR(partition_date, 'YYYY') || 'm' || TO_CHAR(partition_date, 'MM');
-    start_date := partition_date;
-    end_date := partition_date + INTERVAL '1 month';
-
-    -- Check if partition exists
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_tables WHERE tablename = partition_name
-    ) THEN
-        EXECUTE format(
-            'CREATE TABLE %I PARTITION OF messages FOR VALUES FROM (%L) TO (%L)',
-            partition_name, start_date, end_date
-        );
-        RAISE NOTICE 'Created partition: %', partition_name;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Schedule with pg_cron (run on 25th of each month)
--- SELECT cron.schedule('create-messages-partition', '0 0 25 * *', 'SELECT create_messages_partition()');
-```
-
-**Non-Partitioned Version (for SQLite or simpler installations):**
+Stores message history (optional, can be disabled). This is a **plain (non-partitioned)** table — the same schema on SQLite and PostgreSQL.
 
 ```sql
 CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    wa_message_id VARCHAR(100) NOT NULL,
-    chat_id VARCHAR(100) NOT NULL,
-    from_number VARCHAR(50) NOT NULL,
-    to_number VARCHAR(50),
-    type VARCHAR(50) NOT NULL,
+    session_id UUID NOT NULL,
+    wa_message_id VARCHAR,                -- nullable; transient outgoing rows have none yet
+    chat_id VARCHAR NOT NULL,
+    "from" VARCHAR NOT NULL,
+    "to" VARCHAR NOT NULL,
     body TEXT,
-    media JSONB,
-    ack INTEGER DEFAULT 0,
-    from_me BOOLEAN NOT NULL DEFAULT false,
-    is_group BOOLEAN NOT NULL DEFAULT false,
-    wa_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    UNIQUE(session_id, wa_message_id)
+    type VARCHAR NOT NULL DEFAULT 'text',
+    direction VARCHAR NOT NULL DEFAULT 'outgoing',  -- 'incoming' | 'outgoing'
+    timestamp BIGINT,                     -- WhatsApp epoch seconds; read back as a JS number
+    metadata JSONB,
+    status VARCHAR NOT NULL DEFAULT 'sent',          -- pending | sent | delivered | read | failed
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- Indexes (declared on the entity)
 CREATE INDEX idx_messages_session_id ON messages(session_id);
+CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 CREATE INDEX idx_messages_chat_id ON messages(chat_id);
-CREATE INDEX idx_messages_wa_timestamp ON messages(wa_timestamp);
-CREATE INDEX idx_messages_created_at ON messages(created_at);
+CREATE INDEX idx_messages_status ON messages(status);
+
+-- Inbound dedup (issue #464): one row per (session_id, wa_message_id).
+-- NULL wa_message_id rows are exempt (SQL treats NULLs as distinct).
+CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"
+    ON messages(session_id, wa_message_id);
 ```
 
-**Media Schema:**
+> [!NOTE]
+> There is **no** PostgreSQL RANGE partitioning, `create_messages_partition()` function, or `pg_cron` schedule in OpenWA. `messages` is a single plain table on both backends. The `timestamp` column uses a `bigint→number` value transformer so the REST/SDK/MCP contract returns a JS number on both SQLite and PostgreSQL.
 
-```json
-{
-  "mimetype": "image/jpeg",
-  "filename": "image.jpg",
-  "filesize": 102400,
-  "url": "https://storage.example.com/...",
-  "caption": "Check this out!"
-}
-```
+> [!NOTE]
+> Message rows carry no separate `media`/`ack`/`from_me`/`is_group` columns. Media and other engine-specific details are stored in the `metadata` JSON column; delivery state is the `status` enum and `direction` distinguishes inbound vs. outbound.
 
 ---
 
-### 5.3.4 contacts
+### 5.3.4 (removed) contacts
 
-WhatsApp contacts cache.
-
-```sql
-CREATE TABLE contacts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    wa_contact_id VARCHAR(100) NOT NULL,
-    name VARCHAR(255),
-    push_name VARCHAR(255),
-    phone VARCHAR(20),
-    is_my_contact BOOLEAN NOT NULL DEFAULT false,
-    is_blocked BOOLEAN NOT NULL DEFAULT false,
-    profile_pic_url TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    UNIQUE(session_id, wa_contact_id)
-);
-
--- Indexes
-CREATE INDEX idx_contacts_session_id ON contacts(session_id);
-CREATE INDEX idx_contacts_phone ON contacts(phone);
-```
+> [!NOTE]
+> **There is no `contacts` table.** Contacts are read live from the engine on demand (e.g. `GET /sessions/:id/contacts`) and are not persisted to the database.
 
 ---
 
 ### 5.3.5 api_keys
 
-Stores API keys for authentication.
+Stores API keys for authentication. Lives on the **main** (always-SQLite) connection.
 
 ```sql
 CREATE TABLE api_keys (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key_hash VARCHAR(64) NOT NULL UNIQUE,
+    id VARCHAR PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
-    permissions JSONB NOT NULL DEFAULT '["*"]',
-    active BOOLEAN NOT NULL DEFAULT true,
-    expires_at TIMESTAMP WITH TIME ZONE,
-    last_used_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    key_hash VARCHAR(64) NOT NULL,                 -- UNIQUE index
+    key_prefix VARCHAR(12) NOT NULL,               -- shown in the UI; the full key is never stored
+    role VARCHAR(20) NOT NULL DEFAULT 'operator',  -- admin | operator | viewer
+    allowed_ips TEXT,                              -- simple-array (comma-joined), null = any IP
+    allowed_sessions TEXT,                         -- simple-array, null = all sessions
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    expires_at DATETIME,
+    last_used_at DATETIME,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
--- Indexes
-CREATE INDEX idx_api_keys_key_hash ON api_keys(key_hash);
-CREATE INDEX idx_api_keys_active ON api_keys(active);
+CREATE UNIQUE INDEX "IDX_api_keys_keyHash" ON api_keys(key_hash);
 ```
 
-**Permissions Schema:**
-
-```json
-["sessions:read", "sessions:write", "messages:send", "webhooks:manage"]
-```
-
-| Permission        | Description            |
-| ----------------- | ---------------------- |
-| `*`               | Full access            |
-| `sessions:read`   | Read session info      |
-| `sessions:write`  | Create/delete sessions |
-| `messages:send`   | Send messages          |
-| `messages:read`   | Read message history   |
-| `webhooks:manage` | Manage webhooks        |
-| `contacts:read`   | Read contacts          |
-| `groups:read`     | Read groups            |
-| `groups:write`    | Manage groups          |
+> [!NOTE]
+> Access control is **role-based** (`admin` / `operator` / `viewer`), optionally scoped by `allowed_ips` and `allowed_sessions`. There is no granular `permissions` string array — see [04 - Security Design](./04-security-design.md) for what each role can do.
 
 ---
 
-### 5.3.6 session_logs
+### 5.3.6 audit_logs
 
-Audit log for session events.
-
-```sql
-CREATE TABLE session_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    event VARCHAR(100) NOT NULL,
-    status VARCHAR(50),
-    data JSONB,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-
--- Indexes
-CREATE INDEX idx_session_logs_session_id ON session_logs(session_id);
-CREATE INDEX idx_session_logs_event ON session_logs(event);
-CREATE INDEX idx_session_logs_created_at ON session_logs(created_at);
-
--- Auto-cleanup old logs (PostgreSQL)
--- Consider pg_cron or application-level cleanup
-```
-
----
-
-### 5.3.7 webhook_logs
-
-Log delivery webhook.
+Consolidated audit trail for API-key, session, message, and webhook events. This is the **only** audit table — there are no separate `session_logs`, `webhook_logs`, or `api_key_logs` tables. Lives on the **main** (always-SQLite) connection.
 
 ```sql
-CREATE TABLE webhook_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    webhook_id UUID NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
-    event VARCHAR(100) NOT NULL,
-    status_code INTEGER,
-    attempt INTEGER NOT NULL DEFAULT 1,
-    payload JSONB NOT NULL,
-    response JSONB,
-    error TEXT,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
-
--- Indexes
-CREATE INDEX idx_webhook_logs_webhook_id ON webhook_logs(webhook_id);
-CREATE INDEX idx_webhook_logs_created_at ON webhook_logs(created_at);
-CREATE INDEX idx_webhook_logs_status_code ON webhook_logs(status_code);
-```
-
----
-
-### 5.3.8 api_key_logs
-
-Audit log for API access.
-
-```sql
-CREATE TABLE api_key_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
-    endpoint VARCHAR(255) NOT NULL,
-    method VARCHAR(10) NOT NULL,
+CREATE TABLE audit_logs (
+    id VARCHAR PRIMARY KEY,
+    action VARCHAR(50) NOT NULL,                   -- e.g. session_created, message_sent, webhook_failed
+    severity VARCHAR(10) NOT NULL DEFAULT 'info',  -- info | warn | error
+    api_key_id VARCHAR(36),
+    api_key_name VARCHAR(100),
+    session_id VARCHAR(36),
+    session_name VARCHAR(100),
     ip_address VARCHAR(45),
-    user_agent TEXT,
-    status_code INTEGER NOT NULL,
-    response_time INTEGER,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    user_agent VARCHAR(500),
+    method VARCHAR(10),
+    path VARCHAR(500),
+    status_code INTEGER,
+    metadata TEXT,                                 -- simple-json
+    error_message TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
--- Indexes
-CREATE INDEX idx_api_key_logs_api_key_id ON api_key_logs(api_key_id);
-CREATE INDEX idx_api_key_logs_created_at ON api_key_logs(created_at);
-CREATE INDEX idx_api_key_logs_endpoint ON api_key_logs(endpoint);
+-- Indexes (declared on the entity)
+CREATE INDEX "IDX_audit_logs_action"    ON audit_logs(action);
+CREATE INDEX "IDX_audit_logs_apiKeyId"  ON audit_logs(api_key_id);
+CREATE INDEX "IDX_audit_logs_sessionId" ON audit_logs(session_id);
+CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs(created_at);
 ```
 
-### 5.3.9 batch_jobs
+**Audit actions** are an enum (`AuditAction`) spanning API-key lifecycle (`api_key_created`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`), session lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`, `session_deleted`, `session_qr_generated`, `session_connected`, `session_disconnected`), messages (`message_sent`, `message_failed`), and webhooks (`webhook_created`, `webhook_deleted`, `webhook_triggered`, `webhook_failed`).
 
-Stores status for batch/bulk message jobs.
+> [!NOTE]
+> Audit-log retention is automatic: see [§5.7 Data Retention](#57-data-retention). Other event types (session logs, webhook delivery logs, API access logs) are surfaced via structured application logging, not dedicated database tables.
+
+### 5.3.7 message_batches
+
+Tracks bulk/batch message jobs. A single table holds the job state plus its messages, options, progress, and per-message results as JSON columns (there are **no** separate `batch_jobs` / `batch_job_messages` tables).
 
 ```sql
-CREATE TABLE batch_jobs (
+CREATE TABLE message_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    batch_id VARCHAR(100) NOT NULL UNIQUE,
-    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    total_messages INTEGER NOT NULL,
-    sent_count INTEGER NOT NULL DEFAULT 0,
-    failed_count INTEGER NOT NULL DEFAULT 0,
-    cancelled_count INTEGER NOT NULL DEFAULT 0,
-    options JSONB NOT NULL DEFAULT '{}',
-    error TEXT,
-    started_at TIMESTAMP WITH TIME ZONE,
-    completed_at TIMESTAMP WITH TIME ZONE,
+    batch_id VARCHAR NOT NULL UNIQUE,
+    session_id VARCHAR NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'pending',   -- pending | processing | completed | cancelled | failed
+    messages JSONB NOT NULL,                     -- [{ chatId, type, content, variables? }]
+    options JSONB,                               -- { delayBetweenMessages, randomizeDelay, stopOnError }
+    progress JSONB,                              -- { total, sent, failed, pending, cancelled }
+    results JSONB,                               -- [{ chatId, status, messageId?, error?, sentAt? }]
+    current_index INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMP WITH TIME ZONE,
+    completed_at TIMESTAMP WITH TIME ZONE
 );
-
--- Indexes
-CREATE INDEX idx_batch_jobs_session_id ON batch_jobs(session_id);
-CREATE INDEX idx_batch_jobs_status ON batch_jobs(status);
-CREATE INDEX idx_batch_jobs_created_at ON batch_jobs(created_at);
 ```
 
-**Batch Job Status Values:**
+**Batch Status Values:**
 
 | Status       | Description                    |
 | ------------ | ------------------------------ |
@@ -667,90 +479,16 @@ CREATE INDEX idx_batch_jobs_created_at ON batch_jobs(created_at);
 
 ---
 
-### 5.3.10 batch_job_messages
+### 5.3.8 Other data-connection tables
 
-Details of each message in a batch job.
+The data connection also owns:
 
-```sql
-CREATE TABLE batch_job_messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    batch_job_id UUID NOT NULL REFERENCES batch_jobs(id) ON DELETE CASCADE,
-    chat_id VARCHAR(100) NOT NULL,
-    message_type VARCHAR(50) NOT NULL,
-    content JSONB NOT NULL,
-    variables JSONB,
-    status VARCHAR(50) NOT NULL DEFAULT 'pending',
-    wa_message_id VARCHAR(100),
-    error_code VARCHAR(100),
-    error_message TEXT,
-    sent_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-);
+- **`templates`** — reusable message templates (`src/modules/template/entities/template.entity.ts`), with a unique constraint on `(sessionId, name)` — one template name per session.
+- **`baileys_stored_messages`** — Baileys engine message store — the serialized WAMessage proto (`src/engine/adapters/baileys-stored-message.entity.ts`); present only when the Baileys engine is used. (Credentials live on the filesystem, not here.)
+- **`lid_mappings`** — LID↔phone-number identity mappings (`src/engine/identity/lid-mapping.entity.ts`).
 
--- Indexes
-CREATE INDEX idx_batch_job_messages_batch_job_id ON batch_job_messages(batch_job_id);
-CREATE INDEX idx_batch_job_messages_status ON batch_job_messages(status);
-```
-
----
-
-### 5.3.11 webhook_idempotency
-
-Idempotency tracking for webhook delivery.
-
-```sql
-CREATE TABLE webhook_idempotency (
-    idempotency_key VARCHAR(255) PRIMARY KEY,
-    webhook_id UUID REFERENCES webhooks(id) ON DELETE CASCADE,
-    event_type VARCHAR(100) NOT NULL,
-    processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    response_status INTEGER,
-    response_data JSONB
-);
-
--- Index for cleanup job
-CREATE INDEX idx_webhook_idempotency_processed_at ON webhook_idempotency(processed_at);
-
--- Auto-cleanup old entries (24 hours retention)
--- Run via pg_cron or application-level scheduler
--- DELETE FROM webhook_idempotency WHERE processed_at < NOW() - INTERVAL '24 hours';
-```
-
----
-
-### 5.3.12 ip_whitelist
-
-IP whitelist for API key restrictions.
-
-```sql
-CREATE TABLE ip_whitelist (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    api_key_id UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-    ip_address VARCHAR(45) NOT NULL,
-    cidr_range VARCHAR(50),
-    description VARCHAR(255),
-    active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    UNIQUE(api_key_id, ip_address)
-);
-
--- Indexes
-CREATE INDEX idx_ip_whitelist_api_key_id ON ip_whitelist(api_key_id);
-CREATE INDEX idx_ip_whitelist_ip_address ON ip_whitelist(ip_address);
-```
-
-**IP Whitelist Examples:**
-
-```sql
--- Allow specific IP
-INSERT INTO ip_whitelist (api_key_id, ip_address, description)
-VALUES ('uuid', '203.0.113.50', 'Production server');
-
--- Allow CIDR range
-INSERT INTO ip_whitelist (api_key_id, ip_address, cidr_range, description)
-VALUES ('uuid', '10.0.0.0', '10.0.0.0/24', 'Internal network');
-```
+> [!NOTE]
+> **Tables that do *not* exist.** Earlier drafts referenced `contacts`, `session_logs`, `webhook_logs`, `api_key_logs`, `webhook_idempotency`, and `ip_whitelist`. None of these are implemented. Contacts are read live from the engine; auditing is the single `audit_logs` table; webhook idempotency is not a persisted table; and per-key IP restrictions are stored inline on `api_keys.allowed_ips` (a `simple-array`), not in a separate `ip_whitelist` table.
 
 ---
 
@@ -758,37 +496,32 @@ VALUES ('uuid', '10.0.0.0', '10.0.0.0/24', 'Internal network');
 
 ### Query Pattern Analysis
 
-| Query Pattern                   | Indexes Used                                                  | Frequency |
-| ------------------------------- | ------------------------------------------------------------- | --------- |
-| Get session by ID               | `sessions.id` (PK)                                            | Very High |
-| Get sessions by status          | `idx_sessions_status`                                         | High      |
-| Get messages by session + chat  | `idx_messages_session_chat`                                   | Very High |
-| Get messages by timestamp range | `idx_messages_wa_timestamp` + partition pruning               | High      |
-| Get webhooks by session         | `idx_webhooks_session_id`                                     | Medium    |
-| Authenticate API key            | `idx_api_keys_key_hash`                                       | Very High |
-| Check IP whitelist              | `idx_ip_whitelist_api_key_id` + `idx_ip_whitelist_ip_address` | High      |
+These indexes are the ones declared on the entities (see §5.3); the rows below map them to the hot query paths.
 
-### Composite Index Guidelines
+| Query Pattern                    | Index Used                                            | Frequency |
+| -------------------------------- | ----------------------------------------------------- | --------- |
+| Get session by ID                | `sessions.id` (PK)                                    | Very High |
+| Get session by name              | `sessions.name` (UNIQUE)                              | High      |
+| List messages by session (paged) | `(session_id, created_at)` composite                  | Very High |
+| Look up message by chat          | `chat_id`                                             | High      |
+| Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)          | Very High |
+| Authenticate API key             | `IDX_api_keys_keyHash` (UNIQUE, main DB)              | Very High |
+| Filter audit logs                | `IDX_audit_logs_action` / `_apiKeyId` / `_sessionId`  | Medium    |
+
+### Composite & Unique Indexes (as implemented)
 
 ```sql
--- For frequently joined queries
-CREATE INDEX idx_messages_session_chat_timestamp
-    ON messages(session_id, chat_id, wa_timestamp DESC);
+-- messages: paged listing per session + ack-driven status update / inbound dedup
+CREATE INDEX        idx_messages_session_created          ON messages(session_id, created_at);
+CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"   ON messages(session_id, wa_message_id);
 
--- For filtering + sorting
-CREATE INDEX idx_session_logs_session_event_created
-    ON session_logs(session_id, event, created_at DESC);
-
--- Partial indexes for common filters
-CREATE INDEX idx_sessions_ready
-    ON sessions(id) WHERE status = 'ready';
-
-CREATE INDEX idx_webhooks_active
-    ON webhooks(session_id) WHERE active = true;
-
-CREATE INDEX idx_api_keys_active_not_expired
-    ON api_keys(key_hash) WHERE active = true AND (expires_at IS NULL OR expires_at > NOW());
+-- audit_logs (main DB): filter by action / key / session, ordered by time
+CREATE INDEX "IDX_audit_logs_action"    ON audit_logs(action);
+CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs(created_at);
 ```
+
+> [!NOTE]
+> The partial/filtered indexes shown in earlier drafts (e.g. `WHERE status = 'ready'`, `WHERE active = true`) are not part of the current schema. Add them only if a real query pattern justifies the maintenance cost.
 
 ### Index Maintenance
 
@@ -818,7 +551,6 @@ ORDER BY pg_relation_size(i.indexrelid) DESC;
 
 -- Reindex to reclaim space (run during maintenance window)
 REINDEX TABLE messages;
-REINDEX TABLE webhook_logs;
 ```
 
 ## 5.5 Data Flow
@@ -856,127 +588,119 @@ flowchart LR
         CONN[Connection Status]
     end
 
-    subgraph Persistent["Database State"]
+    subgraph Persistent["Database State (sessions row)"]
         CONFIG[Session Config]
-        AUTH[Auth State]
-        LOGS[Session Logs]
+        META[status / phone / pushName]
+        TS[connectedAt / lastActiveAt]
+    end
+
+    subgraph FS["Engine Auth (not in sessions table)"]
+        FSAUTH[whatsapp-web.js: filesystem]
+        DBAUTH[Baileys: engine tables]
     end
 
     Memory -->|Sync| Persistent
     Persistent -->|Restore| Memory
 ```
 
-## 5.5 Migration Strategy
+## 5.6 Migration Strategy
 
-### Migration Files Structure
+OpenWA runs **two separate TypeORM connections**, each with its own migrations directory and CLI DataSource:
+
+| Connection | DataSource              | Migrations dir              | Owns                                                                   |
+| ---------- | ----------------------- | --------------------------- | ---------------------------------------------------------------------- |
+| **main**   | `data-source-main.ts`   | `src/database/migrations-main/` | `api_keys`, `audit_logs` — always SQLite (`./data/main.sqlite`)    |
+| **data**   | `data-source.ts`        | `src/database/migrations/`  | `sessions`, `webhooks`, `messages`, `message_batches`, `templates`, engine tables — SQLite **or** PostgreSQL |
+
+Migrations are hand-authored (TypeORM `synchronize` is off for both connections in production) and are idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`.
+
+### Migration Files
 
 ```
-src/database/migrations/
-├── 1706868000000-CreateSessionsTable.ts
-├── 1706868000001-CreateWebhooksTable.ts
-├── 1706868000002-CreateMessagesTable.ts
-├── 1706868000003-CreateContactsTable.ts
-├── 1706868000004-CreateApiKeysTable.ts
-├── 1706868000005-CreateSessionLogsTable.ts
-├── 1706868000006-CreateWebhookLogsTable.ts
-└── 1706868000007-CreateApiKeyLogsTable.ts
+src/database/migrations-main/      # main connection (auth + audit, SQLite)
+└── 1779900000000-CreateAuthAuditTables.ts   # creates api_keys + audit_logs
+
+src/database/migrations/           # data connection (pluggable)
+├── 1770108659848-AddMessageStatus.ts
+├── 1779235200000-AddUuidDefaultsForPostgres.ts   # Postgres-only: gen_random_uuid() id DEFAULTs
+├── 1779840000000-AddTemplates.ts
+├── 1779900100000-AddMessageSessionWaIndex.ts
+├── 1781000000000-AddBaileysStoredMessages.ts
+├── 1781100000000-AddTemplateNameUnique.ts
+├── 1781200000000-AddLidMappings.ts
+├── 1781300000000-AddMessagesWaMessageIdUnique.ts  # UNIQUE(sessionId, waMessageId) inbound dedup (#464)
+└── 1781500000000-AddWebhookFilters.ts
 ```
+
+> [!NOTE]
+> Run with `npm run migration:run` (data connection) and `npm run migration:run:main` (main connection). The `AddUuidDefaultsForPostgres` migration is dialect-guarded — it is a no-op on SQLite (TypeORM generates UUIDs in the driver layer) and only adds `DEFAULT gen_random_uuid()::varchar` on PostgreSQL.
 
 ### Sample Migration (TypeORM)
 
 ```typescript
-import { MigrationInterface, QueryRunner, Table } from 'typeorm';
+import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateSessionsTable1706868000000 implements MigrationInterface {
+// Real migration: enforces inbound dedup on the data connection.
+export class AddMessagesWaMessageIdUnique1781300000000 implements MigrationInterface {
+  name = 'AddMessagesWaMessageIdUnique1781300000000';
+
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.createTable(
-      new Table({
-        name: 'sessions',
-        columns: [
-          {
-            name: 'id',
-            type: 'uuid',
-            isPrimary: true,
-            generationStrategy: 'uuid',
-            default: 'gen_random_uuid()',
-          },
-          {
-            name: 'name',
-            type: 'varchar',
-            length: '100',
-            isUnique: true,
-          },
-          {
-            name: 'status',
-            type: 'varchar',
-            length: '50',
-            default: "'created'",
-          },
-          // ... more columns
-          {
-            name: 'created_at',
-            type: 'timestamp with time zone',
-            default: 'NOW()',
-          },
-          {
-            name: 'updated_at',
-            type: 'timestamp with time zone',
-            default: 'NOW()',
-          },
-        ],
-      }),
-      true,
-    );
-
-    await queryRunner.createIndex(
-      'sessions',
-      new TableIndex({
-        name: 'idx_sessions_status',
-        columnNames: ['status'],
-      }),
+    if (!(await queryRunner.hasTable('messages'))) return;
+    // ... losslessly de-duplicate existing rows (keep earliest per sessionId+waMessageId) ...
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_messages_sessionId_waMessageId"`);
+    await queryRunner.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "UQ_messages_sessionId_waMessageId" ` +
+        `ON "messages" ("sessionId", "waMessageId")`,
     );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropTable('sessions');
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_messages_sessionId_waMessageId"`);
   }
 }
 ```
 
-## 5.6 Data Retention
+## 5.7 Data Retention
 
 ### Retention Policies
 
-| Data Type    | Default Retention | Configurable |
-| ------------ | ----------------- | ------------ |
-| Sessions     | Indefinite        | No           |
-| Messages     | 30 days           | Yes          |
-| Session Logs | 7 days            | Yes          |
-| Webhook Logs | 7 days            | Yes          |
-| API Key Logs | 30 days           | Yes          |
+Only **`audit_logs`** has an automated retention job. Everything else is kept indefinitely (sessions, webhooks, message history, batches) and is removed only by user action (e.g. deleting a session) or operational backup/restore — there is no message or log auto-purge.
 
-### Cleanup Job
+| Data Type           | Default Retention | Configurable                          |
+| ------------------- | ----------------- | ------------------------------------- |
+| Sessions / Webhooks | Indefinite        | No                                    |
+| Messages / Batches  | Indefinite        | No (delete a session to drop its data) |
+| Audit logs          | 90 days           | Yes — `AUDIT_RETENTION_DAYS` (≤ 0 disables) |
+
+### Audit-Log Cleanup Job
+
+`AuditService` prunes old `audit_logs` rows. It is **not** a `@Cron` — it runs once at startup, then on a 24-hour `setInterval` (`src/modules/audit/audit.service.ts`):
 
 ```typescript
-// Scheduled job to clean up old data
-@Cron('0 0 * * *') // Daily at midnight
-async cleanupOldData() {
-  const messageRetention = config.get('retention.messages', 30);
-  const logsRetention = config.get('retention.logs', 7);
+// src/modules/audit/audit.service.ts (abridged)
+onModuleInit(): void {
+  const parsed = Number.parseInt(process.env.AUDIT_RETENTION_DAYS ?? '', 10);
+  const retentionDays = Number.isInteger(parsed) ? Math.max(0, parsed) : 90;
+  if (retentionDays <= 0) return; // AUDIT_RETENTION_DAYS <= 0 disables retention
 
-  await this.messageRepo.delete({
-    createdAt: LessThan(subDays(new Date(), messageRetention)),
-  });
+  const runCleanup = () => this.cleanup(retentionDays).catch(/* best-effort */);
+  runCleanup();                                              // prune once at startup
+  this.cleanupTimer = setInterval(runCleanup, 24 * 60 * 60 * 1000); // then daily
+  this.cleanupTimer.unref?.();
+}
 
-  await this.sessionLogRepo.delete({
-    createdAt: LessThan(subDays(new Date(), logsRetention)),
-  });
-
-  // ... more cleanup
+async cleanup(olderThanDays = 30): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - olderThanDays);
+  const result = await this.auditRepository.delete({ createdAt: LessThan(cutoff) });
+  return result.affected || 0;
 }
 ```
 
-## 5.7 Backup Strategy
+## 5.8 Backup Strategy
+
+> [!NOTE]
+> This section is **operational guidance**, not a built-in feature. OpenWA ships no scheduler, encryption step, or S3 uploader for backups — the diagram and script below are a recommended setup you wire up externally (cron, your host's backup tooling, etc.). For SQLite, back up the `./data/*.sqlite` files (including `./data/main.sqlite`); for PostgreSQL, use `pg_dump`. The JSON export/import endpoints in §5.1 are a portability path, not a backup mechanism.
 
 ### Backup Components
 
@@ -989,7 +713,7 @@ flowchart TB
         ENCRYPT --> S3[S3/Cloud Storage]
     end
 
-    subgraph Schedule["Schedule"]
+    subgraph Schedule["Schedule (external, e.g. cron)"]
         FULL[Full Backup<br/>Daily]
         INCR[Incremental<br/>Hourly]
     end

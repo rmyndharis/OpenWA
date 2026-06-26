@@ -7,5 +7,6 @@ import { SessionModule } from '../session/session.module';
   imports: [SessionModule],
   controllers: [ContactController],
   providers: [ContactService],
+  exports: [ContactService],
 })
 export class ContactModule {}

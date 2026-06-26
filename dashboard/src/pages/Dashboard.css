@@ -1,14 +1,14 @@
-.dashboard {
+.dashboard{
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.page-header {
+.dashboard .page-header{
   margin-bottom: 2rem;
 }
 
-.header-title {
+.dashboard .header-title{
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -16,7 +16,7 @@
 
 /* H1 inherited from global */
 
-.status-badge {
+.dashboard .status-badge{
   padding: 0.375rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.6875rem;
@@ -25,12 +25,12 @@
   letter-spacing: 0.025em;
 }
 
-.status-badge.connected {
+.dashboard .status-badge.connected{
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.stats-grid {
+.dashboard .stats-grid{
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1.5rem;
@@ -38,7 +38,7 @@
   width: 100%;
 }
 
-.stat-card {
+.dashboard .stat-card{
   position: relative;
   background: var(--bg-white);
   border-radius: 12px;
@@ -52,25 +52,25 @@
     box-shadow 0.2s ease;
 }
 
-.stat-card:hover {
+.dashboard .stat-card:hover{
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
 
-.stat-header {
+.dashboard .stat-header{
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
 }
 
-.stat-icon {
+.dashboard .stat-icon{
   color: var(--text-muted);
   position: relative;
   z-index: 2;
 }
 
-.stat-watermark {
+.dashboard .stat-watermark{
   position: absolute;
   right: -10px;
   bottom: -15px;
@@ -83,7 +83,7 @@
   z-index: 1;
 }
 
-.stat-label {
+.dashboard .stat-label{
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -93,7 +93,7 @@
   z-index: 2;
 }
 
-.stat-value {
+.dashboard .stat-value{
   font-size: 2rem;
   font-weight: 700;
   color: var(--text-primary);
@@ -101,7 +101,7 @@
   z-index: 2;
 }
 
-.stat-trend {
+.dashboard .stat-trend{
   display: flex;
   align-items: center;
   gap: 0.25rem;
@@ -112,15 +112,15 @@
   z-index: 2;
 }
 
-.stat-trend.up {
+.dashboard .stat-trend.up{
   color: var(--primary);
 }
 
-.stat-trend.down {
+.dashboard .stat-trend.down{
   color: #ef4444;
 }
 
-.sessions-section {
+.dashboard .sessions-section{
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -130,7 +130,7 @@
   box-sizing: border-box;
 }
 
-.section-header {
+.dashboard .section-header{
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -139,20 +139,19 @@
 
 /* H2 inherited from global */
 
-.section-subtitle {
+.dashboard .section-subtitle{
   font-size: 0.875rem;
   color: var(--text-muted);
 }
 
-.sessions-table {
+.dashboard .sessions-table{
   display: flex;
   flex-direction: column;
   width: 100%;
   font-size: 0.875rem;
 }
 
-.sessions-table .table-header,
-.sessions-table .table-row {
+.dashboard .sessions-table .table-header, .dashboard .sessions-table .table-row{
   display: grid;
   grid-template-columns: 140px 200px 140px 1fr 180px;
   gap: 1rem;
@@ -160,7 +159,7 @@
   align-items: center;
 }
 
-.sessions-table .table-header {
+.dashboard .sessions-table .table-header{
   background: var(--bg-light);
   border-radius: var(--radius) var(--radius) 0 0;
   font-size: 0.7rem;
@@ -171,29 +170,29 @@
   border-bottom: 1px solid var(--border);
 }
 
-.sessions-table .table-row {
+.dashboard .sessions-table .table-row{
   border-bottom: 1px solid var(--border);
 }
 
-.sessions-table .table-row:last-child {
+.dashboard .sessions-table .table-row:last-child{
   border-bottom: none;
 }
 
-.session-info-cell {
+.dashboard .session-info-cell{
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
   min-width: 0;
 }
 
-.session-id {
+.dashboard .session-id{
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8125rem;
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-.session-name {
+.dashboard .session-name{
   font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
@@ -202,13 +201,13 @@
   max-width: 140px;
 }
 
-.phone {
+.dashboard .phone{
   color: var(--text-primary);
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-.status-pill {
+.dashboard .status-pill{
   display: inline-block;
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
@@ -217,33 +216,33 @@
   width: fit-content;
 }
 
-.status-pill.ready {
+.dashboard .status-pill.ready{
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.status-pill.connecting {
+.dashboard .status-pill.connecting{
   background: #fef3c7;
   color: #d97706;
 }
 
-.status-pill.disconnected {
+.dashboard .status-pill.disconnected{
   background: #f3f4f6;
   color: var(--text-muted);
 }
 
-.last-active {
+.dashboard .last-active{
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
 
-.actions {
+.dashboard .actions{
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
 }
 
-.btn-sm {
+.dashboard .btn-sm{
   padding: 0.375rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
@@ -255,46 +254,46 @@
   color: var(--text-secondary);
 }
 
-.btn-sm:hover {
+.dashboard .btn-sm:hover{
   background: var(--bg-white);
   border-color: var(--text-muted);
 }
 
-.btn-sm.danger {
+.dashboard .btn-sm.danger{
   color: #dc2626;
   border-color: #fecaca;
   background: #fef2f2;
 }
 
-.btn-sm.danger:hover {
+.dashboard .btn-sm.danger:hover{
   background: #fee2e2;
 }
 
 @media (max-width: 1200px) {
-  .stats-grid {
+  .dashboard .stats-grid{
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
-  .dashboard {
+  .dashboard{
     padding: 1rem;
   }
 
-  .stats-grid {
+  .dashboard .stats-grid{
     grid-template-columns: 1fr;
     gap: 1rem;
   }
 
-  .stat-value {
+  .dashboard .stat-value{
     font-size: 1.5rem;
   }
 
-  .sessions-section {
+  .dashboard .sessions-section{
     padding: 1rem;
   }
 
-  .section-header {
+  .dashboard .section-header{
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;
@@ -302,11 +301,11 @@
   }
 
   /* Convert table to card layout on mobile */
-  .sessions-table .table-header {
+  .dashboard .sessions-table .table-header{
     display: none;
   }
 
-  .sessions-table .table-row {
+  .dashboard .sessions-table .table-row{
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -314,34 +313,34 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .sessions-table .table-row:last-child {
+  .dashboard .sessions-table .table-row:last-child{
     border-bottom: none;
   }
 
-  .session-info-cell {
+  .dashboard .session-info-cell{
     order: 1;
   }
 
-  .session-id {
+  .dashboard .session-id{
     font-size: 0.9375rem;
     font-weight: 600;
   }
 
-  .phone {
+  .dashboard .phone{
     order: 2;
   }
 
-  .status-pill {
+  .dashboard .status-pill{
     order: 3;
   }
 
-  .last-active {
+  .dashboard .last-active{
     order: 4;
     font-size: 0.75rem;
     color: var(--text-muted);
   }
 
-  .actions {
+  .dashboard .actions{
     order: 5;
     justify-content: flex-start;
     padding-top: 0.5rem;
@@ -350,11 +349,11 @@
 }
 
 @media (max-width: 480px) {
-  .dashboard {
+  .dashboard{
     padding: 0.75rem;
   }
 
-  .header-title {
+  .dashboard .header-title{
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;

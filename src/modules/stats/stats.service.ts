@@ -284,18 +284,22 @@ export class StatsService {
   }
 
   private async getTimeSeries(since: Date, interval: 'hour' | 'day'): Promise<TimeSeriesPoint[]> {
+    // Alias the bucket as `bucket`, not `timestamp`: `timestamp` is a reserved type keyword in
+    // PostgreSQL, so `GROUP BY timestamp` is not read as the output alias and the query 500s
+    // ("column m.createdAt must appear in the GROUP BY"). SQLite tolerates it, hence the dialect-only
+    // bug. The API field stays `timestamp` (mapped below).
     const raw = await this.messageRepo
       .createQueryBuilder('m')
-      .select(timeSeriesTimestampSql(this.dataDbType, interval), 'timestamp')
+      .select(timeSeriesTimestampSql(this.dataDbType, interval), 'bucket')
       .addSelect(`SUM(CASE WHEN m.direction = 'outgoing' THEN 1 ELSE 0 END)`, 'sent')
       .addSelect(`SUM(CASE WHEN m.direction = 'incoming' THEN 1 ELSE 0 END)`, 'received')
       .where('m.createdAt >= :since', { since })
-      .groupBy('timestamp')
-      .orderBy('timestamp', 'ASC')
-      .getRawMany<{ timestamp: string; sent: string; received: string }>();
+      .groupBy('bucket')
+      .orderBy('bucket', 'ASC')
+      .getRawMany<{ bucket: string; sent: string; received: string }>();
 
     return raw.map(r => ({
-      timestamp: r.timestamp,
+      timestamp: r.bucket,
       sent: parseInt(r.sent || '0'),
       received: parseInt(r.received || '0'),
     }));

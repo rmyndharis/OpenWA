@@ -1,0 +1,60 @@
+name: SDK CI
+
+# Runs the JavaScript/Python/PHP client SDK suites. Path-filtered to SDK sources AND the server
+# contract surfaces the SDK types mirror (DTOs + the engine interface), so a backend DTO change also
+# re-runs the SDK suites and surfaces contract drift. The JavaScript job also builds and runs the
+# dual-format packaging smoke test (require() + import() both consumable).
+on:
+  push:
+    branches: [main, develop]
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+  pull_request:
+    branches: [main, develop]
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+
+jobs:
+  javascript:
+    name: JavaScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/javascript
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sdk/javascript/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run smoke # dual CJS+ESM consumable — must run after build
+
+  python:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[dev]'
+      - run: pytest
+
+  php:
+    name: PHP SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/php
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - run: composer install --no-interaction --no-progress
+      - run: ./vendor/bin/phpunit

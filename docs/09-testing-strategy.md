@@ -1,721 +1,228 @@
 # 09 - Testing Strategy
 
-## Implementation Status
+## 09.1 Current Status
 
-> **Current Status: Minimal Implementation**
->
-> This document outlines the planned testing strategy for OpenWA. The current implementation includes only foundational tests:
->
-> | Test Type | Planned | Actual |
-> |-----------|---------|--------|
-> | Unit Tests | 60% coverage | 3 files |
-> | Integration Tests | 30% coverage | Not yet |
-> | E2E Tests | Critical paths | Not yet |
->
-> **Existing test files:**
-> - `src/common/services/logger.service.spec.ts` - Logger functionality
-> - `src/modules/health/health.controller.spec.ts` - Health endpoints
-> - `src/modules/webhook/utils/idempotency.util.spec.ts` - Idempotency utilities
->
-> Comprehensive testing is planned for future releases. The strategy below serves as a guide for contributors and future development phases.
+OpenWA now has an active Jest test suite covering the backend core, engine adapters, security helpers,
+database migrations, plugin hooks, and smoke-level e2e boot paths. This document describes the current
+test layout and the expected testing workflow for contributors.
 
----
+Status snapshot from the repository state on 2026-06-21:
 
-## 09.1 Overview
+| Area | Current state |
+|------|---------------|
+| Backend unit tests | 89 Jest suites / 987 tests passing with `npm test -- --runInBand` |
+| E2E smoke tests | 3 Jest suites / 11 tests passing with `npm run test:e2e -- --runInBand` |
+| Test files | 92 `*.spec.ts` / `*.e2e-spec.ts` files under `src/` and `test/` |
+| Dashboard checks | CI runs dashboard lint, i18n parity check, and dashboard build |
+| Coverage gate | Jest global thresholds plus stricter thresholds for security-sensitive modules |
 
-```mermaid
-flowchart TB
-    subgraph TestPyramid["Testing Pyramid"]
-        direction TB
-        E2E[E2E Tests<br/>10%]
-        INT[Integration Tests<br/>30%]
-        UNIT[Unit Tests<br/>60%]
-    end
-    
-    subgraph Types["Test Types"]
-        UT[Unit Tests]
-        IT[Integration Tests]
-        ET[E2E Tests]
-        PT[Performance Tests]
-        ST[Security Tests]
-    end
+The exact counts will change as the project evolves. Use the commands below as the source of truth.
+
+```bash
+find src test -name '*.spec.ts' -o -name '*.e2e-spec.ts' | wc -l
+npm test -- --runInBand
+npm run test:e2e -- --runInBand
 ```
 
-### Testing Goals
+## 09.2 Test Commands
 
-| Goal | Target | Current | Priority |
-|------|--------|---------|----------|
-| Code Coverage | > 80% | ~5% | High |
-| Integration Test Coverage | > 70% | 0% | High |
-| E2E Critical Paths | 100% | 0% | High |
-| Performance Benchmarks | Pass all | Not started | Medium |
-| Security Scan | 0 Critical | ✅ Passing | High |
+| Command | Purpose |
+|---------|---------|
+| `npm test` | Run backend Jest unit tests from `src/` |
+| `npm test -- --runInBand` | Run backend tests serially; useful for local debugging and clean output |
+| `npm run test:cov` | Run backend tests with coverage and coverage thresholds |
+| `npm run test:e2e` | Run smoke-level e2e tests from `test/` |
+| `npm run lint` | Run backend ESLint with type-aware rules |
+| `cd dashboard && npm run lint` | Run dashboard ESLint |
+| `cd dashboard && npm run i18n:check` | Verify dashboard locale key parity |
+| `cd dashboard && npm run build` | Type-check and build the dashboard |
 
-## 09.2 Unit Testing
+## 09.3 Backend Unit Tests
 
-### Framework & Tools
+Backend unit tests live next to the source files they cover:
 
-```json
-{
-  "devDependencies": {
-    "jest": "^29.0.0",
-    "@nestjs/testing": "^10.0.0",
-    "ts-jest": "^29.0.0"
-  }
-}
-```
-
-### Test Structure
-
-```
+```text
 src/
-├── modules/
-│   ├── session/
-│   │   ├── session.service.ts
-│   │   └── session.service.spec.ts
-│   ├── message/
-│   │   ├── message.service.ts
-│   │   └── message.service.spec.ts
-│   └── webhook/
-│       ├── webhook.service.ts
-│       └── webhook.service.spec.ts
-└── common/
-    └── utils/
-        ├── validator.ts
-        └── validator.spec.ts
+├── common/
+│   ├── security/
+│   │   ├── ssrf-guard.ts
+│   │   └── ssrf-guard.spec.ts
+│   └── storage/
+│       ├── storage.service.ts
+│       └── storage.service.spec.ts
+├── engine/
+│   ├── adapters/
+│   │   ├── baileys.adapter.ts
+│   │   └── baileys.adapter.spec.ts
+│   └── identity/
+│       ├── wa-id.ts
+│       └── wa-id.spec.ts
+└── modules/
+    ├── session/
+    │   ├── session.service.ts
+    │   └── session.service.spec.ts
+    └── webhook/
+        ├── webhook.service.ts
+        └── webhook.service.spec.ts
 ```
 
-### Unit Test Examples
+### What Unit Tests Should Cover
+
+- Service behavior, validation, and error mapping.
+- Engine adapter mapping at the boundary, especially neutral WhatsApp IDs and delivery statuses.
+- Security helpers such as SSRF checks, path containment, trusted proxy IP resolution, and secret-file handling.
+- Database migrations for SQLite and PostgreSQL where SQL differs.
+- Plugin hooks, plugin loading, and capability wrappers.
+- Race-prone behavior such as reconnect handling, ack reconciliation, and concurrent reaction updates.
+
+### Unit Test Pattern
+
+Use Nest's testing module when dependency injection behavior matters. For pure functions and small helpers,
+prefer direct imports with focused assertions.
 
 ```typescript
-// session.service.spec.ts
-describe('SessionService', () => {
-  let service: SessionService;
-  let engineFactory: jest.Mocked<EngineFactory>;
-  let repository: jest.Mocked<SessionRepository>;
-
-  beforeEach(async () => {
-    const module = await Test.createTestingModule({
-      providers: [
-        SessionService,
-        {
-          provide: EngineFactory,
-          useValue: createMock<EngineFactory>(),
-        },
-        {
-          provide: SessionRepository,
-          useValue: createMock<SessionRepository>(),
-        },
-      ],
-    }).compile();
-
-    service = module.get(SessionService);
-    engineFactory = module.get(EngineFactory);
-    repository = module.get(SessionRepository);
-  });
-
-  describe('createSession', () => {
-    it('should create a new session with default config', async () => {
-      const dto = { name: 'test-session' };
-      repository.findByName.mockResolvedValue(null);
-      repository.save.mockResolvedValue({ id: 'sess_123', ...dto });
-
-      const result = await service.createSession(dto);
-
-      expect(result.id).toBe('sess_123');
-      expect(repository.save).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'test-session' })
-      );
-    });
-
-    it('should throw error if session name already exists', async () => {
-      const dto = { name: 'existing-session' };
-      repository.findByName.mockResolvedValue({ id: 'sess_old' });
-
-      await expect(service.createSession(dto))
-        .rejects.toThrow('SESSION_ALREADY_EXISTS');
-    });
-  });
-
-  describe('sendMessage', () => {
-    it('should validate chatId format', async () => {
-      const invalidChatId = 'invalid-format';
-
-      await expect(
-        service.sendMessage('sess_123', invalidChatId, 'Hello')
-      ).rejects.toThrow('MESSAGE_INVALID_CHAT_ID');
-    });
-  });
-});
-```
-
-### Mocking Guidelines
-
-```typescript
-// Mock WhatsApp Engine
-const mockEngine = {
-  initialize: jest.fn().mockResolvedValue(undefined),
-  sendMessage: jest.fn().mockResolvedValue({ messageId: 'msg_123' }),
-  getContacts: jest.fn().mockResolvedValue([]),
-  disconnect: jest.fn(),
-  on: jest.fn(),
-};
-
-// Mock Repository
-const mockRepository = {
-  findById: jest.fn(),
-  findByName: jest.fn(),
-  save: jest.fn(),
-  update: jest.fn(),
-  delete: jest.fn(),
-};
-
-// Mock HTTP Service (for webhooks)
-const mockHttpService = {
-  post: jest.fn().mockReturnValue(of({ data: {}, status: 200 })),
-};
-```
-
-## 09.3 Integration Testing
-
-### Test Database
-
-```yaml
-# docker-compose.test.yml
-version: '3.8'
-services:
-  postgres-test:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: openwa_test
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-    ports:
-      - "5433:5432"
-    tmpfs:
-      - /var/lib/postgresql/data
-  
-  redis-test:
-    image: redis:7-alpine
-    ports:
-      - "6380:6379"
-```
-
-### Integration Test Examples
-
-```typescript
-// session.integration.spec.ts
-describe('Session Integration', () => {
-  let app: INestApplication;
-  let dataSource: DataSource;
-
-  beforeAll(async () => {
-    const module = await Test.createTestingModule({
-      imports: [AppModule],
-    })
-      .overrideProvider(EngineFactory)
-      .useValue(mockEngineFactory)
-      .compile();
-
-    app = module.createNestApplication();
-    await app.init();
-    dataSource = module.get(DataSource);
-  });
-
-  afterAll(async () => {
-    await dataSource.destroy();
-    await app.close();
-  });
-
-  beforeEach(async () => {
-    // Clean database before each test
-    await dataSource.query('TRUNCATE TABLE sessions CASCADE');
-  });
-
-  describe('POST /api/sessions', () => {
-    it('should create session and return QR code', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', 'test-api-key')
-        .send({ name: 'integration-test' })
-        .expect(201);
-
-      expect(response.body.status).toBe('SCAN_QR');
-      expect(response.body.qr).toBeDefined();
-    });
-
-    it('should reject duplicate session name', async () => {
-      // Create first session
-      await request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', 'test-api-key')
-        .send({ name: 'duplicate-test' })
-        .expect(201);
-
-      // Try to create duplicate
-      const response = await request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', 'test-api-key')
-        .send({ name: 'duplicate-test' })
-        .expect(409);
-
-      expect(response.body.statusCode).toBe(409);
-      expect(response.body.message).toMatch(/SESSION_ALREADY_EXISTS/i);
-    });
-  });
-
-  describe('Webhook Delivery', () => {
-    it('should deliver webhook on message received', async () => {
-      // Setup webhook endpoint mock
-      const webhookServer = await createMockWebhookServer(3001);
-      
-      // Create session with webhook
-      await request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', 'test-api-key')
-        .send({
-          name: 'webhook-test',
-          webhook: {
-            url: 'http://localhost:3001/webhook',
-            events: ['message.received']
-          }
-        });
-
-      // Simulate incoming message
-      await simulateIncomingMessage(app, 'webhook-test', {
-        chatId: '628123456789@c.us',
-        text: 'Test message'
-      });
-
-      // Verify webhook was called
-      expect(webhookServer.receivedPayloads).toHaveLength(1);
-      expect(webhookServer.receivedPayloads[0].event).toBe('message.received');
-
-      await webhookServer.close();
-    });
-  });
-});
-```
-
-## 09.4 E2E Testing
-
-### Critical User Journeys
-
-```mermaid
-flowchart LR
-    subgraph Journey1["Session Lifecycle"]
-        J1A[Create Session] --> J1B[Scan QR]
-        J1B --> J1C[Verify Connected]
-        J1C --> J1D[Logout]
-    end
-    
-    subgraph Journey2["Messaging Flow"]
-        J2A[Get Session] --> J2B[Send Text]
-        J2B --> J2C[Verify Sent]
-        J2C --> J2D[Check Webhook]
-    end
-    
-    subgraph Journey3["Bulk Operations"]
-        J3A[Create Batch] --> J3B[Monitor Progress]
-        J3B --> J3C[Verify Results]
-    end
-```
-
-### E2E Test Scenarios
-
-| ID | Scenario | Steps | Expected Result |
-|----|----------|-------|-----------------|
-| E2E-001 | Session Creation | Create → Get QR → Verify status | Status = SCAN_QR |
-| E2E-002 | Send Text Message | Send text → Check response → Verify webhook | Message delivered + webhook called |
-| E2E-003 | Send Media | Send image → Check upload → Verify delivery | Media delivered |
-| E2E-004 | Bulk Messaging | Create batch → Monitor → Verify all sent | 100% delivery |
-| E2E-005 | Webhook Retry | Setup failing webhook → Verify 3 retries | 3 attempts logged |
-| E2E-006 | Rate Limiting | Exceed rate limit → Check 429 response | Proper error + headers |
-| E2E-007 | API Key Auth | Invalid key → Valid key → Permission check | Proper auth flow |
-| E2E-008 | WebSocket Events | Connect → Subscribe → Receive event | Event delivered |
-
-### E2E Test Implementation
-
-```typescript
-// e2e/session.e2e-spec.ts
-describe('Session E2E', () => {
-  let api: AxiosInstance;
-
-  beforeAll(() => {
-    api = axios.create({
-      baseURL: process.env.TEST_API_URL || 'http://localhost:2785/api',
-      headers: { 'X-API-Key': process.env.TEST_API_KEY }
-    });
-  });
-
-  describe('Complete Session Lifecycle', () => {
-    let sessionId: string;
-
-    it('Step 1: Create new session', async () => {
-      const response = await api.post('/sessions', {
-        name: `e2e-test-${Date.now()}`
-      });
-
-      expect(response.status).toBe(201);
-      expect(response.data.status).toBe('SCAN_QR');
-      sessionId = response.data.id;
-    });
-
-    it('Step 2: Get QR code', async () => {
-      const response = await api.get(`/sessions/${sessionId}/qr`);
-
-      expect(response.status).toBe(200);
-      expect(response.data.image).toMatch(/^data:image\/png;base64,/);
-    });
-
-    it('Step 3: Check session status', async () => {
-      const response = await api.get(`/sessions/${sessionId}`);
-
-      expect(response.status).toBe(200);
-      expect(response.data.id).toBe(sessionId);
-    });
-
-    it('Step 4: Delete session', async () => {
-      const response = await api.delete(`/sessions/${sessionId}`);
-
-      expect(response.status).toBe(200);
-    });
-
-    it('Step 5: Verify session deleted', async () => {
-      try {
-        await api.get(`/sessions/${sessionId}`);
-        fail('Should have thrown 404');
-      } catch (error) {
-        expect(error.response.status).toBe(404);
-      }
-    });
-  });
-});
-```
-
-## 09.5 Performance Testing
-
-### Tools
-
-- **k6** - Load testing
-- **Artillery** - API stress testing
-
-### Performance Test Scenarios
-
-```javascript
-// k6/load-test.js
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-
-export const options = {
-  stages: [
-    { duration: '30s', target: 20 },   // Ramp up
-    { duration: '1m', target: 50 },    // Stay at 50 users
-    { duration: '30s', target: 100 },  // Peak load
-    { duration: '30s', target: 0 },    // Ramp down
-  ],
-  thresholds: {
-    http_req_duration: ['p(95)<500'], // 95% requests under 500ms
-    http_req_failed: ['rate<0.01'],   // Less than 1% errors
-  },
-};
-
-const BASE_URL = __ENV.API_URL || 'http://localhost:2785/api';
-const API_KEY = __ENV.API_KEY || 'test-key';
-
-export default function () {
-  // Test: Get sessions
-  const sessionsRes = http.get(`${BASE_URL}/sessions`, {
-    headers: { 'X-API-Key': API_KEY },
-  });
-  
-  check(sessionsRes, {
-    'status is 200': (r) => r.status === 200,
-    'response time < 500ms': (r) => r.timings.duration < 500,
-  });
-
-  sleep(1);
-
-  // Test: Send message (if session exists)
-  if (sessionsRes.json()?.length > 0) {
-    const sessionId = sessionsRes.json()[0].id;
-    const msgRes = http.post(
-      `${BASE_URL}/sessions/${sessionId}/messages/send-text`,
-      JSON.stringify({
-        chatId: '628123456789@c.us',
-        text: `Load test message ${Date.now()}`
+describe('resolveReconnectConfig', () => {
+  it('clamps invalid reconnect settings to safe defaults', () => {
+    expect(
+      resolveReconnectConfig({
+        maxReconnectAttempts: 'not-a-number',
+        reconnectBaseDelay: -1,
       }),
-      {
-        headers: {
-          'X-API-Key': API_KEY,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    check(msgRes, {
-      'message sent': (r) => r.status === 200 || r.status === 400,
-      'response time < 2s': (r) => r.timings.duration < 2000,
-    });
-  }
-
-  sleep(1);
-}
-```
-
-### Performance Targets
-
-| Metric | Target | Critical |
-|--------|--------|----------|
-| API Response Time (p95) | < 500ms | < 1000ms |
-| Message Send Latency | < 2s | < 5s |
-| QR Generation Time | < 3s | < 5s |
-| Throughput | 100 req/s | 50 req/s |
-| Memory per Session | < 500MB | < 800MB |
-| Concurrent Sessions | 10+ | 5 |
-
-## 09.6 Security Testing
-
-### Checklist
-
-```markdown
-## Security Test Checklist
-
-### Authentication
-- [ ] API key required for all endpoints
-- [ ] Invalid API key returns 401
-- [ ] Expired API key rejected
-- [ ] API key hash stored (not plain)
-
-### Authorization
-- [ ] Permission checks enforced
-- [ ] Session isolation (can't access other sessions)
-- [ ] IP whitelist working
-
-### Input Validation
-- [ ] SQL injection prevented
-- [ ] XSS in webhook payloads prevented
-- [ ] chatId format validated
-- [ ] File upload size limits enforced
-
-### Rate Limiting
-- [ ] Rate limits working per endpoint
-- [ ] Rate limit headers present
-- [ ] 429 response on exceed
-
-### Data Protection
-- [ ] Sensitive data encrypted
-- [ ] No secrets in logs
-- [ ] Session auth state encrypted
-```
-
-### Security Test Examples
-
-```typescript
-// security.spec.ts
-describe('Security Tests', () => {
-  describe('Authentication', () => {
-    it('should reject request without API key', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/api/sessions')
-        .expect(401);
-
-      expect(response.body.statusCode).toBe(401);
-      expect(response.body.message).toBeDefined();
-    });
-
-    it('should reject invalid API key', async () => {
-      const response = await request(app.getHttpServer())
-        .get('/api/sessions')
-        .set('X-API-Key', 'invalid-key')
-        .expect(401);
-
-      expect(response.body.statusCode).toBe(401);
-      expect(response.body.message).toBeDefined();
-    });
-  });
-
-  describe('Input Validation', () => {
-    it('should reject SQL injection in session name', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', validApiKey)
-        .send({ name: "'; DROP TABLE sessions; --" })
-        .expect(400);
-
-      expect(response.body.statusCode).toBe(400);
-      expect(response.body.message).toBeDefined();
-    });
-
-    it('should reject XSS in webhook URL', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/api/sessions/sess_123/webhooks')
-        .set('X-API-Key', validApiKey)
-        .send({
-          url: 'javascript:alert(1)',
-          events: ['message.received']
-        })
-        .expect(400);
-
-      expect(response.body.statusCode).toBe(400);
-      expect(response.body.message).toBeDefined();
-    });
-  });
-
-  describe('Rate Limiting', () => {
-    it('should block after exceeding rate limit', async () => {
-      // Send 35 requests (limit is 30)
-      for (let i = 0; i < 35; i++) {
-        await request(app.getHttpServer())
-          .get('/api/sessions')
-          .set('X-API-Key', validApiKey);
-      }
-
-      const response = await request(app.getHttpServer())
-        .get('/api/sessions')
-        .set('X-API-Key', validApiKey)
-        .expect(429);
-
-      expect(response.headers['retry-after']).toBeDefined();
-    });
+    ).toEqual({ maxAttempts: 5, baseDelay: 1000 });
   });
 });
 ```
 
-## 09.7 CI/CD Integration
+## 09.4 E2E Smoke Tests
 
-### GitHub Actions Workflow
+E2E smoke tests live in `test/` and use `test/jest-e2e.json`.
 
-```yaml
-# .github/workflows/test.yml
-name: Tests
-
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
-
-jobs:
-  unit-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-      
-      - run: npm ci
-      - run: npm run test:cov
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/lcov.info
-
-  integration-tests:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_DB: openwa_test
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-        ports:
-          - 5432:5432
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-    
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      
-      - run: npm ci
-      - run: npm run test:integration
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/openwa_test
-          REDIS_URL: redis://localhost:6379
-
-  e2e-tests:
-    runs-on: ubuntu-latest
-    needs: [unit-tests, integration-tests]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      
-      - run: npm ci
-      - run: npm run build
-      - run: npm run test:e2e
-
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm audit --audit-level=high
-      - uses: snyk/actions/node@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+```text
+test/
+├── app.e2e-spec.ts
+├── baileys-engine.e2e-spec.ts
+├── serve-static.e2e-spec.ts
+├── jest-e2e.json
+└── setup-e2e.ts
 ```
 
-## 09.8 Test Reporting
+`test/setup-e2e.ts` configures the app for local test boot before `AppModule` is imported:
 
-### Coverage Requirements
+- `NODE_ENV=test`
+- SQLite database
+- queue disabled
+- auto-start sessions disabled
+- schema synchronize enabled for test boot
 
-| Area | Minimum Coverage |
-|------|------------------|
-| Services | 85% |
-| Controllers | 80% |
-| Guards | 90% |
-| Utils | 95% |
-| Overall | 80% |
+The e2e suite intentionally avoids requiring a live WhatsApp account. It focuses on application boot,
+authentication plumbing, public health endpoints, engine selection paths, and dashboard static serving behavior.
 
-### Test Report Template
+## 09.5 Coverage Policy
 
-```markdown
-## Test Execution Report
+Coverage thresholds are defined in `package.json` under the Jest configuration. Current policy:
 
-**Date:** YYYY-MM-DD
-**Version:** X.X.X
-**Environment:** CI / Staging / Production
+| Scope | Branches | Functions | Lines | Statements |
+|-------|----------|-----------|-------|------------|
+| Global | 30% | 30% | 33% | 33% |
+| `src/common/security/` | 85% | 95% | 90% | 90% |
+| `src/modules/auth/` | 30% | 50% | 45% | 45% |
 
-### Summary
+These thresholds are intentionally higher for security-sensitive code. When adding security code,
+add focused regression tests instead of relying on broad integration coverage.
 
-| Type | Total | Passed | Failed | Skipped |
-|------|-------|--------|--------|---------|
-| Unit | 150 | 148 | 2 | 0 |
-| Integration | 45 | 45 | 0 | 0 |
-| E2E | 15 | 14 | 1 | 0 |
+## 09.6 CI Checks
 
-### Coverage
+CI is defined in `.github/workflows/ci.yml`.
 
-| Module | Lines | Functions | Branches |
-|--------|-------|-----------|----------|
-| session | 92% | 95% | 88% |
-| message | 85% | 90% | 82% |
-| webhook | 88% | 92% | 85% |
-| **Total** | **87%** | **91%** | **84%** |
+| Job | Checks |
+|-----|--------|
+| `lint` | `npm audit --audit-level=critical`, backend ESLint, formatting check |
+| `test` | backend coverage run, e2e smoke tests, Codecov upload |
+| `dashboard` | dashboard install, lint, i18n parity, build |
+| `build` | backend build after lint/test/dashboard jobs pass |
+| `docker` | multi-arch Docker build and push on branch pushes |
 
-### Failed Tests
+Release tags run `.github/workflows/release.yml`, which gates Docker publishing behind tests and build,
+and publishes the GitHub Release only after the image build succeeds — so a tag never ends up with
+release notes but no matching multi-arch image.
 
-1. `message.service.spec.ts` - sendMedia timeout
-   - **Cause:** Mock timeout misconfigured
-   - **Action:** Fix in PR #123
+## 09.7 Testing Guidelines
 
-### Performance Results
+### Add Tests Near the Risk
 
-| Test | Target | Actual | Status |
-|------|--------|--------|--------|
-| API p95 latency | <500ms | 320ms | ✅ |
-| Throughput | 100 req/s | 125 req/s | ✅ |
+For narrow changes, add or update the nearest `*.spec.ts`. For shared behavior, test both the helper and
+one representative consumer. For adapter changes, test the adapter boundary shape rather than the external
+WhatsApp library itself.
+
+### Mock External Systems
+
+Do not require live WhatsApp, Redis, S3, Docker, or internet access for the default test suite. Use mocks,
+temporary directories, or local in-memory objects. Keep live-service tests opt-in and document their
+environment variables separately.
+
+### Preserve Engine-Neutral Contracts
+
+Tests that touch WhatsApp IDs should assert the neutral dialect used by application code:
+
+- `<phone>@c.us`
+- `<id>@g.us`
+- `<lid>@lid`
+- `status@broadcast`, `<id>@newsletter`, `<id>@broadcast`
+
+Application-level tests should not assert raw Baileys `@s.whatsapp.net` IDs or whatsapp-web.js internals.
+
+### Test Failure Paths
+
+For services that dispatch asynchronously, include tests for lookup failure, delivery failure, retries,
+and swallowed fire-and-forget errors. A callback used with `void` should either catch internally or be
+covered by a test proving it cannot leak an unhandled rejection.
+
+### Keep E2E Fast
+
+E2E tests should stay smoke-level unless a change specifically needs a full app boot. Prefer unit tests
+for business logic and e2e tests for wiring, guards, global pipes, app boot, and route-level behavior.
+
+## 09.8 Manual Smoke Checks
+
+Use these checks when changing Docker, Chromium, dashboard serving, or session startup behavior.
+
+```bash
+npm run build:all
+node dist/main
 ```
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+curl -f http://localhost:2785/api/health/ready
+```
+
+For production-compose changes:
+
+```bash
+docker compose up -d --build
+docker compose logs -f openwa-api
+```
+
+Live WhatsApp checks require an operator-owned account and should not be part of CI:
+
+1. Create a session.
+2. Start the session.
+3. Scan QR or request a pairing code.
+4. Confirm session reaches `ready`.
+5. Send a text message to a test chat.
+6. Confirm message history, webhook delivery, and WebSocket events.
+
+## 09.9 Known Gaps
+
+- No default CI job exercises a real WhatsApp connection.
+- No default CI job exercises real PostgreSQL, Redis, S3/MinIO, or Docker socket proxy integration.
+- Performance testing is not automated.
+- Dashboard UI tests are not currently automated beyond lint, i18n parity, and build.
+
+These gaps are intentional for the default suite because the project prioritizes deterministic tests that
+run without external services. Add opt-in integration jobs only when they are isolated, documented, and do
+not make normal contributor workflows brittle.
+
 ---
 
 <div align="center">

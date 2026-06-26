@@ -131,6 +131,35 @@ describe('StorageService put/getFile containment is backend-agnostic', () => {
   });
 });
 
+describe('StorageService getFileCount (S3 size)', () => {
+  it('sums the real Size of each S3 object instead of estimating', async () => {
+    const { service, baseDir } = makeLocalService();
+    const sendMock = jest.fn().mockResolvedValue({
+      Contents: [
+        { Key: 'media/a.jpg', Size: 1000 },
+        { Key: 'media/b.jpg', Size: 2500 },
+      ],
+    });
+    const internal = service as unknown as {
+      storageType: string;
+      s3Client: unknown;
+      s3Bucket: string;
+      s3Available: boolean;
+    };
+    internal.storageType = 's3';
+    internal.s3Client = { send: sendMock };
+    internal.s3Bucket = 'test-bucket';
+    internal.s3Available = true;
+
+    const result = await service.getFileCount();
+
+    expect(result.count).toBe(2);
+    expect(result.sizeBytes).toBe(3500); // real object sizes, not files.length * 100000
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+});
+
 describe('StorageService import resource caps (decompression-bomb defense)', () => {
   let baseDir: string;
   let localPath: string;

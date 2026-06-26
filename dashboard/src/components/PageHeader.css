@@ -3,22 +3,27 @@
    Consistent header styling for all pages
    ============================================= */
 
+/* Grid so the three regions can re-order responsively: on desktop the title and actions share
+   the top row with the subtitle beneath; on mobile the subtitle follows the title directly and
+   the actions drop to the bottom (description should follow the title, not the call-to-action). */
 .page-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'title actions'
+    'subtitle subtitle';
+  align-items: center;
+  column-gap: 1rem;
   margin-bottom: 1.5rem;
   width: 100%;
 }
 
-.page-header__top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-}
-
 .page-header__title-group {
+  grid-area: title;
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .page-header__title-group h1 {
@@ -31,12 +36,15 @@
 }
 
 .page-header__actions {
+  grid-area: actions;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 
 .page-header__subtitle {
+  grid-area: subtitle;
   margin: 0;
   margin-top: 0.5rem; /* Consistent 8px gap from title row */
   font-size: 0.9375rem;
@@ -44,11 +52,15 @@
   line-height: 1.5;
 }
 
-/* Mobile Responsive */
+/* Mobile Responsive: stack as title -> subtitle -> actions */
 @media (max-width: 768px) {
-  .page-header__top {
-    flex-wrap: wrap;
-    gap: 0.75rem;
+  .page-header {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'title'
+      'subtitle'
+      'actions';
+    column-gap: 0;
   }
 
   .page-header__title-group h1 {
@@ -56,7 +68,8 @@
   }
 
   .page-header__actions {
-    flex-shrink: 0;
+    justify-self: stretch;
+    margin-top: 0.25rem;
   }
 
   .page-header__subtitle {
@@ -65,15 +78,6 @@
 }
 
 @media (max-width: 480px) {
-  .page-header__top {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .page-header__actions {
-    width: 100%;
-  }
-
   .page-header__actions > button,
   .page-header__actions > .btn-primary,
   .page-header__actions > .btn-secondary {

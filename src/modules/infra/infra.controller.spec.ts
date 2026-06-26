@@ -18,6 +18,9 @@ jest.mock('fs', () => {
   return {
     ...actual,
     writeFileSync: jest.fn(),
+    // saveConfig now writes the generated env via writeSecretFile, which chmods 0600 — mock it
+    // so the secret-hygiene path never touches the real filesystem.
+    chmodSync: jest.fn(),
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
   };
@@ -31,6 +34,9 @@ import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch, BatchStatus } from '../message/entities/message-batch.entity';
+import { Template } from '../template/entities/template.entity';
+import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
+import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -121,6 +127,29 @@ describe('InfraController.saveConfig SSL reject-unauthorized', () => {
   });
 });
 
+describe('InfraController.saveConfig writes the generated env owner-only', () => {
+  // data/.env.generated holds DB/S3/Redis credentials, so it must be written 0600 — not the
+  // default 0644 (world-readable). The write must go through the same owner-only path the
+  // first-run boot uses, closing the gap between a dashboard save and the next restart.
+  it('persists data/.env.generated with mode 0600, not world-readable', () => {
+    const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+    const controller = new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    controller.saveConfig({ database: { type: 'postgres', sslEnabled: true, password: 'pw' } } as never);
+    const opts = writeSpy.mock.calls[0][2];
+    expect(opts).toEqual({ mode: 0o600 });
+    writeSpy.mockRestore();
+  });
+});
+
 describe('InfraController.saveConfig env-name correctness and merge (#226)', () => {
   const newController = () =>
     new InfraController(
@@ -202,6 +231,93 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
     expect(env).not.toContain('S3_BUCKET=');
     expect(env).not.toContain('S3_ACCESS_KEY_ID=');
     expect(env).not.toContain('S3_SECRET_ACCESS_KEY=');
+  });
+});
+
+describe('InfraController.saveConfig rejects values that would inject extra env vars', () => {
+  const newController = () =>
+    new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  // .env.generated is one KEY=value per line and is loaded on the next boot. A value carrying a
+  // newline would write a second `KEY=value` line — injecting an arbitrary env var (e.g. an admin
+  // key) the operator never set. Such a value must be refused outright, with nothing written.
+  it.each([
+    ['linefeed', '--no-sandbox\nADMIN_MASTER_KEY=attacker'],
+    ['carriage return', '--no-sandbox\rADMIN_MASTER_KEY=attacker'],
+  ])('does not persist a config value containing a %s', (_label, malicious) => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    const result = newController().saveConfig({ engine: { browserArgs: malicious } });
+
+    expect(result.saved).toBe(false);
+    expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
+  });
+
+  it('still persists a normal value with the same key', () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    const result = newController().saveConfig({ engine: { browserArgs: '--no-sandbox --disable-gpu' } });
+
+    expect(result.saved).toBe(true);
+    expect(fs.writeFileSync as jest.Mock).toHaveBeenCalled();
+  });
+});
+
+describe('InfraController.saveConfig engine selection (persist ENGINE_TYPE — Infrastructure tile)', () => {
+  const engineFactory = {
+    getAvailableEngines: () => [{ id: 'whatsapp-web.js' }, { id: 'baileys' }],
+  };
+  const newController = () =>
+    new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      engineFactory as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  function written(config: unknown, existing?: string): string {
+    (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
+    (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
+    (fs.writeFileSync as jest.Mock).mockClear();
+    newController().saveConfig(config as never);
+    const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+    return content;
+  }
+
+  it('persists ENGINE_TYPE when a valid engine is selected', () => {
+    const env = written({ engine: { type: 'baileys', headless: true } });
+    expect(env).toContain('ENGINE_TYPE=baileys');
+  });
+
+  it('does not write ENGINE_TYPE when no engine type is provided (avoids clobbering)', () => {
+    const env = written({ engine: { headless: false } });
+    expect(env).not.toContain('ENGINE_TYPE=');
+    expect(env).toContain('PUPPETEER_HEADLESS=false');
+  });
+
+  it('rejects an unknown engine type and writes nothing', () => {
+    (fs.writeFileSync as jest.Mock).mockClear();
+    const res = newController().saveConfig({ engine: { type: 'bogus' } });
+    expect(res.saved).toBe(false);
+    expect(res.message).toMatch(/unknown engine/i);
+    expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
   });
 });
 
@@ -343,11 +459,130 @@ describe('InfraController.importData round-trips export-data (no silent message/
   });
 });
 
+describe('InfraController.import/export preserves every data-DB table', () => {
+  let ds: DataSource;
+  let controller: InfraController;
+  const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
+  const newController = () =>
+    new InfraController(cfg as never, {} as never, ds, {} as never, {} as never, {} as never, {} as never, {} as never);
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [Session, Webhook, Message, MessageBatch, Template, BaileysStoredMessage, LidMapping],
+      synchronize: true,
+    });
+    await ds.initialize();
+    controller = newController();
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  const seedSession = (id: string) =>
+    ds.getRepository(Session).save(
+      ds.getRepository(Session).create({
+        id,
+        name: `session-${id}`,
+        status: SessionStatus.READY,
+        phone: null,
+        pushName: null,
+        config: {},
+        proxyUrl: null,
+        proxyType: null,
+        connectedAt: null,
+        lastActiveAt: null,
+      }),
+    );
+
+  // lid_mappings is the persisted lid->phone cache; it is NOT a FK to sessions, so the sessions DELETE
+  // never touches it — but export omitted it, so a backup→restore into a fresh DB dropped it entirely.
+  it('restores lid_mappings instead of dropping them on a backup→restore', async () => {
+    await seedSession('s1');
+    const lidRepo = ds.getRepository(LidMapping);
+    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1' }));
+    await lidRepo.save(lidRepo.create({ lid: '222', phone: null, sessionId: 's1' })); // negative cache
+
+    const dump = await controller.exportData();
+    expect((dump.tables as unknown as { lidMappings?: unknown[] }).lidMappings).toHaveLength(2);
+
+    // Simulate restoring into a fresh data DB (the documented backend-migration flow).
+    await lidRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(await lidRepo.count()).toBe(2);
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).phone).toBe('628111');
+    expect((await lidRepo.findOneByOrFail({ lid: '222' })).phone).toBeNull();
+  });
+
+  // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
+  // so an import that never re-inserts them permanently wipes both on the documented backup flow.
+  it('restores templates and baileys_stored_messages instead of cascade-wiping them', async () => {
+    await seedSession('s1');
+    await ds
+      .getRepository(Template)
+      .save(ds.getRepository(Template).create({ id: 't1', sessionId: 's1', name: 'greet', body: 'Hi {{name}}' }));
+    await ds.getRepository(BaileysStoredMessage).save(
+      ds.getRepository(BaileysStoredMessage).create({
+        id: 'bsm1',
+        sessionId: 's1',
+        waMessageId: 'WA1',
+        serializedMessage: '{"k":"v"}',
+      }),
+    );
+
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(await ds.getRepository(Template).count()).toBe(1);
+    expect(await ds.getRepository(BaileysStoredMessage).count()).toBe(1);
+    expect((await ds.getRepository(Template).findOneByOrFail({ id: 't1' })).body).toBe('Hi {{name}}');
+    expect((await ds.getRepository(BaileysStoredMessage).findOneByOrFail({ id: 'bsm1' })).serializedMessage).toBe(
+      '{"k":"v"}',
+    );
+  });
+
+  // The webhooks INSERT omitted the `filters` column, so a filtered webhook came back firing on
+  // every event after a restore (over-delivery / PII fan-out).
+  it('preserves webhook filters across a round-trip', async () => {
+    await seedSession('s1');
+    await ds.getRepository(Webhook).save(
+      ds.getRepository(Webhook).create({
+        id: 'w1',
+        sessionId: 's1',
+        url: 'https://example.com/hook',
+        events: ['message'],
+        secret: null,
+        headers: {},
+        active: true,
+        retryCount: 3,
+        filters: { conditions: [{ field: 'sender', operator: 'equals', value: '123@c.us' }] },
+      }),
+    );
+
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.imported).toBe(true);
+    expect((await ds.getRepository(Webhook).findOneByOrFail({ id: 'w1' })).filters).toEqual({
+      conditions: [{ field: 'sender', operator: 'equals', value: '123@c.us' }],
+    });
+    // The active flag (exported as integer 1 from SQLite) must round-trip as a real boolean.
+    expect((await ds.getRepository(Webhook).findOneByOrFail({ id: 'w1' })).active).toBe(true);
+  });
+});
+
 describe('InfraController.getConfig (#226)', () => {
   it('returns the saved config shape without echoing secrets', () => {
     (fs.existsSync as jest.Mock).mockReturnValue(true);
     (fs.readFileSync as jest.Mock).mockReturnValue(
-      'DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_PASSWORD=secret\nSESSION_DATA_PATH=./sess\nSTORAGE_TYPE=s3\nS3_ACCESS_KEY_ID=ak\nS3_SECRET_ACCESS_KEY=sk\n',
+      'DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_PASSWORD=secret\nSESSION_DATA_PATH=./sess\nENGINE_TYPE=baileys\nSTORAGE_TYPE=s3\nS3_ACCESS_KEY_ID=ak\nS3_SECRET_ACCESS_KEY=sk\n',
     );
     const controller = new InfraController(
       {} as never,
@@ -368,11 +603,85 @@ describe('InfraController.getConfig (#226)', () => {
     expect(cfg.database.host).toBe('db');
     expect(cfg.database.passwordSet).toBe(true);
     expect(cfg.engine.sessionDataPath).toBe('./sess');
+    expect(cfg.engine.type).toBe('baileys');
     expect(cfg.storage.type).toBe('s3');
     expect(cfg.storage.s3CredentialsSet).toBe(true);
     // Secrets are never present on the returned object.
     expect(JSON.stringify(cfg)).not.toContain('secret');
     expect(JSON.stringify(cfg)).not.toContain('"ak"');
+  });
+});
+
+describe('InfraController.getStatus engine (F7 — reads the real engine.puppeteer.* keys)', () => {
+  it('reports the saved headless/browserArgs instead of stale defaults from non-existent flat keys', async () => {
+    const map: Record<string, unknown> = {
+      'engine.type': 'whatsapp-web.js',
+      'engine.puppeteer.headless': false,
+      'engine.puppeteer.args': ['--foo', '--bar'],
+      'engine.sessionDataPath': './sess',
+    };
+    const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
+    const cache = { isAvailable: () => Promise.resolve(false) };
+    const ds = { isInitialized: true };
+    const controller = new InfraController(
+      config as never,
+      ds as never,
+      ds as never,
+      {} as never,
+      {} as never,
+      cache as never,
+      {} as never,
+      {} as never,
+    );
+
+    const status = await controller.getStatus();
+    expect(status.engine.headless).toBe(false);
+    expect(status.engine.browserArgs).toBe('--foo --bar');
+    expect(status.engine.sessionDataPath).toBe('./sess');
+  });
+});
+
+describe('InfraController.getStatus storage (reads the real storage.localPath key)', () => {
+  const buildController = (map: Record<string, unknown>) => {
+    const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
+    const cache = { isAvailable: () => Promise.resolve(false) };
+    const ds = { isInitialized: true };
+    return new InfraController(
+      config as never,
+      ds as never,
+      ds as never,
+      {} as never,
+      {} as never,
+      cache as never,
+      {} as never,
+      {} as never,
+    );
+  };
+
+  it('reports the configured storage.localPath, not the ./uploads fallback', async () => {
+    // The bug: status read the non-existent `storage.path` key, so it always reported the
+    // `./uploads` fallback instead of the real path StorageService uses (`storage.localPath`).
+    const status = await buildController({
+      'storage.type': 'local',
+      'storage.localPath': '/srv/openwa/media',
+    }).getStatus();
+    expect(status.storage.path).toBe('/srv/openwa/media');
+  });
+
+  it('falls back to ./data/media (matching StorageService) when storage.localPath is unset', async () => {
+    const status = await buildController({ 'storage.type': 'local' }).getStatus();
+    expect(status.storage.path).toBe('./data/media');
+  });
+
+  it('reports the bucket in S3 mode so the active backend is visible', async () => {
+    const status = await buildController({ 'storage.type': 's3', 'storage.s3.bucket': 'my-openwa-bucket' }).getStatus();
+    expect(status.storage.type).toBe('s3');
+    expect(status.storage.bucket).toBe('my-openwa-bucket');
+  });
+
+  it('omits bucket in local mode (no fabricated field)', async () => {
+    const status = await buildController({ 'storage.type': 'local' }).getStatus();
+    expect(status.storage.bucket).toBeUndefined();
   });
 });
 

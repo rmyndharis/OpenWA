@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "فُقد الاتصال بالخادم",
+      "message": "تعذّر الوصول إلى الخادم الخلفي. يرجى التحقق مما إذا كان الخادم قيد التشغيل."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "واجهة برمجة واتساب",
@@ -137,7 +143,8 @@
       "activeSessions": "الجلسات النشطة",
       "messagesToday": "رسائل اليوم",
       "webhooksConfigured": "الويب هوك المُهيّأة",
-      "apiCalls": "استدعاءات API (24 ساعة)"
+      "apiCalls": "استدعاءات API (24 ساعة)",
+      "totalMessages": "إجمالي الرسائل"
     },
     "sessionsOverview": "نظرة عامة على الجلسات",
     "showingSessions": "عرض {{shown}} من {{total}} جلسة",
@@ -152,7 +159,22 @@
     "view": "عرض",
     "disconnect": "قطع الاتصال",
     "errorPrefix": "خطأ: {{message}}",
-    "loadError": "فشل تحميل البيانات"
+    "loadError": "فشل تحميل البيانات",
+    "charts": {
+      "title": "تحليلات الرسائل",
+      "period": {
+        "24h": "24 ساعة",
+        "7d": "7 أيام",
+        "30d": "30 يومًا"
+      },
+      "overTime": "الرسائل عبر الزمن",
+      "byType": "الرسائل حسب النوع",
+      "topChats": "أبرز المحادثات",
+      "sent": "المُرسَلة",
+      "received": "المُستلَمة",
+      "messages": "الرسائل",
+      "empty": "لا يوجد نشاط رسائل في هذه الفترة."
+    }
   },
   "sessionStatus": {
     "created": "جديد",
@@ -270,6 +292,36 @@
     "events": "الأحداث",
     "available": "الأحداث المتاحة",
     "saveChanges": "حفظ التغييرات",
+    "filters": {
+      "title": "عوامل التصفية (اختياري)",
+      "hint": "يتم التفعيل فقط عند تطابق جميع الشروط. ينطبق على أحداث الرسائل.",
+      "badge": "{{count}} عامل تصفية",
+      "badge_other": "{{count}} عوامل تصفية",
+      "addCondition": "إضافة شرط",
+      "removeCondition": "إزالة الشرط",
+      "caseSensitive": "حساس لحالة الأحرف",
+      "contactPlaceholder": "رقم أو معرّف واتساب...",
+      "textPlaceholder": "نص للمطابقة...",
+      "addValue": "إضافة \"{{value}}\"",
+      "yes": "نعم",
+      "no": "لا",
+      "fields": {
+        "sender": "المُرسِل",
+        "recipient": "المُستلِم",
+        "body": "نص الرسالة",
+        "type": "نوع الرسالة",
+        "isGroup": "محادثة جماعية",
+        "fromMe": "مُرسَلة مني",
+        "hasMedia": "تحتوي على وسائط",
+        "mentions": "الإشارات"
+      },
+      "operators": {
+        "is": "هو",
+        "isNot": "ليس",
+        "contains": "يحتوي على",
+        "equals": "يساوي"
+      }
+    },
     "columns": {
       "url": "الرابط",
       "events": "الأحداث",
@@ -516,6 +568,17 @@
       "migrationsStatus": "يتم مزامنة المخطط تلقائياً مع TypeORM",
       "migrationsHint": "تُدار عمليات الترحيل تلقائياً. استخدم CLI للترحيل اليدوي."
     },
+    "engine": {
+      "title": "محرك واتساب",
+      "subtitle": "اختر محرك اتصال واتساب وقم بتهيئته.",
+      "builtIn": "مدمج",
+      "headless": "الوضع بدون واجهة",
+      "headlessDesc": "تشغيل المتصفح بدون واجهة مرئية (موصى به للإنتاج).",
+      "sessionDataPath": "مسار بيانات الجلسة",
+      "browserArgs": "وسائط المتصفح",
+      "noBrowser": "يتصل هذا المحرك عبر WebSocket — لا يحتوي على متصفح، لذلك لا توجد إعدادات للوضع بدون واجهة أو وسائط المتصفح. يُطبَّق المحرك النشط بعد إعادة التشغيل.",
+      "restartNote": "يسري تغيير المحرك بعد إعادة تشغيل الخادم."
+    },
     "redis": {
       "title": "Redis",
       "enable": "تفعيل Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "الإضافات",
-    "subtitle": "إدارة المحركات وواجهات التخزين والامتدادات",
+    "subtitle": "ثبّت الإضافات وكوّنها وأدِرها",
     "refresh": "تحديث",
     "engineCard": "محرك واتساب النشط",
     "running": "يعمل",
@@ -593,6 +656,11 @@
     "disable": "تعطيل",
     "healthCheck": "فحص الصحة",
     "configure": "إعداد",
+    "available": "متاحة",
+    "install": "تثبيت إضافة",
+    "uninstall": "إزالة",
+    "uninstallConfirm": "إزالة \"{{name}}\"؟ سيؤدي ذلك إلى حذف ملفاتها.",
+    "engineSwitchHint": "عيّنها كمحرك نشط في الإعدادات، ثم أعد التشغيل",
     "empty": {
       "title": "لم يتم العثور على إضافات",
       "description": "ثبّت إضافات لتوسيع وظائف OpenWA"
@@ -606,7 +674,23 @@
       "sessionDataPath": "مسار بيانات الجلسة",
       "browserArgs": "مُعطيات المتصفح",
       "noOptions": "لا توجد خيارات إعداد لهذه الإضافة",
-      "save": "حفظ الإعدادات"
+      "save": "حفظ الإعدادات",
+      "addItem": "إضافة",
+      "tabConfig": "الإعدادات",
+      "tabSessions": "الجلسات"
+    },
+    "rail": {
+      "engine": "المحرك النشط",
+      "enabled": "مُمكَّنة",
+      "installed": "مُثبَّتة",
+      "active": "الإضافات النشطة",
+      "none": "لا توجد إضافات مُمكَّنة بعد"
+    },
+    "installModal": {
+      "title": "تثبيت إضافة",
+      "hint": "ارفع إضافة معبّأة بصيغة .zip (تحتوي على manifest.json). تعمل في بيئة معزولة بعد تمكينها.",
+      "choose": "اختر ملف .zip…",
+      "tooLarge": "يتجاوز الملف الحد الأقصى البالغ 5 MB."
     },
     "toasts": {
       "errorTitle": "خطأ في الإضافة",
@@ -616,7 +700,24 @@
       "healthError": "خطأ في فحص الصحة",
       "savedTitle": "تم حفظ الإعدادات",
       "savedDesc": "يلزم إعادة تشغيل الخادم لتطبيق التغييرات.",
-      "saveFailed": "فشل الحفظ"
+      "saveFailed": "فشل الحفظ",
+      "installed": "تم تثبيت الإضافة",
+      "installFailed": "فشل التثبيت",
+      "uninstalled": "تمت إزالة الإضافة",
+      "uninstallFailed": "فشلت الإزالة"
+    },
+    "sessions": {
+      "activationTitle": "التشغيل لـ",
+      "activationDesc": "اختر الجلسات التي يعمل عليها هذا الملحق.",
+      "allSessions": "جميع الجلسات",
+      "specificSessions": "جلسات محددة",
+      "noSessions": "لا توجد جلسات بعد.",
+      "saveActivation": "حفظ التفعيل",
+      "perSessionTitle": "إعدادات لكل جلسة",
+      "perSessionDesc": "تجاوز الإعدادات العامة لجلسة معينة؛ الحقول غير المعدّلة ترث القيمة العامة.",
+      "selectSession": "اختر جلسة…",
+      "saveOverride": "حفظ التجاوز",
+      "clearOverride": "مسح التجاوز"
     }
   }
 }

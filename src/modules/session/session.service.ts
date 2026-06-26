@@ -9,10 +9,13 @@ import {
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { paginate, ListOptions } from '../../common/utils/paginate';
+import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -401,9 +404,107 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
       await this.initializeEngine(id, session);
+
+      // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
+      // engine we just registered so the session isn't resurrected to READY (mirrors the post-init
+      // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
+      if (this.stoppingSessions.has(id)) {
+        const resurrected = this.engines.get(id);
+        if (resurrected) {
+          await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
+          this.engines.delete(id);
+        }
+      }
       return this.findOne(id);
     } finally {
       this.initializingSessions.delete(id);
+    }
+  }
+
+  /**
+   * True only while `engine` is still the live engine registered for `id`. Each callback below
+   * captures its own engine instance; once the session is stopped (engine removed from the map) or
+   * restarted/reconnected (engine replaced), a late callback from the superseded engine must not
+   * mutate the session that now belongs to a different — or no — engine. `this.engines` is the
+   * single source of truth for the active engine, so identity comparison closes both the
+   * post-stop and the stale-generation (stop→start / reconnect-replace) windows the one-shot
+   * post-init guard does not cover.
+   */
+  private isLiveEngine(id: string, engine: IWhatsAppEngine): boolean {
+    return this.engines.get(id) === engine;
+  }
+
+  /**
+   * Persist pre-connection history into the `messages` table for the chat view, without webhook/hook/ws
+   * dispatch (it predates the live session). De-duplicated by `waMessageId` so re-syncs never duplicate.
+   */
+  private async persistHistoryMessages(id: string, messages: IncomingMessage[]): Promise<void> {
+    const byId = new Map<string, IncomingMessage>();
+    for (const m of messages) {
+      // Need an id to de-dup; chatId/from/to are NOT NULL; status/story posts aren't chats.
+      if (m.id && !m.isStatusBroadcast && m.chatId && m.from && m.to) {
+        byId.set(m.id, m);
+      }
+    }
+    if (byId.size === 0) {
+      return;
+    }
+    // Chunk the dedup query: a batch can be thousands, past SQLite's bound-variable limit for IN (...).
+    const ids = [...byId.keys()];
+    const CHUNK = 400;
+    let inserted = 0;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunkIds = ids.slice(i, i + CHUNK);
+      const existing = await this.messageRepository.find({
+        where: { sessionId: id, waMessageId: In(chunkIds) },
+        select: ['waMessageId'],
+      });
+      const seen = new Set(existing.map(r => r.waMessageId));
+      const rows = chunkIds
+        .filter(x => !seen.has(x))
+        .map(x => {
+          const m = byId.get(x)!;
+          const metadata: Record<string, unknown> = {};
+          if (m.media) metadata.media = m.media;
+          if (m.quotedMessage) metadata.quotedMessage = m.quotedMessage;
+          const row = this.messageRepository.create({
+            sessionId: id,
+            waMessageId: m.id,
+            chatId: m.chatId,
+            from: m.from,
+            to: m.to,
+            body: m.body,
+            type: m.type,
+            direction: m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+            timestamp: m.timestamp,
+            status: MessageStatus.SENT,
+            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+          });
+          // The chat panel orders by createdAt; stamp the real time so history sorts correctly.
+          if (m.timestamp) {
+            row.createdAt = new Date(m.timestamp * 1000);
+          }
+          return row;
+        });
+      if (rows.length) {
+        // Insert-or-ignore: a live onMessage insert can land between the `seen` SELECT above and this
+        // write, colliding on UNIQUE(sessionId, waMessageId). orIgnore skips the collision instead of
+        // throwing and aborting the whole batch (history is best-effort, persist-never-dispatch).
+        await this.messageRepository
+          .createQueryBuilder()
+          .insert()
+          .values(rows as unknown as QueryDeepPartialEntity<Message>[])
+          .orIgnore()
+          .execute();
+        inserted += rows.length;
+      }
+    }
+    if (inserted) {
+      this.logger.log(`Persisted ${inserted} history message(s)`, {
+        sessionId: id,
+        inserted,
+        action: 'history_messages_persisted',
+      });
     }
   }
 
@@ -430,12 +531,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     await engine.initialize({
       onQRCode: (qr: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log('QR code generated', {
           sessionId: id,
           action: 'qr_generated',
         });
 
         void this.webhookService.dispatch(id, 'session.qr', { sessionId: id, qr });
+
+        // Push the QR to subscribed dashboard clients over the WebSocket (the `session.qr` event is
+        // advertised + consumed there, so clients can render it live instead of polling GET /qr).
+        this.eventsGateway.emitQRCode(id, qr);
 
         // Execute hook for QR event
         void this.hookManager.execute(
@@ -450,6 +556,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         void this.updateStatus(id, SessionStatus.QR_READY);
       },
       onReady: (phone: string, pushName: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.log(`Session ready: ${phone}`, {
           sessionId: id,
           phone,
@@ -458,6 +565,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
 
         void this.webhookService.dispatch(id, 'session.authenticated', { sessionId: id, phone, pushName });
+        this.eventsGateway.emitSessionAuthenticated(id, { phone, pushName });
 
         // Execute hook for ready event
         void this.hookManager.execute(
@@ -485,6 +593,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onMessage: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // Status/Story posts arrive via the inbound path for some engines; don't persist or webhook them.
         // Mirrors the isStatusBroadcast guard in onMessageCreate below.
         if (message.isStatusBroadcast) {
@@ -509,7 +618,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
-              // Plugin stopped processing (e.g., auto-reply handled it)
+              // A plugin handled the event and asked to stop the chain (continue: false).
               return;
             }
 
@@ -545,9 +654,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
-            void this.messageRepository.save(dbMessage).catch(err => {
-              this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
-            });
+            // De-duplicate at the source: the engine can re-fire `message` for one inbound message
+            // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
+            // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
+            // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
+            // message is never dropped by a transient DB failure.
+            let isNewMessage = true;
+            try {
+              await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
+            } catch (err) {
+              if (isUniqueConstraintError(err)) {
+                isNewMessage = false;
+              } else {
+                this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+              }
+            }
+            if (!isNewMessage) {
+              return; // duplicate re-fire — the original already persisted and dispatched
+            }
 
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);
@@ -556,7 +680,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           })
           .catch(err => this.logger.error(`onMessage handler failed for ${id}`, String(err)));
       },
+      onHistoryMessages: (messages): void => {
+        if (!this.isLiveEngine(id, engine)) return;
+        // Persist for the chat view only; no dispatch (these predate the live session).
+        void this.persistHistoryMessages(id, messages).catch(err =>
+          this.logger.error(`Failed to persist history messages for ${id}`, String(err)),
+        );
+      },
       onMessageCreate: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         // `message_create` fires for every message the account creates, including sends composed on a
         // linked phone — which the `message`/`onMessage` event never delivers. Incoming messages are
         // already handled by `onMessage`, so only outgoing (`fromMe`) ones produce `message.sent` here.
@@ -605,6 +737,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           .catch(err => this.logger.error(`onMessageCreate handler failed for ${id}`, String(err)));
       },
       onMessageAck: (messageId, status: DeliveryStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message ack: ${messageId} -> ${status}`, {
           sessionId: id,
           messageId,
@@ -659,32 +792,39 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             .catch(onAckError);
         }
 
-        // Push the live delivery/read tick to the dashboard over the websocket (neutral status).
-        this.eventsGateway.emitMessageAck(id, { messageId, status });
+        // One ack payload, emitted identically over the socket and the webhook so a client coded
+        // against either channel sees the same shape. `id` mirrors the field every other message.*
+        // event carries (and the idempotency-key resolver reads). `ack` is a deprecated legacy field
+        // kept for backward compatibility — new consumers should read the neutral `status`.
+        const ackPayload = { id: messageId, messageId, status, ack: deliveryStatusToAck(status) };
+
+        // Push the live delivery/read tick to the dashboard over the websocket.
+        this.eventsGateway.emitMessageAck(id, ackPayload);
 
         // Dispatch the delivery/read receipt to webhooks (#155). Outgoing `message.sent` is handled
         // solely by `onMessageCreate`, so the ack path deliberately does NOT emit `message.sent`.
-        // `id` mirrors the field every other message.* webhook carries (and the idempotency key
-        // resolver reads). `ack` is a deprecated legacy field kept for backward compatibility —
-        // new consumers should read the neutral `status`.
-        void this.webhookService.dispatch(id, 'message.ack', {
-          id: messageId,
-          messageId,
-          status,
-          ack: deliveryStatusToAck(status),
-        });
+        void this.webhookService.dispatch(id, 'message.ack', ackPayload);
 
-        // Surface delivery failures actively so consumers don't have to poll for them (#220).
+        // Surface delivery failures actively so consumers don't have to poll for them (#220). Use a
+        // distinct object (not the shared ackPayload) so this separate event can't be perturbed by an
+        // in-place payload mutation in the concurrent message.ack dispatch's webhook:before hook.
         if (status === 'failed') {
-          void this.webhookService.dispatch(id, 'message.failed', {
-            id: messageId,
-            messageId,
-            status,
-            ack: deliveryStatusToAck(status),
-          });
+          void this.webhookService.dispatch(id, 'message.failed', { ...ackPayload });
         }
+
+        // Notify plugins of the delivery/read receipt. The `message:ack` hook event was declared in
+        // the HookEvent union but never emitted, so any plugin registered for it silently never fired.
+        // Fire-and-forget: an ack is a notification with nothing downstream to cancel, so the hook's
+        // `continue` flag is moot. Delivery failures surface here as status `failed` — `message:failed`
+        // stays reserved for send-time send failures, which carry a distinct `{ error, input }` payload.
+        void this.hookManager.execute(
+          'message:ack',
+          { messageId, status, ack: deliveryStatusToAck(status) },
+          { sessionId: id, source: 'Engine' },
+        );
       },
       onMessageRevoked: (message): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message revoked: ${message.id}`, {
           sessionId: id,
           messageId: message.id,
@@ -707,6 +847,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.eventsGateway.emitMessageRevoked(id, revokedPayload);
       },
       onMessageReaction: (event): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.debug(`Message reaction received: ${event.messageId} -> ${event.reaction}`, {
           sessionId: id,
           messageId: event.messageId,
@@ -727,6 +868,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
       },
       onDisconnected: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.warn(`Session disconnected: ${reason}`, {
           sessionId: id,
           reason,
@@ -734,6 +876,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
 
         void this.webhookService.dispatch(id, 'session.disconnected', { sessionId: id, reason });
+        this.eventsGateway.emitSessionDisconnected(id, { reason });
 
         // Execute hook for disconnected event
         void this.hookManager.execute(
@@ -751,6 +894,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.scheduleReconnect(id, session);
       },
       onStateChanged: (engineState: EngineStatus): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         const statusMap: Record<EngineStatus, SessionStatus> = {
           [EngineStatus.DISCONNECTED]: SessionStatus.DISCONNECTED,
           [EngineStatus.INITIALIZING]: SessionStatus.INITIALIZING,
@@ -765,6 +909,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
       },
       onError: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
         this.logger.error(`Session engine failed: ${reason}`, undefined, {
           sessionId: id,
           reason,
@@ -775,6 +920,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // then persist the FAILED status. This is terminal — no reconnect is
         // scheduled (unlike onDisconnected), since re-scanning is required.
         this.sessionErrors.set(id, reason);
+
+        // A prior onDisconnected may have scheduled a reconnect. This failure is terminal
+        // (re-scan required), so cancel it — otherwise the pending timer would resurrect a
+        // session the operator must manually restart.
+        this.cancelReconnect(id);
 
         void this.hookManager.execute(
           'session:error',
@@ -855,6 +1005,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       },
     );
 
+    // Clear any timer a prior scheduleReconnect left pending so two back-to-back disconnects
+    // don't stack two timers (which would run executeReconnect twice and double-init the engine).
+    if (state.timer) clearTimeout(state.timer);
     state.timer = setTimeout(() => {
       void this.executeReconnect(id, session, state);
     }, delay);
@@ -866,10 +1019,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
     try {
-      // Clean up old engine
+      // Clean up old engine. Time-bound the teardown: a wedged Chromium (the common reconnect
+      // trigger) makes destroy() hang, and a raw await here would stall the reconnect forever —
+      // the session would never re-init nor reach FAILED. teardownEngineSafely always resolves
+      // (after 10s on a hang), so reconnection proceeds either way.
       const oldEngine = this.engines.get(id);
       if (oldEngine) {
-        await oldEngine.destroy();
+        await this.teardownEngineSafely(id, oldEngine, e => e.destroy(), 'destroy');
         this.engines.delete(id);
       }
 
@@ -881,7 +1037,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (this.stoppingSessions.has(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
-          await resurrected.destroy();
+          await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
           this.engines.delete(id);
         }
         return;
@@ -1032,7 +1188,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return phone;
   }
 
-  async getGroups(id: string): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
+  async getGroups(
+    id: string,
+    opts: ListOptions = {},
+  ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1041,14 +1200,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     const groups = await engine.getGroups();
-    return groups.map(g => ({
+    const mapped = groups.map(g => ({
       id: g.id,
       name: g.name,
       linkedParentJID: g.linkedParentJID,
     }));
+    return paginate(mapped, opts.limit, opts.offset);
   }
 
-  async getChats(id: string): Promise<ChatSummary[]> {
+  async getChats(id: string, opts: ListOptions = {}): Promise<ChatSummary[]> {
     await this.findOne(id); // Verify session exists
     const engine = this.engines.get(id);
 
@@ -1056,7 +1216,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new BadRequestException('Session is not started');
     }
 
-    return engine.getChats();
+    // Most-recent first, then bound the response window. Sorting before the cap means a capped
+    // response is the N newest chats (what clients show first) rather than an arbitrary slice.
+    const chats = [...(await engine.getChats())].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    return paginate(chats, opts.limit, opts.offset);
   }
 
   async sendSeen(id: string, chatId: string): Promise<boolean> {
@@ -1068,6 +1231,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     return engine.sendSeen(chatId);
+  }
+
+  async markUnread(id: string, chatId: string): Promise<boolean> {
+    await this.findOne(id); // Verify session exists
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started');
+    }
+
+    return engine.markUnread(chatId);
   }
 
   async deleteChat(id: string, chatId: string): Promise<boolean> {
@@ -1113,7 +1287,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Get overall session statistics for multi-session monitoring
    */
-  async getStats(): Promise<{
+  async getStats(allowedSessions?: string[] | null): Promise<{
     total: number;
     active: number;
     ready: number;
@@ -1121,7 +1295,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     byStatus: Record<string, number>;
     memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
   }> {
-    const sessions = await this.findAll();
+    // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
+    // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
+    const scope = allowedSessions && allowedSessions.length > 0 ? allowedSessions : null;
+    const sessions = await this.findAll(scope);
     const byStatus: Record<string, number> = {};
 
     for (const session of sessions) {
@@ -1132,7 +1309,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     return {
       total: sessions.length,
-      active: this.engines.size,
+      // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
+      active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,
       disconnected: byStatus[SessionStatus.DISCONNECTED] || 0,
       byStatus,

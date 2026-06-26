@@ -12,7 +12,12 @@ describe('cross-DB column type helpers (data connection dialect)', () => {
 
   it('resolves Postgres types when DATABASE_TYPE=postgres', () => {
     process.env.DATABASE_TYPE = 'postgres';
-    expect(jsonColumnType()).toBe('jsonb');
+    // JSON columns are 'simple-json' on BOTH dialects: the baseline migration created these as
+    // `text`, and the pg driver returns a `text` column as a raw (unparsed) string. A 'jsonb'-typed
+    // entity reading a text column hands back that string, so e.g. webhook.events arrives as
+    // '["message.received"]' and the dashboard's events.map() throws. 'simple-json' JSON-parses on
+    // read regardless of dialect, matching the actual text columns. Dates still differ by dialect.
+    expect(jsonColumnType()).toBe('simple-json');
     expect(dateColumnType()).toBe('timestamp');
   });
 

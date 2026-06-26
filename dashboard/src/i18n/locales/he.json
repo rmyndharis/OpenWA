@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "החיבור לשרת אבד",
+      "message": "לא ניתן להגיע לשרת העורפי. אנא בדקו אם השרת פועל."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "ממשק WhatsApp API",
@@ -137,7 +143,8 @@
       "activeSessions": "Sessions פעילים",
       "messagesToday": "הודעות היום",
       "webhooksConfigured": "Webhooks מוגדרים",
-      "apiCalls": "קריאות API (24 שעות)"
+      "apiCalls": "קריאות API (24 שעות)",
+      "totalMessages": "סה\"כ הודעות"
     },
     "sessionsOverview": "סקירת Sessions",
     "showingSessions": "מוצגים {{shown}} מתוך {{total}} Sessions",
@@ -152,7 +159,22 @@
     "view": "צפייה",
     "disconnect": "ניתוק",
     "errorPrefix": "שגיאה: {{message}}",
-    "loadError": "טעינת הנתונים נכשלה"
+    "loadError": "טעינת הנתונים נכשלה",
+    "charts": {
+      "title": "ניתוח הודעות",
+      "period": {
+        "24h": "24 ש'",
+        "7d": "7 ימים",
+        "30d": "30 יום"
+      },
+      "overTime": "הודעות לאורך זמן",
+      "byType": "הודעות לפי סוג",
+      "topChats": "צ'אטים מובילים",
+      "sent": "נשלחו",
+      "received": "התקבלו",
+      "messages": "הודעות",
+      "empty": "אין פעילות הודעות בתקופה זו."
+    }
   },
   "sessionStatus": {
     "created": "חדש",
@@ -270,6 +292,36 @@
     "events": "אירועים",
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
+    "filters": {
+      "title": "מסננים (אופציונלי)",
+      "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
+      "badge": "{{count}} מסנן",
+      "badge_other": "{{count}} מסננים",
+      "addCondition": "הוספת תנאי",
+      "removeCondition": "הסרת תנאי",
+      "caseSensitive": "תלוי רישיות",
+      "contactPlaceholder": "מספר או מזהה WhatsApp...",
+      "textPlaceholder": "טקסט להתאמה...",
+      "addValue": "הוספת \"{{value}}\"",
+      "yes": "כן",
+      "no": "לא",
+      "fields": {
+        "sender": "שולח",
+        "recipient": "נמען",
+        "body": "גוף ההודעה",
+        "type": "סוג הודעה",
+        "isGroup": "צ'אט קבוצתי",
+        "fromMe": "נשלח על ידי",
+        "hasMedia": "מכיל מדיה",
+        "mentions": "אזכורים"
+      },
+      "operators": {
+        "is": "הוא",
+        "isNot": "אינו",
+        "contains": "מכיל",
+        "equals": "שווה ל"
+      }
+    },
     "columns": {
       "url": "כתובת URL",
       "events": "אירועים",
@@ -516,6 +568,17 @@
       "migrationsStatus": "הסכמה מסונכרנת אוטומטית עם TypeORM",
       "migrationsHint": "ה-Migrations מנוהלים אוטומטית. ניתן להשתמש ב-CLI ל-Migrations ידניים."
     },
+    "engine": {
+      "title": "מנוע WhatsApp",
+      "subtitle": "בחר והגדר את מנוע החיבור של WhatsApp.",
+      "builtIn": "מובנה",
+      "headless": "מצב ללא ממשק",
+      "headlessDesc": "הרצת הדפדפן ללא ממשק גלוי (מומלץ לסביבת ייצור).",
+      "sessionDataPath": "נתיב נתוני הפעלה",
+      "browserArgs": "ארגומנטים של הדפדפן",
+      "noBrowser": "מנוע זה מתחבר באמצעות WebSocket — אין לו דפדפן, ולכן אין הגדרות למצב ללא ממשק או לארגומנטים של הדפדפן. המנוע הפעיל מוחל לאחר הפעלה מחדש.",
+      "restartNote": "החלפת המנוע נכנסת לתוקף לאחר הפעלה מחדש של השרת."
+    },
     "redis": {
       "title": "Redis",
       "enable": "הפעלת Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "תוספים",
-    "subtitle": "ניהול מנועים, יעדי אחסון והרחבות",
+    "subtitle": "התקנה, הגדרה וניהול של הרחבות",
     "refresh": "רענון",
     "engineCard": "מנוע WhatsApp פעיל",
     "running": "פועל",
@@ -593,6 +656,11 @@
     "disable": "השבתה",
     "healthCheck": "בדיקת תקינות",
     "configure": "הגדרה",
+    "available": "זמינים",
+    "install": "התקנת תוסף",
+    "uninstall": "הסרה",
+    "uninstallConfirm": "להסיר את \"{{name}}\"? פעולה זו תמחק את הקבצים שלו.",
+    "engineSwitchHint": "יש להגדיר כמנוע הפעיל בהגדרות ולאחר מכן לאתחל",
     "empty": {
       "title": "לא נמצאו תוספים",
       "description": "ניתן להתקין תוספים כדי להרחיב את היכולות של OpenWA"
@@ -606,7 +674,23 @@
       "sessionDataPath": "נתיב נתוני Session",
       "browserArgs": "ארגומנטים של הדפדפן",
       "noOptions": "אין אפשרויות הגדרה זמינות עבור תוסף זה",
-      "save": "שמירת תצורה"
+      "save": "שמירת תצורה",
+      "addItem": "הוספה",
+      "tabConfig": "הגדרות",
+      "tabSessions": "Sessions"
+    },
+    "rail": {
+      "engine": "מנוע פעיל",
+      "enabled": "מופעלים",
+      "installed": "מותקנים",
+      "active": "תוספים פעילים",
+      "none": "אף אחד אינו מופעל עדיין"
+    },
+    "installModal": {
+      "title": "התקנת תוסף",
+      "hint": "ניתן להעלות תוסף ארוז כקובץ .zip (הכולל manifest.json). הוא פועל בארגז חול לאחר ההפעלה.",
+      "choose": "בחירת קובץ ‎.zip‎…",
+      "tooLarge": "הקובץ חורג מהמגבלה של ‎5 MB‎."
     },
     "toasts": {
       "errorTitle": "שגיאת תוסף",
@@ -616,7 +700,24 @@
       "healthError": "שגיאה בבדיקת תקינות",
       "savedTitle": "התצורה נשמרה",
       "savedDesc": "נדרש אתחול שרת כדי להחיל את השינויים.",
-      "saveFailed": "השמירה נכשלה"
+      "saveFailed": "השמירה נכשלה",
+      "installed": "התוסף הותקן",
+      "installFailed": "ההתקנה נכשלה",
+      "uninstalled": "התוסף הוסר",
+      "uninstallFailed": "ההסרה נכשלה"
+    },
+    "sessions": {
+      "activationTitle": "הפעלה עבור",
+      "activationDesc": "בחרו עבור אילו sessions תוסף זה יפעל.",
+      "allSessions": "כל ה-Sessions",
+      "specificSessions": "Sessions מסוימים",
+      "noSessions": "אין Sessions עדיין.",
+      "saveActivation": "שמירת הפעלה",
+      "perSessionTitle": "הגדרות לכל Session",
+      "perSessionDesc": "דריסת ההגדרות הגלובליות עבור session; שדות שלא שונו יורשים את הערך הגלובלי.",
+      "selectSession": "בחירת session…",
+      "saveOverride": "שמירת דריסה",
+      "clearOverride": "ניקוי דריסה"
     }
   }
 }

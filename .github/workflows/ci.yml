@@ -35,6 +35,9 @@ jobs:
       - name: Check formatting
         run: npm run format -- --check
 
+      - name: Check version consistency (docs track package.json)
+        run: npm run check:versions
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -87,6 +90,9 @@ jobs:
 
       - name: Build dashboard
         run: cd dashboard && npm run build
+
+      - name: Run dashboard unit tests
+        run: cd dashboard && npm run test:unit
 
   build:
     name: Build

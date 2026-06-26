@@ -2,9 +2,10 @@
 
 ## Implementation Status
 
-> **Current Status: ⚠️ Partially Implemented**
+> **Current Status: ✅ Implemented**
 >
-> The core plugin infrastructure is functional. Advanced features are planned for future releases.
+> The plugin runtime — loader, hook bus, capability facade, permission enforcement, per-session
+> activation, and a `worker_thread` sandbox for untrusted plugins — is shipped and wired.
 
 | Component | Status | Location |
 |-----------|--------|----------|
@@ -12,17 +13,19 @@
 | **PluginLoaderService** | ✅ Implemented | `src/core/plugins/plugin-loader.service.ts` |
 | **PluginStorageService** | ✅ Implemented | `src/core/plugins/plugin-storage.service.ts` |
 | **Manifest loading** | ✅ Implemented | Loads from `plugins/` directory |
-| **Plugin lifecycle** | ✅ Implemented | load, enable, disable, unload |
+| **Plugin lifecycle** | ✅ Implemented | onLoad, onEnable, onDisable, onUnload, onConfigChange, healthCheck |
 | **Dashboard UI** | ✅ Implemented | `dashboard/src/pages/Plugins.tsx` |
 | **REST API** | ✅ Implemented | `src/modules/plugins/plugins.controller.ts` |
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **@openwa/plugin-sdk** | 🔜 Planned | NPM package not yet published |
-| **Sandboxed execution** | 🔜 Planned | vm2 isolation not implemented |
-| **Permission enforcement** | ⚠️ Partial | Defined in manifest, not enforced |
-| **Built-in plugins** | ✅ Implemented | `auto-reply` + group auto-translation ship with v0.3.0, disabled by default |
-| **Plugin marketplace** | 🔜 Planned | Install from npm/github |
+| **Sandboxed execution** | ✅ Implemented | Untrusted (disk-loaded) plugins run in a `worker_thread`; see [23 — Plugin Sandboxing](./23-plugin-sandboxing.md). No `vm2`. |
+| **Permission enforcement** | ✅ Implemented | Capability permissions enforced at the call boundary via `assertPermission` |
+| **Per-session activation** | ✅ Implemented | A session-scoped plugin runs only for the sessions an operator activated it for |
+| **Per-session config** | ✅ Implemented | Per-session config overrides shallow-merged over the base config at hook time |
+| **Built-in plugins** | ✅ Implemented | The two engine adapters (`whatsapp-web.js`, `baileys`) register as in-process built-ins |
+| **Plugin install / catalog** | ✅ Implemented | Install a `.zip` by upload or URL, or from the remote catalog |
+| **@openwa/plugin-sdk** | 🔜 Planned | NPM package not yet published; plugins implement `IPlugin` directly today |
 
 ---
 
@@ -49,9 +52,9 @@ flowchart TB
     end
 ```
 
-1. **Isolation** - _Planned, NOT enforced._ Plugins currently run in-process with full Node privileges (`require()`), guarded only by a path-containment check. **Load only trusted plugins** until sandboxed (vm2/worker) execution ships.
+1. **Isolation** - Untrusted plugins (anything loaded from the `plugins/` directory) run in a `worker_thread`, separate from in-process built-ins; capability calls round-trip to the host. First-party built-ins (the engine adapters) run in-process. A `worker_thread` is V8-context isolation in the same OS process, not an OS-level sandbox — see [23 — Plugin Sandboxing](./23-plugin-sandboxing.md) for what it does and does not guarantee, and the OS-containment guidance.
 2. **Extensibility** - Easy to add new features
-3. **Safety** - Permission-based access control (planned; not yet enforced)
+3. **Safety** - Capability permissions are enforced at the call boundary (`assertPermission` throws `PluginCapabilityError`), session scope is enforced per call, and outbound HTTP is SSRF-guarded.
 4. **Performance** - Lazy loading, minimal overhead
 
 ## 19.2 Plugin Types
@@ -105,297 +108,216 @@ plugins/
 
 ### Manifest File
 
+`id`, `name`, `version`, `type`, and `main` are required; the rest are optional. There is **no**
+`types` field and **no** version-compatibility (`min`/`maxVersion`) check — the loader does not gate on
+a host version. The config schema is the top-level `configSchema` (note: not nested under `config`).
+
 ```json
 {
-  "name": "my-awesome-plugin",
+  "id": "my-awesome-plugin",
+  "name": "My Awesome Plugin",
   "version": "1.0.0",
+  "type": "extension",
   "description": "An awesome plugin for OpenWA",
   "author": "Your Name",
   "license": "MIT",
 
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
 
-  "openwa": {
-    "minVersion": "0.3.0",
-    "maxVersion": "2.0.0"
+  "permissions": ["messages:send", "engine:read", "net:fetch"],
+
+  "sessionScoped": true,
+  "sessions": ["*"],
+
+  "net": { "allow": ["api.example.com"] },
+
+  "hooks": ["message:received", "message:sending"],
+
+  "provides": ["greeter"],
+  "requires": [],
+
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "greeting": { "type": "string", "title": "Greeting", "default": "Hello" },
+      "apiKey": { "type": "string", "title": "API key", "secret": true }
+    }
   },
 
-  "permissions": [
-    "messages:read",
-    "messages:write",
-    "contacts:read",
-    "storage:read",
-    "storage:write",
-    "http:outbound"
-  ],
+  "configUi": { "entry": "config-ui.html", "height": 480 },
 
-  "hooks": [
-    "message:received",
-    "message:sending",
-    "session:connected",
-    "webhook:before"
-  ],
-
-  "config": {
-    "schema": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true
-        },
-        "apiKey": {
-          "type": "string",
-          "secret": true
-        },
-        "options": {
-          "type": "object",
-          "properties": {
-            "autoReply": { "type": "boolean", "default": false },
-            "language": { "type": "string", "default": "id" }
-          }
-        }
-      }
-    }
+  "i18n": {
+    "es": { "name": "Mi complemento", "config": { "greeting": { "title": "Saludo" } } }
   }
 }
 ```
 
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `id` | ✅ | Unique identifier (also the plugin's on-disk directory name) |
+| `name` | ✅ | Display name |
+| `version` | ✅ | Semver |
+| `type` | ✅ | One of `engine`, `storage`, `queue`, `auth`, `extension` |
+| `main` | ✅ | Entry file, resolved **inside** the plugin directory (a path that escapes it is rejected) |
+| `permissions` | — | Capability permissions this plugin declares; absent/empty = no capability access |
+| `sessions` | — | Session ids this plugin may act on, or `['*']`. Absent = `['*']`. Static — editing config can't widen it |
+| `sessionScoped` | — | Default `true`. A scoped plugin only sees events for the sessions it's activated for; `false` = always runs |
+| `net.allow` | — | Outbound-HTTP host allowlist for `ctx.net.fetch` (`host`, `host:port`, or `'*'`). Absent = deny all |
+| `configSchema` | — | Declarative config schema the dashboard renders into a form |
+| `configUi` | — | Optional self-contained HTML config editor served into a sandboxed iframe (preferred over `configSchema` when present) |
+| `hooks` | — | Hook events this plugin listens to (informational) |
+| `provides` / `requires` | — | Features this plugin provides / depends on |
+| `i18n` | — | Localized dashboard text per locale (dashboard-only) |
+
+A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
+preserved on an unchanged write.
+
 ### Plugin Entry Point
+
+A plugin's `main` module **default-exports a class** that implements `IPlugin`. All lifecycle methods
+are optional and each receives only the `PluginContext` — there is no second `config` argument; config
+is read from `ctx.config`.
 
 ```typescript
 // plugins/my-plugin/index.ts
 
-import { OpenWAPlugin, PluginContext, MessageEvent, HookResult } from '@openwa/plugin-sdk';
+import type { IPlugin, PluginContext } from '@openwa/plugin-sdk'; // shape only; implement IPlugin
 
-export interface MyPluginConfig {
-  enabled: boolean;
-  apiKey: string;
-  options: {
-    autoReply: boolean;
-    language: string;
-  };
+interface MyPluginConfig {
+  greeting: string;
+  apiKey?: string;
 }
 
-export default class MyAwesomePlugin implements OpenWAPlugin<MyPluginConfig> {
-  name = 'my-awesome-plugin';
-  version = '1.0.0';
+export default class MyAwesomePlugin implements IPlugin {
+  async onLoad(ctx: PluginContext): Promise<void> {
+    ctx.logger.log('Plugin loaded', { version: ctx.manifest.version });
 
-  private ctx!: PluginContext;
-  private config!: MyPluginConfig;
+    // Register a hook handler. Handlers receive a HookContext and return a HookResult.
+    ctx.registerHook('message:received', async hookCtx => {
+      const cfg = ctx.config as MyPluginConfig; // per-session-merged config for this event
+      const { sessionId, data } = hookCtx;
+      const message = data as { from: string; body?: string };
 
-  /**
-   * Called when plugin is loaded
-   */
-  async onLoad(ctx: PluginContext, config: MyPluginConfig): Promise<void> {
-    this.ctx = ctx;
-    this.config = config;
-
-    ctx.logger.info('Plugin loaded', { version: this.version });
-
-    // Register message handler
-    ctx.hooks.on('message:received', this.handleIncomingMessage.bind(this));
-
-    // Register API routes (optional)
-    ctx.router.get('/my-plugin/status', this.getStatus.bind(this));
-    ctx.router.post('/my-plugin/action', this.doAction.bind(this));
-  }
-
-  /**
-   * Called when plugin is unloaded
-   */
-  async onUnload(): Promise<void> {
-    this.ctx.logger.info('Plugin unloading');
-    // Cleanup resources
-  }
-
-  /**
-   * Handle incoming message
-   */
-  async handleIncomingMessage(event: MessageEvent): Promise<HookResult> {
-    if (!this.config.enabled) {
+      if (message.body?.toLowerCase() === 'help' && sessionId) {
+        // Capability call — requires the 'messages:send' permission + an in-scope, live session.
+        await ctx.messages.sendText(sessionId, message.from, cfg.greeting ?? 'How can I help you?');
+        return { continue: false }; // stop the chain
+      }
       return { continue: true };
-    }
-
-    const { message, session } = event;
-
-    // Example: Auto-reply to specific keyword
-    if (this.config.options.autoReply && message.body?.toLowerCase() === 'help') {
-      await this.ctx.api.messages.send(session.id, {
-        phone: message.from,
-        type: 'text',
-        body: 'How can I help you?',
-      });
-
-      // Stop processing (don't trigger webhook)
-      return { continue: false };
-    }
-
-    // Continue to next handler/webhook
-    return { continue: true };
-  }
-
-  /**
-   * Custom API endpoint
-   */
-  async getStatus(req: Request, res: Response): Promise<void> {
-    res.json({
-      plugin: this.name,
-      version: this.version,
-      enabled: this.config.enabled,
-      stats: await this.getStats(),
     });
   }
 
-  async doAction(req: Request, res: Response): Promise<void> {
-    // Perform action
-    res.json({ success: true });
+  async onEnable(_ctx: PluginContext): Promise<void> {}
+  async onDisable(_ctx: PluginContext): Promise<void> {}
+  async onUnload(ctx: PluginContext): Promise<void> {
+    ctx.logger.log('Plugin unloading');
   }
 
-  private async getStats(): Promise<object> {
-    // Get plugin stats from storage
-    return this.ctx.storage.get('stats') || {};
+  async onConfigChange(ctx: PluginContext, newConfig: Record<string, unknown>): Promise<void> {
+    ctx.logger.log('Config changed', { keys: Object.keys(newConfig) });
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
+    return { healthy: true };
   }
 }
 ```
 
 ## 19.4 Plugin SDK
 
+> Plugins implement the `IPlugin` interface directly. An `@openwa/plugin-sdk` npm package is planned
+> but not yet published; the interfaces below are the live runtime contract from
+> `src/core/plugins/plugin.interfaces.ts`.
+
 ### Core Interfaces
 
 ```typescript
-// @openwa/plugin-sdk/types.ts
+// src/core/plugins/plugin.interfaces.ts
 
-export interface OpenWAPlugin<TConfig = any> {
-  name: string;
-  version: string;
-
-  onLoad(ctx: PluginContext, config: TConfig): Promise<void>;
-  onUnload(): Promise<void>;
+export interface IPlugin {
+  // All optional; each receives only the PluginContext.
+  onLoad?: (context: PluginContext) => Promise<void>;
+  onEnable?: (context: PluginContext) => Promise<void>;
+  onDisable?: (context: PluginContext) => Promise<void>;
+  onUnload?: (context: PluginContext) => Promise<void>;
+  onConfigChange?: (context: PluginContext, newConfig: Record<string, unknown>) => Promise<void>;
+  healthCheck?: () => Promise<{ healthy: boolean; message?: string }>;
 }
 
 export interface PluginContext {
-  // Logging
-  logger: Logger;
+  pluginId: string;
+  manifest: PluginManifest;
 
-  // Hook registration
-  hooks: HookRegistry;
+  // Effective config for the firing session (per-session override merged over the base). A getter,
+  // so it reflects live config edits; outside a hook it returns the base config.
+  config: Record<string, unknown>;
 
-  // API access (permission-based)
-  api: PluginAPI;
+  hookManager: HookManager;
+  logger: PluginLogger;        // log / debug / warn / error
+  storage: PluginStorage;      // get / set / delete / list — scoped to this plugin
 
-  // Plugin storage
-  storage: PluginStorage;
+  // Register a hook handler (optionally with a priority; lower runs first).
+  registerHook: (event: HookEvent, handler: HookHandler, priority?: number) => void;
 
-  // HTTP router for custom endpoints
-  router: PluginRouter;
-
-  // Configuration
-  config: ConfigService;
-
-  // Event emitter
-  events: EventEmitter;
+  // Capability facade (permission- + scope-checked on each call):
+  messages: PluginMessagingCapability; // requires 'messages:send'
+  engine: PluginEngineReadCapability;  // requires 'engine:read' (read-only)
+  net: PluginNetCapability;            // requires 'net:fetch' (SSRF-guarded, net.allow-scoped)
 }
 
-export interface Logger {
-  debug(message: string, meta?: object): void;
-  info(message: string, meta?: object): void;
-  warn(message: string, meta?: object): void;
-  error(message: string, meta?: object): void;
-}
-
-export interface HookRegistry {
-  on(event: HookEvent, handler: HookHandler): void;
-  off(event: HookEvent, handler: HookHandler): void;
-  once(event: HookEvent, handler: HookHandler): void;
-}
-
-export type HookEvent =
-  | 'message:received'
-  | 'message:sending'
-  | 'message:sent'
-  | 'message:failed'
-  | 'session:created'
-  | 'session:connected'
-  | 'session:disconnected'
-  | 'session:deleted'
-  | 'webhook:before'
-  | 'webhook:after'
-  | 'webhook:error';
-
-export type HookHandler<T = any> = (event: T) => Promise<HookResult>;
-
-export interface HookResult {
-  continue: boolean;      // Whether to continue to next handler
-  modified?: any;         // Modified event data
-  error?: Error;          // Error to stop processing
+export interface PluginLogger {
+  log(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, error?: unknown, meta?: Record<string, unknown>): void;
 }
 ```
 
-### Plugin API
+There is **no** `ctx.api`, `ctx.router`, or `ctx.events` — plugins do not mount HTTP routes or get an
+event emitter. Hook handlers use the host `HookContext` / `HookResult` shape (see §19.5), not a
+`{ continue, modified }` shape.
+
+### Capability facade
+
+A plugin reaches WhatsApp, the engine, and the network **only** through these three namespaces. Each
+call is gated by the matching declared permission (and, for `messages`/`engine`, the session scope) —
+a missing grant throws a `PluginCapabilityError`.
 
 ```typescript
-// @openwa/plugin-sdk/api.ts
+// ctx.messages — requires 'messages:send'. Routes through MessageService (persistence preserved).
+export interface PluginMessagingCapability {
+  sendText(sessionId: string, chatId: string, text: string): Promise<MessageResponseDto>;
+  reply(sessionId: string, chatId: string, quotedMessageId: string, text: string): Promise<MessageResponseDto>;
+}
 
-export interface PluginAPI {
-  // Sessions (requires: sessions:read/write)
-  sessions: {
-    list(): Promise<Session[]>;
-    get(id: string): Promise<Session>;
-    getStatus(id: string): Promise<SessionStatus>;
-  };
+// ctx.engine — requires 'engine:read'. Read-only, scoped engine queries.
+export interface PluginEngineReadCapability {
+  getGroupInfo(sessionId: string, groupId: string): Promise<...>;
+  getContacts(sessionId: string): Promise<...>;
+  getContactById(sessionId: string, contactId: string): Promise<...>;
+  checkNumberExists(sessionId: string, phone: string): Promise<...>;
+  getChats(sessionId: string): Promise<...>;
+}
 
-  // Messages (requires: messages:read/write)
-  messages: {
-    send(sessionId: string, input: SendMessageInput): Promise<Message>;
-    get(sessionId: string, messageId: string): Promise<Message>;
-    list(sessionId: string, phone: string): Promise<Message[]>;
-  };
-
-  // Contacts (requires: contacts:read/write)
-  contacts: {
-    list(sessionId: string): Promise<Contact[]>;
-    get(sessionId: string, phone: string): Promise<Contact>;
-    exists(sessionId: string, phone: string): Promise<boolean>;
-  };
-
-  // Groups (requires: groups:read/write)
-  groups: {
-    list(sessionId: string): Promise<Group[]>;
-    get(sessionId: string, groupId: string): Promise<Group>;
-    getParticipants(sessionId: string, groupId: string): Promise<Participant[]>;
-  };
-
-  // HTTP (requires: http:outbound)
-  http: {
-    get(url: string, options?: HttpOptions): Promise<HttpResponse>;
-    post(url: string, body: any, options?: HttpOptions): Promise<HttpResponse>;
-    put(url: string, body: any, options?: HttpOptions): Promise<HttpResponse>;
-    delete(url: string, options?: HttpOptions): Promise<HttpResponse>;
-  };
+// ctx.net — requires 'net:fetch'. Always through the host SSRF guard, scoped to manifest net.allow.
+export interface PluginNetCapability {
+  fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
 }
 ```
+
+`ctx.net.fetch` returns a serializable response (`{ ok, status, statusText, headers, body }`, body as
+a string) — no streaming and no live `Response` object, because it must cross the worker boundary via
+structured clone. The request has a default 15 s / hard-cap 30 s timeout and a 10 MB response cap.
 
 ### Plugin Storage
 
 ```typescript
-// @openwa/plugin-sdk/storage.ts
-
+// Key-value storage, scoped to the plugin (values cross structuredClone, so keep them serializable).
 export interface PluginStorage {
-  // Key-value storage (scoped to plugin)
-  get<T = any>(key: string): Promise<T | null>;
-  set<T = any>(key: string, value: T, ttl?: number): Promise<void>;
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
-  has(key: string): Promise<boolean>;
-
-  // List operations
-  keys(pattern?: string): Promise<string[]>;
-  clear(): Promise<void>;
-
-  // Atomic operations
-  increment(key: string, by?: number): Promise<number>;
-  decrement(key: string, by?: number): Promise<number>;
+  list(prefix?: string): Promise<string[]>;
 }
 ```
 
@@ -413,707 +335,265 @@ sequenceDiagram
 
     Core->>HM: Message Received
     HM->>P1: message:received
-    P1->>HM: {continue: true, modified: msg}
-    HM->>P2: message:received (modified)
+    P1->>HM: {continue: true, data: msg}
+    HM->>P2: message:received (with P1's data)
     P2->>HM: {continue: true}
     HM->>Core: Continue processing
     Core->>WH: Deliver webhook
 ```
 
-### Hook Implementation
+A handler returns `{ continue: false }` to stop the chain. To transform the event it returns
+`{ continue: true, data: <new value> }`; the next handler (and the host) sees that `data`. (There is
+no `modified` field — the result type uses `data`.)
+
+### Hook events
 
 ```typescript
-// src/core/hooks/hook-manager.ts
+// src/core/hooks/hook.interfaces.ts
 
-export class HookManager {
-  private hooks: Map<HookEvent, HookHandler[]> = new Map();
-  private pluginHooks: Map<string, Map<HookEvent, HookHandler[]>> = new Map();
-
-  /**
-   * Register hook handler for a plugin
-   */
-  register(pluginId: string, event: HookEvent, handler: HookHandler): void {
-    // Get plugin's hooks map
-    if (!this.pluginHooks.has(pluginId)) {
-      this.pluginHooks.set(pluginId, new Map());
-    }
-
-    const pluginMap = this.pluginHooks.get(pluginId)!;
-    if (!pluginMap.has(event)) {
-      pluginMap.set(event, []);
-    }
-
-    pluginMap.get(event)!.push(handler);
-
-    // Add to global hooks
-    if (!this.hooks.has(event)) {
-      this.hooks.set(event, []);
-    }
-    this.hooks.get(event)!.push(handler);
-  }
-
-  /**
-   * Unregister all hooks for a plugin
-   */
-  unregisterPlugin(pluginId: string): void {
-    const pluginMap = this.pluginHooks.get(pluginId);
-    if (!pluginMap) return;
-
-    // Remove from global hooks
-    for (const [event, handlers] of pluginMap.entries()) {
-      const globalHandlers = this.hooks.get(event);
-      if (globalHandlers) {
-        const filtered = globalHandlers.filter(h => !handlers.includes(h));
-        this.hooks.set(event, filtered);
-      }
-    }
-
-    this.pluginHooks.delete(pluginId);
-  }
-
-  /**
-   * Execute hooks for an event
-   */
-  async execute<T>(event: HookEvent, data: T): Promise<HookExecutionResult<T>> {
-    const handlers = this.hooks.get(event) || [];
-    let currentData = data;
-    let shouldContinue = true;
-
-    for (const handler of handlers) {
-      try {
-        const result = await handler(currentData);
-
-        if (result.modified) {
-          currentData = result.modified;
-        }
-
-        if (!result.continue) {
-          shouldContinue = false;
-          break;
-        }
-
-        if (result.error) {
-          throw result.error;
-        }
-      } catch (error) {
-        // Log error but continue to next handler
-        console.error(`Hook handler error for ${event}:`, error);
-      }
-    }
-
-    return {
-      data: currentData,
-      shouldContinue,
-      handlersExecuted: handlers.length,
-    };
-  }
-}
-
-export interface HookExecutionResult<T> {
-  data: T;
-  shouldContinue: boolean;
-  handlersExecuted: number;
-}
+export type HookEvent =
+  // Session lifecycle
+  | 'session:created'
+  | 'session:starting'
+  | 'session:ready'
+  | 'session:qr'
+  | 'session:disconnected'
+  | 'session:error'
+  | 'session:deleted'
+  // Message lifecycle
+  | 'message:received'
+  | 'message:sending'
+  | 'message:sent'
+  | 'message:failed'
+  | 'message:ack'
+  // Webhook lifecycle
+  | 'webhook:before'
+  | 'webhook:queued'
+  | 'webhook:delivered'
+  | 'webhook:after'
+  | 'webhook:error';
 ```
+
+### Hook context and result
+
+```typescript
+export interface HookContext<T = unknown> {
+  event: HookEvent;
+  data: T;             // the event payload (mutate via the returned HookResult.data)
+  sessionId?: string;  // the session the event belongs to (used for activation + capability scope)
+  timestamp: Date;
+  source: string;      // which service emitted this
+}
+
+export interface HookResult<T = unknown> {
+  continue: boolean;   // false = stop the chain
+  data?: T;            // replacement payload for the next handler (only applied when error is absent)
+  error?: Error;       // an error to propagate; the handler's data mutation is discarded
+}
+
+export type HookHandler<T = unknown> = (ctx: HookContext<T>) => Promise<HookResult<T>>;
+```
+
+### Hook Manager behavior
+
+`HookManager` (`src/core/hooks/hook-manager.service.ts`) is a NestJS provider. Handlers are stored per
+event and run in **priority order** (lower `priority` first; default `100`). On `execute(event, data,
+{ sessionId, source })` it walks the chain, threading each handler's returned `data` into the next; a
+handler that returns `{ continue: false }` stops the chain. A handler that **throws** is logged and the
+chain continues with the previous data (one bad plugin can't break the chain). Same-event re-entrancy
+is blocked: a handler that re-fires the event it is handling is short-circuited (guards synchronous
+re-entry only). Plugins never call `HookManager` directly — they use `ctx.registerHook(...)`, which
+also applies the per-session activation gate.
 
 ## 19.6 Plugin Loader
 
-```typescript
-// src/core/plugins/plugin-loader.ts
+`PluginLoaderService` (`src/core/plugins/plugin-loader.service.ts`) is the NestJS provider that
+discovers, loads, and runs plugins.
 
-import { OpenWAPlugin, PluginContext, PluginManifest } from './types';
-import { HookManager } from '../hooks/hook-manager';
-import { PluginSandbox } from './plugin-sandbox';
-import { PluginStorageImpl } from './plugin-storage';
-import { PluginAPIImpl } from './plugin-api';
+**Discovery & load.** On `onModuleInit` it registers built-in plugins programmatically (the engine
+adapters; see §19.7), then scans the plugins directory (`plugins.dir`, default `./plugins`). For each
+sub-directory with a `manifest.json` it reads the manifest, validates the required fields
+(`id`/`name`/`version`/`type`/`main`), and records an `INSTALLED` plugin plus a persisted registry
+entry — **without running any plugin code**. Persisted config and per-session activation/config are
+read back so an operator's choices survive a restart. There is **no** version-compatibility check.
 
-export class PluginLoader {
-  private plugins: Map<string, LoadedPlugin> = new Map();
-  private hookManager: HookManager;
+> Loading a plugin from disk never auto-enables it. A previously-enabled plugin returns as `INSTALLED`
+> after a restart and must be re-enabled — enabling is always an explicit ADMIN action.
 
-  constructor(
-    private pluginDir: string,
-    hookManager: HookManager,
-  ) {
-    this.hookManager = hookManager;
-  }
+**Enable.** `enablePlugin(id)` runs the lifecycle by trust tier (a synchronous lock prevents a racing
+double-enable, and engines must match the configured active engine):
 
-  /**
-   * Discover and load all plugins
-   */
-  async loadAll(): Promise<void> {
-    const pluginDirs = await this.discoverPlugins();
+- **Built-in (trusted)** → `enableInProcess`: `require()` the `main` module (path-contained to the
+  plugin dir), instantiate the default-exported class, and run `onLoad` then `onEnable` in-process with
+  the live capability context.
+- **Untrusted (disk-loaded)** → `enableSandboxed`: spawn a `worker_thread`, load the module there, and
+  drive `onLoad`/`onEnable` over the channel. Capability calls and hook dispatches round-trip to the
+  host, which runs the **same** permission + session-scope checks. Lifecycle calls are bounded by a
+  30 s timeout and hooks by a 5 s timeout; a failure tears the worker back down. See
+  [23 — Plugin Sandboxing](./23-plugin-sandboxing.md).
 
-    for (const dir of pluginDirs) {
-      try {
-        await this.load(dir);
-      } catch (error) {
-        console.error(`Failed to load plugin from ${dir}:`, error);
-      }
-    }
-  }
+**Disable / unload / uninstall.** `disablePlugin` runs `onDisable` (force-terminating the worker for a
+sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
+disables every enabled plugin on graceful shutdown so stateful plugins can flush. `uninstallPlugin`
+disables + unloads, drops the registry entry, and deletes the plugin's directory (built-ins are
+protected and cannot be uninstalled).
 
-  /**
-   * Load a single plugin
-   */
-  async load(pluginPath: string): Promise<void> {
-    // 1. Read manifest
-    const manifest = await this.readManifest(pluginPath);
-
-    // 2. Validate manifest
-    this.validateManifest(manifest);
-
-    // 3. Check version compatibility
-    this.checkVersionCompatibility(manifest);
-
-    // 4. Check permissions
-    await this.checkPermissions(manifest);
-
-    // 5. Load plugin module
-    const PluginClass = await this.loadModule(pluginPath, manifest);
-
-    // 6. Create plugin instance
-    const plugin = new PluginClass();
-
-    // 7. Create plugin context
-    const ctx = this.createContext(manifest);
-
-    // 8. Load configuration
-    const config = await this.loadConfig(manifest);
-
-    // 9. Initialize plugin
-    await plugin.onLoad(ctx, config);
-
-    // 10. Store loaded plugin
-    this.plugins.set(manifest.name, {
-      instance: plugin,
-      manifest,
-      context: ctx,
-      config,
-    });
-
-    console.log(`Plugin loaded: ${manifest.name}@${manifest.version}`);
-  }
-
-  /**
-   * Unload a plugin
-   */
-  async unload(pluginName: string): Promise<void> {
-    const loaded = this.plugins.get(pluginName);
-    if (!loaded) return;
-
-    // Call plugin cleanup
-    await loaded.instance.onUnload();
-
-    // Unregister hooks
-    this.hookManager.unregisterPlugin(pluginName);
-
-    // Remove from loaded plugins
-    this.plugins.delete(pluginName);
-
-    console.log(`Plugin unloaded: ${pluginName}`);
-  }
-
-  /**
-   * Reload a plugin
-   */
-  async reload(pluginName: string): Promise<void> {
-    const loaded = this.plugins.get(pluginName);
-    if (!loaded) {
-      throw new Error(`Plugin ${pluginName} not loaded`);
-    }
-
-    const pluginPath = loaded.manifest._path;
-    await this.unload(pluginName);
-    await this.load(pluginPath);
-  }
-
-  /**
-   * Create plugin context with permissions
-   */
-  private createContext(manifest: PluginManifest): PluginContext {
-    const permissions = new Set(manifest.permissions);
-
-    return {
-      logger: this.createLogger(manifest.name),
-      hooks: this.createHookRegistry(manifest.name),
-      api: new PluginAPIImpl(permissions),
-      storage: new PluginStorageImpl(manifest.name),
-      router: this.createRouter(manifest.name),
-      config: this.createConfigService(manifest),
-      events: this.createEventEmitter(manifest.name),
-    };
-  }
-
-  private createHookRegistry(pluginId: string) {
-    return {
-      on: (event: HookEvent, handler: HookHandler) => {
-        this.hookManager.register(pluginId, event, handler);
-      },
-      off: (event: HookEvent, handler: HookHandler) => {
-        // Implementation
-      },
-      once: (event: HookEvent, handler: HookHandler) => {
-        // Implementation
-      },
-    };
-  }
-
-  private async discoverPlugins(): Promise<string[]> {
-    const fs = require('fs').promises;
-    const path = require('path');
-
-    const entries = await fs.readdir(this.pluginDir, { withFileTypes: true });
-    const dirs = entries
-      .filter((e: any) => e.isDirectory())
-      .map((e: any) => path.join(this.pluginDir, e.name));
-
-    return dirs.filter(async (dir: string) => {
-      try {
-        await fs.access(path.join(dir, 'manifest.json'));
-        return true;
-      } catch {
-        return false;
-      }
-    });
-  }
-
-  // ... other helper methods
-}
-
-interface LoadedPlugin {
-  instance: OpenWAPlugin;
-  manifest: PluginManifest;
-  context: PluginContext;
-  config: any;
-}
-```
+**Context.** `createPluginContext` builds the `PluginContext` (§19.4): a per-plugin logger, plugin-scoped
+storage, `registerHook` (wrapped with the per-session activation gate), the live `config` getter, and
+the permission-checked `messages` / `engine` / `net` capabilities. The capability methods call
+`assertPermission` (and, for messages/engine, `resolveEngine` → `assertSessionAllowed`) before doing any
+work, so a missing grant or out-of-scope session fails fast with a `PluginCapabilityError`.
 
 ## 19.7 Built-in Plugins
 
-### Auto-Reply Plugin
+The only plugins **shipped** as built-ins are the two WhatsApp **engine adapters**, registered
+programmatically (not loaded from disk) by `EngineFactory` via `registerBuiltInPlugin`:
+
+| Plugin id | Type | Notes |
+|-----------|------|-------|
+| `whatsapp-web.js` | `engine` | Default engine adapter (browser-based) |
+| `baileys` | `engine` | WebSocket engine adapter (no browser) |
+
+Engines are mutually exclusive: the active one is pinned by `engine.type` config, and `enablePlugin`
+rejects any engine that is not the configured active one. Built-ins run **in-process** (trusted) — they
+are not sandboxed. There is no `auto-reply` / `translation` plugin bundled in the source tree today.
+
+### Example: a hook-based message plugin
+
+A disk-installed extension implements `IPlugin`, registers hooks in `onLoad`, and uses the capability
+facade. This auto-reply sketch needs only `messages:send` in its manifest `permissions`:
 
 ```typescript
 // plugins/auto-reply/index.ts
-
-import { OpenWAPlugin, PluginContext, MessageEvent } from '@openwa/plugin-sdk';
+import type { IPlugin, PluginContext } from '@openwa/plugin-sdk'; // shape only; implement IPlugin
 
 interface AutoReplyConfig {
-  enabled: boolean;
-  rules: AutoReplyRule[];
-  defaultReply?: string;
+  enabled?: boolean;
+  rules?: { match: string; reply: string }[];
 }
 
-interface AutoReplyRule {
-  trigger: string | RegExp;
-  reply: string;
-  caseSensitive?: boolean;
-  matchType: 'exact' | 'contains' | 'regex' | 'startsWith';
-}
+export default class AutoReplyPlugin implements IPlugin {
+  async onLoad(ctx: PluginContext): Promise<void> {
+    ctx.registerHook('message:received', async hookCtx => {
+      const cfg = ctx.config as AutoReplyConfig; // per-session-merged config for this event
+      const { sessionId, data } = hookCtx;
+      const message = data as { from: string; body?: string };
+      if (cfg.enabled === false || !sessionId || !message.body) return { continue: true };
 
-export default class AutoReplyPlugin implements OpenWAPlugin<AutoReplyConfig> {
-  name = 'auto-reply';
-  version = '1.0.0';
-
-  private ctx!: PluginContext;
-  private config!: AutoReplyConfig;
-  private compiledRules: CompiledRule[] = [];
-
-  async onLoad(ctx: PluginContext, config: AutoReplyConfig): Promise<void> {
-    this.ctx = ctx;
-    this.config = config;
-
-    // Compile rules for faster matching
-    this.compiledRules = this.compileRules(config.rules);
-
-    // Register hook
-    ctx.hooks.on('message:received', this.handleMessage.bind(this));
-
-    ctx.logger.info('Auto-reply plugin loaded', {
-      rulesCount: this.compiledRules.length,
-    });
-  }
-
-  async onUnload(): Promise<void> {
-    this.ctx.logger.info('Auto-reply plugin unloaded');
-  }
-
-  private compileRules(rules: AutoReplyRule[]): CompiledRule[] {
-    return rules.map(rule => ({
-      ...rule,
-      matcher: this.createMatcher(rule),
-    }));
-  }
-
-  private createMatcher(rule: AutoReplyRule): (text: string) => boolean {
-    const trigger = rule.caseSensitive ? rule.trigger : String(rule.trigger).toLowerCase();
-
-    switch (rule.matchType) {
-      case 'exact':
-        return (text) => text === trigger;
-      case 'contains':
-        return (text) => text.includes(trigger as string);
-      case 'startsWith':
-        return (text) => text.startsWith(trigger as string);
-      case 'regex':
-        const regex = new RegExp(trigger as string, rule.caseSensitive ? '' : 'i');
-        return (text) => regex.test(text);
-      default:
-        return () => false;
-    }
-  }
-
-  async handleMessage(event: MessageEvent): Promise<HookResult> {
-    if (!this.config.enabled) {
-      return { continue: true };
-    }
-
-    const { message, session } = event;
-    const text = this.config.rules[0]?.caseSensitive
-      ? message.body || ''
-      : (message.body || '').toLowerCase();
-
-    // Find matching rule
-    const matchedRule = this.compiledRules.find(rule => rule.matcher(text));
-
-    if (matchedRule) {
-      await this.sendReply(session.id, message.from, matchedRule.reply);
-
-      // Track stats
-      await this.ctx.storage.increment('stats:replies');
-
-      return { continue: true }; // Still trigger webhook
-    }
-
-    // Default reply if configured
-    if (this.config.defaultReply) {
-      await this.sendReply(session.id, message.from, this.config.defaultReply);
-    }
-
-    return { continue: true };
-  }
-
-  private async sendReply(sessionId: string, to: string, reply: string): Promise<void> {
-    await this.ctx.api.messages.send(sessionId, {
-      phone: to,
-      type: 'text',
-      body: reply,
-    });
-  }
-}
-
-interface CompiledRule extends AutoReplyRule {
-  matcher: (text: string) => boolean;
-}
-```
-
-### Translation Plugin
-
-```typescript
-// plugins/translation/index.ts
-
-import { OpenWAPlugin, PluginContext, MessageEvent } from '@openwa/plugin-sdk';
-
-interface TranslationConfig {
-  enabled: boolean;
-  provider: 'google' | 'deepl' | 'libre';
-  apiKey?: string;
-  sourceLanguage: 'auto' | string;
-  targetLanguage: string;
-  translateIncoming: boolean;
-  translateOutgoing: boolean;
-}
-
-export default class TranslationPlugin implements OpenWAPlugin<TranslationConfig> {
-  name = 'translation';
-  version = '1.0.0';
-
-  private ctx!: PluginContext;
-  private config!: TranslationConfig;
-
-  async onLoad(ctx: PluginContext, config: TranslationConfig): Promise<void> {
-    this.ctx = ctx;
-    this.config = config;
-
-    if (config.translateIncoming) {
-      ctx.hooks.on('message:received', this.translateIncoming.bind(this));
-    }
-
-    if (config.translateOutgoing) {
-      ctx.hooks.on('message:sending', this.translateOutgoing.bind(this));
-    }
-  }
-
-  async onUnload(): Promise<void> {}
-
-  async translateIncoming(event: MessageEvent): Promise<HookResult> {
-    if (!this.config.enabled || !event.message.body) {
-      return { continue: true };
-    }
-
-    try {
-      const translated = await this.translate(
-        event.message.body,
-        this.config.sourceLanguage,
-        this.config.targetLanguage
-      );
-
-      // Add translation to message metadata
-      const modified = {
-        ...event,
-        message: {
-          ...event.message,
-          metadata: {
-            ...event.message.metadata,
-            originalText: event.message.body,
-            translatedText: translated,
-            translatedFrom: this.config.sourceLanguage,
-            translatedTo: this.config.targetLanguage,
-          },
-        },
-      };
-
-      return { continue: true, modified };
-    } catch (error) {
-      this.ctx.logger.error('Translation failed', { error });
-      return { continue: true };
-    }
-  }
-
-  async translateOutgoing(event: MessageEvent): Promise<HookResult> {
-    // Similar implementation for outgoing messages
-    return { continue: true };
-  }
-
-  private async translate(
-    text: string,
-    from: string,
-    to: string
-  ): Promise<string> {
-    switch (this.config.provider) {
-      case 'google':
-        return this.translateWithGoogle(text, from, to);
-      case 'deepl':
-        return this.translateWithDeepL(text, from, to);
-      case 'libre':
-        return this.translateWithLibre(text, from, to);
-      default:
-        throw new Error(`Unknown provider: ${this.config.provider}`);
-    }
-  }
-
-  private async translateWithGoogle(
-    text: string,
-    from: string,
-    to: string
-  ): Promise<string> {
-    const response = await this.ctx.api.http.post(
-      'https://translation.googleapis.com/language/translate/v2',
-      {
-        q: text,
-        source: from === 'auto' ? undefined : from,
-        target: to,
-        key: this.config.apiKey,
+      const text = message.body.toLowerCase();
+      const rule = (cfg.rules ?? []).find(r => text.includes(r.match.toLowerCase()));
+      if (rule) {
+        await ctx.messages.sendText(sessionId, message.from, rule.reply);
+        await ctx.storage.set(`stats:replies:${Date.now()}`, rule.match);
       }
-    );
+      return { continue: true }; // keep the chain going (still delivers the webhook)
+    });
 
-    return response.data.translations[0].translatedText;
+    ctx.logger.log('Auto-reply plugin loaded');
   }
-
-  // ... other provider implementations
 }
 ```
+
+A plugin that calls an external API instead would declare `net:fetch` plus the host in `net.allow`, and
+use `await ctx.net.fetch('https://api.example.com/...', { method: 'POST', body, headers })` — the
+SSRF-guarded outbound HTTP capability. A read-only plugin (e.g. enriching events with group/contact
+data) would declare `engine:read` and call `ctx.engine.getGroupInfo(...)` / `ctx.engine.getContacts(...)`.
 
 ## 19.8 Plugin Management API
 
-### REST Endpoints
+`PluginsController` (`src/modules/plugins/plugins.controller.ts`) is mounted at `plugins` and **every
+route requires the `ADMIN` role** (`@RequireRole(ApiKeyRole.ADMIN)` — not a bare API-key guard). There
+is **no** `POST :id/reload` and **no** `GET :id/config`. Install is a multipart `.zip` upload (or by
+URL / catalog), not an npm/github source descriptor.
 
-```typescript
-// src/api/plugins/plugins.controller.ts
+| Method & path | Purpose |
+|---------------|---------|
+| `GET /plugins` | List all plugins |
+| `GET /plugins/catalog` | List the remote plugin catalog, annotated with install state |
+| `GET /plugins/:id` | Get a single plugin |
+| `POST /plugins/install` | Install from an uploaded `.zip` (`multipart/form-data`, field `file`, ≤ 5 MB) |
+| `POST /plugins/install-url` | Install by downloading a `.zip` from a URL (SSRF-guarded) |
+| `POST /plugins/:id/update` | Update an installed plugin in place from a URL (preserves config + enabled state) |
+| `POST /plugins/:id/enable` | Enable a plugin |
+| `POST /plugins/:id/disable` | Disable a plugin |
+| `PUT /plugins/:id/config` | Update the plugin's base config |
+| `PUT /plugins/:id/config/:sessionId` | Set (or clear, when empty) a per-session config override |
+| `PUT /plugins/:id/sessions` | Set which sessions a session-scoped plugin is activated for (`['*']` = all) |
+| `GET /plugins/:id/config-ui` | Serve the plugin's sandboxed config-UI HTML (for an iframe `srcdoc`) |
+| `GET /plugins/:id/health` | Run the plugin's `healthCheck` |
+| `DELETE /plugins/:id` | Uninstall a plugin (removes its files; built-ins are protected) |
 
-@Controller('api/plugins')
-@UseGuards(ApiKeyGuard)
-export class PluginsController {
-  constructor(private pluginService: PluginService) {}
-
-  @Get()
-  async listPlugins(): Promise<PluginInfo[]> {
-    return this.pluginService.listAll();
-  }
-
-  @Get(':id')
-  async getPlugin(@Param('id') id: string): Promise<PluginInfo> {
-    return this.pluginService.get(id);
-  }
-
-  @Post(':id/enable')
-  async enablePlugin(@Param('id') id: string): Promise<void> {
-    await this.pluginService.enable(id);
-  }
-
-  @Post(':id/disable')
-  async disablePlugin(@Param('id') id: string): Promise<void> {
-    await this.pluginService.disable(id);
-  }
-
-  @Post(':id/reload')
-  async reloadPlugin(@Param('id') id: string): Promise<void> {
-    await this.pluginService.reload(id);
-  }
-
-  @Get(':id/config')
-  async getPluginConfig(@Param('id') id: string): Promise<any> {
-    return this.pluginService.getConfig(id);
-  }
-
-  @Put(':id/config')
-  async updatePluginConfig(
-    @Param('id') id: string,
-    @Body() config: any
-  ): Promise<void> {
-    await this.pluginService.updateConfig(id, config);
-  }
-
-  @Post('install')
-  async installPlugin(@Body() input: InstallPluginInput): Promise<PluginInfo> {
-    return this.pluginService.install(input);
-  }
-
-  @Delete(':id')
-  async uninstallPlugin(@Param('id') id: string): Promise<void> {
-    await this.pluginService.uninstall(id);
-  }
-}
-
-interface PluginInfo {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  author: string;
-  enabled: boolean;
-  permissions: string[];
-  config: any;
-}
-
-interface InstallPluginInput {
-  source: 'npm' | 'github' | 'local';
-  package: string;  // npm package name, github repo, or local path
-}
-```
+> `GET /plugins/:id/config-ui` returns untrusted HTML served with `Content-Security-Policy: sandbox`
+> and `X-Content-Type-Options: nosniff`. The dashboard fetches it **with** the API key and injects the
+> body as an iframe `srcdoc` (opaque origin); the editor exchanges config over a `postMessage` bridge,
+> so the API key never reaches the iframe.
 
 ## 19.9 Plugin Security
 
-### Permission Model
+### Permission model
+
+There are exactly **three** capability permissions, declared in the manifest `permissions` array and
+enforced at the capability boundary:
 
 ```typescript
-// src/core/plugins/permissions.ts
+// src/core/plugins/plugin.interfaces.ts
 
-export const PERMISSIONS = {
-  // Sessions
-  'sessions:read': 'Read session information',
-  'sessions:write': 'Create/delete sessions',
-
-  // Messages
-  'messages:read': 'Read messages',
-  'messages:write': 'Send messages',
-
-  // Contacts
-  'contacts:read': 'Read contacts',
-  'contacts:write': 'Block/unblock contacts',
-
-  // Groups
-  'groups:read': 'Read group information',
-  'groups:write': 'Manage groups',
-
-  // Storage
-  'storage:read': 'Read plugin storage',
-  'storage:write': 'Write to plugin storage',
-
-  // HTTP
-  'http:outbound': 'Make outbound HTTP requests',
-
-  // System
-  'system:info': 'Read system information',
-  'system:config': 'Read/write system config',
+export const PluginCapabilityPermission = {
+  /** ctx.messages.* — send / reply on a session. */
+  MESSAGES_SEND: 'messages:send',
+  /** ctx.engine.* — read-only engine queries (group info, contacts, chats, number check). */
+  ENGINE_READ: 'engine:read',
+  /** ctx.net.fetch — SSRF-guarded outbound HTTP, scoped to the manifest net.allow host list. */
+  NET_FETCH: 'net:fetch',
 } as const;
-
-export type Permission = keyof typeof PERMISSIONS;
-
-export class PermissionChecker {
-  constructor(private allowedPermissions: Set<Permission>) {}
-
-  check(required: Permission): boolean {
-    return this.allowedPermissions.has(required);
-  }
-
-  require(required: Permission): void {
-    if (!this.check(required)) {
-      throw new PermissionDeniedError(required);
-    }
-  }
-}
-
-export class PermissionDeniedError extends Error {
-  constructor(permission: Permission) {
-    super(`Permission denied: ${permission}`);
-    this.name = 'PermissionDeniedError';
-  }
-}
 ```
 
-### Sandboxed Execution
+There is no `PermissionChecker` class and no `PermissionDeniedError`. Enforcement lives in the loader:
+each capability method calls `assertPermission(manifest, permission)` before doing any work, and a
+plugin whose manifest does not declare the matching permission (or declares none) is rejected with a
+`PluginCapabilityError`:
 
 ```typescript
-// src/core/plugins/sandbox.ts
+// src/core/plugins/plugin-loader.service.ts (paraphrased)
 
-import { VM } from 'vm2';
-
-export class PluginSandbox {
-  private vm: VM;
-
-  constructor(permissions: Set<Permission>) {
-    this.vm = new VM({
-      timeout: 10000, // 10 second timeout
-      sandbox: {
-        // Only expose allowed APIs
-        console: this.createSafeConsole(),
-        setTimeout: this.createSafeTimeout(),
-        setInterval: this.createSafeInterval(),
-        // ... other safe APIs
-      },
-      eval: false,
-      wasm: false,
-    });
-  }
-
-  async execute(code: string, context: object): Promise<any> {
-    return this.vm.run(code);
-  }
-
-  private createSafeConsole() {
-    return {
-      log: (...args: any[]) => console.log('[Plugin]', ...args),
-      error: (...args: any[]) => console.error('[Plugin]', ...args),
-      warn: (...args: any[]) => console.warn('[Plugin]', ...args),
-    };
-  }
-
-  private createSafeTimeout() {
-    return (fn: Function, ms: number) => {
-      if (ms > 30000) ms = 30000; // Max 30 seconds
-      return setTimeout(fn, ms);
-    };
-  }
-
-  private createSafeInterval() {
-    return (fn: Function, ms: number) => {
-      if (ms < 1000) ms = 1000; // Min 1 second
-      return setInterval(fn, ms);
-    };
+private assertPermission(manifest: PluginManifest, permission: PluginCapabilityPermission): void {
+  if (!(manifest.permissions ?? []).includes(permission)) {
+    throw new PluginCapabilityError(
+      `Plugin ${manifest.id} is missing the '${permission}' permission required for this capability`,
+    );
   }
 }
 ```
+
+Two further checks apply on top of the permission:
+
+- **Session scope.** `messages` and `engine` calls run `assertSessionAllowed(manifest, sessionId)` —
+  the plugin may only act on sessions in its manifest `sessions` list (`['*']` = all). The `sessionId`
+  comes from the plugin, so this is the security boundary; it is static (editing config can't widen it).
+- **Network allowlist.** `ctx.net.fetch` additionally requires the target host to be in `manifest.net.allow`,
+  and the request always passes through the SSRF guard (which blocks internal IPs even for an allowlisted host).
+
+### Sandboxed execution
+
+Untrusted plugins (anything loaded from the plugins directory) run in a Node `worker_thread`; there is
+**no `vm2`**. First-party built-ins (the engine adapters) run in-process. The loader routes by trust
+tier automatically. Key properties:
+
+- Each worker has a heap cap (`maxOldGenerationSizeMb`, default **256 MB**) — an OOM terminates the
+  worker, not the host.
+- A sandboxed hook handler has a **5 s** time budget (`SANDBOX_HOOK_TIMEOUT_MS`); on timeout the host
+  resolves `{ continue: true }` (fail-open) so a slow/wedged handler never stalls the hook chain. The
+  same fail-open value drains in-flight hooks if the worker crashes.
+- Lifecycle methods (`load`/`onLoad`/`onEnable`/`onDisable`) and `healthCheck` are bounded by a **30 s**
+  / **5 s** timeout respectively, so a wedged plugin can't hang an ADMIN enable/disable or the health endpoint.
+- The worker gets a **minimal allowlisted env** (`NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `TZ`) — host secrets
+  (master key, DB/Redis vars, …) are withheld.
+
+This is V8-context isolation in the same OS process, not an OS-level sandbox: a worker can still reach
+Node built-ins (`fs`, `process`, sockets). For genuinely untrusted plugins, combine it with OS
+containment (the shipped Docker image runs read-only rootfs, non-root, `cap_drop: ALL`). See
+[23 — Plugin Sandboxing](./23-plugin-sandboxing.md) for the full security model and author rules.
+
 ---
 
 <div align="center">

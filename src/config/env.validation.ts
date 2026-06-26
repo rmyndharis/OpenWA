@@ -1,4 +1,9 @@
+import { resolve } from 'path';
+
 type EnvConfig = Record<string, unknown>;
+
+// The 'main' (auth/audit) connection is always this fixed SQLite file (not env-overridable).
+const MAIN_DB_PATH = './data/main.sqlite';
 
 /**
  * Fail-fast environment validation. Wired as ConfigModule's `validate`
@@ -40,6 +45,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
         errors.push(`${key} is required when DATABASE_TYPE=postgres`);
       }
     }
+  } else {
+    // SQLite (explicit or default): DATABASE_NAME is a file path for the 'data' connection. It must
+    // not resolve to the 'main' DB file — two TypeORM connections on one SQLite file run separate
+    // migration ledgers + synchronize policies against the same tables, risking schema divergence and
+    // lock contention. (Postgres DATABASE_NAME is a bare db name, so this never applies there.)
+    const dataDbName = str('DATABASE_NAME');
+    if (dataDbName && resolve(dataDbName) === resolve(MAIN_DB_PATH)) {
+      errors.push(`DATABASE_NAME must not point at the main database file (${MAIN_DB_PATH}); use a separate file`);
+    }
   }
 
   const checkPort = (key: string): void => {
@@ -53,6 +67,31 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   checkPort('PORT');
   checkPort('DATABASE_PORT');
   checkPort('REDIS_PORT');
+
+  // Other numeric knobs: a non-integer (e.g. `RATE_LIMIT_SHORT_LIMIT=abc`) parses to NaN downstream,
+  // which silently disables the corresponding limit/timeout. Reject at boot instead of coercing.
+  const checkNonNegativeInt = (key: string): void => {
+    const raw = str(key);
+    if (raw === undefined) return;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0) {
+      errors.push(`${key} must be a non-negative integer (got "${raw}")`);
+    }
+  };
+  for (const key of [
+    'RATE_LIMIT_SHORT_TTL',
+    'RATE_LIMIT_SHORT_LIMIT',
+    'RATE_LIMIT_MEDIUM_TTL',
+    'RATE_LIMIT_MEDIUM_LIMIT',
+    'RATE_LIMIT_LONG_TTL',
+    'RATE_LIMIT_LONG_LIMIT',
+    'WEBHOOK_TIMEOUT',
+    'WEBHOOK_MAX_RETRIES',
+    'WEBHOOK_RETRY_DELAY',
+    'DATABASE_POOL_SIZE',
+  ]) {
+    checkNonNegativeInt(key);
+  }
 
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);

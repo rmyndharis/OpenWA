@@ -61,4 +61,9 @@ describe('App smoke (e2e)', () => {
     // Secure default: no scrape token configured → the endpoint must not exist.
     return request(app.getHttpServer()).get('/api/metrics').expect(404);
   });
+
+  it('POST /mcp returns 404 when MCP_ENABLED is unset', () => {
+    // MCP is off by default; the route must not be mounted, not fall through to the SPA.
+    return request(app.getHttpServer()).post('/mcp').send({ jsonrpc: '2.0', method: 'tools/list', id: 1 }).expect(404);
+  });
 });

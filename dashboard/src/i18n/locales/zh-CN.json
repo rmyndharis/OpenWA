@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "服务器连接已断开",
+      "message": "无法连接到后端服务器。请检查服务器是否正在运行。"
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",
@@ -137,7 +143,8 @@
       "activeSessions": "活跃会话",
       "messagesToday": "今日消息",
       "webhooksConfigured": "已配置 Webhook",
-      "apiCalls": "API 调用（24 小时）"
+      "apiCalls": "API 调用（24 小时）",
+      "totalMessages": "消息总数"
     },
     "sessionsOverview": "会话概览",
     "showingSessions": "显示 {{shown}} / {{total}} 个会话",
@@ -152,7 +159,22 @@
     "view": "查看",
     "disconnect": "断开连接",
     "errorPrefix": "错误：{{message}}",
-    "loadError": "加载数据失败"
+    "loadError": "加载数据失败",
+    "charts": {
+      "title": "消息分析",
+      "period": {
+        "24h": "24小时",
+        "7d": "7天",
+        "30d": "30天"
+      },
+      "overTime": "消息趋势",
+      "byType": "按类型分类的消息",
+      "topChats": "热门聊天",
+      "sent": "已发送",
+      "received": "已接收",
+      "messages": "消息",
+      "empty": "此期间没有消息活动。"
+    }
   },
   "sessionStatus": {
     "created": "新建",
@@ -270,6 +292,36 @@
     "events": "事件",
     "available": "可用事件",
     "saveChanges": "保存更改",
+    "filters": {
+      "title": "筛选条件（可选）",
+      "hint": "仅当所有条件都匹配时才触发。适用于消息事件。",
+      "badge": "{{count}} 个筛选条件",
+      "badge_other": "{{count}} 个筛选条件",
+      "addCondition": "添加条件",
+      "removeCondition": "移除条件",
+      "caseSensitive": "区分大小写",
+      "contactPlaceholder": "号码或 WhatsApp ID...",
+      "textPlaceholder": "要匹配的文本...",
+      "addValue": "添加 \"{{value}}\"",
+      "yes": "是",
+      "no": "否",
+      "fields": {
+        "sender": "发送者",
+        "recipient": "接收者",
+        "body": "消息正文",
+        "type": "消息类型",
+        "isGroup": "是群聊",
+        "fromMe": "由我发送",
+        "hasMedia": "包含媒体",
+        "mentions": "提及"
+      },
+      "operators": {
+        "is": "是",
+        "isNot": "不是",
+        "contains": "包含",
+        "equals": "等于"
+      }
+    },
     "columns": {
       "url": "URL",
       "events": "事件",
@@ -516,6 +568,17 @@
       "migrationsStatus": "架构会通过 TypeORM 自动同步",
       "migrationsHint": "迁移会自动管理。手动迁移请使用 CLI。"
     },
+    "engine": {
+      "title": "WhatsApp 引擎",
+      "subtitle": "选择并配置 WhatsApp 连接引擎。",
+      "builtIn": "内置",
+      "headless": "无头模式",
+      "headlessDesc": "在没有可见界面的情况下运行浏览器（推荐用于生产环境）。",
+      "sessionDataPath": "会话数据路径",
+      "browserArgs": "浏览器参数",
+      "noBrowser": "该引擎通过 WebSocket 连接——没有浏览器，因此没有无头模式或浏览器参数设置。活动引擎将在重启后生效。",
+      "restartNote": "切换引擎将在服务器重启后生效。"
+    },
     "redis": {
       "title": "Redis",
       "enable": "启用 Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "插件",
-    "subtitle": "管理引擎、存储后端和扩展",
+    "subtitle": "安装、配置和管理扩展",
     "refresh": "刷新",
     "engineCard": "当前 WhatsApp 引擎",
     "running": "运行中",
@@ -593,6 +656,11 @@
     "disable": "禁用",
     "healthCheck": "健康检查",
     "configure": "配置",
+    "available": "可用",
+    "install": "安装插件",
+    "uninstall": "卸载",
+    "uninstallConfirm": "卸载“{{name}}”？这将删除其文件。",
+    "engineSwitchHint": "在设置中将其设为活动引擎，然后重启",
     "empty": {
       "title": "未找到插件",
       "description": "安装插件以扩展 OpenWA 功能"
@@ -606,7 +674,23 @@
       "sessionDataPath": "会话数据路径",
       "browserArgs": "浏览器参数",
       "noOptions": "此插件没有可用配置项",
-      "save": "保存配置"
+      "save": "保存配置",
+      "addItem": "添加",
+      "tabConfig": "配置",
+      "tabSessions": "会话"
+    },
+    "rail": {
+      "engine": "活动引擎",
+      "enabled": "已启用",
+      "installed": "已安装",
+      "active": "活跃插件",
+      "none": "尚未启用任何插件"
+    },
+    "installModal": {
+      "title": "安装插件",
+      "hint": "上传打包为 .zip 的插件（包含 manifest.json）。启用后将在沙箱中运行。",
+      "choose": "选择 .zip 文件…",
+      "tooLarge": "文件超过 5 MB 限制。"
     },
     "toasts": {
       "errorTitle": "插件错误",
@@ -616,7 +700,24 @@
       "healthError": "健康检查出错",
       "savedTitle": "配置已保存",
       "savedDesc": "需要重启服务器以应用更改。",
-      "saveFailed": "保存失败"
+      "saveFailed": "保存失败",
+      "installed": "插件已安装",
+      "installFailed": "安装失败",
+      "uninstalled": "插件已卸载",
+      "uninstallFailed": "卸载失败"
+    },
+    "sessions": {
+      "activationTitle": "运行范围",
+      "activationDesc": "选择此插件运行的会话。",
+      "allSessions": "所有会话",
+      "specificSessions": "指定会话",
+      "noSessions": "暂无会话。",
+      "saveActivation": "保存启用设置",
+      "perSessionTitle": "单会话配置",
+      "perSessionDesc": "为某个会话覆盖全局配置；未修改的字段将沿用全局值。",
+      "selectSession": "选择一个会话…",
+      "saveOverride": "保存覆盖配置",
+      "clearOverride": "清除覆盖配置"
     }
   }
 }

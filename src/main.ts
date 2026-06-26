@@ -12,11 +12,13 @@ import {
   isSwaggerEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
+  isApiKeyPepperMissingInProduction,
 } from './config/bootstrap-security';
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
 import { writeSecretFile } from './common/utils/secret-file';
+import { clearBlankEnv, BLANK_SHADOWED_ENV_KEYS } from './config/env-precedence';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -50,6 +52,13 @@ for (const secret of [generatedEnvPath, path.resolve(dataDir, '.api-key')]) {
   }
 }
 
+// A compose `- KEY=${KEY:-}` line forwards a real operator value into the container but renders an
+// empty value when none is set. An empty process.env.KEY would still block .env / .env.generated
+// (loaded below with override:false) from supplying one, silently shadowing the dashboard's saved
+// value — so treat a blank value as unset for every dashboard-managed, blank-forwarded key (engine
+// selection and the external-Postgres password).
+clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+
 // 2. User-managed .env (does not override real process env)
 if (fs.existsSync(userEnvPath)) {
   console.log('[Bootstrap] Loading .env from:', userEnvPath);
@@ -80,7 +89,7 @@ QUEUE_ENABLED=false
 # Storage (Local filesystem)
 STORAGE_TYPE=local
 MINIO_BUILTIN=false
-STORAGE_PATH=./data/media
+STORAGE_LOCAL_PATH=./data/media
 
 # Docker Profiles: none (minimal setup)
 `;
@@ -116,7 +125,17 @@ async function bootstrap() {
     s3SecretKey: process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY,
     apiMasterKey: process.env.API_MASTER_KEY,
     allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
+    redisPassword: process.env.REDIS_PASSWORD,
   });
+
+  // Advisory (not enforced): without API_KEY_PEPPER, stored API-key hashes use plain SHA-256. Enabling
+  // a pepper re-hashes keys and invalidates existing ones, so we only nudge the operator (see api-key-hash.ts).
+  if (isApiKeyPepperMissingInProduction(process.env.NODE_ENV, process.env.API_KEY_PEPPER)) {
+    bootstrapLogger.warn(
+      'API_KEY_PEPPER is not set in production: stored API-key hashes use plain SHA-256. ' +
+        'Set API_KEY_PEPPER and re-issue keys to enable HMAC hashing.',
+    );
+  }
 
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -154,7 +173,13 @@ async function bootstrap() {
           // allow those origins or the @import'd fonts are blocked and the UI falls back to system fonts.
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
           scriptSrc: ["'self'"],
-          imgSrc: ["'self'", 'data:', 'https:'],
+          // `blob:` is needed for the outgoing image-attachment preview, which the dashboard renders
+          // from a URL.createObjectURL(file) blob before the message is sent (Chats.tsx).
+          imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+          // Chat media (voice notes, video) is served to the dashboard as data: URIs. Without an
+          // explicit media-src, <audio>/<video> fall back to default-src 'self' and are blocked.
+          // Mirror imgSrc so audio/video render the same way images already do.
+          mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
           connectSrc: ["'self'"],
           fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           objectSrc: ["'none'"],
@@ -220,8 +245,10 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger documentation (gated by ENABLE_SWAGGER; default on)
-  if (isSwaggerEnabled(process.env.ENABLE_SWAGGER)) {
+  // Swagger documentation. ENABLE_SWAGGER wins; otherwise default on outside production, off in
+  // production (the API schema is reconnaissance surface — production opts in with ENABLE_SWAGGER=true).
+  const swaggerEnabled = isSwaggerEnabled(process.env.ENABLE_SWAGGER, process.env.NODE_ENV);
+  if (swaggerEnabled) {
     const config = createSwaggerConfig();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
@@ -240,7 +267,9 @@ async function bootstrap() {
   await app.listen(port);
 
   console.log(`🚀 OpenWA is running on: http://localhost:${port}`);
-  console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  if (swaggerEnabled) {
+    console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+  }
 
   // Make the dashboard-serving outcome explicit so a missing build (no UI on `/`)
   // is obvious instead of a silent 404.

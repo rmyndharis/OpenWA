@@ -1,8 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PayloadTooLargeException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BulkMessageService, resolveFinalBatchStatus, sanitizeBatchError } from './bulk-message.service';
 import { MessageBatch, BatchStatus } from './entities/message-batch.entity';
 import { MessageStatus } from './entities/message.entity';
+import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -169,5 +171,68 @@ describe('BulkMessageService.processBatch', () => {
 
     const savedStatuses = (repo.save.mock.calls as [MessageBatch][]).map(c => c[0].status);
     expect(savedStatuses[savedStatuses.length - 1]).toBe(BatchStatus.CANCELLED);
+  });
+
+  it('substitutes canonical {{name}} placeholders in bulk content', async () => {
+    const batch = makeBatch(1);
+    batch.messages[0].content = { text: 'Hi {{name}}' };
+    batch.messages[0].variables = { name: 'Sam' };
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('c0@c.us', 'Hi Sam');
+  });
+
+  it('still substitutes legacy single-brace {name} placeholders (backward compatible)', async () => {
+    const batch = makeBatch(1);
+    batch.messages[0].content = { text: 'Hi {name}' };
+    batch.messages[0].variables = { name: 'Sam' };
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('c0@c.us', 'Hi Sam');
+  });
+});
+
+describe('BulkMessageService.createBatch base64 media cap', () => {
+  let service: BulkMessageService;
+  let repo: { findOne: jest.Mock; save: jest.Mock };
+
+  beforeEach(async () => {
+    repo = {
+      findOne: jest.fn().mockResolvedValue(undefined),
+      save: jest.fn().mockImplementation(b => Promise.resolve(b)),
+    };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        BulkMessageService,
+        { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
+        { provide: SessionService, useValue: { getEngine: jest.fn().mockReturnValue({}) } },
+        { provide: MessageService, useValue: { saveOutgoingMessage: jest.fn() } },
+      ],
+    }).compile();
+    service = module.get<BulkMessageService>(BulkMessageService);
+  });
+
+  it('rejects a message whose base64 media exceeds the cap, before persisting the batch', async () => {
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1024';
+    try {
+      await expect(
+        service.createBatch('s1', {
+          messages: [
+            {
+              chatId: 'c0@c.us',
+              type: 'image',
+              content: { image: { base64: Buffer.alloc(1025).toString('base64'), mimetype: 'image/png' } },
+            },
+          ],
+        } as unknown as SendBulkMessageDto),
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
+      expect(repo.save).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    }
   });
 });

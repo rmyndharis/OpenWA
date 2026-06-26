@@ -6,6 +6,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { Public, RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
+import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
 import { DockerService } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
@@ -63,6 +64,7 @@ interface SaveConfigDto {
     s3Endpoint?: string;
   };
   engine?: {
+    type?: string;
     headless?: boolean;
     sessionDataPath?: string;
     browserArgs?: string;
@@ -92,7 +94,8 @@ interface WebhookRow {
   events: string | string[];
   secret: string | null;
   headers: string | Record<string, string>;
-  active: boolean;
+  filters: string | Record<string, unknown> | null;
+  active: boolean | number;
   retryCount: number;
   lastTriggeredAt: string | null;
   createdAt: string;
@@ -135,11 +138,46 @@ interface MessageBatchRow {
   completed_at: string | null;
 }
 
+// templates + baileys_stored_messages both FK sessions ON DELETE CASCADE, so import's
+// `DELETE FROM sessions` wipes them; they must be exported and re-inserted or the documented
+// backup flow loses them permanently.
+interface TemplateRow {
+  id: string;
+  sessionId: string;
+  name: string;
+  body: string;
+  header: string | null;
+  footer: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BaileysStoredMessageRow {
+  id: string;
+  sessionId: string;
+  waMessageId: string;
+  serializedMessage: string;
+  createdAt: string;
+}
+
+// The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the import's
+// `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly or a
+// backup→restore into a fresh DB loses the whole cache (it self-heals via re-lookup, but lossily).
+interface LidMappingRow {
+  lid: string;
+  phone: string | null;
+  sessionId: string | null;
+  updatedAt: string;
+}
+
 interface MigrationTables {
   sessions: SessionRow[];
   webhooks: WebhookRow[];
   messages: MessageRow[];
   messageBatches: MessageBatchRow[];
+  templates: TemplateRow[];
+  baileysStoredMessages: BaileysStoredMessageRow[];
+  lidMappings: LidMappingRow[];
 }
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
@@ -168,7 +206,7 @@ interface SavedConfigResponse {
     s3Endpoint: string;
     s3CredentialsSet: boolean;
   };
-  engine: { headless: boolean; sessionDataPath: string; browserArgs: string };
+  engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
 }
 
 @ApiTags('infrastructure')
@@ -210,12 +248,20 @@ export class InfraController {
     const redisConnected = await this.cacheService.isAvailable();
 
     const storageType = this.configService.get<'local' | 's3'>('storage.type', 'local');
-    const storagePath = this.configService.get<string>('storage.path', './uploads');
+    // Read the key StorageService actually uses (`storage.localPath`, default `./data/media`).
+    // The old `storage.path` key never existed, so status always reported the `./uploads` fallback.
+    const storagePath = this.configService.get<string>('storage.localPath', './data/media');
+    // In S3 mode the local path is unused; surface the bucket so the status panel shows the real
+    // backend. `path` is kept (additive) so the dashboard's local-mode rendering is unchanged.
+    const storageBucket = this.configService.get<string>('storage.s3.bucket');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
-    const engineHeadless = this.configService.get<boolean>('engine.headless', true);
+    // configuration.ts nests these under engine.puppeteer.{headless,args}; the old flat
+    // engine.headless / engine.browserArgs keys never existed, so status always reported defaults.
+    const engineHeadless = this.configService.get<boolean>('engine.puppeteer.headless', true) ?? true;
     const sessionDataPath = this.configService.get<string>('engine.sessionDataPath', './data/sessions');
-    const browserArgs = this.configService.get<string>('engine.browserArgs', '--no-sandbox --disable-gpu');
+    const browserArgs =
+      this.configService.get<string[]>('engine.puppeteer.args')?.join(' ') || '--no-sandbox --disable-gpu';
 
     return {
       database: { connected: dbConnected, type: dbType, host: dbHost },
@@ -225,7 +271,11 @@ export class InfraController {
         messages: { pending: 0, completed: 0, failed: 0 },
         webhooks: { pending: 0, completed: 0, failed: 0 },
       },
-      storage: { type: storageType, path: storagePath },
+      storage: {
+        type: storageType,
+        path: storagePath,
+        ...(storageType === 's3' && storageBucket ? { bucket: storageBucket } : {}),
+      },
       engine: { type: engineType, headless: engineHeadless, sessionDataPath, browserArgs },
     };
   }
@@ -288,6 +338,7 @@ export class InfraController {
         s3CredentialsSet: Boolean(saved.S3_ACCESS_KEY_ID && saved.S3_SECRET_ACCESS_KEY),
       },
       engine: {
+        type: saved.ENGINE_TYPE || 'whatsapp-web.js',
         headless: saved.PUPPETEER_HEADLESS !== 'false',
         sessionDataPath: saved.SESSION_DATA_PATH || '',
         browserArgs: saved.PUPPETEER_ARGS || '',
@@ -427,9 +478,27 @@ export class InfraController {
       // Engine. NOTE: PUPPETEER_HEADLESS / SESSION_DATA_PATH / PUPPETEER_ARGS are the names
       // configuration.ts reads (previously saved as ENGINE_* and silently ignored — #226).
       if (config.engine) {
+        // Persist the selected engine so the Infrastructure tile can actually switch engines (the
+        // active engine was previously only settable via the ENGINE_TYPE env, never from the UI).
+        if (config.engine.type) {
+          const validEngineIds = this.engineFactory.getAvailableEngines().map(e => e.id);
+          if (!validEngineIds.includes(config.engine.type)) {
+            throw new BadRequestException(`Unknown engine type: ${config.engine.type}`);
+          }
+          updates.ENGINE_TYPE = config.engine.type;
+        }
         updates.PUPPETEER_HEADLESS = config.engine.headless !== false ? 'true' : 'false';
         updates.SESSION_DATA_PATH = config.engine.sessionDataPath || './data/sessions';
         updates.PUPPETEER_ARGS = config.engine.browserArgs || '--no-sandbox --disable-gpu';
+      }
+
+      // .env.generated is one KEY=value per line, loaded on the next boot. A value carrying a
+      // line break would write a second line and inject an arbitrary env var the operator never
+      // set, so refuse any such value before writing anything.
+      for (const [key, value] of Object.entries(updates)) {
+        if (/[\r\n]/.test(value)) {
+          throw new BadRequestException(`Invalid configuration value for ${key}: line breaks are not allowed`);
+        }
       }
 
       // Existing values are the base; this payload's values win (secrets handled above).
@@ -450,8 +519,9 @@ export class InfraController {
         '',
       ].join('\n');
 
-      // Write to data/ so it persists across container restarts.
-      fs.writeFileSync(envPath, contents, 'utf8');
+      // Write to data/ so it persists across container restarts. Owner-only (0600): this file holds
+      // the DB/S3/Redis credentials, so it must not be world-readable between save and next restart.
+      writeSecretFile(envPath, contents);
       this.logger.log('Configuration saved', { envPath });
 
       const profileMsg = profiles.length > 0 ? ` Docker profiles required: ${profiles.join(', ')}.` : '';
@@ -582,15 +652,26 @@ export class InfraController {
     exportedAt: string;
     dataDbType: string;
     tables: MigrationTables;
-    counts: { sessions: number; webhooks: number; messages: number; messageBatches: number };
+    counts: {
+      sessions: number;
+      webhooks: number;
+      messages: number;
+      messageBatches: number;
+      templates: number;
+      baileysStoredMessages: number;
+      lidMappings: number;
+    };
   }> {
     // Get all entities from Data DB
     const sessions = await this.dataDataSource.query<SessionRow[]>('SELECT * FROM sessions');
     const webhooks = await this.dataDataSource.query<WebhookRow[]>('SELECT * FROM webhooks');
 
-    // Messages table may not exist yet or be empty
+    // These tables may not exist yet (older DB) or be empty.
     let messages: MessageRow[] = [];
     let messageBatches: MessageBatchRow[] = [];
+    let templates: TemplateRow[] = [];
+    let baileysStoredMessages: BaileysStoredMessageRow[] = [];
+    let lidMappings: LidMappingRow[] = [];
 
     try {
       messages = await this.dataDataSource.query<MessageRow[]>('SELECT * FROM messages');
@@ -604,6 +685,26 @@ export class InfraController {
       this.logger.debug('Message batches table not available for export', { error: String(error) });
     }
 
+    try {
+      templates = await this.dataDataSource.query<TemplateRow[]>('SELECT * FROM templates');
+    } catch (error) {
+      this.logger.debug('Templates table not available for export', { error: String(error) });
+    }
+
+    try {
+      baileysStoredMessages = await this.dataDataSource.query<BaileysStoredMessageRow[]>(
+        'SELECT * FROM baileys_stored_messages',
+      );
+    } catch (error) {
+      this.logger.debug('Baileys stored messages table not available for export', { error: String(error) });
+    }
+
+    try {
+      lidMappings = await this.dataDataSource.query<LidMappingRow[]>('SELECT * FROM lid_mappings');
+    } catch (error) {
+      this.logger.debug('Lid mappings table not available for export', { error: String(error) });
+    }
+
     return {
       exportedAt: new Date().toISOString(),
       dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
@@ -612,12 +713,18 @@ export class InfraController {
         webhooks,
         messages,
         messageBatches,
+        templates,
+        baileysStoredMessages,
+        lidMappings,
       },
       counts: {
         sessions: sessions.length,
         webhooks: webhooks.length,
         messages: messages.length,
         messageBatches: messageBatches.length,
+        templates: templates.length,
+        baileysStoredMessages: baileysStoredMessages.length,
+        lidMappings: lidMappings.length,
       },
     };
   }
@@ -650,7 +757,15 @@ export class InfraController {
     },
   ): Promise<{
     imported: boolean;
-    counts: { sessions: number; webhooks: number; messages: number; messageBatches: number };
+    counts: {
+      sessions: number;
+      webhooks: number;
+      messages: number;
+      messageBatches: number;
+      templates: number;
+      baileysStoredMessages: number;
+      lidMappings: number;
+    };
     warnings: string[];
   }> {
     const warnings: string[] = [];
@@ -659,10 +774,18 @@ export class InfraController {
     await queryRunner.startTransaction();
 
     try {
-      // Clear existing data (in correct order due to foreign keys)
+      // Clear existing data (in correct order due to foreign keys). templates and
+      // baileys_stored_messages FK sessions ON DELETE CASCADE, so the sessions DELETE would clear
+      // them too; clearing them explicitly first keeps the order correct on engines where the
+      // cascade is not enforced, and is a no-op when the table doesn't exist.
       await queryRunner.query('DELETE FROM webhooks');
       await queryRunner.query('DELETE FROM messages').catch(() => {});
       await queryRunner.query('DELETE FROM message_batches').catch(() => {});
+      await queryRunner.query('DELETE FROM templates').catch(() => {});
+      await queryRunner.query('DELETE FROM baileys_stored_messages').catch(() => {});
+      // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
+      // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
+      await queryRunner.query('DELETE FROM lid_mappings').catch(() => {});
       await queryRunner.query('DELETE FROM sessions');
 
       // Import sessions first
@@ -701,8 +824,8 @@ export class InfraController {
         for (const webhook of data.tables.webhooks) {
           try {
             await queryRunner.query(
-              `INSERT INTO webhooks (id, "sessionId", url, events, secret, headers, active, "retryCount", "lastTriggeredAt", "createdAt", "updatedAt") 
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              `INSERT INTO webhooks (id, "sessionId", url, events, secret, headers, filters, active, "retryCount", "lastTriggeredAt", "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
               [
                 webhook.id,
                 webhook.sessionId,
@@ -710,6 +833,11 @@ export class InfraController {
                 typeof webhook.events === 'string' ? webhook.events : JSON.stringify(webhook.events || []),
                 webhook.secret,
                 typeof webhook.headers === 'string' ? webhook.headers : JSON.stringify(webhook.headers || {}),
+                webhook.filters == null
+                  ? null
+                  : typeof webhook.filters === 'string'
+                    ? webhook.filters
+                    : JSON.stringify(webhook.filters),
                 webhook.active,
                 webhook.retryCount,
                 webhook.lastTriggeredAt,
@@ -802,11 +930,73 @@ export class InfraController {
         }
       }
 
+      // Import templates (optional; FK -> sessions, restored above)
+      let templatesCount = 0;
+      if (data.tables.templates?.length) {
+        for (const tpl of data.tables.templates) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO templates (id, "sessionId", name, body, header, footer, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                tpl.id,
+                tpl.sessionId,
+                tpl.name,
+                tpl.body,
+                tpl.header ?? null,
+                tpl.footer ?? null,
+                tpl.createdAt,
+                tpl.updatedAt,
+              ],
+            );
+            templatesCount++;
+          } catch (err) {
+            warnings.push(`Failed to import template ${tpl.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import baileys stored messages (optional; FK -> sessions, restored above)
+      let baileysStoredMessagesCount = 0;
+      if (data.tables.baileysStoredMessages?.length) {
+        for (const bsm of data.tables.baileysStoredMessages) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO baileys_stored_messages (id, "sessionId", "waMessageId", "serializedMessage", "createdAt")
+               VALUES ($1, $2, $3, $4, $5)`,
+              [bsm.id, bsm.sessionId, bsm.waMessageId, bsm.serializedMessage, bsm.createdAt],
+            );
+            baileysStoredMessagesCount++;
+          } catch (err) {
+            warnings.push(`Failed to import baileys stored message ${bsm.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import lid mappings (optional; not a FK, restored as a standalone cache table)
+      let lidMappingsCount = 0;
+      if (data.tables.lidMappings?.length) {
+        for (const lm of data.tables.lidMappings) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
+              [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
+            );
+            lidMappingsCount++;
+          } catch (err) {
+            warnings.push(`Failed to import lid mapping ${lm.lid}: ${err}`);
+          }
+        }
+      }
+
       const counts = {
         sessions: sessionsCount,
         webhooks: webhooksCount,
         messages: messagesCount,
         messageBatches: messageBatchesCount,
+        templates: templatesCount,
+        baileysStoredMessages: baileysStoredMessagesCount,
+        lidMappings: lidMappingsCount,
       };
 
       // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any

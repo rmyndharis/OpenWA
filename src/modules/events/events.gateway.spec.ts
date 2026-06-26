@@ -2,7 +2,9 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { EventsGateway, isSessionSubscriptionAllowed } from './events.gateway';
 import { AuthService } from '../auth/auth.service';
-import type { WSClientMessage, WSErrorResponse, WSSubscribedResponse } from './dto/ws-messages.dto';
+import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
+import type { WSClientMessage, WSErrorResponse, WSSubscribedResponse, WSEventMessage } from './dto/ws-messages.dto';
+import { WEBHOOK_RESERVED_EVENTS } from '../webhook/dto/webhook.dto';
 
 describe('isSessionSubscriptionAllowed (WS session-scope enforcement)', () => {
   it('allows an unrestricted key (null allowedSessions) to subscribe to anything, including *', () => {
@@ -105,5 +107,170 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 
     expect(res.type).toBe('subscribed');
     expect(sock.join).toHaveBeenCalled();
+  });
+
+  it('rejects a subscription to a reserved, never-emitted event (group.*) with INVALID_EVENTS', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-1', ['group.join']),
+    )) as WSErrorResponse;
+
+    expect(res.type).toBe('error');
+    expect(res.code).toBe('INVALID_EVENTS');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+
+  it('keeps the valid events when a subscription mixes a valid and a reserved event', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-1', ['message.received', 'group.join']),
+    )) as WSSubscribedResponse;
+
+    expect(res.type).toBe('subscribed');
+    expect(res.events).toEqual(['message.received']);
+    expect(sock.join).toHaveBeenCalledWith(buildRoomName('sess-1', 'message.received'));
+  });
+
+  // Cross-tenant guard (#221): a session-scoped key must not subscribe to a foreign session or '*'.
+  // The pure predicate is covered above; these drive it through handleSubscribe so a regression that
+  // drops the check (or reads the stale connect-time key) is caught end-to-end.
+  it('forbids a session-scoped key from subscribing to a session outside its allowlist', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(asSocket(sock), subscribeMsg('sess-2', ['*']))) as WSErrorResponse;
+
+    expect(res.type).toBe('error');
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+
+  it('forbids a session-scoped key from subscribing to the * wildcard', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('*', ['message.received']),
+    )) as WSErrorResponse;
+
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+
+  it('allows a session-scoped key to subscribe to a session in its allowlist', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-1', ['message.received']),
+    )) as WSSubscribedResponse;
+
+    expect(res.type).toBe('subscribed');
+    expect(sock.join).toHaveBeenCalledWith(buildRoomName('sess-1', 'message.received'));
+  });
+
+  it('enforces scope using the FRESH re-validated key, not the connect-time key', async () => {
+    // Connect with an unrestricted key, but the key is narrowed to ['sess-1'] by the subscribe re-check.
+    authService.validateApiKey.mockResolvedValueOnce({ name: 'k', allowedSessions: null }); // connect
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+
+    authService.validateApiKey.mockResolvedValueOnce({ name: 'k', allowedSessions: ['sess-1'] }); // subscribe re-check
+    const res = (await gateway.handleMessage(
+      asSocket(sock),
+      subscribeMsg('sess-2', ['message.received']),
+    )) as WSErrorResponse;
+
+    expect(res.code).toBe('FORBIDDEN_SESSION');
+    expect(sock.join).not.toHaveBeenCalled();
+  });
+});
+
+// A capturing, chainable Socket.IO server stub: server.to(r1).to(r2)...emit(...) all
+// resolve to one operator whose emit() we count. Mirrors the real BroadcastOperator,
+// where chained .to() accumulates rooms into a single deduped broadcast.
+const makeCapturingServer = () => {
+  const rooms: string[] = [];
+  const emit = jest.fn();
+  const op: { to: jest.Mock; emit: jest.Mock } = { to: jest.fn(), emit };
+  op.to.mockImplementation((r: string) => {
+    rooms.push(r);
+    return op;
+  });
+  const server = { to: jest.fn((r: string) => (rooms.push(r), op)) };
+  return { server, emit, rooms };
+};
+
+describe('EventsGateway.emitToRooms fan-out', () => {
+  const gw = () => new EventsGateway({ validateApiKey: jest.fn() } as unknown as AuthService);
+
+  it('delivers one event with a single broadcast across all four rooms (no per-room duplicate emit)', () => {
+    const gateway = gw();
+    const { server, emit, rooms } = makeCapturingServer();
+    (gateway as unknown as { server: unknown }).server = server;
+
+    gateway.emitMessage('sess-1', { id: 'm1' });
+
+    // One broadcast, not one-emit-per-room: a socket in several of the rooms gets it once.
+    expect(emit).toHaveBeenCalledTimes(1);
+    const [channel, message] = emit.mock.calls[0] as [string, WSEventMessage];
+    expect(channel).toBe('message');
+    expect(message.type).toBe('event');
+    expect(message.payload.event).toBe('message.received');
+    expect(message.payload.sessionId).toBe('sess-1');
+    // Still targets the specific room plus the three wildcard rooms.
+    expect(new Set(rooms)).toEqual(
+      new Set([
+        buildRoomName('sess-1', 'message.received'),
+        buildRoomName('sess-1', '*'),
+        buildRoomName('*', 'message.received'),
+        buildRoomName('*', '*'),
+      ]),
+    );
+  });
+});
+
+describe('event catalog ⇔ emitter invariants (drift guard)', () => {
+  // Derive the events the gateway ACTUALLY emits by invoking every public emit* room
+  // method against a capturing server. Reflection-based so it cannot rot: a new emit*
+  // method is auto-discovered; an advertised-but-unemitted event fails the equality.
+  const deriveEmittedEvents = (): Set<string> => {
+    const gateway = new EventsGateway({ validateApiKey: jest.fn() } as unknown as AuthService);
+    const captured: string[] = [];
+    const op: { to: () => unknown; emit: (ch: string, msg: WSEventMessage) => boolean } = {
+      to: () => op,
+      emit: (_ch, msg) => (captured.push(msg.payload.event), true),
+    };
+    (gateway as unknown as { server: unknown }).server = { to: () => op };
+
+    const proto = Object.getPrototypeOf(gateway) as object;
+    const emitMethods = Object.getOwnPropertyNames(proto).filter(n => n.startsWith('emit') && n !== 'emitToRooms');
+    for (const name of emitMethods) {
+      (gateway as unknown as Record<string, (...a: unknown[]) => void>)[name]('sess-1', {});
+    }
+    return new Set(captured);
+  };
+
+  it('every advertised SUBSCRIBABLE_EVENT has a gateway emitter, and every emitter is advertised', () => {
+    expect(new Set(SUBSCRIBABLE_EVENTS)).toEqual(deriveEmittedEvents());
+  });
+
+  it('reserved webhook group.* events are NOT advertised as socket-subscribable', () => {
+    for (const reserved of WEBHOOK_RESERVED_EVENTS) {
+      expect(SUBSCRIBABLE_EVENTS).not.toContain(reserved);
+    }
   });
 });

@@ -32,7 +32,7 @@ import { CatalogModule } from './modules/catalog/catalog.module';
 import { HooksModule } from './core/hooks';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
-import { ExtensionsModule } from './plugins/extensions/extensions.module';
+import { AgentToolsModule } from './core/agent-tools/agent-tools.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -42,6 +42,22 @@ if (process.env.QUEUE_ENABLED === 'true') {
     QueueModule: Type;
   };
   queueModules.push(queueModule.QueueModule);
+}
+
+// Only mount the MCP server if explicitly enabled to avoid startup cost and
+// the SDK import (which pulls in @modelcontextprotocol/sdk) in non-MCP deployments.
+const mcpModules: Array<Type | DynamicModule> = [];
+if (process.env.MCP_ENABLED === 'true') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { McpModule } = require('./modules/mcp/mcp.module') as typeof import('./modules/mcp/mcp.module');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { version } = require('../package.json') as { version: string };
+  mcpModules.push(
+    McpModule.forRoot({
+      basePath: '/mcp',
+      serverInfo: { name: 'openwa', version },
+    }),
+  );
 }
 
 // Serve the bundled dashboard SPA from this same NestJS process/port when a build is
@@ -60,7 +76,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
       rootPath: DASHBOARD_DIST,
       // Let Nest own these so unknown API/socket routes return real 404s/JSON rather
       // than the SPA index.html fallback (Express 5 / path-to-regexp v8 wildcard syntax).
-      exclude: ['/api/{*splat}', '/socket.io/{*splat}'],
+      exclude: ['/api/{*splat}', '/socket.io/{*splat}', '/mcp', '/mcp/{*splat}'],
     }),
   );
 }
@@ -145,6 +161,11 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             retryDelay: 3000,
             extra: {
               max: configService.get<number>('dataDatabase.poolSize', 10),
+              // Runtime query/pool timeouts so a stuck query or saturated pool fails fast instead of
+              // hanging requests. statement_timeout is safe here (no migrations on this connection).
+              statement_timeout: configService.get<number>('dataDatabase.statementTimeoutMs', 30000),
+              idleTimeoutMillis: configService.get<number>('dataDatabase.idleTimeoutMs', 30000),
+              connectionTimeoutMillis: configService.get<number>('dataDatabase.connectionTimeoutMs', 10000),
             },
           };
         }
@@ -217,7 +238,8 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     StatusModule, // Phase 3: Status/Stories API
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API
-    ExtensionsModule, // First-party extension plugins (registered disabled)
+    AgentToolsModule, // Agent-invocable tool registry (protocol-neutral)
+    ...mcpModules, // MCP Streamable-HTTP server (opt-in via MCP_ENABLED=true)
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
   ],
 })

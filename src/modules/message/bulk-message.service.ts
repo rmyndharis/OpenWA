@@ -13,7 +13,9 @@ import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
+import { assertBase64WithinMediaCap } from './media-cap.util';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { renderTemplate } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
 // Type definitions for bulk message content
@@ -91,6 +93,16 @@ export class BulkMessageService implements OnApplicationBootstrap {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {
       throw new BadRequestException(`Session '${sessionId}' is not active`);
+    }
+
+    // Bound every outbound base64 blob to the media byte cap before the whole messages array (with
+    // its base64 payloads) is persisted into the batch row. Mirrors the single-send cap in
+    // MessageService.buildMediaInput.
+    for (const { content } of dto.messages) {
+      assertBase64WithinMediaCap(content?.image?.base64);
+      assertBase64WithinMediaCap(content?.video?.base64);
+      assertBase64WithinMediaCap(content?.audio?.base64);
+      assertBase64WithinMediaCap(content?.document?.base64);
     }
 
     const batchId = dto.batchId || `batch_${randomUUID().split('-')[0]}`;
@@ -304,15 +316,10 @@ export class BulkMessageService implements OnApplicationBootstrap {
   private applyVariables(content: BulkMessageContent, variables?: Record<string, string>): BulkMessageContent {
     if (!variables) return content;
 
-    // NOTE: This single-brace `{name}` convention differs from the shared
-    // server-side template renderer (`renderTemplate` in
-    // common/utils/template-render.ts) which uses double-brace `{{name}}`
-    // placeholders. The two conventions should be reconciled onto the shared
-    // helper in a follow-up so the gateway exposes one consistent templating
-    // syntax. See issue #69.
-    const replaceVars = (str: string): string => {
-      return str.replace(/\{(\w+)\}/g, (_, key: string) => variables[key] || `{${key}}`);
-    };
+    // Delegate to the shared renderer so the gateway exposes one templating syntax (#69). It
+    // substitutes canonical `{{name}}` placeholders and still honors the legacy single-brace
+    // `{name}` this endpoint historically used (deprecated — prefer `{{name}}`).
+    const replaceVars = (str: string): string => renderTemplate(str, variables);
 
     const processValue = (value: unknown): unknown => {
       if (typeof value === 'string') {

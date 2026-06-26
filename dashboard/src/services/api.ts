@@ -38,11 +38,25 @@ export interface SessionStats {
   memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
 }
 
+export type WebhookFilterOperator = 'is' | 'isNot' | 'contains' | 'equals';
+
+export interface WebhookFilterCondition {
+  field: string;
+  operator: WebhookFilterOperator;
+  value: string | string[] | boolean;
+  caseSensitive?: boolean;
+}
+
+export interface WebhookFilters {
+  conditions: WebhookFilterCondition[];
+}
+
 export interface Webhook {
   id: string;
   sessionId: string;
   url: string;
   events: string[];
+  filters?: WebhookFilters | null;
   active: boolean;
   secret?: string;
   createdAt: string;
@@ -155,6 +169,20 @@ export interface ChatMessage {
   };
 }
 
+// Live WhatsApp message from the engine history endpoint (not a persisted DB row): it carries `fromMe`
+// instead of `direction`/`status`. Used to backfill a chat thread the gateway never captured live.
+export interface EngineHistoryMessage {
+  id: string;
+  chatId: string;
+  from: string;
+  to: string;
+  body: string;
+  type: string;
+  timestamp: number;
+  fromMe?: boolean;
+  media?: { mimetype: string; filename?: string; data?: string };
+}
+
 export interface SendMediaPayload {
   base64?: string;
   url?: string;
@@ -166,6 +194,8 @@ export interface SendMediaPayload {
 export interface HealthStatus {
   status: 'ok' | 'error';
   timestamp?: string;
+  /** Running backend version (from package.json) — read live so the sidebar never shows a stale build. */
+  version?: string;
   details?: {
     database?: { status: string };
     redis?: { status: string };
@@ -211,7 +241,7 @@ export interface SavedConfig {
     s3Endpoint: string;
     s3CredentialsSet: boolean;
   };
-  engine: { headless: boolean; sessionDataPath: string; browserArgs: string };
+  engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
 }
 
 export interface SaveConfigPayload {
@@ -248,6 +278,7 @@ export interface SaveConfigPayload {
     s3Endpoint?: string;
   };
   engine?: {
+    type?: string;
     headless?: boolean;
     sessionDataPath?: string;
     browserArgs?: string;
@@ -270,8 +301,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   // Get API key from sessionStorage for authentication
   const apiKey = sessionStorage.getItem('openwa_api_key');
 
+  // For FormData (file uploads) let the browser set multipart/form-data + boundary itself.
+  const isFormData = options.body instanceof FormData;
   const headers: HeadersInit = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...options.headers,
   };
@@ -291,7 +324,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
+    // On a non-JSON body (e.g. a reverse-proxy 502/503 HTML page) fall through to `HTTP <status>`
+    // rather than statusText: the status code is what the toast connection-lost de-dup matches on,
+    // and statusText is empty over HTTP/2 anyway.
+    const error = await response.json().catch(() => ({}));
     throw new Error(error.message || `HTTP ${response.status}`);
   }
 
@@ -300,6 +336,29 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   return response.json();
+}
+
+/** Like {@link request} but returns the raw response text — e.g. a plugin's HTML config-UI bundle. */
+async function requestText(endpoint: string): Promise<string> {
+  const apiKey = sessionStorage.getItem('openwa_api_key');
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    headers: { ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+  });
+
+  if (response.status === 401) {
+    sessionStorage.removeItem('openwa_api_key');
+    if (typeof window !== 'undefined') {
+      window.location.assign('/');
+      return new Promise<string>(() => {});
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || `HTTP ${response.status}`);
+  }
+
+  return response.text();
 }
 
 // =============================================================================
@@ -328,9 +387,24 @@ export const sessionApi = {
       method: 'POST',
       body: JSON.stringify({ chatId }),
     }),
+  markChatUnread: (id: string, chatId: string) =>
+    request<{ success: boolean }>(`/sessions/${id}/chats/unread`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId }),
+    }),
   getChatMessages: (id: string, chatId: string, limit = 100) =>
     request<{ messages: ChatMessage[]; total: number }>(
       `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}`,
+    ),
+  // Live history straight from WhatsApp (bypasses the DB) — backfills a thread the gateway never
+  // captured, e.g. a freshly paired session whose persisted store is still empty.
+  // includeMedia downloads the media payload (base64) for history messages so stickers/images/
+  // video/voice render instead of collapsing to an empty timestamp-only bubble.
+  getChatHistory: (id: string, chatId: string, limit = 100, includeMedia = false) =>
+    request<EngineHistoryMessage[]>(
+      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/history?limit=${limit}${
+        includeMedia ? '&includeMedia=true' : ''
+      }`,
     ),
 };
 
@@ -342,7 +416,7 @@ export const webhookApi = {
   listBySession: (sessionId: string) => request<Webhook[]>(`/sessions/${sessionId}/webhooks`),
   listAll: () => request<Webhook[]>('/webhooks'),
   get: (sessionId: string, id: string) => request<Webhook>(`/sessions/${sessionId}/webhooks/${id}`),
-  create: (sessionId: string, data: { url: string; events: string[] }) =>
+  create: (sessionId: string, data: { url: string; events: string[]; filters?: WebhookFilters | null }) =>
     request<Webhook>(`/sessions/${sessionId}/webhooks`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -558,21 +632,35 @@ export const settingsApi = {
 // Plugin Types
 // =============================================================================
 
-/** Field definition within a plugin's config schema (mirrors the backend PluginConfigSchema). */
+/** Field definition within a plugin's config schema (mirrors the backend PluginConfigField). */
 export interface PluginConfigField {
-  type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  // 'textarea' is a multi-line string; a field with `enum` renders as a <select>.
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'textarea';
   title?: string;
   description?: string;
   default?: unknown;
   enum?: unknown[];
   required?: boolean;
   secret?: boolean;
+  min?: number;
+  max?: number;
+  pattern?: string;
+  items?: PluginConfigField; // array element schema; array-of-rows when items.type === 'object'
+  properties?: Record<string, PluginConfigField>; // nested-object fields
 }
 
 export interface PluginConfigSchema {
   type: 'object';
   properties: Record<string, PluginConfigField>;
 }
+
+export interface PluginI18nText { title?: string; description?: string }
+export interface PluginI18nLocale {
+  name?: string;
+  description?: string;
+  config?: Record<string, PluginI18nText>;
+}
+export type PluginI18n = Record<string, PluginI18nLocale>;
 
 export interface Plugin {
   id: string;
@@ -587,9 +675,18 @@ export interface Plugin {
   provides: string[];
   /** Declared config fields, when the plugin exposes a schema (drives the dashboard config form). */
   configSchema?: PluginConfigSchema;
+  /** When set, the plugin ships a sandboxed-iframe config editor (preferred over configSchema). */
+  configUi?: { entry: string; height?: number };
+  /** Whether the plugin is scoped to specific sessions (false = global, always runs). */
+  sessionScoped: boolean;
+  /** Sessions the plugin is activated for; ['*'] = all numbers. */
+  activeSessions: string[];
+  /** Per-session config overrides, keyed by sessionId (secrets redacted per slice). */
+  sessionConfig?: Record<string, Record<string, unknown>>;
   loadedAt?: string;
   enabledAt?: string;
   error?: string;
+  i18n?: PluginI18n;
 }
 
 export interface Engine {
@@ -599,6 +696,27 @@ export interface Engine {
   features: string[];
   /** Underlying engine library (e.g. whatsapp-web.js 1.34.7), distinct from the adapter version. */
   library?: { name: string; version: string };
+}
+
+/** A remote catalog entry annotated with this instance's install state. */
+export interface CatalogPlugin {
+  id: string;
+  name: string;
+  version: string;
+  type?: string;
+  status?: string;
+  description?: string;
+  author?: string;
+  license?: string;
+  keywords?: string[];
+  minOpenWAVersion?: string;
+  testedOpenWAVersion?: string;
+  homepage?: string;
+  download?: string;
+  installed: boolean;
+  installedVersion: string | null;
+  updateAvailable: boolean;
+  i18n?: PluginI18n;
 }
 
 // =============================================================================
@@ -621,7 +739,58 @@ export const pluginsApi = {
       method: 'PUT',
       body: JSON.stringify({ config }),
     }),
+  /** Set which sessions a session-scoped plugin is activated for (['*'] = all). */
+  setSessions: (id: string, sessions: string[]) =>
+    request<Plugin>(`/plugins/${id}/sessions`, { method: 'PUT', body: JSON.stringify({ sessions }) }),
+  /** Set (or clear, with an empty object) a plugin's config override for one session. */
+  updateSessionConfig: (id: string, sessionId: string, config: Record<string, unknown>) =>
+    request<{ success: boolean; message: string }>(`/plugins/${id}/config/${encodeURIComponent(sessionId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ config }),
+    }),
   healthCheck: (id: string) => request<{ healthy: boolean; message?: string }>(`/plugins/${id}/health`),
+  install: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<Plugin>('/plugins/install', { method: 'POST', body: form });
+  },
+  installFromUrl: (url: string) =>
+    request<Plugin>('/plugins/install-url', { method: 'POST', body: JSON.stringify({ url }) }),
+  updateFromUrl: (id: string, url: string) =>
+    request<Plugin>(`/plugins/${id}/update`, { method: 'POST', body: JSON.stringify({ url }) }),
+  catalog: () => request<CatalogPlugin[]>('/plugins/catalog'),
+  /** Fetch a plugin's sandboxed config-UI entry HTML (the API key stays here, in the parent). */
+  getConfigUi: (id: string) => requestText(`/plugins/${id}/config-ui`),
+  uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
+};
+
+// =============================================================================
+// Statistics API (mirrors src/modules/stats)
+// =============================================================================
+
+export type StatsPeriod = '24h' | '7d' | '30d';
+
+export interface OverviewStats {
+  sessions: { active: number; total: number; byStatus: Record<string, number> };
+  messages: { sent: number; received: number; failed: number; today: { sent: number; received: number } };
+}
+
+export interface MessageTimeSeriesPoint {
+  timestamp: string;
+  sent: number;
+  received: number;
+}
+
+export interface MessageStats {
+  timeSeries: MessageTimeSeriesPoint[];
+  byType: Record<string, number>;
+  bySession: Array<{ sessionId: string; name: string; sent: number; received: number }>;
+  topChats: Array<{ chatId: string; messageCount: number }>;
+}
+
+export const statsApi = {
+  getOverview: () => request<OverviewStats>('/stats/overview'),
+  getMessages: (period: StatsPeriod) => request<MessageStats>(`/stats/messages?period=${period}`),
 };

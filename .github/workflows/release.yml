@@ -29,6 +29,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fail fast (before tests, image build, or the GitHub Release) if the release is inconsistent:
+      # the tag must match package.json, and the docs/CHANGELOG version guard must pass. This stops a
+      # mis-tagged or under-documented release from ever publishing an image or a GitHub Release.
+      - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${TAG#v}"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag '$TAG' (version '$TAG_VERSION') does not match package.json version '$PKG_VERSION'. Bump package.json or fix the tag before releasing."
+            exit 1
+          fi
+          echo "Tag $TAG matches package.json $PKG_VERSION"
+
+      - name: Check doc version consistency
+        run: npm run check:versions
+
       - name: Run tests
         run: npm test -- --coverage
 
@@ -39,7 +57,10 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [test]
+    # Gate the public Release on a successfully built+pushed image, so a tag never produces a GitHub
+    # Release without a matching container image (the docker job also builds the dashboard, which the
+    # test gate above does not). Trades a few minutes of buildx latency for release/image consistency.
+    needs: [test, docker]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -66,13 +87,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          # Author the release as a real user (the PAT owner) instead of github-actions[bot].
+          # Add a repo secret RELEASE_PAT — a fine-grained PAT scoped to this repo with
+          # "Contents: read and write". Falls back to GITHUB_TOKEN (bot-authored) when the secret
+          # is absent, so the job never breaks before the token is configured.
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.version.outputs.VERSION }}
           body: ${{ steps.changelog.outputs.NOTES }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ──── Docker Image with Version Tag ───────────────────────────────
   docker:

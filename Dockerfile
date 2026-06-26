@@ -2,7 +2,14 @@
 # Multi-stage build for production-ready image
 
 # ===== Stage 1: Builder =====
-FROM docker.io/node:22-slim AS builder
+# Pin the builder to the BUILD host's platform (not the target's). It only produces arch-INDEPENDENT
+# artifacts (the NestJS dist/ JS and the static dashboard SPA), so it never needs to run emulated for
+# the non-native target. On a multi-arch buildx build this avoids QEMU emulating the whole npm ci +
+# Vite build for arm64 — which is slow AND is where the arm64 lightningcss (Vite 8's native CSS
+# minifier) optional dependency fails to install ("Cannot find module lightningcss.linux-arm64-gnu.node").
+# The per-arch runtime deps are installed natively in the target-platform production stage below.
+# NOTE: $BUILDPLATFORM requires BuildKit (CI uses buildx; modern `docker build`/compose default to it).
+FROM --platform=$BUILDPLATFORM docker.io/node:22-slim AS builder
 
 WORKDIR /app
 
@@ -16,8 +23,14 @@ RUN apt-get update && apt-get install -y \
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies (including devDependencies for build)
-RUN npm ci
+# Install all dependencies INCLUDING devDependencies — the build needs them (`nest` from
+# @nestjs/cli, plus `vite`/`typescript` for the dashboard). `--include=dev` is REQUIRED, not
+# cosmetic: npm omits devDependencies whenever NODE_ENV=production is present in the build env.
+# Coolify (and similar PaaS) promote every ${VAR} referenced in the compose file to a build-time
+# variable, so docker-compose.yml's `NODE_ENV=${NODE_ENV:-production}` leaks NODE_ENV=production
+# into this stage and a bare `npm ci` would skip @nestjs/cli → `sh: 1: nest: not found` (exit 127).
+# (docker-compose.dev.yml hardcodes NODE_ENV=development, which is why the dev build never hit this.)
+RUN npm ci --include=dev
 
 # Copy source code
 COPY . .
@@ -25,7 +38,9 @@ COPY . .
 # Build the API (dist/) and the dashboard SPA (dashboard/dist/). The root `npm ci` above
 # ran before the dashboard source was copied, so its postinstall hook skipped the dashboard
 # deps - install them explicitly here (npm ci, reproducible from dashboard/package-lock.json).
-RUN npm run build && npm run dashboard:ci && npm run dashboard:build
+# `--include=dev` for the same reason as above: the dashboard build needs vite/typescript
+# (devDependencies), which a NODE_ENV=production build env would otherwise omit.
+RUN npm run build && npm run dashboard:ci -- --include=dev && npm run dashboard:build
 
 # ===== Stage 2: Production =====
 FROM docker.io/node:22-slim AS production

@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "Connessione al server persa",
+      "message": "Il server backend non è raggiungibile. Verifica che il server sia in esecuzione."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",
@@ -137,7 +143,8 @@
       "activeSessions": "Sessioni Attive",
       "messagesToday": "Messaggi di Oggi",
       "webhooksConfigured": "Webhook Configurati",
-      "apiCalls": "Chiamate API (24h)"
+      "apiCalls": "Chiamate API (24h)",
+      "totalMessages": "Messaggi totali"
     },
     "sessionsOverview": "Panoramica Sessioni",
     "showingSessions": "Visualizzazione di {{shown}} di {{total}} sessioni",
@@ -152,7 +159,22 @@
     "view": "Visualizza",
     "disconnect": "Disconnetti",
     "errorPrefix": "Errore: {{message}}",
-    "loadError": "Impossibile caricare i dati"
+    "loadError": "Impossibile caricare i dati",
+    "charts": {
+      "title": "Analisi messaggi",
+      "period": {
+        "24h": "24 h",
+        "7d": "7 g",
+        "30d": "30 g"
+      },
+      "overTime": "Messaggi nel tempo",
+      "byType": "Messaggi per tipo",
+      "topChats": "Chat principali",
+      "sent": "Inviati",
+      "received": "Ricevuti",
+      "messages": "Messaggi",
+      "empty": "Nessuna attività di messaggi in questo periodo."
+    }
   },
   "sessionStatus": {
     "created": "Nuova",
@@ -230,7 +252,7 @@
       "stop": "Ferma",
       "reconnect": "Riconnetti",
       "delete": "Elimina",
-      "killStuck": "Kill Stuck"
+      "killStuck": "Termina sessione bloccata"
     },
     "toasts": {
       "readyTitle": "Sessione Pronta",
@@ -270,6 +292,36 @@
     "events": "Eventi",
     "available": "Eventi Disponibili",
     "saveChanges": "Salva Modifiche",
+    "filters": {
+      "title": "Filtri (opzionale)",
+      "hint": "Attiva solo quando tutte le condizioni corrispondono. Si applica agli eventi dei messaggi.",
+      "badge": "{{count}} filtro",
+      "badge_other": "{{count}} filtri",
+      "addCondition": "Aggiungi condizione",
+      "removeCondition": "Rimuovi condizione",
+      "caseSensitive": "Distingui maiuscole",
+      "contactPlaceholder": "Numero o ID WhatsApp...",
+      "textPlaceholder": "Testo da cercare...",
+      "addValue": "Aggiungi \"{{value}}\"",
+      "yes": "Sì",
+      "no": "No",
+      "fields": {
+        "sender": "Mittente",
+        "recipient": "Destinatario",
+        "body": "Corpo del messaggio",
+        "type": "Tipo di messaggio",
+        "isGroup": "È una chat di gruppo",
+        "fromMe": "Inviato da me",
+        "hasMedia": "Contiene media",
+        "mentions": "Menzioni"
+      },
+      "operators": {
+        "is": "è",
+        "isNot": "non è",
+        "contains": "contiene",
+        "equals": "è uguale a"
+      }
+    },
     "columns": {
       "url": "URL",
       "events": "Eventi",
@@ -516,6 +568,17 @@
       "migrationsStatus": "Lo schema è sincronizzato automaticamente con TypeORM",
       "migrationsHint": "Le migrazioni sono gestite automaticamente. Usa la CLI per le migrazioni manuali."
     },
+    "engine": {
+      "title": "Motore WhatsApp",
+      "subtitle": "Scegli e configura il motore di connessione di WhatsApp.",
+      "builtIn": "Integrato",
+      "headless": "Modalità headless",
+      "headlessDesc": "Esegui il browser senza interfaccia visibile (consigliato per la produzione).",
+      "sessionDataPath": "Percorso dati sessione",
+      "browserArgs": "Argomenti del browser",
+      "noBrowser": "Questo motore si connette tramite WebSocket: non ha un browser, quindi non ci sono impostazioni per la modalità headless o gli argomenti del browser. Il motore attivo viene applicato dopo un riavvio.",
+      "restartNote": "Il cambio di motore ha effetto dopo il riavvio del server."
+    },
     "redis": {
       "title": "Redis",
       "enable": "Abilita Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "Plugin",
-    "subtitle": "Gestisci i motori, i backend di storage e le estensioni",
+    "subtitle": "Installa, configura e gestisci le estensioni",
     "refresh": "Aggiorna",
     "engineCard": "Motore WhatsApp Attivo",
     "running": "In esecuzione",
@@ -593,6 +656,11 @@
     "disable": "Disabilita",
     "healthCheck": "Controllo dello Stato (Health Check)",
     "configure": "Configura",
+    "available": "Disponibili",
+    "install": "Installa plugin",
+    "uninstall": "Disinstalla",
+    "uninstallConfirm": "Disinstallare \"{{name}}\"? Questa operazione ne elimina i file.",
+    "engineSwitchHint": "Imposta come motore attivo nelle Impostazioni, poi riavvia",
     "empty": {
       "title": "Nessun Plugin Trovato",
       "description": "Installa i plugin per estendere le funzionalità di OpenWA"
@@ -606,7 +674,23 @@
       "sessionDataPath": "Percorso Dati Sessione",
       "browserArgs": "Argomenti del Browser",
       "noOptions": "Nessuna opzione di configurazione disponibile per questo plugin",
-      "save": "Salva Configurazione"
+      "save": "Salva Configurazione",
+      "addItem": "Aggiungi",
+      "tabConfig": "Configurazione",
+      "tabSessions": "Sessioni"
+    },
+    "rail": {
+      "engine": "Motore attivo",
+      "enabled": "abilitati",
+      "installed": "installati",
+      "active": "Plugin attivi",
+      "none": "Nessuno ancora abilitato"
+    },
+    "installModal": {
+      "title": "Installa un plugin",
+      "hint": "Carica un plugin pacchettizzato come file .zip (con un manifest.json). Viene eseguito in sandbox una volta abilitato.",
+      "choose": "Scegli un file .zip…",
+      "tooLarge": "Il file supera il limite di 5 MB."
     },
     "toasts": {
       "errorTitle": "Errore Plugin",
@@ -616,7 +700,24 @@
       "healthError": "Errore nel Controllo dello Stato",
       "savedTitle": "Configurazione Salvata",
       "savedDesc": "È richiesto il riavvio del server per applicare le modifiche.",
-      "saveFailed": "Salvataggio non riuscito"
+      "saveFailed": "Salvataggio non riuscito",
+      "installed": "Plugin installato",
+      "installFailed": "Installazione non riuscita",
+      "uninstalled": "Plugin disinstallato",
+      "uninstallFailed": "Disinstallazione non riuscita"
+    },
+    "sessions": {
+      "activationTitle": "Esegui per",
+      "activationDesc": "Scegli per quali sessioni viene eseguito questo plugin.",
+      "allSessions": "Tutte le sessioni",
+      "specificSessions": "Sessioni specifiche",
+      "noSessions": "Nessuna sessione ancora.",
+      "saveActivation": "Salva attivazione",
+      "perSessionTitle": "Configurazione per sessione",
+      "perSessionDesc": "Sostituisci la configurazione globale per una sessione; i campi non modificati ereditano il valore globale.",
+      "selectSession": "Seleziona una sessione…",
+      "saveOverride": "Salva override",
+      "clearOverride": "Rimuovi override"
     }
   }
 }

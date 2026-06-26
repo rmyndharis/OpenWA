@@ -19,7 +19,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterface {
   name = 'AddUuidDefaultsForPostgres1779235200000';
 
-  private readonly tables = ['sessions', 'webhooks', 'messages', 'api_keys', 'audit_logs', 'message_batches'];
+  // Data-connection tables only — api_keys/audit_logs live on the separate 'main' connection.
+  private readonly tables = ['sessions', 'webhooks', 'messages', 'message_batches'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (queryRunner.connection.options.type !== 'postgres') return;

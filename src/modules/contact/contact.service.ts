@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { SessionService } from '../session/session.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { paginate, ListOptions } from '../../common/utils/paginate';
 
 /**
  * Owns engine access for contact operations so the "session not started" guard and
@@ -18,8 +19,12 @@ export class ContactService {
     return engine;
   }
 
-  getContacts(sessionId: string) {
-    return this.getEngine(sessionId).getContacts();
+  getContacts(sessionId: string, opts: ListOptions = {}) {
+    // getEngine throws synchronously (keeps the "session not started" guard a sync 400); the
+    // engine returns the full set and we bound the HTTP response window via paginate().
+    return this.getEngine(sessionId)
+      .getContacts()
+      .then(contacts => paginate(contacts, opts.limit, opts.offset));
   }
 
   async getContactById(sessionId: string, contactId: string) {

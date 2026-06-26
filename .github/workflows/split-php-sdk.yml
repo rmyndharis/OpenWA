@@ -1,0 +1,72 @@
+name: Split PHP SDK
+
+# Mirrors the PHP SDK (sdk/php) into the standalone repo rmyndharis/openwa-php,
+# which is what Packagist installs (Packagist needs composer.json at a repo root
+# and does not support subdirectories). Uses a dependency-free `git subtree
+# split` + force-push — no third-party action.
+#
+# IMPORTANT: this only syncs the `main` branch (-> Packagist `dev-main`). The
+# monorepo's `v*` tags are the APP version, NOT the SDK version, so they are
+# deliberately NOT propagated. To cut a versioned SDK release, tag the mirror
+# repo directly (see sdk/php — RELEASING below), e.g. `git tag 0.1.0`.
+#
+# One-time setup:
+#   1. Create an empty GitHub repo: rmyndharis/openwa-php
+#   2. Create a PAT (fine-grained, repo = openwa-php, Contents: read & write)
+#   3. Add it to THIS repo as the secret PHP_SDK_SPLIT_TOKEN
+
+on:
+  push:
+    branches: [main]
+    paths: ['sdk/php/**']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: split-php-sdk
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: PHP SDK tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/php
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - run: composer install --no-interaction --no-progress
+      - run: ./vendor/bin/phpunit
+
+  split:
+    name: Mirror sdk/php -> rmyndharis/openwa-php
+    # Never mirror an untested (red) SDK to Packagist dev-main.
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history is required for `git subtree split`
+
+      - name: Split and force-push to the mirror repo
+        env:
+          SPLIT_TOKEN: ${{ secrets.PHP_SDK_SPLIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SPLIT_TOKEN:-}" ]; then
+            echo "::notice::PHP_SDK_SPLIT_TOKEN is not set — skipping. Create rmyndharis/openwa-php and add the secret to enable the mirror."
+            exit 0
+          fi
+          git config user.name "rmyndharis"
+          git config user.email "yudhi@rmyndharis.com"
+          SPLIT_SHA="$(git subtree split --prefix=sdk/php HEAD)"
+          echo "Split SHA: $SPLIT_SHA"
+          git push --force \
+            "https://x-access-token:${SPLIT_TOKEN}@github.com/rmyndharis/openwa-php.git" \
+            "${SPLIT_SHA}:refs/heads/main"
+          echo "Mirrored sdk/php -> rmyndharis/openwa-php@main"

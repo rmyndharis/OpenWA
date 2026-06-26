@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openwa-sdk"
-version = "0.0.1"
+name = "rmyndharis-openwa"
+version = "0.1.0"
 description = "Official Python SDK for OpenWA WhatsApp API Gateway"
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,7 +15,7 @@ authors = [
 keywords = ["whatsapp", "api", "sdk", "openwa", "gateway"]
 
 dependencies = [
-    "httpx>=0.25.0",
+    "httpx>=0.25.0,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -23,3 +23,18 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rmyndharis/OpenWA"
+Repository = "https://github.com/rmyndharis/OpenWA"
+
+[tool.setuptools.packages.find]
+include = ["openwa*"]
+
+# Ship type information (PEP 561) so consumers get the bundled type hints.
+[tool.setuptools.package-data]
+openwa = ["py.typed"]
+"openwa.resources" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

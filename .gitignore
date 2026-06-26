@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+node_modules
 .pnp
 .pnp.js
 
@@ -75,3 +76,4 @@ uploads/
 docs/plans/
 CLAUDE.md
 _docs/
+.superpowers/

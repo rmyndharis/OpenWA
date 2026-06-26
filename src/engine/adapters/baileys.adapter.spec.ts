@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 
 jest.mock('../../common/media/load-remote-media', () => ({
   loadRemoteMediaBuffer: jest.fn(),
@@ -56,7 +58,16 @@ jest.mock('@whiskeysockets/baileys', () => ({
   useMultiFileAuthState: jest.fn().mockResolvedValue({ state: { creds: {}, keys: {} }, saveCreds }),
   fetchLatestBaileysVersion: jest.fn().mockResolvedValue({ version: [2, 3000, 0] }),
   getContentType: jest.fn(() => 'conversation'),
-  downloadMediaMessage: jest.fn().mockResolvedValue(Buffer.from('IMGDATA')),
+  // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
+  // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
+  downloadMediaMessage: jest.fn(() =>
+    Promise.resolve({
+      // eslint-disable-next-line @typescript-eslint/require-await
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from('IMGDATA');
+      },
+    }),
+  ),
   // Identity passthrough by default; individual tests may override to simulate unwrapping.
   normalizeMessageContent: jest.fn((c: unknown) => c),
   DisconnectReason: { loggedOut: 401, restartRequired: 515 },
@@ -80,6 +91,17 @@ const fakeStore = {
   getMessage: jest.fn(),
   clearSession: jest.fn().mockResolvedValue(undefined),
 };
+
+/** A fresh async-iterable stream of the given chunks (the shape `downloadMediaMessage('stream')` returns). */
+function streamOf(...chunks: Buffer[]): AsyncIterable<Buffer> & { destroy: () => void } {
+  return {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async *[Symbol.asyncIterator]() {
+      for (const c of chunks) yield c;
+    },
+    destroy: jest.fn(),
+  };
+}
 const newAdapter = (): BaileysAdapter =>
   new BaileysAdapter({ sessionId: 'sess-1', authDir: './data/baileys', messageStore: fakeStore });
 
@@ -141,6 +163,43 @@ describe('BaileysAdapter lifecycle & status', () => {
     expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
     expect(onDisconnected).toHaveBeenCalled();
     expect(makeWASocket).not.toHaveBeenCalled(); // no reconnect
+  });
+
+  it('on a logged-out close: clears the on-disk auth dir so a fresh connect shows a new QR', async () => {
+    // Root cause of the "QR never appears after logout" bug: the now-invalid multi-file auth dir was
+    // left on disk, so the next connect() reloaded the dead creds and Baileys retried them instead of
+    // emitting a QR. A terminal loggedOut MUST wipe the auth dir.
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({}));
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+      await new Promise(r => setImmediate(r)); // let the fire-and-forget clearAuthState() settle
+      expect(rmSpy).toHaveBeenCalledWith(
+        path.join('./data/baileys', 'sess-1'),
+        expect.objectContaining({ recursive: true, force: true }),
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('logout() clears the on-disk auth dir (stale creds would otherwise block re-linking)', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({}));
+      await adapter.logout();
+      expect(rmSpy).toHaveBeenCalledWith(
+        path.join('./data/baileys', 'sess-1'),
+        expect.objectContaining({ recursive: true, force: true }),
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it('on a recoverable close: reconnects (re-creates the socket) and does NOT fire onDisconnected', async () => {
@@ -502,10 +561,11 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
-  it('getNumberId resolves via onWhatsApp and returns the jid when it exists', async () => {
+  it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
-    await expect(adapter.getNumberId('628111')).resolves.toBe('628111@s.whatsapp.net');
+    // Must cross the engine boundary in the neutral dialect, matching whatsapp-web.js (<phone>@c.us).
+    await expect(adapter.getNumberId('628111')).resolves.toBe('628111@c.us');
     await expect(adapter.checkNumberExists('628111')).resolves.toBe(true);
   });
 
@@ -710,7 +770,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     };
     baileys.getContentType.mockReturnValue('imageMessage');
     const imgBuf = Buffer.from('PNGBYTES');
-    baileys.downloadMediaMessage.mockResolvedValue(imgBuf);
+    baileys.downloadMediaMessage.mockResolvedValue(streamOf(imgBuf));
 
     const onMessage = jest.fn();
     const adapter = newAdapter();
@@ -739,6 +799,81 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg.media).toEqual({ mimetype: 'image/png', data: imgBuf.toString('base64') });
   });
 
+  it('inbound media: skips the download entirely when the declared fileLength exceeds the cap', async () => {
+    const prev = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '10';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+        getContentType: jest.Mock;
+        downloadMediaMessage: jest.Mock;
+      };
+      baileys.getContentType.mockReturnValue('documentMessage');
+      baileys.downloadMediaMessage.mockClear();
+
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'BIG1' },
+            message: { documentMessage: { mimetype: 'application/pdf', fileName: 'huge.pdf', fileLength: 1000 } },
+            messageTimestamp: 1700000030,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { media: { omitted?: boolean; data?: string; sizeBytes?: number } };
+      expect(msg.media.omitted).toBe(true);
+      expect(msg.media.data).toBeUndefined();
+      expect(msg.media.sizeBytes).toBe(1000);
+      expect(baileys.downloadMediaMessage).not.toHaveBeenCalled(); // over-cap media is never downloaded
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      else process.env.MEDIA_DOWNLOAD_MAX_BYTES = prev;
+    }
+  });
+
+  it('inbound media: aborts mid-download when the stream exceeds the cap (sender understated size)', async () => {
+    const prev = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '10';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+        getContentType: jest.Mock;
+        downloadMediaMessage: jest.Mock;
+      };
+      baileys.getContentType.mockReturnValue('imageMessage');
+      // No declared fileLength (passes the pre-gate), but the stream yields 18 bytes > the 10-byte cap.
+      baileys.downloadMediaMessage.mockResolvedValue(streamOf(Buffer.alloc(6), Buffer.alloc(6), Buffer.alloc(6)));
+
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'LIAR1' },
+            message: { imageMessage: { mimetype: 'image/png' } },
+            messageTimestamp: 1700000031,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { media: { omitted?: boolean; data?: string } };
+      expect(msg.media.omitted).toBe(true);
+      expect(msg.media.data).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      else process.env.MEDIA_DOWNLOAD_MAX_BYTES = prev;
+    }
+  });
+
   it('inbound documentWithCaption: normalizeMessageContent unwraps wrapper, yields non-empty mimetype', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
@@ -748,7 +883,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     };
     baileys.getContentType.mockReturnValue('documentWithCaptionMessage');
     const docBuf = Buffer.from('PDFBYTES');
-    baileys.downloadMediaMessage.mockResolvedValue(docBuf);
+    baileys.downloadMediaMessage.mockResolvedValue(streamOf(docBuf));
     // Simulate normalizeMessageContent unwrapping: returns the inner documentMessage.
     baileys.normalizeMessageContent.mockReturnValue({
       documentMessage: { mimetype: 'application/pdf', fileName: 'report.pdf', caption: 'Q1 report' },
@@ -1344,6 +1479,8 @@ describe('BaileysAdapter contact + chat reads', () => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
     jest.clearAllMocks();
+    // Keep hydrateNames() (runs on 'open') inert; clearAllMocks doesn't reset a prior mockResolvedValue.
+    fakeSock.groupFetchAllParticipating.mockResolvedValue({});
   });
 
   const ready = async (): Promise<BaileysAdapter> => {
@@ -1409,7 +1546,7 @@ describe('BaileysAdapter contact + chat reads', () => {
   });
 });
 
-describe('BaileysAdapter sendSeen + deleteChat', () => {
+describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
@@ -1449,6 +1586,29 @@ describe('BaileysAdapter sendSeen + deleteChat', () => {
     fakeSock.fire('connection.update', { connection: 'open' });
     expect(await adapter.sendSeen('628999@s.whatsapp.net')).toBe(false);
     expect(fakeSock.readMessages).not.toHaveBeenCalled();
+  });
+
+  it('markUnread marks the chat unread via chatModify with the last message', async () => {
+    const adapter = await readyWithMessage();
+    const ok = await adapter.markUnread('628111@s.whatsapp.net');
+    expect(ok).toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      {
+        markRead: false,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+  });
+
+  it('markUnread returns false when no last message is known', async () => {
+    const adapter = newAdapter();
+    await adapter.initialize({});
+    fakeSock.fire('connection.update', { connection: 'open' });
+    expect(await adapter.markUnread('628999@s.whatsapp.net')).toBe(false);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
   });
 
   it('deleteChat revokes the chat via chatModify with the last message', async () => {

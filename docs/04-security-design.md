@@ -112,42 +112,23 @@ interface IpWhitelistEntry {
 }
 ```
 
-### API Endpoints
+### Managing the whitelist
 
-#### Add IP to Whitelist
+There is **no `/whitelist` sub-resource**. A key's allowed source IPs are the `allowedIps` field on the API key itself, set when you create or update the key via the API-keys endpoints (see §6.4.9 in the [API Specification](./06-api-specification.md)):
 
 ```http
-POST /api/auth/api-keys/:apiKeyId/whitelist
+POST /api/auth/api-keys
+PUT  /api/auth/api-keys/:id
 ```
 
-**Request Body:**
 ```json
 {
-  "ipAddress": "203.0.113.50",
-  "description": "Production server"
+  "name": "production-server",
+  "allowedIps": ["203.0.113.50", "10.0.0.0/24"]
 }
 ```
 
-**For CIDR Range:**
-```json
-{
-  "ipAddress": "10.0.0.0",
-  "cidrRange": "10.0.0.0/24",
-  "description": "Internal network"
-}
-```
-
-#### List Whitelisted IPs
-
-```http
-GET /api/auth/api-keys/:apiKeyId/whitelist
-```
-
-#### Remove IP from Whitelist
-
-```http
-DELETE /api/auth/api-keys/:apiKeyId/whitelist/:entryId
-```
+`allowedIps` accepts exact IPs and CIDR ranges. An empty or absent list means the key is **not** IP-restricted; a non-empty list fails closed (a request whose client IP can't be determined, or isn't in the list, is rejected). To change the whitelist, `PUT` the key with the new `allowedIps` array.
 
 ### Implementation
 
@@ -246,39 +227,24 @@ For IPv6, use a library that supports IPv6 parsing (e.g., `ipaddr.js`) when perf
 
 ## 4.4 Data Encryption
 
-### Encryption Strategy
+### In Transit
 
-```mermaid
-flowchart LR
-    subgraph Transit["In Transit"]
-        TLS[TLS 1.3]
-    end
-    
-    subgraph Rest["At Rest"]
-        AES[AES-256-GCM]
-    end
-    
-    subgraph Sensitive["Sensitive Data"]
-        AUTH[Auth State]
-        PROXY[Proxy Credentials]
-        SECRET[Webhook Secrets]
-    end
-    
-    Sensitive --> AES
-    AES --> DB[(Database)]
-    Client --> TLS --> Server
-```
+OpenWA serves plain HTTP on its port; terminate **TLS at your reverse proxy / load balancer** (nginx, Traefik, Caddy) and expose the gateway only over HTTPS in production. The API key is bearer-equivalent and is sent on every request, so it must never traverse plaintext `http://` outside local development.
 
-### What Gets Encrypted
+### At Rest
 
-| Data | Encrypted | Method |
-|------|-----------|--------|
-| API Keys | Yes | SHA-256 hash |
-| Auth State | Yes | AES-256-GCM |
-| Webhook Secrets | Yes | AES-256-GCM |
-| Proxy Passwords | Yes | AES-256-GCM |
-| Message Content | Optional | AES-256-GCM |
-| Session Config | No | - |
+> **There is currently no application-level encryption at rest.** API keys are stored **hashed** (one-way), but other sensitive values are stored as plaintext in the database / on disk and are protected by filesystem and database permissions, not by encryption. Encryption at rest for these fields is a roadmap item, not a shipped feature — do not assume it.
+
+| Data | At rest | How it is protected |
+|------|---------|---------------------|
+| API keys | **Hashed** — SHA-256 with an optional `API_KEY_PEPPER` HMAC; never reversible | A database leak alone cannot recover the keys; with a pepper set, hashes can't be precomputed offline. See §4.2. |
+| Session auth state (WhatsApp credentials) | Plaintext on disk (the engine's auth store under the data volume) | Filesystem permissions on the data volume — keep it private. |
+| Webhook secrets | Plaintext — `webhooks.secret` (`varchar`) | Database access control; never returned by any API response (write-only response DTO). |
+| Proxy credentials | Plaintext — `sessions.proxyUrl` may embed `user:pass` | Database access control; never returned by the session read DTOs. |
+| Generated config (`data/.env.generated`) | Plaintext file, written `0600` | Owner-only file permissions. |
+| Message content | Plaintext in the `messages` table | Database access control. |
+
+**Hardening you can apply today:** set `API_KEY_PEPPER`; restrict the data volume and database to the app's user; and encrypt at the infrastructure layer (LUKS / cloud-provider encrypted volumes / an encrypted managed Postgres) rather than relying on application-level field encryption, which is not implemented.
 
 ## 4.5 Input Validation
 
@@ -303,7 +269,7 @@ flowchart TB
 | `chatId` | Pattern: `^\d+@(c\.us\|g\.us)$` |
 | `phone` | Pattern: `^\d{10,15}$` |
 | `url` | Valid URL, HTTPS only for webhooks |
-| `text` | Max 65536 chars, sanitized |
+| `text` | Max 4096 chars (`send-text`) |
 | `sessionName` | Alphanumeric + hyphen, 3-50 chars |
 
 ### DTO Validation
@@ -320,7 +286,7 @@ export class SendTextDto {
   chatId: string;
 
   @IsString()
-  @MaxLength(65536)
+  @MaxLength(4096)
   text: string;
 }
 
@@ -344,32 +310,28 @@ flowchart LR
     RL -->|Under Limit| APP[Application]
     RL -->|Over Limit| ERR[429 Too Many Requests]
     
-    subgraph Limits["Limit Tiers"]
-        T1[Global: 1000/min]
-        T2[Per Key: 100/min]
-        T3[Per Endpoint: varies]
+    subgraph Limits["Global windows (per client IP)"]
+        T1[short: 10 / 1s]
+        T2[medium: 100 / 60s]
+        T3[long: 1000 / 1h]
     end
 ```
 
-### Endpoint Limits
+### Windows
 
-| Endpoint Category | Rate Limit | Window |
-|-------------------|------------|--------|
-| Session Create | 5 | 1 minute |
-| Session Read | 60 | 1 minute |
-| Message Send | 30 | 1 minute |
-| Message Read | 60 | 1 minute |
-| Webhook CRUD | 10 | 1 minute |
-| Health Check | 120 | 1 minute |
+All limits are **global and per client IP** (resolved through `TRUSTED_PROXIES`), applied by a global `ThrottlerGuard`. There is **no per-endpoint limit table** — these three windows apply to every non-exempt route, and exceeding any one returns `429 Too Many Requests`:
 
-### Response Headers
+| Window | Default limit | Window length | Env overrides |
+|--------|---------------|---------------|---------------|
+| `short` | 10 requests | 1 s | `RATE_LIMIT_SHORT_TTL` / `RATE_LIMIT_SHORT_LIMIT` |
+| `medium` | 100 requests | 60 s | `RATE_LIMIT_MEDIUM_TTL` / `RATE_LIMIT_MEDIUM_LIMIT` |
+| `long` | 1000 requests | 3600 s | `RATE_LIMIT_LONG_TTL` / `RATE_LIMIT_LONG_LIMIT` |
 
-```http
-X-RateLimit-Limit: 30
-X-RateLimit-Remaining: 25
-X-RateLimit-Reset: 1706868060
-Retry-After: 45
-```
+TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are exempt (`@SkipThrottle`). To enforce tighter per-route limits, lower the global windows or add a limiter at your reverse proxy.
+
+### Response on limit
+
+Exceeding any window returns `429 Too Many Requests` with a `Retry-After` header. The `ThrottlerGuard` also sets `X-RateLimit-*` response headers (limit / remaining / reset) by default, and the API exposes them via CORS — but with three named windows in play, the `429` + `Retry-After` is the simplest backpressure signal to act on.
 
 ## 4.7 CORS Configuration
 
@@ -481,6 +443,8 @@ app.use(helmet({
 
 ### What Gets Logged
 
+> **Reality check:** audit entries are persisted to the `audit_logs` table, but **only session-lifecycle actions are emitted today** (`session_created` / `session_started` / `session_stopped` / `session_force_killed` / `session_deleted` / `session_qr_generated`). The `AuditAction` enum also defines `api_key_auth_failed`, `message_sent`, and `webhook_*`, but **no code path emits them** (there is no global audit interceptor) — so failed auth, message sends, and webhook changes are **not** in the audit log yet (a tracked enhancement). Failed authentication currently surfaces only as a `logger.warn` in the application log. The diagram below is the intended coverage.
+
 ```mermaid
 flowchart TB
     subgraph Events["Logged Events"]
@@ -500,24 +464,29 @@ flowchart TB
 
 ```json
 {
-  "timestamp": "2025-02-02T10:00:00.000Z",
-  "level": "info",
-  "event": "api.request",
-  "requestId": "uuid",
+  "id": "uuid",
+  "action": "session_started",
+  "severity": "info",
   "apiKeyId": "uuid",
+  "sessionId": "sess_123",
   "ip": "192.168.1.1",
   "method": "POST",
-  "path": "/api/sessions/sess_123/messages/send-text",
-  "statusCode": 200,
-  "responseTime": 150,
-  "userAgent": "MyApp/1.0"
+  "path": "/api/sessions/sess_123/start",
+  "statusCode": 201,
+  "userAgent": "MyApp/1.0",
+  "metadata": {},
+  "createdAt": "2026-02-02T10:00:00.000Z"
 }
 ```
 
+`action` is an `AuditAction` enum value (snake_case); `severity` is `info` / `warn` / `error`. There is no `requestId` or `responseTime` field, and no global request-logging interceptor — entries are written explicitly by the code paths that emit them.
+
 ### Security Alerts
 
-| Event | Severity | Action |
-|-------|----------|--------|
+> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The only related runtime behavior today is a `logger.warn` when an IP-restricted key is used from a disallowed IP. Forward the audit log / application log to your SIEM to build these alerts.
+
+| Event | Severity | Intended action (roadmap) |
+|-------|----------|---------------------------|
 | Multiple failed auth | High | Alert + temp block |
 | Rate limit exceeded | Medium | Log + block |
 | Invalid signature | Medium | Log |
@@ -557,14 +526,16 @@ flowchart TB
 
 ### Secrets Inventory
 
-| Secret Type | Storage | Rotation |
-|-------------|---------|----------|
+| Secret | Storage | Rotation guidance |
+|--------|---------|-------------------|
 | Database credentials | Environment variable | 90 days |
 | Redis password | Environment variable | 90 days |
-| Encryption key | Environment variable | 365 days |
-| API master key | Environment variable | 180 days |
-| Webhook secrets | Database (encrypted) | Per webhook |
-| Session auth state | File system (default) / Database (optional, encrypted) | Never (tied to WA session) |
+| API master key (`API_MASTER_KEY`) | Environment variable | 180 days |
+| API key pepper (`API_KEY_PEPPER`) | Environment variable | Rotating it invalidates all existing key hashes |
+| Webhook secrets | Database — **plaintext**; never returned by the API | Per webhook |
+| Session auth state | File system (data volume) — **not encrypted** | Never (tied to the WA session) |
+
+> There is no application `ENCRYPTION_KEY` — OpenWA does not encrypt data at rest (see §4.4). The rotation cadences above are operational recommendations, not enforced by the app.
 
 ### Environment Variables Security
 
@@ -580,6 +551,8 @@ docker secret create db_password ./secret.txt
 ```
 
 ### Docker Secrets
+
+> **Caveat:** the `*_FILE` convention shown below requires a secret-file reader in the app (see "Reading Secrets" below), which is **not currently implemented** — OpenWA reads secrets straight from environment variables. Until that helper exists, pass secrets as plain env vars (e.g. an `.env` file with restricted permissions) rather than `_FILE` paths.
 
 ```yaml
 # docker-compose.prod.yml
@@ -607,6 +580,8 @@ secrets:
 
 ### Reading Secrets in Application
 
+> **Not implemented as shown.** OpenWA does **not** read `<NAME>_FILE` Docker-secret files — there is no `getSecret()` helper today. Secrets come straight from `process.env`, layered at boot as `process.env` → `.env` → `data/.env.generated` (`override:false`, so a real environment value wins). The function below is a suggested pattern to add if you want Docker-secret `_FILE` support; as-is, `DATABASE_PASSWORD_FILE` / `ENCRYPTION_KEY_FILE` are not consulted.
+
 ```typescript
 // config/secrets.ts
 import { readFileSync, existsSync } from 'fs';
@@ -633,6 +608,8 @@ const dbPassword = getSecret('DATABASE_PASSWORD');
 ```
 
 ### Key Rotation Procedure
+
+> **Not applicable today.** OpenWA stores no encrypted-at-rest data (see §4.4), so there is no data-encryption key to rotate and no `rotateEncryptionKey()` in the codebase. The flow below is illustrative for if/when field-level encryption is added. To rotate the `API_MASTER_KEY` or `API_KEY_PEPPER`, use the API-key endpoints (§4.2) — rotating the pepper invalidates existing key hashes.
 
 ```mermaid
 flowchart TB
@@ -708,6 +685,8 @@ updates:
 ```
 
 ### Security Scanning in CI
+
+> **Aspirational template — not in the repo.** There is no `security.yml`, no Snyk, and no CodeQL workflow today. The actual dependency check is an inline step in `ci.yml` (`npm audit --audit-level=critical`, run on push/PR — not on a schedule). The workflow below is a recommended setup to add if you want scheduled scanning and SAST.
 
 ```yaml
 # .github/workflows/security.yml
@@ -875,7 +854,7 @@ communication:
 4. Snapshot affected database
 
 ### Evidence Collection
-- Export API access logs: `npm run logs:export --since="2h"`
+- Capture the audit log (the `audit_logs` table / audit query API) and the application logs (`docker compose logs openwa`) — there is no `logs:export` script
 - Database query logs
 - Network traffic captures
 - System metrics at incident time

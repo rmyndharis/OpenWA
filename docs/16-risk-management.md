@@ -194,7 +194,7 @@ flowchart TB
 
 ### Dependency Security
 - [ ] npm audit clean
-- [ ] Snyk scan passed
+- [ ] Dependabot alerts reviewed
 - [ ] Dependencies up to date
 - [ ] No known vulnerabilities
 ```
@@ -289,6 +289,8 @@ Dependencies (`whatsapp-web.js`, Puppeteer, NestJS, etc.) may have vulnerabiliti
 
 **Mitigation Strategies:**
 
+> **Current state:** the real dependency check is an inline `npm audit --audit-level=critical` step in `ci.yml` (runs on push / PR — not on a daily schedule), plus Dependabot PRs (`.github/dependabot.yml`: npm for `/` and `/dashboard`, weekly). There is **no** standalone `security.yml` and **no** Snyk integration. The workflow below is a recommended enhancement to add scheduled scanning.
+
 ```yaml
 # .github/workflows/security.yml
 name: Security Scan
@@ -318,10 +320,10 @@ jobs:
 
 | Action | Frequency |
 |--------|-----------|
-| npm audit | Daily (automated) |
-| Snyk scan | Daily (automated) |
-| Minor updates | Weekly |
-| Major updates | Monthly (with testing) |
+| npm audit (`--audit-level=critical`, inline in CI) | Every push / PR |
+| Snyk scan | Not configured (planned) |
+| Dependabot PRs (npm: `/` and `/dashboard`) | Weekly |
+| Major updates | Reviewed manually |
 | Security patches | Immediate |
 
 ---

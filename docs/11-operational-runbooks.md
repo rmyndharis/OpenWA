@@ -79,17 +79,17 @@ docker compose restart openwa
 
 ```bash
 # Check health
-curl http://localhost:2785/health
+curl http://localhost:2785/api/health
 
 # Check all sessions reconnected
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions | jq '.[].status'
 
 # Send test message
-curl -X POST http://localhost:2785/api/sessions/default/messages \
+curl -X POST http://localhost:2785/api/sessions/default/messages/send-text \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"phone": "628xxx@c.us", "type": "text", "body": "Test after restart"}'
+  -d '{"chatId": "628xxx@c.us", "text": "Test after restart"}'
 ```
 
 **Rollback:** Restore from backup if data corruption detected (see Runbook: Restore from Backup)
@@ -116,9 +116,11 @@ curl -H "X-API-Key: $API_KEY" \
 # 2. Check if auto-reconnect is working
 docker compose logs openwa 2>&1 | grep -i "{sessionId}" | tail -20
 
-# 3. Try session restart
+# 3. Try session restart (stop then start — there is no /restart route)
 curl -X POST -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/restart
+  http://localhost:2785/api/sessions/{sessionId}/stop
+curl -X POST -H "X-API-Key: $API_KEY" \
+  http://localhost:2785/api/sessions/{sessionId}/start
 
 # 4. Wait for reconnection (30 seconds)
 sleep 30
@@ -133,12 +135,12 @@ curl -H "X-API-Key: $API_KEY" \
 #    - Has the phone been inactive for 14+ days?
 
 # 7. If need to re-scan QR:
+#    The endpoint returns a PNG data URL: { "qrCode": "data:image/png;base64,...", "status": "qr_ready" }
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/qr
 
-# Display QR in terminal (requires qrencode)
-curl -s -H "X-API-Key: $API_KEY" \
-  "http://localhost:2785/api/sessions/{sessionId}/qr?format=raw" | qrencode -t ANSI
+# Display QR in terminal: there is no raw/format param — consume the `session.qr`
+# webhook/WebSocket event to get the raw QR string for qrencode.
 ```
 
 **Verification:**
@@ -147,13 +149,13 @@ curl -s -H "X-API-Key: $API_KEY" \
 # Session connected
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId} | jq '.status'
-# Expected: "CONNECTED"
+# Expected: "ready"
 
 # Test message
-curl -X POST http://localhost:2785/api/sessions/{sessionId}/messages \
+curl -X POST http://localhost:2785/api/sessions/{sessionId}/messages/send-text \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"phone": "628xxx@c.us", "type": "text", "body": "Session reconnected"}'
+  -d '{"chatId": "628xxx@c.us", "text": "Session reconnected"}'
 ```
 
 ---
@@ -176,26 +178,27 @@ docker stats --no-stream openwa
 free -m
 
 # 2. Identify memory consumers
-# Check per-session memory
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/metrics/memory
+# Process-wide memory: scrape /api/metrics (Prometheus text, Bearer METRICS_TOKEN)
+curl -H "Authorization: Bearer $METRICS_TOKEN" \
+  http://localhost:2785/api/metrics \
+  | grep -E "openwa_process_resident_memory_bytes|openwa_process_heap_used_bytes"
 
 # 3. Check for memory leaks
 docker compose logs openwa 2>&1 | grep -i "heap\|memory\|gc"
 
 # 4. Immediate actions:
 
-# A. Clear message cache
-curl -X POST -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/cache/clear
+# A. Clear the in-process cache (no runtime cache-clear API — restart the container;
+#    if using Redis, flush via redis-cli)
+docker compose restart openwa
 
 # B. Restart container (will reconnect sessions)
 docker compose restart openwa
 
 # C. If caused by too many sessions:
-# List sessions sorted by memory
+# List sessions (no sort param); process memory is in stats/overview (memoryUsage, MB)
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions?sort=memory
+  http://localhost:2785/api/sessions/stats/overview
 
 # Consider removing unused sessions
 
@@ -235,9 +238,9 @@ curl -H "X-API-Key: $API_KEY" \
 curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks
 
-# 2. Check recent webhook logs
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/logs?status=failed&limit=20"
+# 2. Check recent webhook deliveries
+# There is no webhook-delivery log API — inspect the server logs / audit trail instead:
+docker compose logs openwa 2>&1 | grep -i "webhook" | tail -20
 
 # 3. Identify failure reason:
 # A. Endpoint not responding
@@ -260,27 +263,30 @@ curl -X POST -H "X-API-Key: $API_KEY" \
 # 5. Fix based on cause:
 
 # A. Update webhook URL
-curl -X PATCH http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
+curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://new-endpoint.com/webhook"}'
 
 # B. Update authentication
-curl -X PATCH http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
+curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"headers": {"Authorization": "Bearer new-token"}}'
 
-# C. Temporarily disable and re-enable
-curl -X POST -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/disable
+# C. Temporarily disable and re-enable (toggle the `active` boolean)
+curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"active": false}'
 
-curl -X POST -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/enable
+curl -X PUT http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId} \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"active": true}'
 
 # 6. Retry failed deliveries
-curl -X POST -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/retry-failed
+# No retry-failed API — failed deliveries auto-retry with exponential backoff (doc 06 §6.6)
 ```
 
 **Verification:**
@@ -289,12 +295,11 @@ curl -X POST -H "X-API-Key: $API_KEY" \
 # Webhook test successful
 curl -X POST -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/test
-# Expected: {"status": "success"}
+# Expected: {"success": true, "statusCode": 200}
 
 # Recent deliveries successful
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:2785/api/sessions/{sessionId}/webhooks/{webhookId}/logs?limit=5" | jq '.[].status'
-# Expected: all "success"
+# No delivery-log API — confirm via the server logs / audit trail:
+docker compose logs openwa 2>&1 | grep -i "webhook" | tail -5
 ```
 
 ---
@@ -316,8 +321,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 ```bash
 # 1. Pre-maintenance checks (1 hour before)
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/health/detailed
+curl http://localhost:2785/api/health/ready
 docker stats --no-stream
 
 # 2. Notify users (via webhook or external system)
@@ -349,7 +353,7 @@ docker compose up -d
 
 # 9. Wait for health
 sleep 30
-curl http://localhost:2785/health
+curl http://localhost:2785/api/health
 
 # 10. Verify all sessions reconnected
 curl -H "X-API-Key: $API_KEY" \
@@ -364,12 +368,11 @@ curl -H "X-API-Key: $API_KEY" \
 
 ```bash
 # All services healthy
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/health/detailed
+curl http://localhost:2785/api/health/ready
 
 # All sessions connected
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions | jq '[.[] | select(.status == "CONNECTED")] | length'
+  http://localhost:2785/api/sessions | jq '[.[] | select(.status == "ready")] | length'
 
 # Test message flow
 # Send test message and verify webhook received
@@ -408,14 +411,14 @@ docker compose down
 
 # 5. Update version in docker-compose.yml
 # Change: image: ghcr.io/rmyndharis/openwa:0.1.0
-# To:     image: ghcr.io/rmyndharis/openwa:0.2.0
+# To:     image: ghcr.io/rmyndharis/openwa:0.7.3
 
 # 6. Pull new image
 docker compose pull
 
 # 7. Run database migrations (if any)
 # Use migration:run:prod in the production image — `migration:run` needs ts-node + the TS
-# source, both stripped from the prod image by `npm ci --omit=dev` (M13).
+# source, both stripped from the prod image by `npm ci --omit=dev`.
 docker compose run --rm openwa npm run migration:run:prod
 
 # 8. Start services
@@ -423,11 +426,10 @@ docker compose up -d
 
 # 9. Wait for health
 sleep 30
-curl http://localhost:2785/health
+curl http://localhost:2785/api/health
 
 # 10. Verify version
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/health/detailed | jq '.version'
+curl http://localhost:2785/api/health | jq '.version'
 
 # 11. Verify all sessions
 curl -H "X-API-Key: $API_KEY" \
@@ -441,9 +443,8 @@ curl -H "X-API-Key: $API_KEY" \
 
 ```bash
 # Correct version
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/health/detailed | jq '.version'
-# Expected: "0.2.0"
+curl http://localhost:2785/api/health | jq '.version'
+# Expected: "0.7.3"
 
 # All tests pass
 ./scripts/smoke-test.sh
@@ -547,7 +548,7 @@ docker compose down
 
 # 4. Start the app and CONFIRM an existing API key still authenticates
 docker compose up -d
-curl -s -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth/validate
+curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth/validate
 ```
 
 > Restoring `main.sqlite` is the whole point: it carries the API keys and audit log.
@@ -558,7 +559,7 @@ curl -s -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth/validat
 
 ```bash
 # Health check
-curl http://localhost:2785/health
+curl http://localhost:2785/api/health
 
 # Verify sessions
 curl -H "X-API-Key: $API_KEY" \
@@ -566,7 +567,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 # Verify data integrity
 curl -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions/default/messages?limit=1
+  "http://localhost:2785/api/sessions/default/messages?limit=1"
 ```
 
 ---
@@ -605,7 +606,7 @@ sudo systemctl restart nginx
 docker compose restart nginx
 
 # Verify HTTPS
-curl -v https://api.your-domain.com/health
+curl -v https://api.your-domain.com/api/health
 ```
 
 ---

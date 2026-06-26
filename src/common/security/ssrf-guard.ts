@@ -170,6 +170,41 @@ export function assertNoRedirect(response: { status: number; type?: string }, ur
   }
 }
 
+/** Default DNS resolution deadline (ms) — generous for healthy resolvers; bounds a hang. */
+const DEFAULT_DNS_TIMEOUT_MS = 10000;
+
+function resolveDnsTimeoutMs(): number {
+  const raw = process.env.SSRF_DNS_TIMEOUT_MS;
+  const n = raw !== undefined ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DNS_TIMEOUT_MS;
+}
+
+/**
+ * Resolve a host with `{ all: true }`, bounded by a deadline so a hanging/slow DNS resolver cannot
+ * pin a worker indefinitely (the lookup is otherwise unbounded). The default deadline is generous
+ * and overridable via SSRF_DNS_TIMEOUT_MS. On expiry — or on a rejected lookup (NXDOMAIN, transient
+ * EAI_AGAIN, ESERVFAIL, …) — it throws SsrfBlockedError; the in-flight lookup is left to settle with
+ * its late result swallowed (no unhandledRejection). Wrapping the rejection keeps every resolution
+ * failure typed, so callers map it to a 4xx instead of leaking a raw DNS error as a generic 500.
+ */
+async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
+  const lookupPromise = lookup(host, { all: true });
+  lookupPromise.catch(() => undefined); // swallow a late rejection if the deadline already fired
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SsrfBlockedError(`Timed out resolving host: ${host}`)), resolveDnsTimeoutMs());
+  });
+  try {
+    return await Promise.race([lookupPromise, deadline]);
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) throw err; // deadline already produced a typed error
+    const code = (err as NodeJS.ErrnoException)?.code;
+    throw new SsrfBlockedError(`Could not resolve host: ${host}${code ? ` (${code})` : ''}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Validate an outbound URL and resolve its host ONCE. Throws SsrfBlockedError if the scheme is not
  * http(s) or if the host (literal or any DNS-resolved address) is internal/reserved. Guards both
@@ -207,7 +242,7 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
     return null; // literal IP — fetch connects directly, nothing to rebind
   }
 
-  const resolved = await lookup(host, { all: true });
+  const resolved = await lookupWithDeadline(host);
   if (resolved.length === 0) {
     throw new SsrfBlockedError(`Could not resolve host: ${host}`);
   }
@@ -245,6 +280,52 @@ export function pinnedLookup(addresses: LookupAddress[]): LookupFunction {
 }
 
 /**
+ * A `connect.lookup` that resolves EVERY host it is asked to connect to and refuses any that resolve
+ * to an internal/reserved address. Used by the redirect-following download path so that each hop —
+ * the original URL AND every redirect target — is validated at connect time, not just the first one.
+ * This closes the redirect-bypass hole a single-host pin can't: a 3xx to an internal host is rejected
+ * at the socket. Allowlisted hosts (SSRF_ALLOWED_HOSTS) are resolved without the block check, matching
+ * {@link resolveSafeFetchTarget}.
+ */
+export function validatingLookup(): LookupFunction {
+  const fn = (hostname: string, options: LookupOptions, callback: (...args: unknown[]) => void): void => {
+    const host = hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+    const allowlisted = getAllowedHosts().has(host.toLowerCase());
+    const finish = (addrs: LookupAddress[]): void => {
+      if (options.all) callback(null, addrs);
+      else callback(null, addrs[0].address, addrs[0].family);
+    };
+
+    if (isIPv4(host) || isIPv6(host)) {
+      if (!allowlisted && isBlockedAddress(host)) {
+        callback(new SsrfBlockedError(`Blocked internal address: ${host}`));
+        return;
+      }
+      finish([{ address: host, family: isIPv6(host) ? 6 : 4 }]);
+      return;
+    }
+
+    lookupWithDeadline(host)
+      .then(resolved => {
+        if (resolved.length === 0) {
+          callback(new SsrfBlockedError(`Could not resolve host: ${host}`));
+          return;
+        }
+        if (!allowlisted) {
+          const bad = resolved.find(a => isBlockedAddress(a.address));
+          if (bad) {
+            callback(new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${bad.address}`));
+            return;
+          }
+        }
+        finish(resolved);
+      })
+      .catch((err: unknown) => callback(err instanceof Error ? err : new Error(String(err))));
+  };
+  return fn as unknown as LookupFunction;
+}
+
+/**
  * Perform an SSRF-safe fetch and hand the response to `use`, then tear down the per-request
  * connection. The host is validated and resolved ONCE; the connection is pinned to the vetted IP(s)
  * via an undici dispatcher so it cannot be re-resolved to an internal address between check and
@@ -262,11 +343,26 @@ export async function withSafeFetch<T>(
   rawUrl: string,
   init: RequestInit,
   use: (response: Response) => Promise<T> | T,
-  opts: { guard?: boolean } = {},
+  opts: { guard?: boolean; followRedirects?: boolean } = {},
 ): Promise<T> {
   const guard = opts.guard ?? true;
   if (!guard) {
     return use(await undiciFetch(rawUrl, { ...init, redirect: 'follow' }));
+  }
+
+  if (opts.followRedirects) {
+    // Download path (plugin .zip / catalog JSON): public release hosts legitimately 302 to a CDN, so
+    // refusing every redirect breaks them. Follow redirects, but SECURELY — instead of pinning one
+    // host's IPs, route the connection through a lookup that resolves+validates EVERY host on demand,
+    // so each hop (original + every redirect target) is checked at connect time and a 3xx to an
+    // internal host is blocked at the socket. The scheme/host of the original URL is validated first.
+    await resolveSafeFetchTarget(rawUrl);
+    const dispatcher = new Agent({ connect: { lookup: validatingLookup() } });
+    try {
+      return await use(await undiciFetch(rawUrl, { ...init, redirect: 'follow', dispatcher }));
+    } finally {
+      await dispatcher.destroy().catch(() => undefined);
+    }
   }
 
   const target = await resolveSafeFetchTarget(rawUrl);

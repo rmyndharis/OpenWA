@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
 import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
+import { assertBase64WithinMediaCap } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
@@ -646,6 +647,10 @@ export class MessageService {
     if (dto.base64 && !dto.mimetype) {
       throw new BadRequestException('mimetype is required when using base64 data');
     }
+
+    // Bound an outbound base64 payload to the same byte cap as URL/inbound media, before it is
+    // persisted or handed to the engine. URL media is already capped while streaming.
+    assertBase64WithinMediaCap(dto.base64);
 
     return {
       mimetype: dto.mimetype || 'application/octet-stream',

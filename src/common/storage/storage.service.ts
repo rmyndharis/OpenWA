@@ -148,25 +148,50 @@ export class StorageService {
   }
 
   async getFileCount(): Promise<{ count: number; sizeBytes: number }> {
+    if (this.storageType === 's3' && this.s3Client && this.s3Available) {
+      // ListObjectsV2 already returns each object's Size, so report the real total instead of a
+      // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
+      return this.getS3CountAndSize();
+    }
+
     const files = await this.listFiles();
     let sizeBytes = 0;
-
-    if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      // S3 size would require additional API calls, estimate
-      sizeBytes = files.length * 100000; // Estimate 100KB per file
-    } else {
-      for (const file of files) {
-        try {
-          const fullPath = path.join(this.localPath, file);
-          const stats = fs.statSync(fullPath);
-          sizeBytes += stats.size;
-        } catch (error) {
-          this.logger.debug(`Failed to stat file: ${file}`, { error: String(error) });
-        }
+    for (const file of files) {
+      try {
+        const fullPath = path.join(this.localPath, file);
+        const stats = fs.statSync(fullPath);
+        sizeBytes += stats.size;
+      } catch (error) {
+        this.logger.debug(`Failed to stat file: ${file}`, { error: String(error) });
       }
     }
 
     return { count: files.length, sizeBytes };
+  }
+
+  private async getS3CountAndSize(): Promise<{ count: number; sizeBytes: number }> {
+    let count = 0;
+    let sizeBytes = 0;
+    let continuationToken: string | undefined;
+
+    do {
+      const response = await this.s3Client!.send(
+        new ListObjectsV2Command({
+          Bucket: this.s3Bucket,
+          Prefix: 'media/',
+          ContinuationToken: continuationToken,
+        }),
+      );
+
+      for (const obj of response.Contents ?? []) {
+        count += 1;
+        sizeBytes += obj.Size ?? 0;
+      }
+
+      continuationToken = response.NextContinuationToken;
+    } while (continuationToken);
+
+    return { count, sizeBytes };
   }
 
   // ============================================================================
@@ -332,19 +357,16 @@ export class StorageService {
     return fs.promises.readFile(fullPath);
   }
 
-  private putLocalFile(filePath: string, data: Buffer): Promise<void> {
+  private async putLocalFile(filePath: string, data: Buffer): Promise<void> {
     if (!isPathWithin(this.localPath, filePath)) {
       throw new Error(`Refusing to write outside storage root: ${filePath}`);
     }
     const fullPath = path.join(this.localPath, filePath);
-    const dir = path.dirname(fullPath);
 
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    fs.writeFileSync(fullPath, data);
-    return Promise.resolve();
+    // Async, non-blocking: a synchronous write here stalls the event loop during an import.
+    // mkdir recursive is idempotent, so it doubles as the existsSync check.
+    await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.promises.writeFile(fullPath, data);
   }
 
   // ============================================================================

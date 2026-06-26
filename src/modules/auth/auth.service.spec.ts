@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
-import { AuthService, resolveSeedApiKey } from './auth.service';
+import { AuthService, resolveSeedApiKey, bannerKeyLine } from './auth.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
 // Helpers
@@ -59,6 +59,25 @@ describe('resolveSeedApiKey (first-boot default admin key)', () => {
     process.env.API_MASTER_KEY = 'master-wins';
     process.env.ALLOW_DEV_API_KEY = 'true';
     expect(resolveSeedApiKey()).toBe('master-wins');
+  });
+});
+
+describe('bannerKeyLine (startup banner key masking)', () => {
+  const FULL = 'owa_k1_0123456789abcdef0123456789abcdef';
+
+  it('prints the full key only when it was just created', () => {
+    expect(bannerKeyLine(FULL, true)).toBe(FULL);
+  });
+
+  it('masks the key on subsequent boots — the full secret is never re-logged', () => {
+    const line = bannerKeyLine(FULL, false);
+    expect(line).not.toContain('0123456789abcdef'); // the secret tail must not appear
+    expect(line.startsWith('owa_k1_0')).toBe(true); // a short fingerprint is fine
+    expect(line).toMatch(/data\/\.api-key|dashboard/); // points the operator to the real source
+  });
+
+  it('passes a placeholder through unchanged', () => {
+    expect(bannerKeyLine('(check dashboard for keys)', false)).toBe('(check dashboard for keys)');
   });
 });
 

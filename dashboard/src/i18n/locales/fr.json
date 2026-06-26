@@ -1,4 +1,10 @@
 {
+  "toast": {
+    "connectionLost": {
+      "title": "Connexion au serveur perdue",
+      "message": "Le serveur backend est injoignable. Veuillez vérifier qu'il est en cours d'exécution."
+    }
+  },
   "common": {
     "appName": "OpenWA",
     "appSubtitle": "WhatsApp API",
@@ -137,7 +143,8 @@
       "activeSessions": "Sessions actives",
       "messagesToday": "Messages aujourd'hui",
       "webhooksConfigured": "Webhooks configurés",
-      "apiCalls": "Appels API (24h)"
+      "apiCalls": "Appels API (24h)",
+      "totalMessages": "Messages totaux"
     },
     "sessionsOverview": "Aperçu des sessions",
     "showingSessions": "Affichage de {{shown}} sur {{total}} sessions",
@@ -152,7 +159,22 @@
     "view": "Voir",
     "disconnect": "Déconnecter",
     "errorPrefix": "Erreur : {{message}}",
-    "loadError": "Échec du chargement des données"
+    "loadError": "Échec du chargement des données",
+    "charts": {
+      "title": "Analyses des messages",
+      "period": {
+        "24h": "24 h",
+        "7d": "7 j",
+        "30d": "30 j"
+      },
+      "overTime": "Messages au fil du temps",
+      "byType": "Messages par type",
+      "topChats": "Discussions principales",
+      "sent": "Envoyés",
+      "received": "Reçus",
+      "messages": "Messages",
+      "empty": "Aucune activité de message sur cette période."
+    }
   },
   "sessionStatus": {
     "created": "Nouveau",
@@ -270,6 +292,36 @@
     "events": "Événements",
     "available": "Événements disponibles",
     "saveChanges": "Enregistrer les modifications",
+    "filters": {
+      "title": "Filtres (facultatif)",
+      "hint": "Déclencher uniquement lorsque toutes les conditions sont remplies. S'applique aux événements de message.",
+      "badge": "{{count}} filtre",
+      "badge_other": "{{count}} filtres",
+      "addCondition": "Ajouter une condition",
+      "removeCondition": "Supprimer la condition",
+      "caseSensitive": "Sensible à la casse",
+      "contactPlaceholder": "Numéro ou identifiant WhatsApp...",
+      "textPlaceholder": "Texte à rechercher...",
+      "addValue": "Ajouter « {{value}} »",
+      "yes": "Oui",
+      "no": "Non",
+      "fields": {
+        "sender": "Expéditeur",
+        "recipient": "Destinataire",
+        "body": "Corps du message",
+        "type": "Type de message",
+        "isGroup": "Est une discussion de groupe",
+        "fromMe": "Envoyé par moi",
+        "hasMedia": "Contient un média",
+        "mentions": "Mentions"
+      },
+      "operators": {
+        "is": "est",
+        "isNot": "n'est pas",
+        "contains": "contient",
+        "equals": "est égal à"
+      }
+    },
     "columns": {
       "url": "URL",
       "events": "Événements",
@@ -516,6 +568,17 @@
       "migrationsStatus": "Le schéma est auto-synchronisé avec TypeORM",
       "migrationsHint": "Les migrations sont gérées automatiquement. Utilisez la CLI pour les migrations manuelles."
     },
+    "engine": {
+      "title": "Moteur WhatsApp",
+      "subtitle": "Choisissez et configurez le moteur de connexion WhatsApp.",
+      "builtIn": "Intégré",
+      "headless": "Mode headless",
+      "headlessDesc": "Exécuter le navigateur sans interface visible (recommandé en production).",
+      "sessionDataPath": "Chemin des données de session",
+      "browserArgs": "Arguments du navigateur",
+      "noBrowser": "Ce moteur se connecte via WebSocket : il n'a pas de navigateur, il n'y a donc pas de réglages de mode headless ni d'arguments de navigateur. Le moteur actif est appliqué après un redémarrage.",
+      "restartNote": "Le changement de moteur prend effet après le redémarrage du serveur."
+    },
     "redis": {
       "title": "Redis",
       "enable": "Activer Redis",
@@ -579,7 +642,7 @@
   },
   "plugins": {
     "title": "Plugins",
-    "subtitle": "Gérez les moteurs, les backends de stockage et les extensions",
+    "subtitle": "Installez, configurez et gérez les extensions",
     "refresh": "Actualiser",
     "engineCard": "Moteur WhatsApp actif",
     "running": "En cours d'exécution",
@@ -593,6 +656,11 @@
     "disable": "Désactiver",
     "healthCheck": "Bilan de santé",
     "configure": "Configurer",
+    "available": "Disponible",
+    "install": "Installer le plugin",
+    "uninstall": "Désinstaller",
+    "uninstallConfirm": "Désinstaller « {{name}} » ? Cela supprime ses fichiers.",
+    "engineSwitchHint": "Définissez-le comme moteur actif dans les Paramètres, puis redémarrez",
     "empty": {
       "title": "Aucun plugin trouvé",
       "description": "Installez des plugins pour étendre les fonctionnalités d'OpenWA"
@@ -606,7 +674,23 @@
       "sessionDataPath": "Chemin des données de session",
       "browserArgs": "Arguments du navigateur",
       "noOptions": "Aucune option de configuration disponible pour ce plugin",
-      "save": "Enregistrer la configuration"
+      "save": "Enregistrer la configuration",
+      "addItem": "Ajouter",
+      "tabConfig": "Configuration",
+      "tabSessions": "Sessions"
+    },
+    "rail": {
+      "engine": "Moteur actif",
+      "enabled": "activé",
+      "installed": "installé",
+      "active": "Plugins actifs",
+      "none": "Aucun activé pour l'instant"
+    },
+    "installModal": {
+      "title": "Installer un plugin",
+      "hint": "Téléversez un plugin empaqueté au format .zip (avec un manifest.json). Il s'exécute en bac à sable une fois activé.",
+      "choose": "Choisir un fichier .zip…",
+      "tooLarge": "Le fichier dépasse la limite de 5 MB."
     },
     "toasts": {
       "errorTitle": "Erreur de plugin",
@@ -616,7 +700,24 @@
       "healthError": "Erreur lors du bilan de santé",
       "savedTitle": "Configuration enregistrée",
       "savedDesc": "Redémarrage du serveur requis pour appliquer les modifications.",
-      "saveFailed": "Échec de l'enregistrement"
+      "saveFailed": "Échec de l'enregistrement",
+      "installed": "Plugin installé",
+      "installFailed": "Échec de l'installation",
+      "uninstalled": "Plugin désinstallé",
+      "uninstallFailed": "Échec de la désinstallation"
+    },
+    "sessions": {
+      "activationTitle": "Exécuter pour",
+      "activationDesc": "Choisissez les sessions pour lesquelles ce plugin s'exécute.",
+      "allSessions": "Toutes les sessions",
+      "specificSessions": "Sessions spécifiques",
+      "noSessions": "Aucune session pour le moment.",
+      "saveActivation": "Enregistrer l'activation",
+      "perSessionTitle": "Configuration par session",
+      "perSessionDesc": "Remplacez la configuration globale pour une session ; les champs non modifiés héritent de la valeur globale.",
+      "selectSession": "Sélectionnez une session…",
+      "saveOverride": "Enregistrer le remplacement",
+      "clearOverride": "Effacer le remplacement"
     }
   }
 }

@@ -13,6 +13,20 @@ describe('ContactService', () => {
     expect(() => makeService(undefined).getContacts('s1')).toThrow(BadRequestException);
   });
 
+  it('caps an unbounded contacts list at the default limit (1000)', async () => {
+    const big = Array.from({ length: 1500 }, (_, i) => ({ id: `${i}@c.us` }));
+    const getContacts = jest.fn().mockResolvedValue(big);
+    await expect(makeService({ getContacts }).getContacts('s1')).resolves.toHaveLength(1000);
+  });
+
+  it('applies limit/offset to the contacts list', async () => {
+    const big = Array.from({ length: 50 }, (_, i) => ({ id: `${i}@c.us` }));
+    const getContacts = jest.fn().mockResolvedValue(big);
+    const page = (await makeService({ getContacts }).getContacts('s1', { limit: 5, offset: 10 })) as { id: string }[];
+    expect(page).toHaveLength(5);
+    expect(page[0].id).toBe('10@c.us');
+  });
+
   it('maps a missing contact to 404', async () => {
     const svc = makeService({ getContactById: jest.fn().mockResolvedValue(null) });
     await expect(svc.getContactById('s1', 'c404')).rejects.toBeInstanceOf(NotFoundException);

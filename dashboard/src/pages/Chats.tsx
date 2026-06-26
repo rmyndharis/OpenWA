@@ -3,6 +3,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import {
   Search,
   Send,
+  ArrowLeft,
   Loader2,
   User,
   Users,
@@ -23,6 +24,7 @@ import {
   type ChatMessage,
   type MessageType,
 } from '../services/api';
+import { mapEngineHistoryMessage, mergeChatMessages } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
@@ -333,8 +335,18 @@ export function Chats() {
       try {
         setLoadingMessages(true);
         markChatRead(chatId);
-        const data = await sessionApi.getChatMessages(selectedSessionId, chatId, 100);
-        setMessages([...data.messages].reverse());
+        // The DB holds only messages captured live since the gateway connected; the engine holds the
+        // real WhatsApp history (including messages from before connect). Merge both so a freshly
+        // paired session shows the conversation instead of an empty thread. Tolerate either side
+        // failing — only surface an error if both do.
+        const [dbRes, historyRes] = await Promise.allSettled([
+          sessionApi.getChatMessages(selectedSessionId, chatId, 100),
+          sessionApi.getChatHistory(selectedSessionId, chatId, 100, true),
+        ]);
+        if (dbRes.status === 'rejected' && historyRes.status === 'rejected') throw dbRes.reason;
+        const dbMessages = dbRes.status === 'fulfilled' ? dbRes.value.messages : [];
+        const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
+        setMessages(mergeChatMessages(dbMessages, history));
       } catch (err) {
         showErrorToast(t('chats.errors.loadMessages'), err instanceof Error ? err.message : undefined);
         setMessages([]);
@@ -641,7 +653,7 @@ export function Chats() {
           </p>
         </div>
       ) : (
-        <div className="chats-layout">
+        <div className={`chats-layout ${activeChat ? 'has-active-chat' : ''}`}>
           {/* LEFT SIDEBAR: session & chat rooms */}
           <aside className="chats-sidebar">
             <div className="sidebar-header-box">
@@ -730,6 +742,9 @@ export function Chats() {
               <div className="room-container">
                 {/* Room header */}
                 <header className="room-header">
+                  <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
+                    <ArrowLeft size={20} />
+                  </button>
                   <div className="room-avatar">
                     {activeChat.isGroup ? <Users size={20} /> : <User size={20} />}
                   </div>
