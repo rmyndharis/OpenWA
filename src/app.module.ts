@@ -161,6 +161,11 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             retryDelay: 3000,
             extra: {
               max: configService.get<number>('dataDatabase.poolSize', 10),
+              // Runtime query/pool timeouts so a stuck query or saturated pool fails fast instead of
+              // hanging requests. statement_timeout is safe here (no migrations on this connection).
+              statement_timeout: configService.get<number>('dataDatabase.statementTimeoutMs', 30000),
+              idleTimeoutMillis: configService.get<number>('dataDatabase.idleTimeoutMs', 30000),
+              connectionTimeoutMillis: configService.get<number>('dataDatabase.connectionTimeoutMs', 10000),
             },
           };
         }

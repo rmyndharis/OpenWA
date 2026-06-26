@@ -12,6 +12,7 @@ import {
   isSwaggerEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
+  isApiKeyPepperMissingInProduction,
 } from './config/bootstrap-security';
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
@@ -126,6 +127,15 @@ async function bootstrap() {
     allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
     redisPassword: process.env.REDIS_PASSWORD,
   });
+
+  // Advisory (not enforced): without API_KEY_PEPPER, stored API-key hashes use plain SHA-256. Enabling
+  // a pepper re-hashes keys and invalidates existing ones, so we only nudge the operator (see api-key-hash.ts).
+  if (isApiKeyPepperMissingInProduction(process.env.NODE_ENV, process.env.API_KEY_PEPPER)) {
+    bootstrapLogger.warn(
+      'API_KEY_PEPPER is not set in production: stored API-key hashes use plain SHA-256. ' +
+        'Set API_KEY_PEPPER and re-issue keys to enable HMAC hashing.',
+    );
+  }
 
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });

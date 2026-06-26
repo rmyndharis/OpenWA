@@ -52,6 +52,11 @@ export default () => ({
     logging: process.env.DATABASE_LOGGING === 'true',
     // Connection pooling (PostgreSQL)
     poolSize: parseInt(process.env.DATABASE_POOL_SIZE || '10', 10),
+    // Pool/query timeouts (PostgreSQL). statement_timeout is server-side per query; idle/connection
+    // are pool-side. Set any to 0 to disable. Applied to the runtime connection only (see app.module).
+    statementTimeoutMs: parseInt(process.env.DATABASE_STATEMENT_TIMEOUT_MS || '30000', 10),
+    idleTimeoutMs: parseInt(process.env.DATABASE_IDLE_TIMEOUT_MS || '30000', 10),
+    connectionTimeoutMs: parseInt(process.env.DATABASE_CONNECTION_TIMEOUT_MS || '10000', 10),
     // SSL configuration
     ssl: process.env.DATABASE_SSL === 'true',
     sslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false',

@@ -62,6 +62,36 @@ describe('configuration — Puppeteer args delimiter', () => {
   });
 });
 
+describe('configuration — Postgres pool timeouts', () => {
+  const keys = ['DATABASE_STATEMENT_TIMEOUT_MS', 'DATABASE_IDLE_TIMEOUT_MS', 'DATABASE_CONNECTION_TIMEOUT_MS'];
+  const orig: Record<string, string | undefined> = {};
+  beforeEach(() => keys.forEach(k => (orig[k] = process.env[k])));
+  afterEach(() =>
+    keys.forEach(k => {
+      if (orig[k] === undefined) delete process.env[k];
+      else process.env[k] = orig[k];
+    }),
+  );
+
+  it('defaults to sane pool timeouts (30s statement, 30s idle, 10s connection)', () => {
+    keys.forEach(k => delete process.env[k]);
+    const cfg = configuration().dataDatabase;
+    expect(cfg.statementTimeoutMs).toBe(30000);
+    expect(cfg.idleTimeoutMs).toBe(30000);
+    expect(cfg.connectionTimeoutMs).toBe(10000);
+  });
+
+  it('honors env overrides (incl. 0 to disable a timeout)', () => {
+    process.env.DATABASE_STATEMENT_TIMEOUT_MS = '0';
+    process.env.DATABASE_IDLE_TIMEOUT_MS = '15000';
+    process.env.DATABASE_CONNECTION_TIMEOUT_MS = '2000';
+    const cfg = configuration().dataDatabase;
+    expect(cfg.statementTimeoutMs).toBe(0);
+    expect(cfg.idleTimeoutMs).toBe(15000);
+    expect(cfg.connectionTimeoutMs).toBe(2000);
+  });
+});
+
 describe('configuration — plugin download cap is fail-safe', () => {
   const orig = process.env.PLUGIN_DOWNLOAD_MAX_BYTES;
   afterEach(() => {
