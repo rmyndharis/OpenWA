@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI now runs the dashboard unit tests, and re-runs the client-SDK suites when a server DTO or the engine interface changes (not only on SDK edits), so contract drift is caught at its source. (#478)
+- The Postgres connection pool now applies query/connection timeouts (`statement_timeout`, `idleTimeoutMillis`, `connectionTimeoutMillis`) on the runtime connection, so a stuck query or a saturated pool fails fast instead of hanging requests. The migration connection keeps idle/connection timeouts but never `statement_timeout`, so a long `CREATE INDEX` is not aborted. Env-tunable (`DATABASE_STATEMENT_TIMEOUT_MS`, `DATABASE_IDLE_TIMEOUT_MS`, `DATABASE_CONNECTION_TIMEOUT_MS`), conservative defaults, `0` disables; SQLite is unaffected. (#480)
 
 ### Fixed
 
@@ -30,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The startup banner prints the full admin API key only when it is first created; on subsequent boots the key is masked, so the live credential is not re-written to the log pipeline on every restart. (#478)
 - The production secret guard now rejects a placeholder `REDIS_PASSWORD` (e.g. `changeme`); an empty/unset password is still allowed so passwordless private-network Redis continues to boot. (#478)
 - The published PHP SDK package no longer ships its test suite, PHPUnit config, or `composer.lock`. (#478)
+- The production weak-secret guard now also rejects the common defaults `123456`, `qwerty`, `root`, `test`, and `demo`. Matching stays an exact full-value comparison, so a strong secret that merely contains one of these words is not blocked. (#480)
+- The gateway now logs a startup warning when `API_KEY_PEPPER` is unset in production (stored API-key hashes then use plain SHA-256). Advisory only — enabling a pepper invalidates existing key hashes, so it stays opt-in and is never enforced. (#480)
 
 ## [0.7.5] - 2026-06-26
 
