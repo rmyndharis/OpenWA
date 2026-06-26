@@ -135,6 +135,23 @@ describe('assertNoDefaultSecretsInProduction', () => {
     expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'development', allowDevApiKey: 'true' })).not.toThrow();
   });
 
+  it('refuses prod with a placeholder REDIS_PASSWORD', () => {
+    expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', redisPassword: 'changeme' })).toThrow(
+      /REDIS_PASSWORD/,
+    );
+  });
+
+  it('allows prod with an empty REDIS_PASSWORD (passwordless private-network Redis is supported)', () => {
+    expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production', redisPassword: '' })).not.toThrow();
+    expect(() => assertNoDefaultSecretsInProduction({ nodeEnv: 'production' })).not.toThrow();
+  });
+
+  it('allows prod with a strong REDIS_PASSWORD', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({ nodeEnv: 'production', redisPassword: 'a-strong-unique-redis-secret' }),
+    ).not.toThrow();
+  });
+
   it('allows the default sqlite + local-storage prod setup (no secrets needed)', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({ nodeEnv: 'production', databaseType: 'sqlite', storageType: 'local' }),
