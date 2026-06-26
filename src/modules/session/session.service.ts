@@ -792,29 +792,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             .catch(onAckError);
         }
 
-        // Push the live delivery/read tick to the dashboard over the websocket (neutral status).
-        this.eventsGateway.emitMessageAck(id, { messageId, status });
+        // One ack payload, emitted identically over the socket and the webhook so a client coded
+        // against either channel sees the same shape. `id` mirrors the field every other message.*
+        // event carries (and the idempotency-key resolver reads). `ack` is a deprecated legacy field
+        // kept for backward compatibility — new consumers should read the neutral `status`.
+        const ackPayload = { id: messageId, messageId, status, ack: deliveryStatusToAck(status) };
+
+        // Push the live delivery/read tick to the dashboard over the websocket.
+        this.eventsGateway.emitMessageAck(id, ackPayload);
 
         // Dispatch the delivery/read receipt to webhooks (#155). Outgoing `message.sent` is handled
         // solely by `onMessageCreate`, so the ack path deliberately does NOT emit `message.sent`.
-        // `id` mirrors the field every other message.* webhook carries (and the idempotency key
-        // resolver reads). `ack` is a deprecated legacy field kept for backward compatibility —
-        // new consumers should read the neutral `status`.
-        void this.webhookService.dispatch(id, 'message.ack', {
-          id: messageId,
-          messageId,
-          status,
-          ack: deliveryStatusToAck(status),
-        });
+        void this.webhookService.dispatch(id, 'message.ack', ackPayload);
 
-        // Surface delivery failures actively so consumers don't have to poll for them (#220).
+        // Surface delivery failures actively so consumers don't have to poll for them (#220). Use a
+        // distinct object (not the shared ackPayload) so this separate event can't be perturbed by an
+        // in-place payload mutation in the concurrent message.ack dispatch's webhook:before hook.
         if (status === 'failed') {
-          void this.webhookService.dispatch(id, 'message.failed', {
-            id: messageId,
-            messageId,
-            status,
-            ack: deliveryStatusToAck(status),
-          });
+          void this.webhookService.dispatch(id, 'message.failed', { ...ackPayload });
         }
 
         // Notify plugins of the delivery/read receipt. The `message:ack` hook event was declared in
