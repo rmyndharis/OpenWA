@@ -84,3 +84,11 @@ test('multiple consecutive formats: *a* _b_', () => {
     { type: 'italic', children: [text('b')] },
   ]);
 });
+
+test('marker without outside boundary stays literal (no over-formatting)', () => {
+  // 'word*bold*end' has no boundary char before the opening '*' nor after the closer.
+  // Per WhatsApp rules this is literal text — the boundary guard prevents over-formatting.
+  assert.deepEqual(parseMessageBody('word*bold*end'), [
+    { type: 'text', value: 'word*bold*end' },
+  ]);
+});

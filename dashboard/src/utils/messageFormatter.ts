@@ -19,7 +19,7 @@ const FORMATS: Record<string, 'bold' | 'italic' | 'strike'> = {
   '~': 'strike',
 };
 
-const BOUNDARY_OUTSIDE = /[\s.,;:!?()[\]{}'"<>]|^|$/;
+const BOUNDARY_CHAR = /^[\s.,;:!?()[\]{}'"<>]$/;
 
 /**
  * Parse a WhatsApp-formatted text string into a list of MessageNode.
@@ -113,7 +113,7 @@ function findSingleBacktick(s: string, from: number): number {
       continue;
     }
     if (idx > 0 && s.slice(idx - 1, idx + 2) === '```') {
-      // The '`' is the last of a triple opener; skip past the triple.
+      // The '`' is the middle of a triple backtick; skip past all three.
       i = idx + 2;
       continue;
     }
@@ -136,7 +136,7 @@ function parseFormatting(input: string): MessageNode[] {
 
     // Boundary outside the opener: previous char must be a boundary or string-start.
     const prev = i === 0 ? '' : input[i - 1];
-    if (!BOUNDARY_OUTSIDE.test(prev) && prev !== '') continue;
+    if (prev !== '' && !BOUNDARY_CHAR.test(prev)) continue;
 
     // Char immediately inside (right after the opener) must NOT be whitespace.
     const inside = input[i + 1];
@@ -150,7 +150,7 @@ function parseFormatting(input: string): MessageNode[] {
       if (/\s/.test(beforeCloser)) continue;
       // Boundary after closer: must be boundary or string-end.
       const after = j === input.length - 1 ? '' : input[j + 1];
-      if (after !== '' && !BOUNDARY_OUTSIDE.test(after)) continue;
+      if (after !== '' && !BOUNDARY_CHAR.test(after)) continue;
 
       const before = input.slice(0, i);
       const inner = input.slice(i + 1, j);
