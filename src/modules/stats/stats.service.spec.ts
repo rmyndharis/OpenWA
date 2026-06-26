@@ -78,6 +78,36 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     expect(stats.timeSeries[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:00:00$/);
   });
 
+  it('time-series query never groups by the bare reserved word `timestamp` (Postgres-safe)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ direction: MessageDirection.OUTGOING });
+
+    // SQLite tolerates `GROUP BY timestamp`, but `timestamp` is a reserved type keyword in Postgres
+    // and crashes there ("column m.createdAt must appear in the GROUP BY"). Assert the generated SQL,
+    // not the result, so the fix can't silently regress on the backend the test DB doesn't exercise.
+    const captured: string[] = [];
+    const repo = ds.getRepository(Message);
+    const origCreate = repo.createQueryBuilder.bind(repo);
+    jest.spyOn(repo, 'createQueryBuilder').mockImplementation((alias?: string) => {
+      const qb = origCreate(alias);
+      const origGetRawMany = qb.getRawMany.bind(qb);
+      jest.spyOn(qb, 'getRawMany').mockImplementation((async () => {
+        captured.push(qb.getQuery());
+        return origGetRawMany();
+      }) as never);
+      return qb;
+    });
+
+    await service.getMessageStats('24h');
+
+    expect(captured.some(sql => /GROUP BY/i.test(sql))).toBe(true); // sanity: a grouped query was built
+    for (const sql of captured) {
+      expect(sql).not.toMatch(/GROUP BY\s+timestamp\b/i);
+    }
+  });
+
   it('getSessionStats returns 24 hourly buckets with the right counts', async () => {
     await ds
       .getRepository(Session)
