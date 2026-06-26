@@ -1,6 +1,6 @@
 # 10 - DevOps & Infrastructure
 
-> **⚠️ Conceptual reference (M9).** Some examples here predate the shipped runtime and may not
+> **⚠️ Conceptual reference.** Some examples here predate the shipped runtime and may not
 > match it exactly. The **authoritative** sources are the repo's `Dockerfile`, `docker-compose.yml`
 > (Docker socket-proxy threat model, gosu non-root drop, loopback-bound datastores, container
 > hardening), and `.env.example` (canonical env var names). Where this doc and those disagree,
@@ -113,7 +113,7 @@ services:
       - DATABASE_URL=postgresql://openwa:openwa@postgres:5432/openwa
       - REDIS_URL=redis://redis:6379
       # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
-      # strong secret. Production refuses to boot with a placeholder/default (M9/M16).
+      # strong secret. Production refuses to boot with a placeholder/default.
       - API_MASTER_KEY=
     volumes:
       - ./:/app

@@ -1,4 +1,4 @@
-# OpenWA - Local smoke / quick-start compose (L22)
+# OpenWA - Local smoke / quick-start compose
 #
 # This builds and runs the PRODUCTION image (same Dockerfile) against a local SQLite DB
 # with a bind-mounted ./data — it is a single-container local smoke test, NOT a
@@ -15,7 +15,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: openwa-api
-    # Container hardening (finding H7) — same posture as production (same Dockerfile/entrypoint).
+    # Container hardening — same posture as production (same Dockerfile/entrypoint).
     security_opt:
       - 'no-new-privileges:true'
     cap_drop:

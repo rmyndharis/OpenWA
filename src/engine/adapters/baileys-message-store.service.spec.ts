@@ -31,7 +31,7 @@ describe('BaileysMessageStoreService', () => {
       type: 'sqlite',
       database: ':memory:',
       // Session must be present so the @ManyToOne relation metadata resolves and synchronize
-      // can emit the CASCADE FK on the baileys_stored_messages table (I6).
+      // can emit the CASCADE FK on the baileys_stored_messages table.
       entities: [BaileysStoredMessage, Session],
       synchronize: true,
     });
@@ -75,7 +75,7 @@ describe('BaileysMessageStoreService', () => {
   });
 
   /**
-   * C1 regression test — drives eviction through the REAL put() path so the stored
+   * Regression test — drives eviction through the REAL put() path so the stored
    * createdAt value comes from the upsert payload (millisecond precision), not from
    * SQLite's datetime('now') (second precision). Without the `createdAt: new Date()`
    * fix in put(), the string comparison '…:XX' < '…:XX.000' evaluates TRUE for every
@@ -84,7 +84,7 @@ describe('BaileysMessageStoreService', () => {
    * This test MUST FAIL against the old code (no explicit createdAt in upsert) and
    * PASS with the fix.
    */
-  it('eviction via put() keeps exactly the cap — never wipes the store (C1)', async () => {
+  it('eviction via put() keeps exactly the cap — never wipes the store', async () => {
     process.env.BAILEYS_MESSAGE_STORE_LIMIT = '3';
     await seedSession('s_c1');
     const s = new BaileysMessageStoreService(repo);

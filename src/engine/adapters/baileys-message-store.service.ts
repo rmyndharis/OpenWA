@@ -61,7 +61,7 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
     // :createdAt bound param used in enforceLimit(). Without this, SQLite's datetime('now') stores
     // second-precision (e.g. '…:11') while the JS Date bound serializes as '…:11.000', and SQLite
     // string-compares '…:11' < '…:11.000' = TRUE, causing every same-second row to be over-evicted
-    // and the store to be wiped to ~0 (C1).
+    // and the store to be wiped to ~0.
     try {
       await this.repo.upsert({ sessionId, waMessageId, serializedMessage, createdAt: new Date() }, [
         'sessionId',

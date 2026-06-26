@@ -8,7 +8,7 @@ services:
     container_name: openwa-docker-proxy
     restart: unless-stopped
     # Only on the isolated internal network — reachable solely by openwa-api, NOT the
-    # dashboard or any other peer (finding H6). `internal: true` also denies the proxy
+    # dashboard or any other peer. `internal: true` also denies the proxy
     # outbound access; it only needs the locally-mounted docker socket.
     networks:
       - internal-docker
@@ -40,7 +40,7 @@ services:
     networks:
       - openwa-network
       - internal-docker
-    # Container hardening (finding H7): Chromium runs with --no-sandbox, so the
+    # Container hardening: Chromium runs with --no-sandbox, so the
     # container itself is the confinement boundary. cap_drop ALL + a minimal re-add
     # ONLY for the root entrypoint's chown + gosu privilege-drop; once gosu setuids to
     # the openwa user the node/Chromium process keeps NO effective capabilities.
@@ -84,7 +84,7 @@ services:
       - DATABASE_HOST=${DATABASE_HOST:-postgres}
       - DATABASE_PORT=${DATABASE_PORT:-5432}
       - DATABASE_USERNAME=${DATABASE_USERNAME:-openwa}
-      # No committed default secret (M16). Empty for the default sqlite setup; the
+      # No committed default secret. Empty for the default sqlite setup; the
       # postgres service requires it (:?) when that profile is active.
       - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-false}
