@@ -1,15 +1,16 @@
 name: SDK CI
 
-# Runs the JavaScript/Python/PHP client SDK suites. Path-filtered to sdk/** so it only fires on SDK
-# changes and never blocks an unrelated app release. The JavaScript job also builds and runs the
+# Runs the JavaScript/Python/PHP client SDK suites. Path-filtered to SDK sources AND the server
+# contract surfaces the SDK types mirror (DTOs + the engine interface), so a backend DTO change also
+# re-runs the SDK suites and surfaces contract drift. The JavaScript job also builds and runs the
 # dual-format packaging smoke test (require() + import() both consumable).
 on:
   push:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml']
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
   pull_request:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml']
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
 
 jobs:
   javascript:
