@@ -38,4 +38,14 @@ describe('loadCliEnv (migration CLI env precedence)', () => {
 
     expect(process.env[KEY]).toBe('postgres');
   });
+
+  it('lets .env win over data/.env.generated (the middle layer), matching main.ts ordering', () => {
+    // Guards against a future edit that reorders the two loads or flips override — .env must win.
+    fs.writeFileSync(path.join(dir, '.env'), 'DATABASE_TYPE=postgres\n');
+    fs.writeFileSync(path.join(dir, 'data', '.env.generated'), 'DATABASE_TYPE=sqlite\n');
+
+    loadCliEnv(dir);
+
+    expect(process.env[KEY]).toBe('postgres');
+  });
 });

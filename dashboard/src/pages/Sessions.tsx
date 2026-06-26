@@ -37,7 +37,11 @@ export function Sessions() {
       setSessions(data);
       // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
       // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
-      // Dashboard shows stale session counts/status. Prefix-matches both `sessions` and `sessionStats`.
+      // Dashboard shows stale session counts/status. This runs on every reload (mount / WS-failed /
+      // mutation), which is harmless: the Sessions page holds no active observer on a ['sessions', …]
+      // query, so invalidation only marks the shared cache stale (no refetch here, no loop) and the
+      // Dashboard/other views refetch lazily on next mount. Prefix-matches every session-scoped key
+      // (sessions, sessionStats, per-session groups/chats/templates).
       void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
       return data;
     } catch (err) {
