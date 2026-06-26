@@ -421,8 +421,9 @@ export interface IWhatsAppEngine {
   getContactById(contactId: string): Promise<Contact | null>;
   checkNumberExists(number: string): Promise<boolean>;
   /**
-   * Resolve a phone number to its canonical chat id in the engine's native format, or null if the
-   * number is not registered. The engine owns the JID scheme, so callers never build it themselves.
+   * Resolve a phone number to its canonical chat id in the neutral dialect (`<phone>@c.us`), or null
+   * if the number is not registered. The engine owns the JID scheme and returns it already neutralized,
+   * so the value is engine-agnostic and round-trips back to a send on any engine.
    */
   getNumberId(number: string): Promise<string | null>;
   /**

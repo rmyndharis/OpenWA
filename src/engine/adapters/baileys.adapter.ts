@@ -488,7 +488,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.ensureReady();
     const results = await this.sock!.onWhatsApp(number);
     const hit = results?.[0];
-    return hit?.exists ? hit.jid : null;
+    // Baileys returns a raw `<phone>@s.whatsapp.net`; neutralize it before it crosses the engine
+    // boundary so the value matches whatsapp-web.js (`<phone>@c.us`) and the IWhatsAppEngine contract
+    // (no raw `@s.whatsapp.net` in a neutral field). It also round-trips back to a send on either engine.
+    return hit?.exists ? this.sessionStore.toNeutralJid(hit.jid) : null;
   }
 
   async sendChatState(chatId: string, state: ChatState): Promise<void> {
