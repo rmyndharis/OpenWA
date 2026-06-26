@@ -672,6 +672,17 @@ describe('InfraController.getStatus storage (reads the real storage.localPath ke
     const status = await buildController({ 'storage.type': 'local' }).getStatus();
     expect(status.storage.path).toBe('./data/media');
   });
+
+  it('reports the bucket in S3 mode so the active backend is visible', async () => {
+    const status = await buildController({ 'storage.type': 's3', 'storage.s3.bucket': 'my-openwa-bucket' }).getStatus();
+    expect(status.storage.type).toBe('s3');
+    expect(status.storage.bucket).toBe('my-openwa-bucket');
+  });
+
+  it('omits bucket in local mode (no fabricated field)', async () => {
+    const status = await buildController({ 'storage.type': 'local' }).getStatus();
+    expect(status.storage.bucket).toBeUndefined();
+  });
 });
 
 describe('InfraController.exportStorage keeps the export import-able and sweeps it', () => {

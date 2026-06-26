@@ -251,6 +251,9 @@ export class InfraController {
     // Read the key StorageService actually uses (`storage.localPath`, default `./data/media`).
     // The old `storage.path` key never existed, so status always reported the `./uploads` fallback.
     const storagePath = this.configService.get<string>('storage.localPath', './data/media');
+    // In S3 mode the local path is unused; surface the bucket so the status panel shows the real
+    // backend. `path` is kept (additive) so the dashboard's local-mode rendering is unchanged.
+    const storageBucket = this.configService.get<string>('storage.s3.bucket');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
     // configuration.ts nests these under engine.puppeteer.{headless,args}; the old flat
@@ -268,7 +271,11 @@ export class InfraController {
         messages: { pending: 0, completed: 0, failed: 0 },
         webhooks: { pending: 0, completed: 0, failed: 0 },
       },
-      storage: { type: storageType, path: storagePath },
+      storage: {
+        type: storageType,
+        path: storagePath,
+        ...(storageType === 's3' && storageBucket ? { bucket: storageBucket } : {}),
+      },
       engine: { type: engineType, headless: engineHeadless, sessionDataPath, browserArgs },
     };
   }
