@@ -160,6 +160,16 @@ interface BaileysStoredMessageRow {
   createdAt: string;
 }
 
+// The persisted lid->phone resolution cache. Not a FK to sessions (provenance only), so the import's
+// `DELETE FROM sessions` never clears it — it must be exported + re-inserted explicitly or a
+// backup→restore into a fresh DB loses the whole cache (it self-heals via re-lookup, but lossily).
+interface LidMappingRow {
+  lid: string;
+  phone: string | null;
+  sessionId: string | null;
+  updatedAt: string;
+}
+
 interface MigrationTables {
   sessions: SessionRow[];
   webhooks: WebhookRow[];
@@ -167,6 +177,7 @@ interface MigrationTables {
   messageBatches: MessageBatchRow[];
   templates: TemplateRow[];
   baileysStoredMessages: BaileysStoredMessageRow[];
+  lidMappings: LidMappingRow[];
 }
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
@@ -641,6 +652,7 @@ export class InfraController {
       messageBatches: number;
       templates: number;
       baileysStoredMessages: number;
+      lidMappings: number;
     };
   }> {
     // Get all entities from Data DB
@@ -652,6 +664,7 @@ export class InfraController {
     let messageBatches: MessageBatchRow[] = [];
     let templates: TemplateRow[] = [];
     let baileysStoredMessages: BaileysStoredMessageRow[] = [];
+    let lidMappings: LidMappingRow[] = [];
 
     try {
       messages = await this.dataDataSource.query<MessageRow[]>('SELECT * FROM messages');
@@ -679,6 +692,12 @@ export class InfraController {
       this.logger.debug('Baileys stored messages table not available for export', { error: String(error) });
     }
 
+    try {
+      lidMappings = await this.dataDataSource.query<LidMappingRow[]>('SELECT * FROM lid_mappings');
+    } catch (error) {
+      this.logger.debug('Lid mappings table not available for export', { error: String(error) });
+    }
+
     return {
       exportedAt: new Date().toISOString(),
       dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
@@ -689,6 +708,7 @@ export class InfraController {
         messageBatches,
         templates,
         baileysStoredMessages,
+        lidMappings,
       },
       counts: {
         sessions: sessions.length,
@@ -697,6 +717,7 @@ export class InfraController {
         messageBatches: messageBatches.length,
         templates: templates.length,
         baileysStoredMessages: baileysStoredMessages.length,
+        lidMappings: lidMappings.length,
       },
     };
   }
@@ -736,6 +757,7 @@ export class InfraController {
       messageBatches: number;
       templates: number;
       baileysStoredMessages: number;
+      lidMappings: number;
     };
     warnings: string[];
   }> {
@@ -754,6 +776,9 @@ export class InfraController {
       await queryRunner.query('DELETE FROM message_batches').catch(() => {});
       await queryRunner.query('DELETE FROM templates').catch(() => {});
       await queryRunner.query('DELETE FROM baileys_stored_messages').catch(() => {});
+      // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
+      // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
+      await queryRunner.query('DELETE FROM lid_mappings').catch(() => {});
       await queryRunner.query('DELETE FROM sessions');
 
       // Import sessions first
@@ -941,6 +966,22 @@ export class InfraController {
         }
       }
 
+      // Import lid mappings (optional; not a FK, restored as a standalone cache table)
+      let lidMappingsCount = 0;
+      if (data.tables.lidMappings?.length) {
+        for (const lm of data.tables.lidMappings) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
+              [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
+            );
+            lidMappingsCount++;
+          } catch (err) {
+            warnings.push(`Failed to import lid mapping ${lm.lid}: ${err}`);
+          }
+        }
+      }
+
       const counts = {
         sessions: sessionsCount,
         webhooks: webhooksCount,
@@ -948,6 +989,7 @@ export class InfraController {
         messageBatches: messageBatchesCount,
         templates: templatesCount,
         baileysStoredMessages: baileysStoredMessagesCount,
+        lidMappings: lidMappingsCount,
       };
 
       // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any

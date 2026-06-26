@@ -36,6 +36,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { MessageBatch, BatchStatus } from '../message/entities/message-batch.entity';
 import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
+import { LidMapping } from '../../engine/identity/lid-mapping.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -469,7 +470,7 @@ describe('InfraController.import/export preserves every data-DB table', () => {
     ds = new DataSource({
       type: 'sqlite',
       database: ':memory:',
-      entities: [Session, Webhook, Message, MessageBatch, Template, BaileysStoredMessage],
+      entities: [Session, Webhook, Message, MessageBatch, Template, BaileysStoredMessage, LidMapping],
       synchronize: true,
     });
     await ds.initialize();
@@ -495,6 +496,28 @@ describe('InfraController.import/export preserves every data-DB table', () => {
         lastActiveAt: null,
       }),
     );
+
+  // lid_mappings is the persisted lid->phone cache; it is NOT a FK to sessions, so the sessions DELETE
+  // never touches it — but export omitted it, so a backup→restore into a fresh DB dropped it entirely.
+  it('restores lid_mappings instead of dropping them on a backup→restore', async () => {
+    await seedSession('s1');
+    const lidRepo = ds.getRepository(LidMapping);
+    await lidRepo.save(lidRepo.create({ lid: '111', phone: '628111', sessionId: 's1' }));
+    await lidRepo.save(lidRepo.create({ lid: '222', phone: null, sessionId: 's1' })); // negative cache
+
+    const dump = await controller.exportData();
+    expect((dump.tables as unknown as { lidMappings?: unknown[] }).lidMappings).toHaveLength(2);
+
+    // Simulate restoring into a fresh data DB (the documented backend-migration flow).
+    await lidRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(await lidRepo.count()).toBe(2);
+    expect((await lidRepo.findOneByOrFail({ lid: '111' })).phone).toBe('628111');
+    expect((await lidRepo.findOneByOrFail({ lid: '222' })).phone).toBeNull();
+  });
 
   // DELETE FROM sessions cascades to templates + baileys_stored_messages (both FK ON DELETE CASCADE),
   // so an import that never re-inserts them permanently wipes both on the documented backup flow.
