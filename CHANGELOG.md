@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A plugin whose enable failed after it had already subscribed hooks no longer leaves stale hook registrations behind; a later successful enable could otherwise dispatch each event to the plugin more than once. (#477)
+- The WebSocket `message.ack` event now carries the same `{ id, messageId, status, ack }` shape over the socket as the matching webhook does — the socket previously omitted `id` and the legacy `ack`. (#477)
+- Reconnect timers are no longer stacked when two disconnects arrive back-to-back, and a terminal engine failure now cancels any pending reconnect so a `FAILED` session cannot be resurrected by a stale timer. (#477)
+- The dashboard recovers from a stale lazy-loaded chunk after a redeploy with a single guarded reload instead of replacing the whole UI with the error screen; the Content-Security-Policy `img-src` now allows `blob:` so the outgoing image-attachment preview renders. (#477)
+- The Baileys engine's number-check (`GET /sessions/:id/contacts/check/:number`) now returns a neutral `<phone>@c.us` id, matching the whatsapp-web.js engine, instead of a raw `@s.whatsapp.net` id. (#477)
+- The data export/import now includes the `lid_mappings` resolution cache, so a backup/restore or a SQLite↔PostgreSQL migration no longer drops it. (#477)
+
 ## [0.7.5] - 2026-06-26
 
 ### Fixed
