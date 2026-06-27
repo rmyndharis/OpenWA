@@ -90,6 +90,14 @@
     "noMessagesInChat": "No messages yet. Send the first message to get started!",
     "scrollToBottom": "Scroll to latest messages",
     "downloadDocument": "Download document",
+    "media": {
+      "photo": "Photo",
+      "video": "Video",
+      "voice": "Voice message",
+      "sticker": "Sticker",
+      "document": "Document",
+      "attachment": "Attachment"
+    },
     "actions": {
       "reply": "Reply",
       "react": "React",

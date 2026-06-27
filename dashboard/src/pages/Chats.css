@@ -821,6 +821,14 @@
   margin-bottom: 0.5rem;
 }
 
+/* Placeholder for a media message whose payload isn't loaded (older deep-history messages are
+   metadata-only). Keeps the bubble visible and labeled instead of rendering empty. */
+.chats-page .message-media-placeholder{
+  font-style: italic;
+  opacity: 0.75;
+  font-size: 0.9375rem;
+}
+
 .chats-page .chat-document-media{
   display: inline-flex;
   align-items: center;
