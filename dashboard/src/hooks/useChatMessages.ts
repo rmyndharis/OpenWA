@@ -3,7 +3,6 @@ import {
   mergeChatMessages,
   mapEngineHistoryMessage,
   mergeOrAppend,
-  replaceMessageById,
   updateMessageById,
   removeMessageById,
   type ChatMessageView,
@@ -57,12 +56,6 @@ export function useChatMessagesActions() {
       qc.setQueryData<ChatMessageView[]>(
         messagesQueryKey(sessionId, chatId),
         (old = []) => mergeOrAppend(old, msg),
-      );
-    },
-    replaceTempMessage(sessionId: string, chatId: string, tempId: string, real: ChatMessageView) {
-      qc.setQueryData<ChatMessageView[]>(
-        messagesQueryKey(sessionId, chatId),
-        (old = []) => replaceMessageById(old, tempId, real),
       );
     },
     updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {

@@ -137,9 +137,13 @@ export function Chats() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
 
-  // Per-chat scroll-position memory + auto-scroll heuristic
+  // Per-chat scroll-position memory + auto-scroll heuristic.
+  // Pass `messages.length > 0` as the loaded signal: it stays stable once the
+  // chat has any message (doesn't toggle per append) and covers both the
+  // first-fetch resolution and a WS-driven first message on a previously-empty
+  // chat. `loadingMessages` alone would miss the latter case.
   const { containerRef: messagesContainerRef, onMessageAppended } =
-    useChatScrollPosition(activeChat?.id ?? null);
+    useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
 
   // Popular emojis
   const popularEmojis = ['😀', '😂', '👍', '❤️', '🔥', '👏', '🙏', '🎉', '💡', '🤔', '😅', '😍', '😊', '😭', '😎', '😜', '🚀', '✨'];
