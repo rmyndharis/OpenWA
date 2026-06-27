@@ -96,7 +96,10 @@
       "voice": "Voice message",
       "sticker": "Sticker",
       "document": "Document",
-      "attachment": "Attachment"
+      "attachment": "Attachment",
+      "location": "Location",
+      "contact": "Contact",
+      "unsupported": "Unsupported message"
     },
     "actions": {
       "reply": "Reply",
