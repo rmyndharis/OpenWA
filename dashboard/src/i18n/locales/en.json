@@ -88,6 +88,7 @@
     "noMessageYet": "No messages yet",
     "loadingMessages": "Loading messages...",
     "noMessagesInChat": "No messages yet. Send the first message to get started!",
+    "scrollToBottom": "Scroll to latest messages",
     "downloadDocument": "Download document",
     "actions": {
       "reply": "Reply",

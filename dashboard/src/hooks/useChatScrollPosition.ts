@@ -1,114 +1,106 @@
-import { useCallback, useLayoutEffect, useRef, type RefObject } from 'react';
-import { decideScroll, type ScrollDirection } from '../utils/scrollDecision.ts';
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { decideScroll, isAwayFromBottom, type ScrollDirection } from '../utils/scrollDecision.ts';
 
 /**
- * Decide what to do with the scroll container on a chat switch or load-resolve.
+ * Decide where to place the scroll when entering a chat (or when its content first loads):
+ *   - 'saved'  → a remembered scrollTop exists for this chat: restore it
+ *   - 'bottom' → first visit (no saved position): jump to the latest message
+ *   - null     → nothing to do yet (no chat selected, or content not loaded)
  *
- * Inputs:
- *   - prevChatId: chat we are LEAVING (or null if first render)
- *   - nextChatId: chat we are ENTERING (or null if no chat selected)
- *   - prevLoaded: was the previous chat's content rendered when we last ran?
- *   - isLoaded:   is the next chat's content rendered now?
- *   - savedScrollTop: previously-saved scrollTop for nextChatId (or undefined)
+ * Note: this no longer decides whether to SAVE the leaving chat's position. That position is
+ * captured continuously by the hook's scroll handler, so it never depends on reading scrollTop
+ * after the DOM has already swapped to the next chat — the bug that left returned-to chats stuck
+ * at the top (the old layout-effect save read the incoming chat's / spinner's scrollTop ≈ 0).
  *
- * Output: { save: 'previous' | null, restore: 'saved' | 'bottom' | null }
- *   - save:    instructs the hook to write the CURRENT scrollTop into the
- *              map under prevChatId BEFORE doing the restore
- *   - restore: instructs the hook to write scrollTop = (the saved value)
- *              or = scrollHeight (bottom); null means do nothing
- *
- * This is a pure function so it can be unit-tested without React.
+ * Pure function so it can be unit-tested without React.
  */
-export interface RestoreDecision {
-  save: 'previous' | null;
-  restore: 'saved' | 'bottom' | null;
-}
+export type RestoreTarget = 'saved' | 'bottom' | null;
 
 export function decideRestoreTarget(
-  prevChatId: string | null,
   nextChatId: string | null,
-  prevLoaded: boolean,
   isLoaded: boolean,
   savedScrollTop: number | undefined,
-): RestoreDecision {
-  // Only save the previous chat's scrollTop when we're switching to ANOTHER
-  // chat (not when deselecting back to nothing) and when its content was
-  // actually rendered (not a spinner snapshot).
-  const save: 'previous' | null =
-    prevChatId !== null &&
-    nextChatId !== null &&
-    prevChatId !== nextChatId &&
-    prevLoaded
-      ? 'previous'
-      : null;
-
-  const restore: 'saved' | 'bottom' | null =
-    nextChatId !== null && isLoaded
-      ? savedScrollTop !== undefined ? 'saved' : 'bottom'
-      : null;
-
-  return { save, restore };
+): RestoreTarget {
+  if (nextChatId === null || !isLoaded) return null;
+  // A saved value of 0 is a real position (user was at the top) — only `undefined` means "first visit".
+  return savedScrollTop !== undefined ? 'saved' : 'bottom';
 }
 
 /**
- * Per-chat scroll-position memory + auto-scroll heuristic.
+ * Per-chat scroll-position memory + auto-scroll heuristic + "jump to bottom" affordance.
  *
- * - On chat switch (and once content for the new chat has actually rendered):
- *   saves the leaving chat's scrollTop, restores the entering chat's saved
- *   scrollTop, or jumps to bottom on first visit. All synchronously, before
- *   paint, via useLayoutEffect — no visible "jump" or smooth-scroll animation.
- * - The hook depends on BOTH activeChatId AND isLoaded so that a cold-open
- *   (spinner first, then data) correctly waits to restore until the messages
- *   list is mounted with non-zero scrollHeight.
- * - On message append: `onMessageAppended(direction)` snapshots the geometry
- *   BEFORE the new message is committed, then defers the scroll-to-bottom (if
- *   any) to the next frame so the new message is already in the DOM.
+ * - `onScroll` (attach to the scroll container) records the active chat's scrollTop on every scroll,
+ *   so switching away always has an accurate position to restore later, and toggles the jump button
+ *   based on how far the user has scrolled up.
+ * - On chat switch / first load: restores the entering chat's remembered scrollTop, or jumps to
+ *   bottom on first visit — synchronously before paint via useLayoutEffect.
+ * - `onMessageAppended(direction)`: scrolls to bottom when appropriate (the user's own message, or an
+ *   arrival while they were already near the bottom), deferred to the next frame so the new node is
+ *   in the DOM. Preserves position when the user has scrolled up to read history.
+ * - `scrollToBottom()`: smooth-scrolls to the latest message (the jump button's action).
  *
- * Mount the returned `containerRef` on the scroll container (the `.room-messages`
- * div in Chats.tsx). The Map of saved positions lives in a ref so it doesn't
- * trigger renders and is garbage-collected when the host component unmounts.
+ * Mount `containerRef` on the scroll container (`.room-messages`). The Map of saved positions lives
+ * in a ref so it doesn't trigger renders and is garbage-collected when the host component unmounts.
  */
 export function useChatScrollPosition(
   activeChatId: string | null,
   isLoaded: boolean,
 ): {
   containerRef: RefObject<HTMLDivElement | null>;
+  onScroll: () => void;
   onMessageAppended: (direction: ScrollDirection) => void;
+  showJumpToBottom: boolean;
+  scrollToBottom: () => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollMap = useRef<Map<string, number>>(new Map());
-  const prevChatIdRef = useRef<string | null>(null);
-  const prevLoadedRef = useRef<boolean>(false);
+
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
+  const syncJumpButton = useCallback((el: HTMLDivElement) => {
+    setShowJumpToBottom(
+      isAwayFromBottom({
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      }),
+    );
+  }, []);
+
+  // Recreated whenever the active chat changes, so the position is always recorded under the chat
+  // currently on screen — React swaps the listener on the container, never leaving a stale closure.
+  const onScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (activeChatId !== null) scrollMap.current.set(activeChatId, el.scrollTop);
+    syncJumpButton(el);
+  }, [activeChatId, syncJumpButton]);
 
   useLayoutEffect(() => {
-    const prev = prevChatIdRef.current;
-    const next = activeChatId;
     const el = containerRef.current;
-    const prevLoaded = prevLoadedRef.current;
-
-    const decision = decideRestoreTarget(
-      prev,
+    const next = activeChatId;
+    const target = decideRestoreTarget(
       next,
-      prevLoaded,
       isLoaded,
       next !== null ? scrollMap.current.get(next) : undefined,
     );
 
-    if (el) {
-      if (decision.save === 'previous' && prev !== null) {
-        scrollMap.current.set(prev, el.scrollTop);
-      }
-      if (decision.restore === 'saved' && next !== null) {
+    if (el && next !== null) {
+      if (target === 'saved') {
         const saved = scrollMap.current.get(next);
         if (saved !== undefined) el.scrollTop = saved;
-      } else if (decision.restore === 'bottom') {
+      } else if (target === 'bottom') {
         el.scrollTop = el.scrollHeight;
+        // Media can grow the content a frame after open; re-pin to the bottom next frame so the chat
+        // reliably lands on the latest message instead of mid-thread.
+        requestAnimationFrame(() => {
+          const cur = containerRef.current;
+          if (cur) cur.scrollTop = cur.scrollHeight;
+        });
       }
+      if (target !== null) syncJumpButton(el);
     }
-
-    prevChatIdRef.current = next;
-    prevLoadedRef.current = isLoaded;
-  }, [activeChatId, isLoaded]);
+  }, [activeChatId, isLoaded, syncJumpButton]);
 
   const onMessageAppended = useCallback((direction: ScrollDirection) => {
     const el = containerRef.current;
@@ -125,5 +117,11 @@ export function useChatScrollPosition(
     });
   }, []);
 
-  return { containerRef, onMessageAppended };
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, []);
+
+  return { containerRef, onScroll, onMessageAppended, showJumpToBottom, scrollToBottom };
 }

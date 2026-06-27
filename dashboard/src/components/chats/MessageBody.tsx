@@ -13,6 +13,12 @@ const linkifyOptions = {
   rel: 'noopener noreferrer',
   defaultProtocol: 'https',
   ignoreTags: ['code', 'pre'],
+  validate: {
+    // Only linkify web URLs. A scheme'd match that isn't http(s) — e.g. file://… — is left as inert
+    // text. Bare domains and www.* have no '://' here and still resolve to https via defaultProtocol;
+    // emails are a separate token type and remain linkified.
+    url: (value: string) => !value.includes('://') || /^https?:\/\//i.test(value),
+  },
   attributes: {
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
   },
