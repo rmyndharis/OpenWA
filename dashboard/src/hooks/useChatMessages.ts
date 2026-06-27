@@ -35,7 +35,17 @@ export function useChatMessages(
       if (dbRes.status === 'rejected' && historyRes.status === 'rejected') throw dbRes.reason;
       const dbMessages = dbRes.status === 'fulfilled' ? dbRes.value.messages : [];
       const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
-      return mergeChatMessages(dbMessages, history);
+      const merged = mergeChatMessages(dbMessages, history);
+      // The DB stores ONLY incoming messages, and its page can reach further back than the engine
+      // history page (which carries both directions). Those extra older DB rows render as a confusing
+      // "only the other person" band at the top of the thread. Trim the thread to the history's range
+      // so the initial view is balanced; older messages (both directions) lazy-load via deep history on
+      // scroll-up. (When there's no history — e.g. a fresh session — keep the DB rows as-is.)
+      if (history.length === 0) return merged;
+      const ts = (m: { timestamp?: number; createdAt: string }): number =>
+        m.timestamp ?? (Math.floor(Date.parse(m.createdAt) / 1000) || 0);
+      const oldestHistoryTs = Math.min(...history.map(ts));
+      return merged.filter(m => ts(m) >= oldestHistoryTs);
     },
     enabled: Boolean(sessionId && chatId),
     staleTime: Infinity,
