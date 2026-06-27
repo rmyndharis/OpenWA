@@ -50,9 +50,10 @@ import {
 import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import {
   capInboundMedia,
+  coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
-  coerceDeclaredSize,
+  isMediaDownloadEnabled,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -200,6 +201,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * download through the concurrency limiter for backpressure. Returns undefined when there's no media.
    */
   private async capInboundMediaFor(msg: Message): Promise<IncomingMessage['media'] | undefined> {
+    if (!isMediaDownloadEnabled()) {
+      return undefined;
+    }
     const maxBytes = inboundMediaMaxBytes();
     const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
     const declared = coerceDeclaredSize(data?.size);

@@ -3,6 +3,7 @@ import {
   inboundMediaMaxBytes,
   inboundMediaConcurrency,
   coerceDeclaredSize,
+  isMediaDownloadEnabled,
 } from './inbound-media-cap';
 
 describe('inbound media cap', () => {
@@ -67,6 +68,46 @@ describe('inbound media cap', () => {
       expect(inboundMediaMaxBytes()).toBe(50 * 1024 * 1024);
       process.env[ENV] = 'abc';
       expect(inboundMediaMaxBytes()).toBe(50 * 1024 * 1024);
+    });
+  });
+
+  describe('isMediaDownloadEnabled', () => {
+    const ENV = 'MEDIA_DOWNLOAD_ENABLED';
+    const orig = process.env[ENV];
+    afterEach(() => {
+      if (orig === undefined) delete process.env[ENV];
+      else process.env[ENV] = orig;
+    });
+
+    it('defaults to true when unset', () => {
+      delete process.env[ENV];
+      expect(isMediaDownloadEnabled()).toBe(true);
+    });
+
+    it('returns false when set to "false"', () => {
+      process.env[ENV] = 'false';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns false when set to "0"', () => {
+      process.env[ENV] = '0';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns false when set to "no"', () => {
+      process.env[ENV] = 'no';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns true for any other value', () => {
+      process.env[ENV] = 'true';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = '1';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = 'yes';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = 'whatever';
+      expect(isMediaDownloadEnabled()).toBe(true);
     });
   });
 

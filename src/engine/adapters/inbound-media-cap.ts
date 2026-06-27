@@ -22,6 +22,19 @@ export function inboundMediaConcurrency(): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_INBOUND_MEDIA_CONCURRENCY;
 }
 
+/** Default for inbound media download. */
+const DEFAULT_MEDIA_DOWNLOAD_ENABLED = true;
+
+/**
+ * Whether inbound media download is enabled. When false, the engine skips downloading media from
+ * incoming messages entirely — no decryption, no memory allocation, no storage. Override via
+ * MEDIA_DOWNLOAD_ENABLED; accepts 'false', '0', or 'no' (case-sensitive) to disable.
+ */
+export function isMediaDownloadEnabled(): boolean {
+  const val = process.env.MEDIA_DOWNLOAD_ENABLED ?? '';
+  return val !== 'false' && val !== '0' && val !== 'no';
+}
+
 /**
  * Coerce a sender-declared media size (a protobuf `fileLength`, which may be a number, a Long-like
  * `{ toNumber() }`, a numeric string, or absent) to a finite byte count. Unknown/garbage → 0, i.e.

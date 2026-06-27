@@ -43,9 +43,10 @@ import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
 import {
   capInboundMedia,
+  coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
-  coerceDeclaredSize,
+  isMediaDownloadEnabled,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -1013,53 +1014,58 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'documentWithCaptionMessage' ||
       contentType === 'stickerMessage';
     if (isMediaType) {
-      // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
-      // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
-      const normalizedContent = b.normalizeMessageContent(content) ?? content;
-      const subMessage =
-        normalizedContent.imageMessage ??
-        normalizedContent.videoMessage ??
-        normalizedContent.audioMessage ??
-        normalizedContent.documentMessage ??
-        normalizedContent.stickerMessage;
-      const mimetype = subMessage?.mimetype ?? '';
-      const filename = normalizedContent.documentMessage?.fileName ?? undefined;
-      const maxBytes = inboundMediaMaxBytes();
-      const declared = coerceDeclaredSize(subMessage?.fileLength);
-
-      if (declared > maxBytes) {
-        // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
-        // (Baileys integrity-checks content against the declared size, so this is a robust bound).
-        media = { mimetype, filename, omitted: true, sizeBytes: declared };
-        this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
-          msgId: msg.key.id,
-          sizeBytes: declared,
-        });
+      if (!isMediaDownloadEnabled()) {
+        // media stays undefined — Media download disabled entirely via MEDIA_DOWNLOAD_ENABLED=false.
+        // The message is emitted without a media field.
       } else {
-        try {
-          // Stream-download with a running-total abort so a sender who understates fileLength still
-          // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
-          const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
-          if (buf === null) {
-            media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
-            this.logger.warn('Inbound media exceeded MEDIA_DOWNLOAD_MAX_BYTES mid-download; aborted', {
+        // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
+        // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
+        const normalizedContent = b.normalizeMessageContent(content) ?? content;
+        const subMessage =
+          normalizedContent.imageMessage ??
+          normalizedContent.videoMessage ??
+          normalizedContent.audioMessage ??
+          normalizedContent.documentMessage ??
+          normalizedContent.stickerMessage;
+        const mimetype = subMessage?.mimetype ?? '';
+        const filename = normalizedContent.documentMessage?.fileName ?? undefined;
+        const maxBytes = inboundMediaMaxBytes();
+        const declared = coerceDeclaredSize(subMessage?.fileLength);
+
+        if (declared > maxBytes) {
+          // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
+          // (Baileys integrity-checks content against the declared size, so this is a robust bound).
+          media = { mimetype, filename, omitted: true, sizeBytes: declared };
+          this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
+            msgId: msg.key.id,
+            sizeBytes: declared,
+          });
+        } else {
+          try {
+            // Stream-download with a running-total abort so a sender who understates fileLength still
+            // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
+            const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
+            if (buf === null) {
+              media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
+              this.logger.warn('Inbound media exceeded MEDIA_DOWNLOAD_MAX_BYTES mid-download; aborted', {
+                msgId: msg.key.id,
+              });
+            } else {
+              // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
+              // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
+              media = capInboundMedia({
+                mimetype,
+                filename,
+                sizeBytes: buf.byteLength,
+                toBase64: () => buf.toString('base64'),
+              });
+            }
+          } catch (err) {
+            this.logger.debug('Failed to download inbound media; emitting message without media', {
+              error: err instanceof Error ? err.message : String(err),
               msgId: msg.key.id,
             });
-          } else {
-            // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
-            // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
-            media = capInboundMedia({
-              mimetype,
-              filename,
-              sizeBytes: buf.byteLength,
-              toBase64: () => buf.toString('base64'),
-            });
           }
-        } catch (err) {
-          this.logger.debug('Failed to download inbound media; emitting message without media', {
-            error: err instanceof Error ? err.message : String(err),
-            msgId: msg.key.id,
-          });
         }
       }
     }
