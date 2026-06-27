@@ -46,6 +46,11 @@ import './Chats.css';
 // many more to reveal each time the user scrolls near the top. Keeps the DOM small on large chats.
 const MESSAGES_WINDOW_SIZE = 30;
 const MESSAGES_WINDOW_STEP = 30;
+// Lazy "load older": once the window reaches the top of what's loaded, fetch a deeper slice of the engine
+// history (both directions, text-only) by growing this ceiling each time, up to the engine's max.
+const HISTORY_INITIAL_LIMIT = 100;
+const HISTORY_FETCH_STEP = 300;
+const HISTORY_MAX_LIMIT = 2000;
 
 type MessageMedia = { mimetype: string; filename?: string; data?: string };
 
@@ -123,7 +128,7 @@ export function Chats() {
     isLoading: loadingMessages,
     isError: messagesError,
   } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
-  const { appendMessage, updateMessage } = useChatMessagesActions();
+  const { appendMessage, updateMessage, loadOlderHistory } = useChatMessagesActions();
   const queryClient = useQueryClient();
   const [messageInput, setMessageInput] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
@@ -158,17 +163,22 @@ export function Chats() {
     scrollToBottom,
   } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
 
-  // Client-side windowing. useChatMessages already loads the full recent thread (DB + engine history,
-  // BOTH directions). To keep large chats fast we only RENDER the most recent `visibleCount` messages
-  // and reveal older ones as the user scrolls near the top — no extra fetches, with scroll anchoring so
-  // the view doesn't jump. (Reaching back beyond the loaded thread is a future backend-paging concern;
-  // the DB stores only incoming messages, so older outgoing must keep coming from the engine history.)
+  // Render windowing + lazy "load older". useChatMessages loads the recent thread (DB + engine history,
+  // BOTH directions). We render only the most recent `visibleCount` messages and reveal more as the user
+  // scrolls up: first the already-loaded older ones (instant), then — once the window reaches the top of
+  // what's loaded — fetch a deeper slice of the engine history (text-only for the deeper portion).
   const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_SIZE);
+  const [loadingOlder, setLoadingOlder] = useState<boolean>(false);
+  const [hasMoreToFetch, setHasMoreToFetch] = useState<boolean>(true);
+  const historyLimitRef = useRef<number>(HISTORY_INITIAL_LIMIT);
   const pendingAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
 
-  // Reset the render window when the active chat changes.
+  // Reset windowing + pagination when the active chat changes.
   useEffect(() => {
     setVisibleCount(MESSAGES_WINDOW_SIZE);
+    setLoadingOlder(false);
+    setHasMoreToFetch(true);
+    historyLimitRef.current = HISTORY_INITIAL_LIMIT;
     pendingAnchorRef.current = null;
   }, [activeChat?.id]);
 
@@ -177,26 +187,67 @@ export function Chats() {
     [messages, visibleCount],
   );
 
-  // Reveal an older slice when the user nears the top. Arm the anchor first so the layout effect below
-  // keeps the reading position once the older messages mount (content grows above the viewport).
-  const revealOlder = useCallback(() => {
-    if (visibleCount >= messages.length) return;
+  // Capture the current geometry so the layout effect below keeps the reading position once older
+  // content mounts above the viewport.
+  const armAnchor = useCallback(() => {
     const el = messagesContainerRef.current;
     pendingAnchorRef.current = { prevTop: el?.scrollTop ?? 0, prevHeight: el?.scrollHeight ?? 0 };
-    setVisibleCount(c => Math.min(c + MESSAGES_WINDOW_STEP, messages.length));
-  }, [visibleCount, messages.length, messagesContainerRef]);
+  }, [messagesContainerRef]);
+
+  const revealOlder = useCallback(async () => {
+    if (loadingOlder) return;
+    // 1) Reveal already-loaded older messages — instant, no fetch.
+    if (visibleCount < messages.length) {
+      armAnchor();
+      setVisibleCount(c => Math.min(c + MESSAGES_WINDOW_STEP, messages.length));
+      return;
+    }
+    // 2) Window covers everything loaded → fetch a deeper slice of engine history (both directions).
+    if (!hasMoreToFetch || !selectedSessionId || !activeChat) return;
+    // The loaded thread already being shorter than the last ceiling means there's nothing older to fetch.
+    if (messages.length < historyLimitRef.current || historyLimitRef.current >= HISTORY_MAX_LIMIT) {
+      setHasMoreToFetch(false);
+      return;
+    }
+    setLoadingOlder(true);
+    armAnchor();
+    try {
+      const nextLimit = Math.min(historyLimitRef.current + HISTORY_FETCH_STEP, HISTORY_MAX_LIMIT);
+      const added = await loadOlderHistory(selectedSessionId, activeChat.id, nextLimit);
+      historyLimitRef.current = nextLimit;
+      setHasMoreToFetch(added > 0 && nextLimit < HISTORY_MAX_LIMIT);
+      if (added > 0) setVisibleCount(c => c + added); // reveal the newly fetched older messages
+      else pendingAnchorRef.current = null;
+    } catch (err) {
+      pendingAnchorRef.current = null;
+      showWarningToast(t('chats.errors.loadMessages'), err instanceof Error ? err.message : undefined);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [
+    loadingOlder,
+    visibleCount,
+    messages.length,
+    hasMoreToFetch,
+    selectedSessionId,
+    activeChat,
+    armAnchor,
+    loadOlderHistory,
+    t,
+    showWarningToast,
+  ]);
 
   // Compose the container's scroll handler: keep the hook's position-save + jump-button logic, and
-  // reveal the next older slice when the user nears the top.
+  // reveal/fetch older messages when the user nears the top.
   const onMessagesScroll = useCallback(() => {
     onScrollSavePosition();
     const el = messagesContainerRef.current;
-    if (el && isNearTop(el.scrollTop)) revealOlder();
+    if (el && isNearTop(el.scrollTop)) void revealOlder();
   }, [onScrollSavePosition, revealOlder, messagesContainerRef]);
 
-  // After the window grows, restore the reading position — content grew above the viewport, so shift
-  // scrollTop by the same amount. Keyed on `visibleCount` so realtime appends (which grow `messages` at
-  // the bottom) don't trigger it.
+  // After older content mounts (window grew, or older was fetched + revealed), restore the reading
+  // position — content grew above the viewport, so shift scrollTop by the same amount. Keyed on
+  // `visibleCount` so realtime appends (which grow `messages` at the bottom) don't trigger it.
   useLayoutEffect(() => {
     const anchor = pendingAnchorRef.current;
     if (!anchor) return;
@@ -1048,6 +1099,11 @@ export function Chats() {
                     })
                   )}
                 </div>
+                {loadingOlder && (
+                  <div className="messages-loading-older" aria-hidden="true">
+                    <Loader2 className="animate-spin" size={18} />
+                  </div>
+                )}
                 {showJumpToBottom && (
                   <button
                     type="button"

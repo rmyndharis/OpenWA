@@ -73,5 +73,21 @@ export function useChatMessagesActions() {
         (old = []) => removeMessageById(old, id),
       );
     },
+    /**
+     * Load older messages by fetching a deeper slice of the engine history (both directions, metadata
+     * only — no media for the deeper portion) and merging it into the cached thread. `limit` is the new,
+     * larger ceiling; the engine returns the most-recent `limit`, so a bigger limit reveals older ones.
+     * Returns how many genuinely-new (older) messages were added, so the caller knows whether more remain.
+     */
+    async loadOlderHistory(sessionId: string, chatId: string, limit: number): Promise<number> {
+      const history = await sessionApi.getChatHistory(sessionId, chatId, limit, false, true);
+      const older = history.map(mapEngineHistoryMessage);
+      const key = messagesQueryKey(sessionId, chatId);
+      const before = qc.getQueryData<ChatMessageView[]>(key) ?? [];
+      // `before` second so existing rows (with real status + any media) win over the metadata-only copies.
+      const merged = mergeChatMessages(older, before);
+      qc.setQueryData<ChatMessageView[]>(key, merged);
+      return merged.length - before.length;
+    },
   };
 }
