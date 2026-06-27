@@ -931,9 +931,22 @@ export function Chats() {
 
                       const renderMedia = () => {
                         if (msg.type === 'revoked') return null;
-                        if (!mediaInfo) return null;
-                        const mediaSrc = getMediaSrc(mediaInfo);
-                        if (!mediaSrc) return null;
+                        const mediaSrc = mediaInfo ? getMediaSrc(mediaInfo) : '';
+                        if (!mediaSrc) {
+                          // Media message with no payload — e.g. older messages from the deep-history
+                          // backfill, which is metadata-only. Show a labeled placeholder so the bubble is
+                          // visible (notably the user's own sent photos/voice) instead of empty.
+                          if (!isMediaMessage) return null;
+                          const label =
+                            msg.type === 'image' ? `📷 ${t('chats.media.photo')}`
+                            : msg.type === 'video' ? `🎥 ${t('chats.media.video')}`
+                            : msg.type === 'voice' || msg.type === 'audio' ? `🎤 ${t('chats.media.voice')}`
+                            : msg.type === 'sticker' ? `🏷️ ${t('chats.media.sticker')}`
+                            : msg.type === 'document' ? `📄 ${t('chats.media.document')}`
+                            : `📎 ${t('chats.media.attachment')}`;
+                          return <div className="message-media-placeholder">{label}</div>;
+                        }
+                        if (!mediaInfo) return null; // unreachable (mediaSrc implies mediaInfo) — narrows the type
 
                         switch (msg.type) {
                           case 'image':

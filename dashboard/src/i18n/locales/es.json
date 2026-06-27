@@ -90,6 +90,14 @@
     "noMessagesInChat": "Aún no hay mensajes. ¡Envía el primero para empezar!",
     "scrollToBottom": "Ir al último mensaje",
     "downloadDocument": "Descargar documento",
+    "media": {
+      "photo": "Foto",
+      "video": "Video",
+      "voice": "Nota de voz",
+      "sticker": "Sticker",
+      "document": "Documento",
+      "attachment": "Adjunto"
+    },
     "actions": {
       "reply": "Responder",
       "react": "Reaccionar",

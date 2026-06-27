@@ -84,8 +84,10 @@ export function useChatMessagesActions() {
       const older = history.map(mapEngineHistoryMessage);
       const key = messagesQueryKey(sessionId, chatId);
       const before = qc.getQueryData<ChatMessageView[]>(key) ?? [];
-      // `before` second so existing rows (with real status + any media) win over the metadata-only copies.
-      const merged = mergeChatMessages(older, before);
+      // `before` FIRST so the already-loaded rows win the dedup — mergeChatMessages lets the first arg
+      // overwrite the second, and the cached rows carry real delivery status + media that the
+      // metadata-only deep copies lack. The deep rows only contribute the genuinely-older messages.
+      const merged = mergeChatMessages(before, older);
       qc.setQueryData<ChatMessageView[]>(key, merged);
       return merged.length - before.length;
     },
