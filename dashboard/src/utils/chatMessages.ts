@@ -49,14 +49,16 @@ export interface ChatMessageView extends ChatMessage {
 }
 
 /**
- * Append `incoming` to `list`. If an entry with the same id exists, replace it in place.
- * Returns a new array — does not mutate the input.
+ * Append `incoming` to `list`. If an entry with the same identity exists, replace it in place.
+ * Identity uses the same `waMessageId ?? id` key as mergeChatMessages — a DB row (id=UUID,
+ * waMessageId=WA id) and a live WS message (id=WA id) for the same WhatsApp message must dedupe,
+ * not double-add. Returns a new array — does not mutate the input.
  */
 export function mergeOrAppend(
   list: ChatMessageView[],
   incoming: ChatMessageView,
 ): ChatMessageView[] {
-  const idx = list.findIndex(m => m.id === incoming.id);
+  const idx = list.findIndex(m => msgKey(m) === msgKey(incoming));
   if (idx === -1) return [...list, incoming];
   const next = list.slice();
   next[idx] = incoming;

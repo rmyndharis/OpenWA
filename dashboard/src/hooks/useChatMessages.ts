@@ -53,9 +53,12 @@ export function useChatMessagesActions() {
 
   return {
     appendMessage(sessionId: string, chatId: string, msg: ChatMessageView) {
-      qc.setQueryData<ChatMessageView[]>(
-        messagesQueryKey(sessionId, chatId),
-        (old = []) => mergeOrAppend(old, msg),
+      // Only append to a slice that already exists (a chat that has been opened). Do NOT seed a slice
+      // for a never-opened chat: with staleTime: Infinity that phantom slice would be "fresh", so
+      // opening the chat would skip the full-history queryFn and show only this one message (truncated
+      // history). Returning undefined from the updater is a no-op when there is no cached data.
+      qc.setQueryData<ChatMessageView[]>(messagesQueryKey(sessionId, chatId), old =>
+        old === undefined ? undefined : mergeOrAppend(old, msg),
       );
     },
     updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {

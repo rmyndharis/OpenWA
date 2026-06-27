@@ -116,7 +116,8 @@
       "send": "发送消息失败",
       "react": "回应消息失败",
       "delete": "删除消息失败"
-    }
+    },
+    "loadMessagesError": "无法加载消息。请检查服务器日志。"
   },
   "errorBoundary": {
     "title": "出了点问题",

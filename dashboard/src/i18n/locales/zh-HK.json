@@ -116,7 +116,8 @@
       "send": "傳送訊息失敗",
       "react": "回應訊息失敗",
       "delete": "刪除訊息失敗"
-    }
+    },
+    "loadMessagesError": "無法載入訊息。請檢查伺服器日誌。"
   },
   "errorBoundary": {
     "title": "發生問題",

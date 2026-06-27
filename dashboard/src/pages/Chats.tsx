@@ -114,6 +114,7 @@ export function Chats() {
   const {
     data: messages = [],
     isLoading: loadingMessages,
+    isError: messagesError,
   } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
@@ -785,6 +786,11 @@ export function Chats() {
                     <div className="messages-loading">
                       <Loader2 className="animate-spin" size={32} />
                       <span>{t('chats.loadingMessages')}</span>
+                    </div>
+                  ) : messagesError ? (
+                    <div className="messages-empty">
+                      <MessageSquare size={32} />
+                      <span>{t('chats.loadMessagesError')}</span>
                     </div>
                   ) : messages.length === 0 ? (
                     <div className="messages-empty">

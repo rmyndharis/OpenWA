@@ -79,7 +79,10 @@ import {
 
 const msg = (over: Partial<ChatMessageView> = {}): ChatMessageView => ({
   id: 'm-1',
-  waMessageId: 'true_g@g.us_AAA',
+  // Derive a distinct waMessageId per id by default (each WhatsApp message has its own), so dedup
+  // keyed on `waMessageId ?? id` treats different ids as different messages. Override explicitly to
+  // exercise the live-WS-vs-DB-copy case.
+  waMessageId: `true_g@g.us_${over.id ?? 'm-1'}`,
   chatId: 'g@g.us',
   from: 'me',
   to: 'g@g.us',
@@ -105,6 +108,16 @@ test('mergeOrAppend replaces in place when id matches', () => {
   assert.equal(after.length, 2);
   assert.equal(after[0].body, 'new');
   assert.equal(after[1].id, 'm-2');
+});
+
+test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but same waMessageId)', () => {
+  // DB-persisted copy: id = UUID, waMessageId = WA serialized id.
+  const dbCopy = msg({ id: 'uuid-1', waMessageId: 'true_g@g.us_WA1', body: 'persisted' });
+  // The same WhatsApp message arriving live over WS, carrying the WA id.
+  const live = msg({ id: 'true_g@g.us_WA1', waMessageId: 'true_g@g.us_WA1', body: 'live' });
+  const after = mergeOrAppend([dbCopy], live);
+  assert.equal(after.length, 1); // must NOT double-add the same message
+  assert.equal(after[0].body, 'live');
 });
 
 test('mergeOrAppend does not mutate the input array', () => {

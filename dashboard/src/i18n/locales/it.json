@@ -116,7 +116,8 @@
       "send": "Impossibile inviare il messaggio",
       "react": "Impossibile reagire al messaggio",
       "delete": "Impossibile eliminare il messaggio"
-    }
+    },
+    "loadMessagesError": "Impossibile caricare i messaggi. Controlla i log del server."
   },
   "errorBoundary": {
     "title": "Qualcosa è andato storto",

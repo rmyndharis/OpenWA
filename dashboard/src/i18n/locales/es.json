@@ -116,7 +116,8 @@
       "send": "Error al enviar el mensaje",
       "react": "Error al reaccionar al mensaje",
       "delete": "Error al eliminar el mensaje"
-    }
+    },
+    "loadMessagesError": "No se pudieron cargar los mensajes. Revisa los registros del servidor."
   },
   "errorBoundary": {
     "title": "Algo salió mal",

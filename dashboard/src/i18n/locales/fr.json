@@ -116,7 +116,8 @@
       "send": "Échec de l'envoi du message",
       "react": "Échec de la réaction au message",
       "delete": "Échec de la suppression du message"
-    }
+    },
+    "loadMessagesError": "Impossible de charger les messages. Vérifiez les journaux du serveur."
   },
   "errorBoundary": {
     "title": "Une erreur est survenue",

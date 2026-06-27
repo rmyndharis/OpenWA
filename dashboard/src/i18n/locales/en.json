@@ -116,7 +116,8 @@
       "send": "Failed to send message",
       "react": "Failed to react to message",
       "delete": "Failed to delete message"
-    }
+    },
+    "loadMessagesError": "Couldn't load messages. Check the server logs."
   },
   "errorBoundary": {
     "title": "Something went wrong",
