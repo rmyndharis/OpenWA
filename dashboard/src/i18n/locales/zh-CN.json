@@ -173,7 +173,8 @@
       "sent": "已发送",
       "received": "已接收",
       "messages": "消息",
-      "empty": "此期间没有消息活动。"
+      "empty": "此期间没有消息活动。",
+      "error": "无法加载消息分析数据。请检查服务器日志。"
     }
   },
   "sessionStatus": {
@@ -577,7 +578,14 @@
       "sessionDataPath": "会话数据路径",
       "browserArgs": "浏览器参数",
       "noBrowser": "该引擎通过 WebSocket 连接——没有浏览器，因此没有无头模式或浏览器参数设置。活动引擎将在重启后生效。",
-      "restartNote": "切换引擎将在服务器重启后生效。"
+      "restartNote": "切换引擎将在服务器重启后生效。",
+      "webVersion": "WhatsApp Web 构建版本",
+      "webVersionNative": "自动（whatsapp-web.js 默认）",
+      "webVersionSource": {
+        "pinned": "通过 WWEBJS_WEB_VERSION 锁定",
+        "auto": "自动解析，当前已知可用的构建版本",
+        "native": "whatsapp-web.js 原生自动选择"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -613,7 +621,8 @@
       "accessKey": "访问密钥",
       "secretKey": "秘密密钥",
       "endpoint": "自定义端点（可选）",
-      "endpointHint": "适用于 MinIO 或其他兼容 S3 的服务"
+      "endpointHint": "适用于 MinIO 或其他兼容 S3 的服务",
+      "s3Unreachable": "S3（无法连接）"
     },
     "statusLabels": {
       "connected": "已连接",
@@ -638,6 +647,22 @@
     },
     "toasts": {
       "saveFailed": "保存失败"
+    },
+    "envPinNote": "已由环境变量锁定 —— 此为当前运行值；在取消该变量之前，仪表盘的更改不会生效。",
+    "migration": {
+      "title": "请注意 —— 此操作将更改数据后端",
+      "dbWarning": "新数据库将从空白状态开始。请立即（在仍使用旧数据库时）下载当前数据的备份，然后在重启后恢复。",
+      "storageWarning": "现有的媒体文件不会自动迁移到新的存储后端；它们将保留在原位置。",
+      "downloadBackup": "请先下载备份",
+      "backupTitle": "数据备份与恢复",
+      "backupHint": "在切换数据库之前，将所有数据导出为 JSON，然后在切换后导入。备份中包含明文的 webhook 密钥和代理凭据 —— 请妥善保管，并在恢复完成后将其删除。",
+      "export": "导出数据",
+      "import": "导入数据",
+      "exportFailed": "无法导出数据",
+      "importFailed": "无法导入数据",
+      "importOk": "数据已导入",
+      "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
+      "invalidFile": "该文件不是有效的 OpenWA 数据备份。"
     }
   },
   "plugins": {

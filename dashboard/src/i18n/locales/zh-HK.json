@@ -173,7 +173,8 @@
       "sent": "已傳送",
       "received": "已接收",
       "messages": "訊息",
-      "empty": "此期間沒有訊息活動。"
+      "empty": "此期間沒有訊息活動。",
+      "error": "無法載入訊息分析。請查看伺服器日誌。"
     }
   },
   "sessionStatus": {
@@ -577,7 +578,14 @@
       "sessionDataPath": "工作階段資料路徑",
       "browserArgs": "瀏覽器參數",
       "noBrowser": "此引擎透過 WebSocket 連線——沒有瀏覽器，因此沒有無頭模式或瀏覽器參數設定。使用中的引擎會在重新啟動後生效。",
-      "restartNote": "切換引擎會在伺服器重新啟動後生效。"
+      "restartNote": "切換引擎會在伺服器重新啟動後生效。",
+      "webVersion": "WhatsApp Web 版本",
+      "webVersionNative": "自動（whatsapp-web.js 預設）",
+      "webVersionSource": {
+        "pinned": "透過 WWEBJS_WEB_VERSION 鎖定",
+        "auto": "自動解析，目前已知可用的版本",
+        "native": "whatsapp-web.js 原生自動選取"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -613,7 +621,8 @@
       "accessKey": "存取金鑰",
       "secretKey": "秘密金鑰",
       "endpoint": "自訂端點（選填）",
-      "endpointHint": "適用於 MinIO 或其他兼容 S3 的服務"
+      "endpointHint": "適用於 MinIO 或其他兼容 S3 的服務",
+      "s3Unreachable": "S3（無法連線）"
     },
     "statusLabels": {
       "connected": "已連線",
@@ -638,6 +647,22 @@
     },
     "toasts": {
       "saveFailed": "儲存失敗"
+    },
+    "envPinNote": "已由環境變數鎖定 — 這是正在運行的值；在取消設定該變數之前，儀表板的變更不會生效。",
+    "migration": {
+      "title": "請注意 — 此操作會更改資料後端",
+      "dbWarning": "新資料庫會以空白狀態啟動。請立即下載目前資料的備份（趁仍在舊資料庫時），然後在重新啟動後還原。",
+      "storageWarning": "現有的媒體檔案不會自動移至新的儲存後端；它們會保留在舊位置。",
+      "downloadBackup": "請先下載備份",
+      "backupTitle": "資料備份與還原",
+      "backupHint": "在切換資料庫前，請將所有資料匯出為 JSON，然後在切換後再匯入。備份以明文包含 webhook 密鑰及代理憑證 — 請妥善保存，並在還原後刪除。",
+      "export": "匯出資料",
+      "import": "匯入資料",
+      "exportFailed": "無法匯出資料",
+      "importFailed": "無法匯入資料",
+      "importOk": "資料已匯入",
+      "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",
+      "invalidFile": "該檔案並非有效的 OpenWA 資料備份。"
     }
   },
   "plugins": {

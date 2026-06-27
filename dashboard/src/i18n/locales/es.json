@@ -173,7 +173,8 @@
       "sent": "Enviados",
       "received": "Recibidos",
       "messages": "Mensajes",
-      "empty": "Sin actividad de mensajes en este período."
+      "empty": "Sin actividad de mensajes en este período.",
+      "error": "No se pudieron cargar las analíticas de mensajes. Revisa los registros del servidor."
     }
   },
   "sessionStatus": {
@@ -577,7 +578,14 @@
       "sessionDataPath": "Ruta de datos de sesión",
       "browserArgs": "Argumentos del navegador",
       "noBrowser": "Este motor se conecta por WebSocket: no tiene navegador, por lo que no hay ajustes de modo headless ni de argumentos del navegador. El motor activo se aplica tras reiniciar.",
-      "restartNote": "Cambiar el motor surte efecto tras reiniciar el servidor."
+      "restartNote": "Cambiar el motor surte efecto tras reiniciar el servidor.",
+      "webVersion": "Compilación de WhatsApp Web",
+      "webVersionNative": "automático (predeterminado de whatsapp-web.js)",
+      "webVersionSource": {
+        "pinned": "fijado mediante WWEBJS_WEB_VERSION",
+        "auto": "resuelto automáticamente, compilación estable conocida actual",
+        "native": "selección automática nativa de whatsapp-web.js"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -613,7 +621,8 @@
       "accessKey": "Clave de acceso",
       "secretKey": "Clave secreta",
       "endpoint": "Endpoint personalizado (opcional)",
-      "endpointHint": "Para MinIO u otros servicios compatibles con S3"
+      "endpointHint": "Para MinIO u otros servicios compatibles con S3",
+      "s3Unreachable": "S3 (inaccesible)"
     },
     "statusLabels": {
       "connected": "Conectado",
@@ -638,6 +647,22 @@
     },
     "toasts": {
       "saveFailed": "Error al guardar"
+    },
+    "envPinNote": "Fijado por una variable de entorno: este es el valor en ejecución; los cambios del panel no se aplicarán hasta que esa variable se elimine.",
+    "migration": {
+      "title": "Atención: esto cambia el backend de datos",
+      "dbWarning": "La nueva base de datos comienza vacía. Descarga ahora una copia de seguridad de tus datos actuales (mientras sigues en la base de datos anterior) y luego restáurala después del reinicio.",
+      "storageWarning": "Los archivos multimedia existentes no se trasladan automáticamente al nuevo backend de almacenamiento; permanecerán en la ubicación anterior.",
+      "downloadBackup": "Descargar copia de seguridad primero",
+      "backupTitle": "Copia de seguridad y restauración de datos",
+      "backupHint": "Exporta todos los datos como JSON antes de cambiar de base de datos y luego impórtalos tras el cambio. La copia de seguridad contiene secretos de webhook y credenciales de proxy en texto plano: guárdala de forma segura y elimínala después de restaurarla.",
+      "export": "Exportar datos",
+      "import": "Importar datos",
+      "exportFailed": "No se pudieron exportar los datos",
+      "importFailed": "No se pudieron importar los datos",
+      "importOk": "Datos importados",
+      "importConfirm": "La importación REEMPLAZARÁ todos los datos actuales con la copia de seguridad ({{rows}} filas). Esto no se puede deshacer. ¿Continuar?",
+      "invalidFile": "Ese archivo no es una copia de seguridad de datos válida de OpenWA."
     }
   },
   "plugins": {
