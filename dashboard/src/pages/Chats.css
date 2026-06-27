@@ -1018,3 +1018,33 @@
   background: #202c33;
   border-color: #2f3b43;
 }
+
+/* Inline code inside a message body. */
+.chats-page .message-text code,
+.chats-page .quote-body code {
+  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+/* Code block. */
+.chats-page .message-text pre {
+  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  padding: 0.5em 0.75em;
+  border-radius: 6px;
+  margin: 0.25em 0;
+  overflow-x: auto;
+}
+
+.chats-page .message-text pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* Clickable photo cue. */
+.chats-page .chat-image-media {
+  cursor: zoom-in;
+}
+
