@@ -96,15 +96,15 @@ const msg = (over: Partial<ChatMessageView> = {}): ChatMessageView => ({
 });
 
 test('mergeOrAppend appends when id is new', () => {
-  const before = [msg({ id: 'm-1' })];
-  const after = mergeOrAppend(before, msg({ id: 'm-2', body: 'world' }));
+  const before = [msg({ id: 'm-1', waMessageId: 'wa-1' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-2', waMessageId: 'wa-2', body: 'world' }));
   assert.equal(after.length, 2);
   assert.equal(after[1].body, 'world');
 });
 
 test('mergeOrAppend replaces in place when id matches', () => {
-  const before = [msg({ id: 'm-1', body: 'old' }), msg({ id: 'm-2' })];
-  const after = mergeOrAppend(before, msg({ id: 'm-1', body: 'new' }));
+  const before = [msg({ id: 'm-1', waMessageId: 'wa-1', body: 'old' }), msg({ id: 'm-2', waMessageId: 'wa-2' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-1', waMessageId: 'wa-1', body: 'new' }));
   assert.equal(after.length, 2);
   assert.equal(after[0].body, 'new');
   assert.equal(after[1].id, 'm-2');
@@ -120,9 +120,16 @@ test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but 
   assert.equal(after[0].body, 'live');
 });
 
+test('mergeOrAppend keeps two distinct optimistic temps (no waMessageId) separate', () => {
+  // Temp placeholders have no waMessageId; they must not collapse into each other.
+  const before = [msg({ id: 'temp_1', waMessageId: undefined })];
+  const after = mergeOrAppend(before, msg({ id: 'temp_2', waMessageId: undefined }));
+  assert.equal(after.length, 2);
+});
+
 test('mergeOrAppend does not mutate the input array', () => {
-  const before = [msg({ id: 'm-1' })];
-  const after = mergeOrAppend(before, msg({ id: 'm-2' }));
+  const before = [msg({ id: 'm-1', waMessageId: 'wa-1' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-2', waMessageId: 'wa-2' }));
   assert.notEqual(after, before);
   assert.equal(before.length, 1);
 });

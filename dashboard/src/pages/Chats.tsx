@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -15,6 +15,7 @@ import {
   X,
   CornerUpLeft,
   Trash2,
+  ChevronDown,
 } from 'lucide-react';
 import {
   sessionApi,
@@ -36,9 +37,15 @@ import {
   messagesQueryKey,
 } from '../hooks/useChatMessages';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
+import { isNearTop, anchorScrollTopAfterPrepend } from '../utils/scrollDecision';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import './Chats.css';
+
+// Client-side render windowing: how many of the most-recent loaded messages to render on open, and how
+// many more to reveal each time the user scrolls near the top. Keeps the DOM small on large chats.
+const MESSAGES_WINDOW_SIZE = 30;
+const MESSAGES_WINDOW_STEP = 30;
 
 type MessageMedia = { mimetype: string; filename?: string; data?: string };
 
@@ -143,8 +150,60 @@ export function Chats() {
   // chat has any message (doesn't toggle per append) and covers both the
   // first-fetch resolution and a WS-driven first message on a previously-empty
   // chat. `loadingMessages` alone would miss the latter case.
-  const { containerRef: messagesContainerRef, onMessageAppended } =
-    useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+  const {
+    containerRef: messagesContainerRef,
+    onScroll: onScrollSavePosition,
+    onMessageAppended,
+    showJumpToBottom,
+    scrollToBottom,
+  } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+
+  // Client-side windowing. useChatMessages already loads the full recent thread (DB + engine history,
+  // BOTH directions). To keep large chats fast we only RENDER the most recent `visibleCount` messages
+  // and reveal older ones as the user scrolls near the top — no extra fetches, with scroll anchoring so
+  // the view doesn't jump. (Reaching back beyond the loaded thread is a future backend-paging concern;
+  // the DB stores only incoming messages, so older outgoing must keep coming from the engine history.)
+  const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_SIZE);
+  const pendingAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
+
+  // Reset the render window when the active chat changes.
+  useEffect(() => {
+    setVisibleCount(MESSAGES_WINDOW_SIZE);
+    pendingAnchorRef.current = null;
+  }, [activeChat?.id]);
+
+  const visibleMessages = useMemo(
+    () => messages.slice(Math.max(0, messages.length - visibleCount)),
+    [messages, visibleCount],
+  );
+
+  // Reveal an older slice when the user nears the top. Arm the anchor first so the layout effect below
+  // keeps the reading position once the older messages mount (content grows above the viewport).
+  const revealOlder = useCallback(() => {
+    if (visibleCount >= messages.length) return;
+    const el = messagesContainerRef.current;
+    pendingAnchorRef.current = { prevTop: el?.scrollTop ?? 0, prevHeight: el?.scrollHeight ?? 0 };
+    setVisibleCount(c => Math.min(c + MESSAGES_WINDOW_STEP, messages.length));
+  }, [visibleCount, messages.length, messagesContainerRef]);
+
+  // Compose the container's scroll handler: keep the hook's position-save + jump-button logic, and
+  // reveal the next older slice when the user nears the top.
+  const onMessagesScroll = useCallback(() => {
+    onScrollSavePosition();
+    const el = messagesContainerRef.current;
+    if (el && isNearTop(el.scrollTop)) revealOlder();
+  }, [onScrollSavePosition, revealOlder, messagesContainerRef]);
+
+  // After the window grows, restore the reading position — content grew above the viewport, so shift
+  // scrollTop by the same amount. Keyed on `visibleCount` so realtime appends (which grow `messages` at
+  // the bottom) don't trigger it.
+  useLayoutEffect(() => {
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) return;
+    pendingAnchorRef.current = null;
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = anchorScrollTopAfterPrepend(anchor.prevTop, anchor.prevHeight, el.scrollHeight);
+  }, [visibleCount, messagesContainerRef]);
 
   // Popular emojis
   const popularEmojis = ['😀', '😂', '👍', '❤️', '🔥', '👏', '🙏', '🎉', '💡', '🤔', '😅', '😍', '😊', '😭', '😎', '😜', '🚀', '✨'];
@@ -231,9 +290,17 @@ export function Chats() {
         },
       };
 
-      // Always write to the React Query cache for this message's session — keeps non-active chats
-      // up to date so re-opening them shows fresh data without a refetch.
-      appendMessage(event.sessionId, newMsg.chatId, mappedMessage);
+      // Only update the cache for chats already loaded into it. Seeding a brand-new slice from a
+      // single live message would — with staleTime:Infinity in useChatMessages — make the next open
+      // of that chat treat the 1-message slice as fresh and skip fetching its real DB/engine history,
+      // truncating the thread until gcTime evicts it. For never-opened chats we skip the write; the
+      // next open runs queryFn and backfills the full thread. (The sidebar list still updates below.)
+      const cached = queryClient.getQueryData<ChatMessageView[]>(
+        messagesQueryKey(event.sessionId, newMsg.chatId),
+      );
+      if (cached !== undefined) {
+        appendMessage(event.sessionId, newMsg.chatId, mappedMessage);
+      }
 
       // If the message belongs to the currently visible chat, mark-as-read and run the scroll heuristic.
       if (activeChat && newMsg.chatId === activeChat.id) {
@@ -263,7 +330,7 @@ export function Chats() {
         return updatedChats;
       });
     },
-    [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended],
+    [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended, queryClient],
   );
 
   const handleIncomingMessageAck = useCallback(
@@ -635,7 +702,9 @@ export function Chats() {
   const imageMedia = useMemo<LightboxItem[]>(
     () =>
       messages
-        .filter(m => m.type === 'image' && Boolean(getMediaSrc(m.metadata?.media)))
+        // Stickers render with the same zoom-in image affordance + lightbox onClick as images, so
+        // include them here too — otherwise the findIndex below misses and the click is a no-op.
+        .filter(m => (m.type === 'image' || m.type === 'sticker') && Boolean(getMediaSrc(m.metadata?.media)))
         .map(m => ({
           id: m.id,
           url: getMediaSrc(m.metadata?.media),
@@ -780,8 +849,10 @@ export function Chats() {
                   </div>
                 </header>
 
-                {/* Messages body */}
-                <div className="room-messages" ref={messagesContainerRef}>
+                {/* Messages body. Wrapped so the floating jump-to-bottom button anchors to the
+                    bottom-right of the scroll area instead of scrolling with the thread. */}
+                <div className="room-messages-area">
+                <div className="room-messages" ref={messagesContainerRef} onScroll={onMessagesScroll}>
                   {loadingMessages ? (
                     <div className="messages-loading">
                       <Loader2 className="animate-spin" size={32} />
@@ -798,7 +869,7 @@ export function Chats() {
                       <span>{t('chats.noMessagesInChat')}</span>
                     </div>
                   ) : (
-                    messages.map(msg => {
+                    visibleMessages.map(msg => {
                       const isMe = msg.direction === 'outgoing';
                       const formattedTime = formatTime(
                         msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000),
@@ -976,6 +1047,18 @@ export function Chats() {
                       );
                     })
                   )}
+                </div>
+                {showJumpToBottom && (
+                  <button
+                    type="button"
+                    className="jump-to-bottom-btn"
+                    onClick={scrollToBottom}
+                    aria-label={t('chats.scrollToBottom')}
+                    title={t('chats.scrollToBottom')}
+                  >
+                    <ChevronDown size={22} />
+                  </button>
+                )}
                 </div>
 
                 {/* Attachment preview banner */}

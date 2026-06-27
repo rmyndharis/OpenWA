@@ -92,3 +92,27 @@ test('marker without outside boundary stays literal (no over-formatting)', () =>
     { type: 'text', value: 'word*bold*end' },
   ]);
 });
+
+// XSS inertness: this formatter is the one place untrusted, attacker-controlled message bodies are
+// rendered. It must only ever emit text/code *values* (which React escapes) and format containers —
+// never markup. These pin that invariant so a future refactor can't silently start interpreting HTML.
+test('HTML in a body is a single literal text node, never markup', () => {
+  assert.deepEqual(parseMessageBody('<script>alert(1)</script>'), [
+    text('<script>alert(1)</script>'),
+  ]);
+});
+
+test('formatting markers wrap raw HTML as literal text, not parsed markup', () => {
+  // The bold node carries the literal '<b onmouseover=x>' as its text child — no attributes escape.
+  assert.deepEqual(parseMessageBody('*<b onmouseover=x>*'), [
+    { type: 'bold', children: [text('<b onmouseover=x>')] },
+  ]);
+});
+
+test('a javascript: URL body stays a plain text node (no link node emitted)', () => {
+  // The formatter never produces link nodes — link rendering is linkify's job, and it ignores the
+  // javascript: scheme. Pin that the parser leaves it as inert text.
+  assert.deepEqual(parseMessageBody('javascript:alert(1)'), [
+    text('javascript:alert(1)'),
+  ]);
+});

@@ -330,8 +330,19 @@
   font-family: monospace;
 }
 
+/* Non-scrolling positioned wrapper around the thread so the jump-to-bottom button can anchor to the
+   bottom-right of the visible scroll area (an absolute child of the scroller itself would scroll). */
+.chats-page .room-messages-area{
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
 .chats-page .room-messages{
   flex: 1;
+  min-height: 0;
   padding: 1.5rem;
   overflow-y: auto;
   display: flex;
@@ -339,6 +350,42 @@
   gap: 0.75rem;
   background-image: radial-gradient(var(--border) 1px, transparent 0);
   background-size: 24px 24px;
+}
+
+/* WhatsApp-style floating "jump to latest" button — shown only once scrolled up past a threshold.
+   Filled primary (green) circle with an explicit white chevron: colors are literal, not inherited
+   via currentColor, so the icon is guaranteed visible regardless of theme/cascade quirks. */
+.chats-page .jump-to-bottom-btn{
+  position: absolute;
+  right: 1.25rem;
+  bottom: 1rem;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary, #25d366);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  z-index: 5;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+/* Force the lucide chevron to a fixed size and an explicit white stroke (lucide paths inherit the
+   svg stroke), so it can never collapse to 0 or pick up an invisible inherited color. */
+.chats-page .jump-to-bottom-btn svg{
+  display: block;
+  width: 22px;
+  height: 22px;
+  stroke: #ffffff;
+}
+
+.chats-page .jump-to-bottom-btn:hover{
+  background: var(--primary-hover, #1da851);
+  transform: translateY(-1px);
 }
 
 .chats-page .messages-loading{
