@@ -663,7 +663,8 @@
       "importFailed": "No se pudieron importar los datos",
       "importOk": "Datos importados",
       "importConfirm": "La importación REEMPLAZARÁ todos los datos actuales con la copia de seguridad ({{rows}} filas). Esto no se puede deshacer. ¿Continuar?",
-      "invalidFile": "Ese archivo no es una copia de seguridad de datos válida de OpenWA."
+      "invalidFile": "Ese archivo no es una copia de seguridad de datos válida de OpenWA.",
+      "importTooLarge": "La copia de seguridad supera el límite de la solicitud. Aumenta BODY_SIZE_LIMIT en el servidor e inténtalo de nuevo."
     }
   },
   "plugins": {

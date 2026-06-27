@@ -663,7 +663,8 @@
       "importFailed": "無法匯入資料",
       "importOk": "資料已匯入",
       "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",
-      "invalidFile": "該檔案並非有效的 OpenWA 資料備份。"
+      "invalidFile": "該檔案並非有效的 OpenWA 資料備份。",
+      "importTooLarge": "備份超出請求大小限制。請在伺服器上調高 BODY_SIZE_LIMIT 後重試。"
     }
   },
   "plugins": {

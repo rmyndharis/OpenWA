@@ -116,6 +116,39 @@ export class StorageService {
     return this.s3Available;
   }
 
+  private lastS3Check = 0;
+  private s3CheckInFlight: Promise<void> | null = null;
+
+  /**
+   * Re-probe S3/MinIO reachability when it's currently marked unavailable — e.g. a bundled MinIO that
+   * came up AFTER the app booted (the init HeadBucket raced and latched false). Throttled (10s) and
+   * in-flight-deduped so the status endpoint can call it on every poll cheaply. Once available it
+   * stays available (no need to re-probe a healthy backend here).
+   */
+  async refreshS3Availability(): Promise<boolean> {
+    if (this.storageType !== 's3' || !this.s3Client || this.s3Available) return this.s3Available;
+    if (this.s3CheckInFlight) {
+      await this.s3CheckInFlight;
+      return this.s3Available;
+    }
+    const now = Date.now();
+    if (now - this.lastS3Check < 10_000) return this.s3Available;
+    this.lastS3Check = now;
+    this.s3CheckInFlight = (async () => {
+      try {
+        await this.s3Client!.send(new HeadBucketCommand({ Bucket: this.s3Bucket }));
+        this.s3Available = true;
+        this.logger.log(`S3 bucket '${this.s3Bucket}' is now reachable`);
+      } catch {
+        // still unreachable — leave s3Available false; a later poll retries after the throttle window
+      } finally {
+        this.s3CheckInFlight = null;
+      }
+    })();
+    await this.s3CheckInFlight;
+    return this.s3Available;
+  }
+
   async listFiles(): Promise<string[]> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       return this.listS3Files();

@@ -301,7 +301,8 @@ export class InfraController {
     const dbBuiltIn = running ? running.database && dbHost === 'postgres' : savedBuiltin.database;
     const redisBuiltIn = running ? running.cache && redisHost === 'redis' : savedBuiltin.cache;
     const storageBuiltIn = running ? running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
-    const s3Available = storageType === 's3' ? this.storageService.isS3Available() : undefined;
+    // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
+    const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 
     return {
       database: { connected: dbConnected, type: dbType, host: dbHost, builtIn: dbBuiltIn },

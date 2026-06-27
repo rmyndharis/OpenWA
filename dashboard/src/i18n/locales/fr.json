@@ -663,7 +663,8 @@
       "importFailed": "Impossible d'importer les données",
       "importOk": "Données importées",
       "importConfirm": "L'importation REMPLACERA toutes les données actuelles par la sauvegarde ({{rows}} lignes). Cette action est irréversible. Continuer ?",
-      "invalidFile": "Ce fichier n'est pas une sauvegarde de données OpenWA valide."
+      "invalidFile": "Ce fichier n'est pas une sauvegarde de données OpenWA valide.",
+      "importTooLarge": "La sauvegarde dépasse la limite de la requête. Augmentez BODY_SIZE_LIMIT sur le serveur, puis réessayez."
     }
   },
   "plugins": {

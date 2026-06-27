@@ -655,7 +655,7 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
       {} as never, // engineFactory
       { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      { isS3Available: () => false } as never, // storageService
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
       {} as never, // shutdownService
     );
 
@@ -678,7 +678,7 @@ describe('InfraController.getStatus storage (reads the real storage.localPath ke
       {} as never, // engineFactory
       { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      { isS3Available: () => false } as never, // storageService
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
       {} as never, // shutdownService
     );
   };

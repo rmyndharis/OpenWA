@@ -663,7 +663,8 @@
       "importFailed": "无法导入数据",
       "importOk": "数据已导入",
       "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
-      "invalidFile": "该文件不是有效的 OpenWA 数据备份。"
+      "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
+      "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
     }
   },
   "plugins": {

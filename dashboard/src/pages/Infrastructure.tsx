@@ -293,6 +293,9 @@ export function Infrastructure() {
               (dbConfig.type === 'postgres' && dbConfig.builtIn !== infraStatus.database.builtIn) ||
               dbExternalRetarget),
         );
+        // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
+        // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
+        // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
         setStorageSwitch(
           !!infraStatus &&
             (storageConfig.type !== infraStatus.storage.type ||
@@ -351,7 +354,16 @@ export function Infrastructure() {
       if (res.imported) toast.success(t('infrastructure.migration.importOk'));
       else toast.error(t('infrastructure.migration.importFailed'), (res.warnings || []).slice(0, 3).join('; ') || res.message);
     } catch (err) {
-      toast.error(t('infrastructure.migration.importFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+      // A large backup can exceed the request body cap (default 25mb) — give an actionable message
+      // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
+      const status = (err as { status?: number } | null)?.status;
+      const detail =
+        status === 413
+          ? t('infrastructure.migration.importTooLarge')
+          : err instanceof Error
+            ? err.message
+            : t('common.unknownError');
+      toast.error(t('infrastructure.migration.importFailed'), detail);
     } finally {
       setMigrating(false);
     }
