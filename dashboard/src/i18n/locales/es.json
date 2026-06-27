@@ -99,6 +99,9 @@
       "attachment": "Adjunto",
       "location": "Ubicación",
       "contact": "Contacto",
+      "call": "Llamada",
+      "callMissed": "Llamada perdida",
+      "callVideo": "Videollamada",
       "unsupported": "Mensaje no soportado"
     },
     "actions": {

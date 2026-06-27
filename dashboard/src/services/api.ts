@@ -140,6 +140,7 @@ export const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'call',
   'revoked',
   'unknown',
 ] as const;
@@ -166,6 +167,7 @@ export interface ChatMessage {
     media?: { mimetype: string; filename?: string; data?: string };
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    call?: { video: boolean; missed: boolean };
   };
 }
 
@@ -181,6 +183,8 @@ export interface EngineHistoryMessage {
   timestamp: number;
   fromMe?: boolean;
   media?: { mimetype: string; filename?: string; data?: string };
+  /** For `call` messages: video vs voice, and whether an incoming call went unanswered. */
+  call?: { video: boolean; missed: boolean };
 }
 
 export interface SendMediaPayload {

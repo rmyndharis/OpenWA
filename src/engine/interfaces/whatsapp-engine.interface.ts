@@ -51,6 +51,7 @@ export type MessageType =
   | 'sticker'
   | 'location'
   | 'contact'
+  | 'call'
   | 'revoked'
   | 'unknown';
 
@@ -87,6 +88,8 @@ export interface IncomingMessage {
   senderPhone?: string | null;
   /** Sender contact info, best-effort from the WhatsApp Web cache. Sync fields only (no network). */
   contact?: MessageContact;
+  /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
+  call?: { video: boolean; missed: boolean };
   media?: {
     mimetype: string;
     filename?: string;

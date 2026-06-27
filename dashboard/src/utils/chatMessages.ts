@@ -18,7 +18,10 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
     status: 'read',
     timestamp: h.timestamp,
     createdAt: new Date((h.timestamp ?? 0) * 1000).toISOString(),
-    metadata: h.media ? { media: h.media } : undefined,
+    metadata:
+      h.media || h.call
+        ? { ...(h.media ? { media: h.media } : {}), ...(h.call ? { call: h.call } : {}) }
+        : undefined,
   };
 }
 
@@ -45,6 +48,7 @@ export interface ChatMessageView extends ChatMessage {
     media?: MessageMedia;
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    call?: { video: boolean; missed: boolean };
   };
 }
 

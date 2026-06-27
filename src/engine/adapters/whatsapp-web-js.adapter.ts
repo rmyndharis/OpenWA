@@ -1315,6 +1315,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
+      if (msg.type === 'call_log') {
+        // The public Message wrapper doesn't surface call details; read them off the raw _data.
+        const d = (msg as unknown as { _data?: { isVideoCall?: boolean; callDuration?: number } })._data ?? {};
+        out.call = {
+          video: Boolean(d.isVideoCall),
+          // An incoming call with no recorded duration was never answered → a missed call.
+          missed: !out.fromMe && !d.callDuration,
+        };
+      }
       if (includeMedia && msg.hasMedia) {
         try {
           // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the response/heap.

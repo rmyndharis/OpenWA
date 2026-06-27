@@ -99,6 +99,9 @@
       "attachment": "Attachment",
       "location": "Location",
       "contact": "Contact",
+      "call": "Call",
+      "callMissed": "Missed call",
+      "callVideo": "Video call",
       "unsupported": "Unsupported message"
     },
     "actions": {

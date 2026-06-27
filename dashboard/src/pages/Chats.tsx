@@ -1034,6 +1034,15 @@ export function Chats() {
                               <LazyMediaPlaceholder label={label} onVisible={() => ensureMessageMedia(msg)} />
                             );
                           }
+                          if (msg.type === 'call') {
+                            const call = msg.metadata?.call;
+                            const callLabel = call?.video
+                              ? `📹 ${t('chats.media.callVideo')}`
+                              : call?.missed
+                                ? `📞 ${t('chats.media.callMissed')}`
+                                : `📞 ${t('chats.media.call')}`;
+                            return <div className="message-media-placeholder">{callLabel}</div>;
+                          }
                           if (msg.type === 'contact') {
                             return <div className="message-media-placeholder">👤 {t('chats.media.contact')}</div>;
                           }
