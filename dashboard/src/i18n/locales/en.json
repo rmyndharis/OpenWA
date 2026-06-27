@@ -173,7 +173,8 @@
       "sent": "Sent",
       "received": "Received",
       "messages": "Messages",
-      "empty": "No message activity in this period."
+      "empty": "No message activity in this period.",
+      "error": "Couldn't load message analytics. Check the server logs."
     }
   },
   "sessionStatus": {
@@ -577,7 +578,14 @@
       "sessionDataPath": "Session Data Path",
       "browserArgs": "Browser Arguments",
       "noBrowser": "This engine connects over WebSocket — it has no browser, so there are no headless or browser-argument settings. The active engine is applied after a restart.",
-      "restartNote": "Switching the engine takes effect after a server restart."
+      "restartNote": "Switching the engine takes effect after a server restart.",
+      "webVersion": "WhatsApp Web build",
+      "webVersionNative": "auto (whatsapp-web.js default)",
+      "webVersionSource": {
+        "pinned": "pinned via WWEBJS_WEB_VERSION",
+        "auto": "auto-resolved, current known-good build",
+        "native": "whatsapp-web.js native auto-select"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -601,6 +609,7 @@
     },
     "storage": {
       "title": "Storage Configuration",
+      "s3Unreachable": "S3 (unreachable)",
       "local": "Local Filesystem",
       "localDesc": "Store media files locally",
       "s3": "Amazon S3",
@@ -619,6 +628,22 @@
       "connected": "Connected",
       "disconnected": "Disconnected",
       "disabled": "Disabled"
+    },
+    "envPinNote": "Pinned by an environment variable — this is the running value; dashboard changes won't apply until that variable is unset.",
+    "migration": {
+      "title": "Heads up — this changes the data backend",
+      "dbWarning": "The new database starts empty. Download a backup of your current data now (while still on the old database), then restore it after the restart.",
+      "storageWarning": "Existing media files are not moved to the new storage backend automatically; they'll remain in the old location.",
+      "downloadBackup": "Download backup first",
+      "backupTitle": "Data backup & restore",
+      "backupHint": "Export all data as JSON before switching databases, then import it after the switch. The backup contains webhook secrets and proxy credentials in plaintext — store it securely and delete it after restoring.",
+      "export": "Export data",
+      "import": "Import data",
+      "exportFailed": "Couldn't export data",
+      "importFailed": "Couldn't import data",
+      "importOk": "Data imported",
+      "importConfirm": "Importing will REPLACE all current data with the backup ({{rows}} rows). This cannot be undone. Continue?",
+      "invalidFile": "That file isn't a valid OpenWA data backup."
     },
     "restart": {
       "idleTitle": "Configuration saved",

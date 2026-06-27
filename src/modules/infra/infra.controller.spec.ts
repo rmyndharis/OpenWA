@@ -457,6 +457,31 @@ describe('InfraController.importData round-trips export-data (no silent message/
     expect((await ds.getRepository(Message).findOneByOrFail({ id: 'm1' })).body).toBe('keep me');
     expect(await ds.getRepository(Session).findOneBy({ id: 's2' })).toBeNull();
   });
+
+  it('refuses an empty/garbage backup — does not wipe existing data (#488 review must-fix)', async () => {
+    await seedSession('s1');
+    await ds.getRepository(Message).save(
+      ds.getRepository(Message).create({
+        id: 'm1',
+        sessionId: 's1',
+        chatId: 'c1',
+        from: 'a',
+        to: 'b',
+        body: 'keep me',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.DELIVERED,
+      }),
+    );
+
+    // A wrong/empty file (no rows to restore) must NOT commit the all-rows DELETE and report success.
+    const res = await controller.importData({ tables: {} });
+
+    expect(res.imported).toBe(false);
+    expect(res.warnings.length).toBeGreaterThan(0);
+    expect(await ds.getRepository(Session).count()).toBe(1);
+    expect(await ds.getRepository(Message).count()).toBe(1);
+  });
 });
 
 describe('InfraController.import/export preserves every data-DB table', () => {
@@ -627,11 +652,11 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
       config as never,
       ds as never,
       ds as never,
-      {} as never,
-      {} as never,
+      {} as never, // engineFactory
+      { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      {} as never,
-      {} as never,
+      { isS3Available: () => false } as never, // storageService
+      {} as never, // shutdownService
     );
 
     const status = await controller.getStatus();
@@ -650,11 +675,11 @@ describe('InfraController.getStatus storage (reads the real storage.localPath ke
       config as never,
       ds as never,
       ds as never,
-      {} as never,
-      {} as never,
+      {} as never, // engineFactory
+      { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      {} as never,
-      {} as never,
+      { isS3Available: () => false } as never, // storageService
+      {} as never, // shutdownService
     );
   };
 

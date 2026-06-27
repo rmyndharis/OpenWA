@@ -197,7 +197,9 @@ export class StatsService {
       .addSelect('COUNT(*)', 'messageCount')
       .where('m.createdAt >= :since', { since })
       .groupBy('m.chatId')
-      .orderBy('messageCount', 'DESC')
+      // Order by the aggregate expression, not the "messageCount" alias: Postgres folds an unquoted
+      // ORDER BY messageCount to lowercase and 42703s against the quoted alias (SQLite tolerated it).
+      .orderBy('COUNT(*)', 'DESC')
       .limit(10)
       .getRawMany<{ chatId: string; messageCount: string }>();
 

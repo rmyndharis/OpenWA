@@ -70,19 +70,6 @@
   z-index: 2;
 }
 
-.dashboard .stat-watermark{
-  position: absolute;
-  right: -10px;
-  bottom: -15px;
-  width: 96px;
-  height: 96px;
-  opacity: 0.04;
-  color: var(--text-primary);
-  transform: rotate(-15deg);
-  pointer-events: none;
-  z-index: 1;
-}
-
 .dashboard .stat-label{
   font-size: 0.75rem;
   font-weight: 600;

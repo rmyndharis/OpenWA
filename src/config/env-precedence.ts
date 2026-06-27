@@ -12,10 +12,33 @@
 /**
  * Keys the bundled compose forwards with `- KEY=${KEY:-}` (rendering blank when unset) AND the
  * dashboard saves to `data/.env.generated`. A blank forward of one of these would shadow the
- * dashboard's value, so each is cleared when blank. Only add a key that meets BOTH conditions —
- * `REDIS_PASSWORD`/`S3_*` are dashboard-managed but not blank-forwarded by compose, so they don't belong.
+ * dashboard's value, so each is cleared when blank — letting a dashboard switch (database, storage,
+ * redis, engine) actually apply at runtime while a real host value still pins. Only add a key that
+ * meets BOTH conditions (blank-forwarded by compose AND dashboard-managed); keep this list in sync
+ * with the `${KEY:-}` forwards in docker-compose.yml.
  */
-export const BLANK_SHADOWED_ENV_KEYS: string[] = ['ENGINE_TYPE', 'DATABASE_PASSWORD'];
+export const BLANK_SHADOWED_ENV_KEYS: string[] = [
+  'ENGINE_TYPE',
+  // Database selection + connection details (#488)
+  'DATABASE_TYPE',
+  'DATABASE_HOST',
+  'DATABASE_PORT',
+  'DATABASE_USERNAME',
+  'DATABASE_NAME',
+  'DATABASE_PASSWORD',
+  // Storage selection + S3 details (#488)
+  'STORAGE_TYPE',
+  'STORAGE_LOCAL_PATH',
+  'S3_BUCKET',
+  'S3_ENDPOINT',
+  'S3_REGION',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+  // Redis selection + connection details (#488)
+  'REDIS_ENABLED',
+  'REDIS_HOST',
+  'REDIS_PORT',
+];
 
 export function clearBlankEnv(env: NodeJS.ProcessEnv, keys: string[]): void {
   for (const key of keys) {

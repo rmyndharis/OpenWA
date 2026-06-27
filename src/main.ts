@@ -118,7 +118,9 @@ async function bootstrap() {
     nodeEnv: process.env.NODE_ENV,
     databaseType: process.env.DATABASE_TYPE,
     databasePassword: process.env.DATABASE_PASSWORD,
+    postgresBuiltIn: process.env.POSTGRES_BUILTIN,
     storageType: process.env.STORAGE_TYPE,
+    minioBuiltIn: process.env.MINIO_BUILTIN,
     // Mirror storage.service's canonical-with-legacy fallback so the guard inspects the var the app
     // actually uses (it reads S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY first).
     s3AccessKey: process.env.S3_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY,

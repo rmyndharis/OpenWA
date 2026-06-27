@@ -8,6 +8,7 @@ import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isPathWithin } from '../../common/utils/path-safety';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
+import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
 import { DockerService } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
@@ -19,15 +20,27 @@ import { randomUUID } from 'crypto';
 import * as dotenv from 'dotenv';
 
 interface InfraStatus {
-  database: { connected: boolean; type: string; host: string };
-  redis: { enabled: boolean; connected: boolean; host: string; port: number };
+  // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
+  // service (detected live from the labeled container), not merely the saved intent. Falls back to the
+  // saved flag when Docker is unavailable. (#488)
+  database: { connected: boolean; type: string; host: string; builtIn: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
     enabled: boolean;
     messages: { pending: number; completed: number; failed: number };
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string };
-  engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
+  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  engine: {
+    type: string;
+    headless: boolean;
+    sessionDataPath: string;
+    browserArgs: string;
+    // whatsapp-web.js only: the actual WhatsApp Web build in use (distinct from the library version),
+    // and how it was chosen. Omitted for other engines (e.g. baileys). (#488)
+    webVersion?: string | null;
+    webVersionSource?: 'pinned' | 'auto' | 'native';
+  };
 }
 
 interface SaveConfigDto {
@@ -256,6 +269,19 @@ export class InfraController {
     const storageBucket = this.configService.get<string>('storage.s3.bucket');
 
     const engineType = this.configService.get<string>('engine.type', 'whatsapp-web.js');
+    // whatsapp-web.js only: surface the actual WhatsApp Web build (not the library version) so the
+    // dashboard shows which build is running. Trigger the auto-resolve so the panel is populated even
+    // before a session starts; the result is cached, so this is a one-time fetch. (#488)
+    let webVersion: string | null | undefined;
+    let webVersionSource: 'pinned' | 'auto' | 'native' | undefined;
+    if (engineType === 'whatsapp-web.js') {
+      if (getEffectiveWebVersionInfo().source === 'auto') {
+        await resolveCurrentWebVersion().catch(() => undefined);
+      }
+      const info = getEffectiveWebVersionInfo();
+      webVersion = info.version;
+      webVersionSource = info.source;
+    }
     // configuration.ts nests these under engine.puppeteer.{headless,args}; the old flat
     // engine.headless / engine.browserArgs keys never existed, so status always reported defaults.
     const engineHeadless = this.configService.get<boolean>('engine.puppeteer.headless', true) ?? true;
@@ -263,9 +289,29 @@ export class InfraController {
     const browserArgs =
       this.configService.get<string[]>('engine.puppeteer.args')?.join(' ') || '--no-sandbox --disable-gpu';
 
+    // Built-in detection: prefer the actually-running bundled container as truth (so a stopped/missing
+    // container, or a host-pinned external host, reads as NOT built-in), and require the app to be
+    // pointed at the bundled service. Fall back to the saved *_BUILTIN intent when Docker is
+    // unreachable (bare-npm / socket-less) so the toggles don't spuriously flip off. (#488)
+    const s3Endpoint = this.configService.get<string>('storage.s3.endpoint');
+    const running = this.dockerService.isDockerAvailable()
+      ? await this.dockerService.getRunningBuiltinServices()
+      : null;
+    const savedBuiltin = this.readSavedBuiltinFlags();
+    const dbBuiltIn = running ? running.database && dbHost === 'postgres' : savedBuiltin.database;
+    const redisBuiltIn = running ? running.cache && redisHost === 'redis' : savedBuiltin.cache;
+    const storageBuiltIn = running ? running.storage && s3Endpoint === 'http://minio:9000' : savedBuiltin.storage;
+    const s3Available = storageType === 's3' ? this.storageService.isS3Available() : undefined;
+
     return {
-      database: { connected: dbConnected, type: dbType, host: dbHost },
-      redis: { enabled: redisEnabled, connected: redisConnected, host: redisHost, port: redisPort },
+      database: { connected: dbConnected, type: dbType, host: dbHost, builtIn: dbBuiltIn },
+      redis: {
+        enabled: redisEnabled,
+        connected: redisConnected,
+        host: redisHost,
+        port: redisPort,
+        builtIn: redisBuiltIn,
+      },
       queue: {
         enabled: queueEnabled,
         messages: { pending: 0, completed: 0, failed: 0 },
@@ -275,9 +321,34 @@ export class InfraController {
         type: storageType,
         path: storagePath,
         ...(storageType === 's3' && storageBucket ? { bucket: storageBucket } : {}),
+        builtIn: storageBuiltIn,
+        ...(storageType === 's3' ? { s3Available } : {}),
       },
-      engine: { type: engineType, headless: engineHeadless, sessionDataPath, browserArgs },
+      engine: {
+        type: engineType,
+        headless: engineHeadless,
+        sessionDataPath,
+        browserArgs,
+        ...(engineType === 'whatsapp-web.js' ? { webVersion, webVersionSource } : {}),
+      },
     };
+  }
+
+  /** Saved built-in intent flags from data/.env.generated — the fallback when Docker isn't reachable. */
+  private readSavedBuiltinFlags(): { database: boolean; cache: boolean; storage: boolean } {
+    try {
+      const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
+      const saved: Record<string, string> = fs.existsSync(envPath)
+        ? dotenv.parse(fs.readFileSync(envPath, 'utf8'))
+        : {};
+      return {
+        database: saved.POSTGRES_BUILTIN === 'true',
+        cache: saved.REDIS_BUILTIN === 'true',
+        storage: saved.MINIO_BUILTIN === 'true',
+      };
+    } catch {
+      return { database: false, cache: false, storage: false };
+    }
   }
 
   @Get('engines')
@@ -564,12 +635,20 @@ export class InfraController {
 
     // If profiles are specified, orchestrate Docker containers
     if (this.dockerService.isDockerAvailable()) {
+      // Remove only the profiles the Save flow explicitly asked to remove, and never one we're about to
+      // (re)start. We deliberately do NOT infer teardown from the saved *_BUILTIN flag: the default
+      // data/.env.generated carries POSTGRES_BUILTIN=false, so a bare compose-profile restart would
+      // otherwise tear down the very backend the app is running on. (Known minor limitation: switching
+      // away from a built-in backend and then reloading the page before restarting can leave the old
+      // container running until the next explicit change.)
+      const toRemove = profilesToRemove.filter(p => !profiles.includes(p));
+
       // First, remove containers for disabled services
-      if (profilesToRemove.length > 0) {
-        this.logger.log('Removing disabled profiles...');
+      if (toRemove.length > 0) {
+        this.logger.log('Removing disabled profiles...', { toRemove });
         removalResult = { removed: [], errors: [] };
 
-        for (const profile of profilesToRemove) {
+        for (const profile of toRemove) {
           try {
             const success = await this.dockerService.removeService(profile);
             if (success) {
@@ -1006,6 +1085,18 @@ export class InfraController {
       if (warnings.length > 0) {
         await queryRunner.rollbackTransaction();
         return { imported: false, counts, warnings };
+      }
+
+      // A wrong/empty/garbage backup file restores zero rows but the DELETE already ran — committing
+      // would silently WIPE the database and report success. Refuse it and roll back instead. (#488 review)
+      const totalRestored = Object.values(counts).reduce((sum, n) => sum + n, 0);
+      if (totalRestored === 0) {
+        await queryRunner.rollbackTransaction();
+        return {
+          imported: false,
+          counts,
+          warnings: ['Backup contained no rows to restore; refused to replace existing data. Check the file.'],
+        };
       }
 
       await queryRunner.commitTransaction();

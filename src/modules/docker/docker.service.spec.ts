@@ -3,6 +3,34 @@ import { DockerService } from './docker.service';
 // Prevent actual Docker connections on module init during tests
 jest.mock('dockerode');
 
+describe('DockerService.getRunningBuiltinServices', () => {
+  const container = (name: string, service: string, state: string) => ({
+    id: name,
+    name,
+    state,
+    status: state,
+    labels: { 'com.openwa.service': service, 'com.openwa.builtin': 'true' },
+  });
+
+  it('reports a service built-in only when its labeled container is actually running', async () => {
+    const service = new DockerService();
+    jest
+      .spyOn(service, 'listContainers')
+      .mockResolvedValue([
+        container('openwa-postgres', 'database', 'running'),
+        container('openwa-redis', 'cache', 'exited'),
+      ]);
+
+    expect(await service.getRunningBuiltinServices()).toEqual({ database: true, cache: false, storage: false });
+  });
+
+  it('reports all false when no bundled containers are present (e.g. Docker unavailable)', async () => {
+    const service = new DockerService();
+    jest.spyOn(service, 'listContainers').mockResolvedValue([]);
+    expect(await service.getRunningBuiltinServices()).toEqual({ database: false, cache: false, storage: false });
+  });
+});
+
 describe('DockerService.buildDockerOptions', () => {
   let service: DockerService;
   const originalDockerHost = process.env.DOCKER_HOST;

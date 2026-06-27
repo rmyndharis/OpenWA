@@ -7,9 +7,9 @@ import {
   isSupportedProxyUrl,
   loadRemoteMedia,
   resolveAuthTimeoutMs,
-  resolveWebVersionPin,
   wwebjsAckToDeliveryStatus,
 } from './whatsapp-web-js.adapter';
+import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
@@ -619,28 +619,27 @@ describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () =>
   });
 });
 
-describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
+describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve current WA-Web build)', () => {
   const orig = { v: process.env.WWEBJS_WEB_VERSION, p: process.env.WWEBJS_WEB_VERSION_REMOTE_PATH };
+  const fetcherFor = (currentVersion: unknown, ok = true) =>
+    jest.fn(() =>
+      Promise.resolve({ ok, status: ok ? 200 : 500, json: () => Promise.resolve({ currentVersion }) }),
+    ) as unknown as typeof fetch;
+
+  beforeEach(() => __resetWebVersionCache());
   afterEach(() => {
+    __resetWebVersionCache();
     if (orig.v === undefined) delete process.env.WWEBJS_WEB_VERSION;
     else process.env.WWEBJS_WEB_VERSION = orig.v;
     if (orig.p === undefined) delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
     else process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = orig.p;
   });
 
-  it('returns undefined (default auto-version) when unset / "latest" / "off" / "auto"', () => {
-    delete process.env.WWEBJS_WEB_VERSION;
-    expect(resolveWebVersionPin()).toBeUndefined();
-    for (const value of ['latest', 'off', 'auto']) {
-      process.env.WWEBJS_WEB_VERSION = value;
-      expect(resolveWebVersionPin()).toBeUndefined();
-    }
-  });
-
-  it('pins a remote webVersionCache from the version when set', () => {
+  it('pins the explicit version without any network call when set', async () => {
     delete process.env.WWEBJS_WEB_VERSION_REMOTE_PATH;
     process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
-    expect(resolveWebVersionPin()).toEqual({
+    const fetcher = fetcherFor('SHOULD-NOT-BE-USED');
+    expect(await resolveWebVersionPin(fetcher)).toEqual({
       webVersion: '2.3000.1041203030-alpha',
       webVersionCache: {
         type: 'remote',
@@ -648,12 +647,95 @@ describe('resolveWebVersionPin (#251 — opt-in WA-Web version pin)', () => {
           'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041203030-alpha.html',
       },
     });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it('honors a custom WWEBJS_WEB_VERSION_REMOTE_PATH template ({version} placeholder)', () => {
+  it('honors a custom WWEBJS_WEB_VERSION_REMOTE_PATH template ({version} placeholder)', async () => {
     process.env.WWEBJS_WEB_VERSION = '2.9999.0';
     process.env.WWEBJS_WEB_VERSION_REMOTE_PATH = 'https://cdn.example.com/wa/{version}.html';
-    expect(resolveWebVersionPin()?.webVersionCache.remotePath).toBe('https://cdn.example.com/wa/2.9999.0.html');
+    expect((await resolveWebVersionPin(fetcherFor('x')))?.webVersionCache.remotePath).toBe(
+      'https://cdn.example.com/wa/2.9999.0.html',
+    );
+  });
+
+  it('"off" disables pinning (native whatsapp-web.js auto-select) with no network call', async () => {
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    const fetcher = fetcherFor('x');
+    expect(await resolveWebVersionPin(fetcher)).toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'auto', 'latest'])(
+    'auto-resolves the current wa-version build when WWEBJS_WEB_VERSION=%p (the #488 fix)',
+    async value => {
+      if (value === '') delete process.env.WWEBJS_WEB_VERSION;
+      else process.env.WWEBJS_WEB_VERSION = value;
+      const pin = await resolveWebVersionPin(fetcherFor('2.3000.1042251103-alpha'));
+      expect(pin?.webVersion).toBe('2.3000.1042251103-alpha');
+      expect(pin?.webVersionCache.remotePath).toContain('2.3000.1042251103-alpha.html');
+    },
+  );
+
+  it('falls back to native auto-select (undefined) when the wa-version fetch fails', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined();
+  });
+
+  it('caches the resolved current version (fetches once across calls)', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    const fetcher = fetcherFor('2.3000.1042251103-alpha');
+    await resolveWebVersionPin(fetcher);
+    await resolveWebVersionPin(fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT cache a transient failure — a later call retries and resolves (#488 review must-fix)', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined(); // transient failure, not cached
+    const ok = fetcherFor('2.3000.1042251103-alpha');
+    const pin = await resolveWebVersionPin(ok); // retries
+    expect(pin?.webVersion).toBe('2.3000.1042251103-alpha');
+    expect(ok).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedupes concurrent in-flight resolves into a single fetch', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    const fetcher = fetcherFor('2.3000.1042251103-alpha');
+    const [a, b] = await Promise.all([resolveWebVersionPin(fetcher), resolveWebVersionPin(fetcher)]);
+    expect(a?.webVersion).toBe('2.3000.1042251103-alpha');
+    expect(b?.webVersion).toBe('2.3000.1042251103-alpha');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('getEffectiveWebVersionInfo (#488 — surface the running WA-Web build to the dashboard)', () => {
+  const orig = process.env.WWEBJS_WEB_VERSION;
+  beforeEach(() => __resetWebVersionCache());
+  afterEach(() => {
+    __resetWebVersionCache();
+    if (orig === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = orig;
+  });
+
+  it('reports an explicitly pinned env version', () => {
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1041203030-alpha';
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: '2.3000.1041203030-alpha', source: 'pinned' });
+  });
+
+  it('reports native auto-select for "off"', () => {
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'native' });
+  });
+
+  it('reports the auto-resolved current build once resolution has run', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: null, source: 'auto' });
+    await resolveWebVersionPin(
+      jest.fn(() =>
+        Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ currentVersion: '2.3000.9-alpha' }) }),
+      ) as never,
+    );
+    expect(getEffectiveWebVersionInfo()).toEqual({ version: '2.3000.9-alpha', source: 'auto' });
   });
 });
 

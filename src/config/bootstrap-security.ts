@@ -82,9 +82,13 @@ export interface SecretCheckEnv {
   nodeEnv?: string;
   databaseType?: string;
   databasePassword?: string;
+  /** POSTGRES_BUILTIN — when 'true', OpenWA runs the bundled Postgres on the internal-only network. */
+  postgresBuiltIn?: string;
   storageType?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  /** MINIO_BUILTIN — when 'true', OpenWA runs the bundled MinIO on the internal-only network. */
+  minioBuiltIn?: string;
   apiMasterKey?: string;
   /** ALLOW_DEV_API_KEY — when 'true' it seeds the well-known public `dev-admin-key` as an ADMIN credential. */
   allowDevApiKey?: string;
@@ -104,10 +108,13 @@ export function assertNoDefaultSecretsInProduction(env: SecretCheckEnv): void {
   const isWeak = (value?: string): boolean => !value || FORBIDDEN_PROD_SECRETS.has(value.trim().toLowerCase());
   const problems: string[] = [];
 
-  if (env.databaseType === 'postgres' && isWeak(env.databasePassword)) {
+  // Built-in datastores run on the internal-only Docker network (not published), so their fixed
+  // 'openwa'/'minioadmin' credentials are not internet-reachable — exempt them so selecting the
+  // built-in option doesn't crash-loop a production boot. External datastores are still enforced.
+  if (env.databaseType === 'postgres' && env.postgresBuiltIn !== 'true' && isWeak(env.databasePassword)) {
     problems.push('DATABASE_PASSWORD');
   }
-  if (env.storageType === 's3') {
+  if (env.storageType === 's3' && env.minioBuiltIn !== 'true') {
     if (isWeak(env.s3AccessKey)) problems.push('S3_ACCESS_KEY');
     if (isWeak(env.s3SecretKey)) problems.push('S3_SECRET_KEY');
   }

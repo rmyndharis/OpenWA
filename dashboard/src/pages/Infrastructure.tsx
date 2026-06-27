@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   Database,
@@ -10,6 +10,9 @@ import {
   CheckCircle,
   Trash2,
   Cpu,
+  AlertTriangle,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { infraApi, API_BASE_URL } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -135,46 +138,67 @@ export function Infrastructure() {
   const [queueEnabled, setQueueEnabled] = useState(false);
   const [pendingProfiles, setPendingProfiles] = useState<string[]>([]);
   const [previousProfiles, setPreviousProfiles] = useState<string[]>([]);
+  // Set when the just-saved config changes the DB or storage backend vs what's running, so the restart
+  // modal can warn that the new backend starts empty and offer a data backup before switching (#488).
+  const [dbSwitch, setDbSwitch] = useState(false);
+  const [storageSwitch, setStorageSwitch] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  // After a successful save (before the restart reloads the page), /config holds the new value but
+  // /status still holds the old one — so suppress the "pinned by environment" note, which infers a pin
+  // from exactly that divergence and would otherwise mislabel a pending change.
+  const [savePending, setSavePending] = useState(false);
 
+  // Whether the editable form has been seeded from the server once. After that, a background refetch
+  // (react-query refetchOnWindowFocus) must NOT re-seed the editable fields or it would wipe the
+  // operator's in-progress, unsaved edits. A successful save restarts → full page reload, re-arming it.
+  const formHydrated = useRef(false);
+
+  // LIVE indicators (not editable) — always reflect the running process, every refetch.
   useEffect(() => {
     if (!infraStatus) return;
+    setRedisConfig(prev => ({ ...prev, connected: infraStatus.redis.connected }));
+    setQueueStats({ messages: infraStatus.queue.messages, webhooks: infraStatus.queue.webhooks });
+  }, [infraStatus]);
 
+  // Seed the EDITABLE selections from live /status ONCE (the running selection), guarded so a refetch
+  // can't clobber an unsaved edit. These are also the badge sources, so on first paint they show what's
+  // actually running (#488 family).
+  useEffect(() => {
+    if (!infraStatus || formHydrated.current) return;
     setDbConfig(prev => ({
       ...prev,
       type: (infraStatus.database.type as 'sqlite' | 'postgres') || 'sqlite',
       host: infraStatus.database.host || 'localhost',
+      // builtIn reflects whether OpenWA's bundled container is actually running (live), not saved intent.
+      builtIn: infraStatus.database.builtIn,
     }));
-
     setRedisConfig(prev => ({
       ...prev,
       host: infraStatus.redis.host,
       port: String(infraStatus.redis.port),
-      connected: infraStatus.redis.connected,
+      builtIn: infraStatus.redis.builtIn,
     }));
-
+    setRedisEnabled(infraStatus.redis.enabled);
     setStorageConfig(prev => ({
       ...prev,
       type: infraStatus.storage.type,
       localPath: infraStatus.storage.path || './uploads',
+      builtIn: infraStatus.storage.builtIn,
     }));
-
     setQueueEnabled(infraStatus.queue.enabled);
-    setQueueStats({
-      messages: infraStatus.queue.messages,
-      webhooks: infraStatus.queue.webhooks,
-    });
   }, [infraStatus]);
 
-  // Hydrate the editable form from the saved config (data/.env.generated) so the form
-  // reflects what was actually persisted — including fields /status does not expose
-  // (username, pool size, SSL flags, S3 details). Secrets are never returned, so their
-  // inputs stay empty; an empty submit preserves the stored secret on the backend (#226).
+  // Hydrate the editable form from the saved config (data/.env.generated) ONCE — only the detail fields
+  // /status does not expose (username, pool size, SSL flags, S3 details, host/port). The "what's
+  // running" fields (type, redis enabled, storage type, built-in) are owned by the live /status effect
+  // above. Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored
+  // secret on the backend (#226).
   useEffect(() => {
-    if (!savedConfig) return;
+    if (!savedConfig || formHydrated.current) return;
+    // NOTE: builtIn for db/redis/storage is owned by the live /status effect above (it reflects the
+    // actually-running bundled container), so it is intentionally NOT set here from saved intent.
     setDbConfig(prev => ({
       ...prev,
-      type: savedConfig.database.type,
-      builtIn: savedConfig.database.builtIn,
       host: savedConfig.database.host || prev.host,
       port: savedConfig.database.port || prev.port,
       username: savedConfig.database.username || prev.username,
@@ -183,18 +207,13 @@ export function Infrastructure() {
       sslEnabled: savedConfig.database.sslEnabled,
       sslRejectUnauthorized: savedConfig.database.sslRejectUnauthorized,
     }));
-    setRedisEnabled(savedConfig.redis.enabled);
     setRedisConfig(prev => ({
       ...prev,
-      builtIn: savedConfig.redis.builtIn,
       host: savedConfig.redis.host || prev.host,
       port: savedConfig.redis.port || prev.port,
     }));
-    setQueueEnabled(savedConfig.queue.enabled);
     setStorageConfig(prev => ({
       ...prev,
-      type: savedConfig.storage.type,
-      builtIn: savedConfig.storage.builtIn,
       localPath: savedConfig.storage.localPath || prev.localPath,
       s3Bucket: savedConfig.storage.s3Bucket || prev.s3Bucket,
       s3Region: savedConfig.storage.s3Region || prev.s3Region,
@@ -207,6 +226,12 @@ export function Infrastructure() {
       browserArgs: savedConfig.engine.browserArgs || prev.browserArgs,
     }));
   }, [savedConfig]);
+
+  // Lock the editable form once both sources have seeded it, so later background refetches only refresh
+  // the live indicators above and never overwrite unsaved edits.
+  useEffect(() => {
+    if (infraStatus && savedConfig) formHydrated.current = true;
+  }, [infraStatus, savedConfig]);
 
   // The active engine reflects what's actually running (honours a real-env ENGINE_TYPE override),
   // so seed the selected radio from it rather than the saved .env.generated value.
@@ -247,8 +272,32 @@ export function Infrastructure() {
 
       const result = await infraApi.saveConfig(payload);
       if (result.saved) {
+        setSavePending(true);
         setPreviousProfiles(pendingProfiles);
         setPendingProfiles(result.profiles || []);
+        // Flag a backend switch vs what's actually running so the restart modal can warn about the
+        // empty-database / orphaned-media data move before it happens. A switch is: changing type;
+        // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
+        // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
+        // /status, so compare the edited form against the still-cached saved config.
+        const dbExternalRetarget =
+          dbConfig.type === 'postgres' &&
+          !dbConfig.builtIn &&
+          !!savedConfig &&
+          (dbConfig.host !== savedConfig.database.host ||
+            dbConfig.port !== savedConfig.database.port ||
+            dbConfig.database !== savedConfig.database.database);
+        setDbSwitch(
+          !!infraStatus &&
+            (dbConfig.type !== infraStatus.database.type ||
+              (dbConfig.type === 'postgres' && dbConfig.builtIn !== infraStatus.database.builtIn) ||
+              dbExternalRetarget),
+        );
+        setStorageSwitch(
+          !!infraStatus &&
+            (storageConfig.type !== infraStatus.storage.type ||
+              (storageConfig.type === 's3' && storageConfig.builtIn !== infraStatus.storage.builtIn)),
+        );
         setShowRestartModal(true);
       } else {
         toast.error(t('infrastructure.toasts.saveFailed'), result.message);
@@ -257,6 +306,54 @@ export function Infrastructure() {
       toast.error(t('infrastructure.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Download a JSON backup of all Data-DB tables. Called BEFORE a DB switch (while still on the old
+  // database) so the data can be re-imported into the new one — switching otherwise starts empty (#488).
+  const handleExportBackup = async () => {
+    setMigrating(true);
+    try {
+      const dump = await infraApi.exportData();
+      const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `openwa-backup-${dump.exportedAt?.slice(0, 10) || 'data'}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(t('infrastructure.migration.exportFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  // Restore a previously-exported backup into the CURRENT database (use after switching + restart).
+  // Import REPLACES all current data, so validate + confirm (showing the row count) before any call.
+  const handleImportBackup = async (file: File) => {
+    let parsed: { tables?: Record<string, unknown[]> };
+    try {
+      parsed = JSON.parse(await file.text()) as { tables?: Record<string, unknown[]> };
+    } catch {
+      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
+      return;
+    }
+    if (!parsed?.tables || typeof parsed.tables !== 'object') {
+      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
+      return;
+    }
+    const rows = Object.values(parsed.tables).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
+    if (!window.confirm(t('infrastructure.migration.importConfirm', { rows }))) return;
+    setMigrating(true);
+    try {
+      const res = await infraApi.importData(parsed.tables);
+      if (res.imported) toast.success(t('infrastructure.migration.importOk'));
+      else toast.error(t('infrastructure.migration.importFailed'), (res.warnings || []).slice(0, 3).join('; ') || res.message);
+    } catch (err) {
+      toast.error(t('infrastructure.migration.importFailed'), err instanceof Error ? err.message : t('common.unknownError'));
+    } finally {
+      setMigrating(false);
     }
   };
 
@@ -316,6 +413,22 @@ export function Infrastructure() {
     setTimeout(check, 3000);
   };
 
+  // A setting whose RUNNING value (/status) differs from the SAVED file (/config) is being pinned by a
+  // host/.env environment variable, which wins at runtime — so a dashboard change to it won't apply
+  // until that variable is unset. Surface that honestly instead of letting the control look effective.
+  const dbPinnedByEnv =
+    !savePending && !!infraStatus && !!savedConfig && infraStatus.database.type !== savedConfig.database.type;
+  const redisPinnedByEnv =
+    !savePending && !!infraStatus && !!savedConfig && infraStatus.redis.enabled !== savedConfig.redis.enabled;
+  const storagePinnedByEnv =
+    !savePending && !!infraStatus && !!savedConfig && infraStatus.storage.type !== savedConfig.storage.type;
+  const envPinNote = (pinned: boolean) =>
+    pinned ? (
+      <p className="env-pin-note">
+        <AlertTriangle size={14} /> {t('infrastructure.envPinNote')}
+      </p>
+    ) : null;
+
   return (
     <div className="infrastructure-page">
       <PageHeader title={t('infrastructure.title')} subtitle={t('infrastructure.subtitle')} />
@@ -332,6 +445,7 @@ export function Infrastructure() {
               ● {dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
             </span>
           </div>
+          {envPinNote(dbPinnedByEnv)}
 
           <div className="radio-group">
             <label className={`radio-option ${dbConfig.type === 'sqlite' ? 'selected' : ''}`}>
@@ -494,6 +608,35 @@ export function Infrastructure() {
               {t('infrastructure.database.migrationsHint')}
             </p>
           </div>
+
+          {/* Data backup / restore — used to carry data across a database switch (#488). */}
+          <div className="data-migration-row">
+            <div>
+              <strong>{t('infrastructure.migration.backupTitle')}</strong>
+              <small>{t('infrastructure.migration.backupHint')}</small>
+            </div>
+            <div className="data-migration-actions">
+              <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
+                {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                {t('infrastructure.migration.export')}
+              </button>
+              <label className="btn-secondary btn-sm" style={{ cursor: migrating ? 'default' : 'pointer' }}>
+                <Upload size={14} />
+                {t('infrastructure.migration.import')}
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  style={{ display: 'none' }}
+                  disabled={migrating}
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleImportBackup(file);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
+          </div>
         </section>
 
         {/* Engine */}
@@ -525,6 +668,20 @@ export function Infrastructure() {
               </label>
             ))}
           </div>
+
+          {/* The actual WhatsApp Web build in use — distinct from the library version above (#488). */}
+          {infraStatus?.engine.webVersion !== undefined && (
+            <p className="engine-web-version">
+              {t('infrastructure.engine.webVersion')}:{' '}
+              <code>{infraStatus.engine.webVersion ?? t('infrastructure.engine.webVersionNative')}</code>
+              {infraStatus.engine.webVersionSource && (
+                <span className="muted">
+                  {' '}
+                  ({t(`infrastructure.engine.webVersionSource.${infraStatus.engine.webVersionSource}`)})
+                </span>
+              )}
+            </p>
+          )}
 
           {engineConfig.type === 'whatsapp-web.js' ? (
             <div className="config-form">
@@ -588,6 +745,7 @@ export function Infrastructure() {
                 : t('infrastructure.statusLabels.disabled')}
             </span>
           </div>
+          {envPinNote(redisPinnedByEnv)}
 
           <div
             className="toggle-row"
@@ -762,7 +920,18 @@ export function Infrastructure() {
               <HardDrive size={20} />
               <h2>{t('infrastructure.storage.title')}</h2>
             </div>
+            {(() => {
+              // S3 selected but the backend isn't reachable → warn instead of a misleading green.
+              const s3Unreachable = storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
+              const cls = storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
+              return (
+                <span className={`status-indicator ${cls}`}>
+                  ● {storageConfig.type === 's3' ? (s3Unreachable ? t('infrastructure.storage.s3Unreachable') : 'S3') : 'Local'}
+                </span>
+              );
+            })()}
           </div>
+          {envPinNote(storagePinnedByEnv)}
 
           <div className="radio-group">
             <label className={`radio-option ${storageConfig.type === 'local' ? 'selected' : ''}`}>
@@ -891,6 +1060,22 @@ export function Infrastructure() {
                   <p style={{ fontSize: '1rem', color: '#475569', marginBottom: '1.5rem' }}>
                     <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
                   </p>
+                  {(dbSwitch || storageSwitch) && (
+                    <div className="migration-warning">
+                      <AlertTriangle size={18} />
+                      <div>
+                        <strong>{t('infrastructure.migration.title')}</strong>
+                        {dbSwitch && <p>{t('infrastructure.migration.dbWarning')}</p>}
+                        {storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
+                        {dbSwitch && (
+                          <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
+                            {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                            {t('infrastructure.migration.downloadBackup')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
                     <button className="btn-secondary" onClick={() => setShowRestartModal(false)}>
                       {t('infrastructure.restart.later')}

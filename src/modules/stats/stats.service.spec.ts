@@ -147,6 +147,46 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     }
   });
 
+  it('no analytics query orders/groups by an unquoted mixed-case alias (Postgres case-folds it → 42703)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ direction: MessageDirection.OUTGOING });
+
+    Object.defineProperty(service, 'dataDbType', { get: () => 'postgres', configurable: true });
+
+    const captured: string[] = [];
+    const repo = ds.getRepository(Message);
+    const origCreate = repo.createQueryBuilder.bind(repo);
+    jest.spyOn(repo, 'createQueryBuilder').mockImplementation((alias?: string) => {
+      const qb = origCreate(alias);
+      jest.spyOn(qb, 'getRawMany').mockImplementation(() => {
+        captured.push(qb.getQuery());
+        return Promise.resolve([]);
+      });
+      return qb;
+    });
+
+    await service.getMessageStats('24h'); // time-series + byType + bySession + topChats
+    await service.getSessionStats('s1');
+
+    expect(captured.length).toBeGreaterThan(0);
+    // Postgres folds an UNQUOTED identifier to lowercase; a mixed-case alias defined with quotes
+    // (COUNT(*) AS "messageCount") then no longer matches a bare `ORDER BY messageCount` → it looks for
+    // "messagecount" and 42703s. SQLite is case-insensitive so it never surfaced. Flag any bare
+    // (unquoted) ORDER BY / GROUP BY term that contains an uppercase letter.
+    const offenders: string[] = [];
+    for (const sql of captured) {
+      for (const clause of sql.match(/\b(?:ORDER|GROUP) BY\s+[^\s,]+/gi) ?? []) {
+        const term = clause.replace(/\b(?:ORDER|GROUP) BY\s+/i, '');
+        // Only a BARE identifier (no quotes, no dots, no parens) folds — `COUNT(*)`, `to_char(...)`,
+        // `"m"."chatId"` are all safe; `messageCount` is the landmine.
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(term) && /[A-Z]/.test(term)) offenders.push(`${clause}  ::  ${sql}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('getSessionStats returns 24 hourly buckets with the right counts', async () => {
     await ds
       .getRepository(Session)

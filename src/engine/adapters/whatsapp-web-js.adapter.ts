@@ -33,6 +33,7 @@ import {
   RevokedMessage,
   ReactionEvent,
 } from '../interfaces/whatsapp-engine.interface';
+import { resolveWebVersionPin } from '../wa-web-version';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -125,28 +126,9 @@ export interface WhatsAppWebJsConfig {
 const READY_RECONCILE_INTERVAL_MS = 2000;
 const READY_RECONCILE_TIMEOUT_MS = 90_000;
 
-/**
- * Optional pin for the WhatsApp Web client version. whatsapp-web.js 1.34.x can get stuck at
- * "authenticating" when the auto-fetched WA-Web version is incompatible (#251/#273). Set
- * WWEBJS_WEB_VERSION to a known-good version string to pin it; WWEBJS_WEB_VERSION_REMOTE_PATH
- * overrides the URL template (use `{version}` as the placeholder) if you self-host the HTML.
- * Unset (or `latest`/`off`/`auto`) keeps whatsapp-web.js's default auto-version behavior.
- */
-export function resolveWebVersionPin():
-  | { webVersion: string; webVersionCache: { type: 'remote'; remotePath: string } }
-  | undefined {
-  const version = process.env.WWEBJS_WEB_VERSION?.trim();
-  if (!version || ['off', 'latest', 'auto'].includes(version.toLowerCase())) {
-    return undefined;
-  }
-  const template =
-    process.env.WWEBJS_WEB_VERSION_REMOTE_PATH?.trim() ||
-    'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html';
-  return {
-    webVersion: version,
-    webVersionCache: { type: 'remote', remotePath: template.replace('{version}', version) },
-  };
-}
+// WhatsApp Web version resolution (the #488 auto-resolve) lives in a dependency-free module so infra
+// status can import it without loading whatsapp-web.js (engine lazy-loading). The adapter imports
+// resolveWebVersionPin above for use in initialize().
 
 /**
  * Optional override for whatsapp-web.js's initial boot/inject wait (#353). On slow first boots
@@ -281,7 +263,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
       // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
       // hang on some setups, #251). Opt-in: unset leaves whatsapp-web.js to auto-select.
-      const versionPin = resolveWebVersionPin();
+      const versionPin = await resolveWebVersionPin();
       if (versionPin) {
         this.logger.log(`Pinning WhatsApp Web version ${versionPin.webVersion}`);
       }

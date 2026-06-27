@@ -103,6 +103,34 @@ describe('assertNoDefaultSecretsInProduction', () => {
     ).toThrow(/DATABASE_PASSWORD/);
   });
 
+  it('allows the built-in Postgres/MinIO default credentials in prod (internal-only network) (#488 review)', () => {
+    // The bundled containers are reachable only on the internal Docker network (not published), so the
+    // known 'openwa'/'minioadmin' creds the built-in flow provisions must not crash-loop a prod boot.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+      }),
+    ).not.toThrow();
+  });
+
+  it('still refuses an EXTERNAL Postgres with a default password even when MinIO is built-in', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'false',
+      }),
+    ).toThrow(/DATABASE_PASSWORD/);
+  });
+
   it('refuses prod with default MinIO/S3 credentials', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({
