@@ -308,6 +308,23 @@ export class MessageController {
     );
   }
 
+  @Get(':chatId/:messageId/media')
+  @ApiOperation({
+    summary: 'Download (and cache) the media payload for a single message',
+    description:
+      'Lazily fetches the media for one message — for older messages backfilled metadata-only via ' +
+      'history(deep). Served from the storage cache when already downloaded, otherwise downloaded from ' +
+      'the engine and persisted so subsequent requests are instant.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'chatId', description: 'Chat ID' })
+  @ApiParam({ name: 'messageId', description: 'Serialized message id' })
+  @ApiResponse({ status: 200, description: 'Media payload (mimetype + base64 data)' })
+  @ApiResponse({ status: 404, description: 'Media not available (message not in store or no media)' })
+  async getMessageMedia(@Param('sessionId') sessionId: string, @Param('messageId') messageId: string) {
+    return this.messageService.getMessageMedia(sessionId, messageId);
+  }
+
   @Get(':chatId/:messageId/reactions')
   @ApiOperation({ summary: 'Get reactions for a specific message' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })

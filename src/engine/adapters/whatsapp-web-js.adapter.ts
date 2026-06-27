@@ -1282,6 +1282,24 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   // ========== Gap Quick Wins Implementation ==========
 
+  async downloadMessageMedia(
+    messageId: string,
+  ): Promise<{ mimetype: string; data: string; filename?: string } | null> {
+    this.ensureReady();
+    // getMessageById resolves from the engine's message store (populated when chat history was loaded),
+    // so it reaches older messages that chat.fetchMessages({limit}) would miss.
+    const message = await this.client!.getMessageById(messageId).catch(() => null);
+    if (!message || !message.hasMedia) return null;
+    const media = await this.inboundLimiter.run(() => message.downloadMedia());
+    if (!media || !media.data) return null;
+    const sizeBytes = Buffer.byteLength(media.data, 'base64');
+    if (sizeBytes > inboundMediaMaxBytes()) {
+      this.logger.warn('On-demand media exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped', { messageId, sizeBytes });
+      return null;
+    }
+    return { mimetype: media.mimetype, data: media.data, filename: media.filename || undefined };
+  }
+
   async getChatHistory(chatId: string, limit: number = 50, includeMedia: boolean = false): Promise<IncomingMessage[]> {
     this.ensureReady();
     const chat = await this.client!.getChatById(chatId);
