@@ -453,6 +453,13 @@ export interface IWhatsAppEngine {
   deleteMessage(chatId: string, messageId: string, forEveryone?: boolean): Promise<void>;
   getChatHistory(chatId: string, limit?: number, includeMedia?: boolean): Promise<IncomingMessage[]>;
 
+  /**
+   * Download the media payload for a single message by its (serialized) id — used to lazily fetch
+   * media for older messages that were backfilled metadata-only via getChatHistory(deep). Returns null
+   * when the message can't be resolved (e.g. no longer in the engine store) or has no media.
+   */
+  downloadMessageMedia(messageId: string): Promise<{ mimetype: string; data: string; filename?: string } | null>;
+
   // Contact Extended Operations
   getProfilePicture(contactId: string): Promise<string | null>;
   blockContact(contactId: string): Promise<void>;

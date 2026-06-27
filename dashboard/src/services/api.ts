@@ -413,6 +413,13 @@ export const sessionApi = {
   // captured, e.g. a freshly paired session whose persisted store is still empty.
   // includeMedia downloads the media payload (base64) for history messages so stickers/images/
   // video/voice render instead of collapsing to an empty timestamp-only bubble.
+  // Lazily fetch (and server-side cache) the media payload for ONE message — for older messages that
+  // were backfilled metadata-only via getChatHistory(deep). Returns base64 media; persisted by the
+  // backend so a later request is instant.
+  getMessageMedia: (id: string, chatId: string, messageId: string) =>
+    request<{ mimetype: string; data: string; filename?: string }>(
+      `/sessions/${id}/messages/${encodeURIComponent(chatId)}/${encodeURIComponent(messageId)}/media`,
+    ),
   // `deep` raises the engine's limit ceiling (100 → 2000) to reach further back in the conversation,
   // loading earlier messages on demand. It forces metadata-only (includeMedia is ignored when deep),
   // so older scrollback comes back as text without media payloads. Used for "load older" pagination.

@@ -40,6 +40,7 @@ import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import { isNearTop, anchorScrollTopAfterPrepend } from '../utils/scrollDecision';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
+import LazyMediaPlaceholder from '../components/chats/LazyMediaPlaceholder';
 import './Chats.css';
 
 // Client-side render windowing: how many of the most-recent loaded messages to render on open, and how
@@ -173,14 +174,46 @@ export function Chats() {
   const historyLimitRef = useRef<number>(HISTORY_INITIAL_LIMIT);
   const pendingAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
 
-  // Reset windowing + pagination when the active chat changes.
+  // Lazy on-demand media for older (metadata-only) messages: ids with an in-flight download, and ids
+  // whose download failed (render a static label for those, don't keep retrying).
+  const mediaFetchRef = useRef<Set<string>>(new Set());
+  const [mediaFailed, setMediaFailed] = useState<Set<string>>(new Set());
+
+  // Reset windowing + pagination + media state when the active chat changes.
   useEffect(() => {
     setVisibleCount(MESSAGES_WINDOW_SIZE);
     setLoadingOlder(false);
     setHasMoreToFetch(true);
     historyLimitRef.current = HISTORY_INITIAL_LIMIT;
     pendingAnchorRef.current = null;
+    mediaFetchRef.current.clear();
+    setMediaFailed(new Set());
   }, [activeChat?.id]);
+
+  // Download (and server-side cache) the media payload for one older message, then patch it into the
+  // cached thread so the real photo/audio replaces the placeholder. The backend persists it, so a later
+  // visit is instant. Deduped per message; failures are remembered to avoid hammering.
+  const ensureMessageMedia = useCallback(
+    (msg: ChatMessageView) => {
+      if (!selectedSessionId || !activeChat) return;
+      if (msg.metadata?.media?.data) return;
+      if (mediaFetchRef.current.has(msg.id)) return;
+      mediaFetchRef.current.add(msg.id);
+      const waId = msg.waMessageId || msg.id;
+      sessionApi
+        .getMessageMedia(selectedSessionId, activeChat.id, waId)
+        .then(media => {
+          queryClient.setQueryData<ChatMessageView[]>(
+            messagesQueryKey(selectedSessionId, activeChat.id),
+            (old = []) =>
+              old.map(m => (m.id === msg.id ? { ...m, metadata: { ...m.metadata, media } } : m)),
+          );
+        })
+        .catch(() => setMediaFailed(prev => new Set(prev).add(msg.id)))
+        .finally(() => mediaFetchRef.current.delete(msg.id));
+    },
+    [selectedSessionId, activeChat, queryClient],
+  );
 
   const visibleMessages = useMemo(
     () => messages.slice(Math.max(0, messages.length - visibleCount)),
@@ -934,8 +967,9 @@ export function Chats() {
                         const mediaSrc = mediaInfo ? getMediaSrc(mediaInfo) : '';
                         if (!mediaSrc) {
                           // Media message with no payload — e.g. older messages from the deep-history
-                          // backfill, which is metadata-only. Show a labeled placeholder so the bubble is
-                          // visible (notably the user's own sent photos/voice) instead of empty.
+                          // backfill, which is metadata-only. Lazily fetch the real media when the bubble
+                          // nears the viewport; until then (or on failure) show a labeled placeholder so
+                          // the bubble is visible instead of empty.
                           if (!isMediaMessage) return null;
                           const label =
                             msg.type === 'image' ? `📷 ${t('chats.media.photo')}`
@@ -944,7 +978,12 @@ export function Chats() {
                             : msg.type === 'sticker' ? `🏷️ ${t('chats.media.sticker')}`
                             : msg.type === 'document' ? `📄 ${t('chats.media.document')}`
                             : `📎 ${t('chats.media.attachment')}`;
-                          return <div className="message-media-placeholder">{label}</div>;
+                          if (mediaFailed.has(msg.id)) {
+                            return <div className="message-media-placeholder">{label}</div>;
+                          }
+                          return (
+                            <LazyMediaPlaceholder label={label} onVisible={() => ensureMessageMedia(msg)} />
+                          );
                         }
                         if (!mediaInfo) return null; // unreachable (mediaSrc implies mediaInfo) — narrows the type
 

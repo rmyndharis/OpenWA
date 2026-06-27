@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { StorageService } from '../../common/storage/storage.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
@@ -34,7 +35,37 @@ export class MessageService {
     private readonly hookManager: HookManager,
     private readonly templateService: TemplateService,
     private readonly lidMappingStore: LidMappingStoreService,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * Lazily fetch (and persist) the media payload for one message — used for older messages that were
+   * backfilled metadata-only via getChatHistory(deep). Serves from the storage layer when already
+   * downloaded (so a media fetched yesterday is instant today), otherwise downloads it from the engine
+   * and caches it. The message id is sanitized into a safe per-session storage key.
+   */
+  async getMessageMedia(
+    sessionId: string,
+    messageId: string,
+  ): Promise<{ mimetype: string; data: string; filename?: string }> {
+    const safeId = messageId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+    const key = `media-cache/${sessionId}/${safeId}.json`;
+    try {
+      const cached = await this.storage.getFile(key);
+      return JSON.parse(cached.toString('utf8'));
+    } catch {
+      // not cached yet — fall through to download
+    }
+    const engine = this.getEngine(sessionId);
+    const media = await engine.downloadMessageMedia(messageId);
+    if (!media) {
+      throw new NotFoundException(`Media not available for message ${messageId}`);
+    }
+    await this.storage
+      .putFile(key, Buffer.from(JSON.stringify(media), 'utf8'))
+      .catch(err => this.logger.warn(`Failed to persist media cache for ${messageId}: ${String(err)}`));
+    return media;
+  }
 
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
     // Execute hook before sending - plugins can modify or block

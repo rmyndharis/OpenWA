@@ -829,6 +829,12 @@
   font-size: 0.9375rem;
 }
 
+.chats-page .message-media-placeholder--loading{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .chats-page .chat-document-media{
   display: inline-flex;
   align-items: center;
