@@ -96,7 +96,10 @@
       "voice": "Nota de voz",
       "sticker": "Sticker",
       "document": "Documento",
-      "attachment": "Adjunto"
+      "attachment": "Adjunto",
+      "location": "Ubicación",
+      "contact": "Contacto",
+      "unsupported": "Mensaje no soportado"
     },
     "actions": {
       "reply": "Responder",

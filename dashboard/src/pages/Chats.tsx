@@ -53,6 +53,14 @@ const HISTORY_INITIAL_LIMIT = 100;
 const HISTORY_FETCH_STEP = 300;
 const HISTORY_MAX_LIMIT = 2000;
 
+// Message types that have a downloadable media payload (so an empty one is lazily fetched). Other
+// non-text types (location, contact, call logs reported as `unknown`) are NOT downloadable media.
+const DOWNLOADABLE_MEDIA_TYPES = new Set<MessageType>(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
+// Bound concurrent on-demand media downloads and retry transient failures (notably HTTP 429 when many
+// placeholders become visible while scrolling fast), so media isn't dropped under load.
+const MEDIA_DOWNLOAD_CONCURRENCY = 3;
+const MEDIA_DOWNLOAD_RETRIES = 4;
+
 type MessageMedia = { mimetype: string; filename?: string; data?: string };
 
 // Delivery acks must only ADVANCE the tick, never regress it. The backend DB update is forward-only
@@ -174,10 +182,16 @@ export function Chats() {
   const historyLimitRef = useRef<number>(HISTORY_INITIAL_LIMIT);
   const pendingAnchorRef = useRef<{ prevTop: number; prevHeight: number } | null>(null);
 
-  // Lazy on-demand media for older (metadata-only) messages: ids with an in-flight download, and ids
-  // whose download failed (render a static label for those, don't keep retrying).
+  // Lazy on-demand media for older (metadata-only) messages, throttled through a small queue. `mediaFetchRef`
+  // holds enqueued/in-flight ids (dedup); `mediaFailed` holds ids whose download failed after retries
+  // (render a static label, stop retrying); `mediaQueueRef`/`mediaActiveRef` bound concurrency.
   const mediaFetchRef = useRef<Set<string>>(new Set());
   const [mediaFailed, setMediaFailed] = useState<Set<string>>(new Set());
+  const mediaQueueRef = useRef<{ msg: ChatMessageView; sessionId: string; chatId: string }[]>([]);
+  const mediaActiveRef = useRef<number>(0);
+  // Holds the latest queue pump so a finished task can trigger the next one without the callback
+  // referencing itself before it's declared.
+  const runMediaQueueRef = useRef<() => void>(() => {});
 
   // Reset windowing + pagination + media state when the active chat changes.
   useEffect(() => {
@@ -187,32 +201,56 @@ export function Chats() {
     historyLimitRef.current = HISTORY_INITIAL_LIMIT;
     pendingAnchorRef.current = null;
     mediaFetchRef.current.clear();
+    mediaQueueRef.current = [];
     setMediaFailed(new Set());
   }, [activeChat?.id]);
 
-  // Download (and server-side cache) the media payload for one older message, then patch it into the
-  // cached thread so the real photo/audio replaces the placeholder. The backend persists it, so a later
-  // visit is instant. Deduped per message; failures are remembered to avoid hammering.
+  // Drain the media-download queue up to the concurrency cap. Each task downloads (server-persisted) the
+  // message's media, patches it into the cached thread, and retries transient failures with backoff (so a
+  // 429 burst recovers instead of dropping). Stable callback — operates on refs.
+  const runMediaQueue = useCallback(() => {
+    while (mediaActiveRef.current < MEDIA_DOWNLOAD_CONCURRENCY && mediaQueueRef.current.length > 0) {
+      const { msg, sessionId, chatId } = mediaQueueRef.current.shift()!;
+      mediaActiveRef.current++;
+      const waId = msg.waMessageId || msg.id;
+      void (async () => {
+        for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_RETRIES; attempt++) {
+          try {
+            const media = await sessionApi.getMessageMedia(sessionId, chatId, waId);
+            queryClient.setQueryData<ChatMessageView[]>(messagesQueryKey(sessionId, chatId), (old = []) =>
+              old.map(m => (m.id === msg.id ? { ...m, metadata: { ...m.metadata, media } } : m)),
+            );
+            return;
+          } catch {
+            if (attempt === MEDIA_DOWNLOAD_RETRIES) {
+              setMediaFailed(prev => new Set(prev).add(msg.id));
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 500 * attempt + Math.floor(Math.random() * 250)));
+          }
+        }
+      })().finally(() => {
+        mediaFetchRef.current.delete(msg.id);
+        mediaActiveRef.current--;
+        runMediaQueueRef.current();
+      });
+    }
+  }, [queryClient]);
+  useEffect(() => {
+    runMediaQueueRef.current = runMediaQueue;
+  }, [runMediaQueue]);
+
+  // Enqueue a one-shot media download for a message (called when its placeholder nears the viewport).
   const ensureMessageMedia = useCallback(
     (msg: ChatMessageView) => {
       if (!selectedSessionId || !activeChat) return;
       if (msg.metadata?.media?.data) return;
       if (mediaFetchRef.current.has(msg.id)) return;
       mediaFetchRef.current.add(msg.id);
-      const waId = msg.waMessageId || msg.id;
-      sessionApi
-        .getMessageMedia(selectedSessionId, activeChat.id, waId)
-        .then(media => {
-          queryClient.setQueryData<ChatMessageView[]>(
-            messagesQueryKey(selectedSessionId, activeChat.id),
-            (old = []) =>
-              old.map(m => (m.id === msg.id ? { ...m, metadata: { ...m.metadata, media } } : m)),
-          );
-        })
-        .catch(() => setMediaFailed(prev => new Set(prev).add(msg.id)))
-        .finally(() => mediaFetchRef.current.delete(msg.id));
+      mediaQueueRef.current.push({ msg, sessionId: selectedSessionId, chatId: activeChat.id });
+      runMediaQueue();
     },
-    [selectedSessionId, activeChat, queryClient],
+    [selectedSessionId, activeChat, runMediaQueue],
   );
 
   const visibleMessages = useMemo(
@@ -964,26 +1002,45 @@ export function Chats() {
 
                       const renderMedia = () => {
                         if (msg.type === 'revoked') return null;
+                        if (msg.type === 'location') {
+                          // WhatsApp location messages carry a base64 JPEG map-preview thumbnail in `body`
+                          // (there's no separate media payload to download). Render the thumbnail + a label
+                          // instead of dumping the base64 string as text. The body is suppressed below.
+                          const thumb =
+                            msg.body && msg.body.length > 100 ? `data:image/jpeg;base64,${msg.body}` : '';
+                          return (
+                            <div className="message-location">
+                              {thumb && <img src={thumb} alt="" className="chat-location-thumb" />}
+                              <span className="message-media-placeholder">📍 {t('chats.media.location')}</span>
+                            </div>
+                          );
+                        }
                         const mediaSrc = mediaInfo ? getMediaSrc(mediaInfo) : '';
                         if (!mediaSrc) {
-                          // Media message with no payload — e.g. older messages from the deep-history
-                          // backfill, which is metadata-only. Lazily fetch the real media when the bubble
-                          // nears the viewport; until then (or on failure) show a labeled placeholder so
-                          // the bubble is visible instead of empty.
-                          if (!isMediaMessage) return null;
-                          const label =
-                            msg.type === 'image' ? `📷 ${t('chats.media.photo')}`
-                            : msg.type === 'video' ? `🎥 ${t('chats.media.video')}`
-                            : msg.type === 'voice' || msg.type === 'audio' ? `🎤 ${t('chats.media.voice')}`
-                            : msg.type === 'sticker' ? `🏷️ ${t('chats.media.sticker')}`
-                            : msg.type === 'document' ? `📄 ${t('chats.media.document')}`
-                            : `📎 ${t('chats.media.attachment')}`;
-                          if (mediaFailed.has(msg.id)) {
-                            return <div className="message-media-placeholder">{label}</div>;
+                          // Real media type with no payload yet (older deep-history messages are metadata-only):
+                          // lazily fetch the media when the bubble nears the viewport; until then (or on failure)
+                          // show a labeled placeholder so the bubble is visible instead of empty.
+                          if (DOWNLOADABLE_MEDIA_TYPES.has(msg.type)) {
+                            const label =
+                              msg.type === 'image' ? `📷 ${t('chats.media.photo')}`
+                              : msg.type === 'video' ? `🎥 ${t('chats.media.video')}`
+                              : msg.type === 'voice' || msg.type === 'audio' ? `🎤 ${t('chats.media.voice')}`
+                              : msg.type === 'sticker' ? `🏷️ ${t('chats.media.sticker')}`
+                              : `📄 ${t('chats.media.document')}`;
+                            if (mediaFailed.has(msg.id)) {
+                              return <div className="message-media-placeholder">{label}</div>;
+                            }
+                            return (
+                              <LazyMediaPlaceholder label={label} onVisible={() => ensureMessageMedia(msg)} />
+                            );
                           }
-                          return (
-                            <LazyMediaPlaceholder label={label} onVisible={() => ensureMessageMedia(msg)} />
-                          );
+                          if (msg.type === 'contact') {
+                            return <div className="message-media-placeholder">👤 {t('chats.media.contact')}</div>;
+                          }
+                          // Anything else non-text (e.g. call logs the engine reports as `unknown`) isn't a
+                          // downloadable attachment — show a neutral label instead of a misleading "attachment".
+                          if (!isMediaMessage) return null;
+                          return <div className="message-media-placeholder">ℹ️ {t('chats.media.unsupported')}</div>;
                         }
                         if (!mediaInfo) return null; // unreachable (mediaSrc implies mediaInfo) — narrows the type
 
@@ -1062,6 +1119,10 @@ export function Chats() {
                               {isRevoked ? (
                                 <div className="message-text">{t('chats.messageDeleted')}</div>
                               ) : (
+                                // `location` bodies hold a base64 thumbnail and `contact` bodies hold a vcard
+                                // (both rendered/labeled by renderMedia), so don't dump them as text.
+                                msg.type !== 'location' &&
+                                msg.type !== 'contact' &&
                                 msg.body &&
                                 (!mediaInfo || msg.body !== mediaInfo.filename) && (
                                   <MessageBody text={msg.body} className="message-text" />

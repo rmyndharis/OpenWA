@@ -835,6 +835,19 @@
   gap: 0.4rem;
 }
 
+/* Location message: base64 map thumbnail (from the message body) + a label. */
+.chats-page .message-location{
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.chats-page .chat-location-thumb{
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 8px;
+  display: block;
+}
+
 .chats-page .chat-document-media{
   display: inline-flex;
   align-items: center;
