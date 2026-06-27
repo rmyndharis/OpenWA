@@ -27,6 +27,8 @@ export function mapWwebjsMessageType(raw: string): MessageType {
     case 'vcard':
     case 'multi_vcard':
       return 'contact';
+    case 'call_log':
+      return 'call';
     case 'revoked':
       return 'revoked';
     default:
