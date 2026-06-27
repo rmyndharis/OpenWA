@@ -388,6 +388,26 @@
   transform: translateY(-1px);
 }
 
+/* "Loading older messages" spinner — absolutely positioned over the top of the thread so it never
+   shifts scrollHeight (which would break the prepend anchoring). */
+.chats-page .messages-loading-older{
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-white, #ffffff);
+  color: var(--text-secondary, #475569);
+  border: 1px solid var(--border, #e2e8f0);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
+}
+
 .chats-page .messages-loading{
   display: flex;
   flex-direction: column;
