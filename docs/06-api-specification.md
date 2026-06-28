@@ -2685,7 +2685,7 @@ Same `{ statuses }` wrapper and `Status` shape as the list-all route.
 
 #### POST /api/sessions/:sessionId/status/send-text
 
-Post a text status (story) to the session's status feed.
+Post a text status (story) to the session's status feed. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
 
 **Auth:** API key (OPERATOR)
 
@@ -2700,11 +2700,12 @@ Post a text status (story) to the session's status feed.
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | text | string | yes | — | Status text body |
+| recipients | string[] | yes | 1–256 items, each matching `^\d+@(c\.us\|lid)$` | JIDs of the contacts permitted to view the status (passed as `statusJidList` to the engine). Empty array → `400` |
 | backgroundColor | string | no | 6-digit hex color matching `^#[0-9A-Fa-f]{6}$` | e.g. `#25D366`; bad value → `backgroundColor must be a hex color (e.g., #25D366)` |
-| font | integer | no | integer `0`–`4` | Font index |
+| font | integer | no | integer `0`–`5` | Font index |
 
 ```json
-{ "text": "Hello from OpenWA!", "backgroundColor": "#25D366", "font": 2 }
+{ "text": "Hello from OpenWA!", "recipients": ["6281234567890@c.us"], "backgroundColor": "#25D366", "font": 2 }
 ```
 
 **Response** `201`
@@ -2719,11 +2720,15 @@ Post a text status (story) to the session's status feed.
 
 Returns the engine `StatusResult` directly (no wrapper). POST default status is `201`.
 
-**Errors:** `400` validation failure (unknown body field, bad `backgroundColor`/`font`), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
+**Recipient JIDs:** `@c.us` (regular phone) recipients are reliable. `@lid` (privacy-id) recipients are best-effort and unverified — WhatsApp may not deliver to an unresolved LID, so prefer `@c.us` where the phone number is known.
+
+**Sender-side caveat:** the posting account's own phone may display a "waiting for this status update" notice in its status feed; this is cosmetic — recipients view the status normally.
+
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients, bad `backgroundColor`/`font`), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; WA Web removed `WAWebStatusGatingUtils.canCheckStatusRankingPosterGating` around 2026-04-30, so the wwebjs path is upstream-blocked — see #455)
 
 #### POST /api/sessions/:sessionId/status/send-image
 
-Post an image status (story) from a URL or base64 payload.
+Post an image status (story) from a URL or base64 payload. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
 
 **Auth:** API key (OPERATOR)
 
@@ -2740,12 +2745,14 @@ Post an image status (story) from a URL or base64 payload.
 | image | object (`MediaInput`) | yes | validated nested object (an empty `{}` passes — there is no `@IsNotEmpty`) | Media source wrapper |
 | image.url | string | no | — | Media source URL |
 | image.base64 | string | no | — | Base64-encoded media data |
+| image.mimetype | string | no | — | Media MIME type; if omitted the service defaults to `image/jpeg` |
+| recipients | string[] | yes | 1–256 items, each matching `^\d+@(c\.us\|lid)$` | JIDs of the contacts permitted to view the status (`statusJidList`). Empty array → `400` |
 | caption | string | no | — | Optional caption |
 
-The service resolves the media as `image.url || image.base64 || ''` and hard-codes mimetype `image/jpeg`.
+The service resolves the media as `image.url || image.base64 || ''` and applies mimetype `image.mimetype ?? 'image/jpeg'`.
 
 ```json
-{ "image": { "url": "https://example.com/photo.jpg" }, "caption": "My status" }
+{ "image": { "url": "https://example.com/photo.jpg", "mimetype": "image/png" }, "recipients": ["6281234567890@c.us"], "caption": "My status" }
 ```
 
 **Response** `201`
@@ -2760,11 +2767,13 @@ The service resolves the media as `image.url || image.base64 || ''` and hard-cod
 
 Returns the engine `StatusResult` directly. POST default status is `201`.
 
-**Errors:** `400` unknown top-level body field (strict whitelist), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
+**Recipient JIDs:** `@c.us` (regular phone) recipients are reliable. `@lid` (privacy-id) recipients are best-effort and unverified — prefer `@c.us` where the phone number is known. **Sender-side caveat:** the posting account's own phone may show a "waiting for this status update" notice; recipients view it normally.
+
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; see `send-text` and #455)
 
 #### POST /api/sessions/:sessionId/status/send-video
 
-Post a video status (story) from a URL or base64 payload.
+Post a video status (story) from a URL or base64 payload. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
 
 **Auth:** API key (OPERATOR)
 
@@ -2781,12 +2790,14 @@ Post a video status (story) from a URL or base64 payload.
 | video | object (`MediaInput`) | yes | validated nested object (an empty `{}` passes) | Media source wrapper |
 | video.url | string | no | — | Media source URL |
 | video.base64 | string | no | — | Base64-encoded media data |
+| video.mimetype | string | no | — | Media MIME type; if omitted the service defaults to `video/mp4` |
+| recipients | string[] | yes | 1–256 items, each matching `^\d+@(c\.us\|lid)$` | JIDs of the contacts permitted to view the status (`statusJidList`). Empty array → `400` |
 | caption | string | no | — | Optional caption |
 
-The service resolves the media as `video.url || video.base64 || ''` and hard-codes mimetype `video/mp4`.
+The service resolves the media as `video.url || video.base64 || ''` and applies mimetype `video.mimetype ?? 'video/mp4'`.
 
 ```json
-{ "video": { "url": "https://example.com/clip.mp4" }, "caption": "Watch this" }
+{ "video": { "url": "https://example.com/clip.mp4", "mimetype": "video/quicktime" }, "recipients": ["6281234567890@c.us"], "caption": "Watch this" }
 ```
 
 **Response** `201`
@@ -2801,7 +2812,9 @@ The service resolves the media as `video.url || video.base64 || ''` and hard-cod
 
 Returns the engine `StatusResult` directly. POST default status is `201`.
 
-**Errors:** `400` unknown top-level body field, or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
+**Recipient JIDs:** `@c.us` (regular phone) recipients are reliable. `@lid` (privacy-id) recipients are best-effort and unverified — prefer `@c.us` where the phone number is known. **Sender-side caveat:** the posting account's own phone may show a "waiting for this status update" notice; recipients view it normally.
+
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; see `send-text` and #455)
 
 #### DELETE /api/sessions/:sessionId/status/:statusId
 
