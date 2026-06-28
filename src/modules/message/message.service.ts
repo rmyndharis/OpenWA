@@ -52,7 +52,7 @@ export class MessageService {
     const key = `media-cache/${sessionId}/${safeId}.json`;
     try {
       const cached = await this.storage.getFile(key);
-      return JSON.parse(cached.toString('utf8'));
+      return JSON.parse(cached.toString('utf8')) as { mimetype: string; data: string; filename?: string };
     } catch {
       // not cached yet — fall through to download
     }
