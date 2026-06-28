@@ -14,6 +14,10 @@ import {
 import { MessageService } from '../../modules/message/message.service';
 import { SessionService } from '../../modules/session/session.service';
 
+// `archiver` v8 ships as ESM only, which ts-jest cannot parse; StorageService (pulled in transitively
+// via MessageService) imports it for the export path only. Stub it — these tests don't touch exporting.
+jest.mock('archiver', () => ({ default: jest.fn() }));
+
 function makePlugin(sessions?: string[], permissions: string[] = ['messages:send', 'engine:read']): PluginInstance {
   const manifest: PluginManifest = {
     id: 'test-ext',

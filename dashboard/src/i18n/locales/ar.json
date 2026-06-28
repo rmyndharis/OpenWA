@@ -89,6 +89,22 @@
     "loadingMessages": "جارٍ تحميل الرسائل...",
     "noMessagesInChat": "لا توجد رسائل بعد. أرسل الرسالة الأولى للبدء!",
     "downloadDocument": "تنزيل المستند",
+    "scrollToBottom": "الانتقال إلى أحدث الرسائل",
+    "media": {
+      "photo": "صورة",
+      "video": "فيديو",
+      "voice": "رسالة صوتية",
+      "sticker": "ملصق",
+      "document": "مستند",
+      "attachment": "مرفق",
+      "location": "الموقع",
+      "contact": "جهة اتصال",
+      "call": "مكالمة",
+      "callMissed": "مكالمة فائتة",
+      "callVideo": "مكالمة فيديو",
+      "callVideoMissed": "مكالمة فيديو فائتة",
+      "unsupported": "رسالة غير مدعومة"
+    },
     "actions": {
       "reply": "رد",
       "react": "تفاعل",

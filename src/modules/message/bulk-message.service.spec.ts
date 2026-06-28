@@ -9,6 +9,10 @@ import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 
+// `archiver` v8 ships as ESM only, which ts-jest cannot parse; StorageService (pulled in transitively
+// via MessageService) imports it for the export path only. Stub it — these tests don't touch exporting.
+jest.mock('archiver', () => ({ default: jest.fn() }));
+
 /** Regression lock for the terminal-status decision (cancel-clobber + stopOnError overwrite bugs). */
 describe('resolveFinalBatchStatus', () => {
   it('CANCELLED wins even when messages were sent/failed (no clobber back to PROCESSING/COMPLETED)', () => {

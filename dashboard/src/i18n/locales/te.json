@@ -89,6 +89,22 @@
     "loadingMessages": "సందేశాలను లోడ్ చేస్తోంది...",
     "noMessagesInChat": "ఇంకా సందేశాలు లేవు. ప్రారంభించడానికి మొదటి సందేశాన్ని పంపండి!",
     "downloadDocument": "డాక్యుమెంట్‌ను డౌన్‌లోడ్ చేయి",
+    "scrollToBottom": "తాజా సందేశాలకు వెళ్లండి",
+    "media": {
+      "photo": "ఫోటో",
+      "video": "వీడియో",
+      "voice": "వాయిస్ సందేశం",
+      "sticker": "స్టిక్కర్",
+      "document": "పత్రం",
+      "attachment": "అటాచ్‌మెంట్",
+      "location": "స్థానం",
+      "contact": "సంప్రదింపు",
+      "call": "కాల్",
+      "callMissed": "మిస్డ్ కాల్",
+      "callVideo": "వీడియో కాల్",
+      "callVideoMissed": "మిస్డ్ వీడియో కాల్",
+      "unsupported": "మద్దతు లేని సందేశం"
+    },
     "actions": {
       "reply": "ప్రత్యుత్తరం",
       "react": "ప్రతిస్పందించు",

@@ -10,6 +10,11 @@ import { TemplateService } from '../template/template.service';
 import { Template } from '../template/entities/template.entity';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { StorageService } from '../../common/storage/storage.service';
+
+// `archiver` v8 ships as ESM only, which ts-jest cannot parse when StorageService imports it (pulled in
+// here via MessageService). The export path is its only consumer, so a lightweight stub is sufficient.
+jest.mock('archiver', () => ({ default: jest.fn() }));
 
 const mockEngineResult = { id: 'wa-msg-1', timestamp: 1706868000 };
 
@@ -89,6 +94,7 @@ describe('MessageService', () => {
         { provide: HookManager, useValue: hookManager },
         { provide: TemplateService, useValue: templateService },
         { provide: LidMappingStoreService, useValue: lidMappingStore },
+        { provide: StorageService, useValue: { getFile: jest.fn(), putFile: jest.fn() } },
       ],
     }).compile();
 

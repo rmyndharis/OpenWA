@@ -89,6 +89,22 @@
     "loadingMessages": "Chargement des messages...",
     "noMessagesInChat": "Aucun message pour le moment. Envoyez le premier message pour commencer !",
     "downloadDocument": "Télécharger le document",
+    "scrollToBottom": "Aller aux derniers messages",
+    "media": {
+      "photo": "Photo",
+      "video": "Vidéo",
+      "voice": "Message vocal",
+      "sticker": "Sticker",
+      "document": "Document",
+      "attachment": "Pièce jointe",
+      "location": "Localisation",
+      "contact": "Contact",
+      "call": "Appel",
+      "callMissed": "Appel manqué",
+      "callVideo": "Appel vidéo",
+      "callVideoMissed": "Appel vidéo manqué",
+      "unsupported": "Message non pris en charge"
+    },
     "actions": {
       "reply": "Répondre",
       "react": "Réagir",

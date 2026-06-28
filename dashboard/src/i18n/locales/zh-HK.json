@@ -89,6 +89,22 @@
     "loadingMessages": "正在載入訊息...",
     "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
     "downloadDocument": "下載文件",
+    "scrollToBottom": "捲動至最新訊息",
+    "media": {
+      "photo": "相片",
+      "video": "影片",
+      "voice": "語音訊息",
+      "sticker": "貼圖",
+      "document": "文件",
+      "attachment": "附件",
+      "location": "位置",
+      "contact": "聯絡人",
+      "call": "通話",
+      "callMissed": "未接來電",
+      "callVideo": "視像通話",
+      "callVideoMissed": "未接視像通話",
+      "unsupported": "不支援的訊息"
+    },
     "actions": {
       "reply": "回覆",
       "react": "回應",

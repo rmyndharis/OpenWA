@@ -89,6 +89,22 @@
     "loadingMessages": "正在加载消息...",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",
+    "scrollToBottom": "滚动到最新消息",
+    "media": {
+      "photo": "照片",
+      "video": "视频",
+      "voice": "语音消息",
+      "sticker": "贴纸",
+      "document": "文档",
+      "attachment": "附件",
+      "location": "位置",
+      "contact": "联系人",
+      "call": "通话",
+      "callMissed": "未接来电",
+      "callVideo": "视频通话",
+      "callVideoMissed": "未接视频通话",
+      "unsupported": "不支持的消息"
+    },
     "actions": {
       "reply": "回复",
       "react": "回应",

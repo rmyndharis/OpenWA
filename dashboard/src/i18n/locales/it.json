@@ -89,6 +89,22 @@
     "loadingMessages": "Caricamento messaggi...",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",
+    "scrollToBottom": "Vai agli ultimi messaggi",
+    "media": {
+      "photo": "Foto",
+      "video": "Video",
+      "voice": "Messaggio vocale",
+      "sticker": "Sticker",
+      "document": "Documento",
+      "attachment": "Allegato",
+      "location": "Posizione",
+      "contact": "Contatto",
+      "call": "Chiamata",
+      "callMissed": "Chiamata persa",
+      "callVideo": "Videochiamata",
+      "callVideoMissed": "Videochiamata persa",
+      "unsupported": "Messaggio non supportato"
+    },
     "actions": {
       "reply": "Rispondi",
       "react": "Reagisci",
