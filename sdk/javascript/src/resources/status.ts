@@ -8,7 +8,13 @@
 
 import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
-import type { SendImageStatusRequest, SendTextStatusRequest, SendVideoStatusRequest, StatusRecord } from '../types.js';
+import type {
+  SendImageStatusRequest,
+  SendTextStatusRequest,
+  SendVideoStatusRequest,
+  StatusRecord,
+  StatusResult,
+} from '../types.js';
 
 export class StatusResource {
   constructor(private readonly client: OpenWAClient) {}
@@ -30,8 +36,8 @@ export class StatusResource {
   }
 
   /** Post a text status update. */
-  sendText(sessionId: string, body: SendTextStatusRequest): Promise<StatusRecord> {
-    return this.client.request<StatusRecord>({
+  sendText(sessionId: string, body: SendTextStatusRequest): Promise<StatusResult> {
+    return this.client.request<StatusResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/status/send-text`,
       body,
@@ -39,8 +45,8 @@ export class StatusResource {
   }
 
   /** Post an image status update. */
-  sendImage(sessionId: string, body: SendImageStatusRequest): Promise<StatusRecord> {
-    return this.client.request<StatusRecord>({
+  sendImage(sessionId: string, body: SendImageStatusRequest): Promise<StatusResult> {
+    return this.client.request<StatusResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/status/send-image`,
       body,
@@ -48,8 +54,8 @@ export class StatusResource {
   }
 
   /** Post a video status update. */
-  sendVideo(sessionId: string, body: SendVideoStatusRequest): Promise<StatusRecord> {
-    return this.client.request<StatusRecord>({
+  sendVideo(sessionId: string, body: SendVideoStatusRequest): Promise<StatusResult> {
+    return this.client.request<StatusResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/status/send-video`,
       body,
