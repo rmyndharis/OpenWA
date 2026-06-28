@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Clean install on Node 22+ / npm 11.** `@nestjs/websockets` is now declared as a direct dependency — it was only resolving transitively via `@nestjs/platform-socket.io`, so stricter installs failed with `TS2307: Cannot find module '@nestjs/websockets'`. The `postinstall` script also no longer triggers Node's `DEP0190` deprecation: `shell: true` is retained (so Windows still resolves `npm` via `npm.cmd`) but the command is now passed as a single string instead of an args array. Thanks @abdullah4tech. (#500)
+
+### Changed
+
+- **Italian translation update.** Improved the `messageTester` page title in the Italian (`it`) dashboard locale to use natural Italian instead of an anglicism. Thanks @albanobattistella. (#497)
+
 ## [0.7.9] - 2026-06-28
 
 ### Added
