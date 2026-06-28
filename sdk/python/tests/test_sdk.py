@@ -376,11 +376,12 @@ class TestStatus:
         backend.on("POST", "/status/send-image", body={"statusId": "s1"})
         backend.on("POST", "/status/send-video", body={"statusId": "s2"})
         client = make_client(backend)
-        # Server requires a nested {image|video:{...}} body, not flat media fields.
-        client.status.send_image("s", {"image": {"url": "http://img"}, "caption": "hi"})
-        assert backend.calls[-1].body == {"image": {"url": "http://img"}, "caption": "hi"}
-        client.status.send_video("s", {"video": {"url": "http://vid"}})
-        assert backend.calls[-1].body == {"video": {"url": "http://vid"}}
+        # Server requires a nested {image|video:{...}} body, not flat media fields,
+        # plus a required recipients list.
+        client.status.send_image("s", {"image": {"url": "http://img"}, "recipients": ["a@c.us"], "caption": "hi"})
+        assert backend.calls[-1].body == {"image": {"url": "http://img"}, "recipients": ["a@c.us"], "caption": "hi"}
+        client.status.send_video("s", {"video": {"url": "http://vid"}, "recipients": ["a@c.us"]})
+        assert backend.calls[-1].body == {"video": {"url": "http://vid"}, "recipients": ["a@c.us"]}
 
 
 class TestChatsAndHealth:
