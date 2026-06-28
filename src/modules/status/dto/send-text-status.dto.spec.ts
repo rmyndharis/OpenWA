@@ -13,23 +13,23 @@ describe('SendTextStatusDto recipients validation', () => {
 
   it('rejects missing recipients', async () => {
     const errors = await validate(plainToInstance(SendTextStatusDto, { text: 'hi' }));
-    expect(errors.some((e) => e.property === 'recipients')).toBe(true);
+    expect(errors.some(e => e.property === 'recipients')).toBe(true);
   });
 
   it('rejects an empty recipients array (-> 400)', async () => {
     const errors = await validate(plainToInstance(SendTextStatusDto, { text: 'hi', recipients: [] }));
-    expect(errors.some((e) => e.property === 'recipients')).toBe(true);
+    expect(errors.some(e => e.property === 'recipients')).toBe(true);
   });
 
   it('rejects non-string entries', async () => {
     const errors = await validate(plainToInstance(SendTextStatusDto, { text: 'hi', recipients: [123] }));
-    expect(errors.some((e) => e.property === 'recipients')).toBe(true);
+    expect(errors.some(e => e.property === 'recipients')).toBe(true);
   });
 
   it('rejects more than 256 recipients', async () => {
     const recipients = Array.from({ length: 257 }, (_, i) => `${i}@c.us`);
     const errors = await validate(plainToInstance(SendTextStatusDto, { text: 'hi', recipients }));
-    expect(errors.some((e) => e.property === 'recipients')).toBe(true);
+    expect(errors.some(e => e.property === 'recipients')).toBe(true);
   });
 
   it('accepts exactly 256 recipients', async () => {
@@ -42,7 +42,7 @@ describe('SendTextStatusDto recipients validation', () => {
     const errors = await validate(
       plainToInstance(SendTextStatusDto, { text: 'hi', recipients: ['not-a-jid', '123@g.us', '@c.us', 'abc@lid'] }),
     );
-    expect(errors.some((e) => e.property === 'recipients')).toBe(true);
+    expect(errors.some(e => e.property === 'recipients')).toBe(true);
   });
 
   it('accepts @lid recipients', async () => {

@@ -1,12 +1,4 @@
-import {
-  IsString,
-  IsOptional,
-  ValidateNested,
-  IsArray,
-  ArrayMinSize,
-  ArrayMaxSize,
-  Matches,
-} from 'class-validator';
+import { IsString, IsOptional, ValidateNested, IsArray, ArrayMinSize, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 
 class StatusMediaInput {

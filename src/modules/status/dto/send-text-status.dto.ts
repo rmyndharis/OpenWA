@@ -1,14 +1,4 @@
-import {
-  IsString,
-  IsOptional,
-  IsInt,
-  Min,
-  Max,
-  Matches,
-  IsArray,
-  ArrayMinSize,
-  ArrayMaxSize,
-} from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Max, Matches, IsArray, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 
 export class SendTextStatusDto {
   @IsString()

@@ -1358,9 +1358,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   /** Shape a Baileys send result into a StatusResult; expiresAt is timestamp + 24h (WhatsApp status TTL). */
   private toStatusResult(sent: WAMessage | undefined): StatusResult {
-    const ts = sent?.messageTimestamp
-      ? new Date(this.toUnixSeconds(sent.messageTimestamp) * 1000)
-      : new Date();
+    const ts = sent?.messageTimestamp ? new Date(this.toUnixSeconds(sent.messageTimestamp) * 1000) : new Date();
     return {
       statusId: sent?.key?.id ?? '',
       timestamp: ts,

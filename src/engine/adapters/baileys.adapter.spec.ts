@@ -1697,11 +1697,15 @@ describe('BaileysAdapter status posting', () => {
       backgroundColor: '#25D366',
       font: 2,
     });
-    expect(fakeSock.sendMessage).toHaveBeenCalledWith('status@broadcast', { text: 'hello' }, {
-      statusJidList: ['628111@s.whatsapp.net', '628222@lid'],
-      backgroundColor: '#25D366',
-      font: 2,
-    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { text: 'hello' },
+      {
+        statusJidList: ['628111@s.whatsapp.net', '628222@lid'],
+        backgroundColor: '#25D366',
+        font: 2,
+      },
+    );
     expect(result.statusId).toBe('STATUS1');
     expect(result.expiresAt.getTime() - result.timestamp.getTime()).toBe(24 * 3_600_000);
     expect(fakeStore.put).not.toHaveBeenCalled();
@@ -1725,10 +1729,7 @@ describe('BaileysAdapter status posting', () => {
   it('postVideoStatus resolves media and threads recipients', async () => {
     fakeSock.sendMessage.mockResolvedValue({ key: { id: 'VID1' }, messageTimestamp: 1719600000 });
     const adapter = await ready();
-    await adapter.postVideoStatus(
-      { mimetype: 'video/mp4', data: 'AAAA' },
-      { recipients: ['628111@c.us'] },
-    );
+    await adapter.postVideoStatus({ mimetype: 'video/mp4', data: 'AAAA' }, { recipients: ['628111@c.us'] });
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       'status@broadcast',
       { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4' },
