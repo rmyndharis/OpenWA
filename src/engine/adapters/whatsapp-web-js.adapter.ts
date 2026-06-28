@@ -1282,9 +1282,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   // ========== Gap Quick Wins Implementation ==========
 
-  async downloadMessageMedia(
-    messageId: string,
-  ): Promise<{ mimetype: string; data: string; filename?: string } | null> {
+  async downloadMessageMedia(messageId: string): Promise<{ mimetype: string; data: string; filename?: string } | null> {
     this.ensureReady();
     // getMessageById resolves from the engine's message store (populated when chat history was loaded),
     // so it reaches older messages that chat.fetchMessages({limit}) would miss.
@@ -1315,7 +1313,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
-      if (msg.type === 'call_log') {
+      if ((msg.type as string) === 'call_log') {
         // The public Message wrapper doesn't surface call details; read them off the raw _data.
         const d = (msg as unknown as { _data?: { isVideoCall?: boolean; callDuration?: number } })._data ?? {};
         out.call = {
