@@ -43,7 +43,10 @@ function decodeStorageFileName(stem: string): string | null {
   const encoded = stem.slice(ENCODED_KEY_PREFIX.length);
   const padded = encoded.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (encoded.length % 4)) % 4);
   try {
-    return Buffer.from(padded, 'base64').toString('utf8');
+    const decoded = Buffer.from(padded, 'base64').toString('utf8');
+    // Only accept it as one of our base64url-encoded names if it round-trips exactly. A literal legacy
+    // filename that merely starts with `key-` would otherwise be mis-decoded into a garbage key.
+    return encodeStorageKey(decoded) === stem ? decoded : null;
   } catch {
     return null;
   }
@@ -254,6 +257,11 @@ export class PluginStorageService {
           // pre-existed (writeFileSync mode only applies on create). Mirrors saveRegistry's hardening.
           atomicWriteFileSync(filePath, JSON.stringify(value, null, 2), { mode: 0o600 });
           fs.chmodSync(filePath, 0o600);
+          // Migrate off any pre-encoding legacy file for this key so a stale copy can't shadow reads/lists.
+          const legacyPath = resolveLegacyKeyPath(key);
+          if (legacyPath && legacyPath !== filePath && fs.existsSync(legacyPath)) {
+            fs.unlinkSync(legacyPath);
+          }
           return Promise.resolve();
         } catch (error) {
           logger.error(`Failed to write plugin data: ${pluginId}/${key}`, String(error));

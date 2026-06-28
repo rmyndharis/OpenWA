@@ -330,6 +330,10 @@ export class WebhookService {
             action: 'webhook_queue_failed',
           });
 
+          // Fallback: deliver directly when the queue add failed (e.g. Redis unreachable with the
+          // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
+          // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
+          // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
           try {
             await this.deliverWebhook(webhook, finalPayload, headers);
 

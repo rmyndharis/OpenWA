@@ -91,6 +91,42 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(await storage.list()).toContain('legacy');
   });
 
+  it('migrates a legacy plain-key file off on the next set (no stale shadow copy)', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    const legacyFile = path.join(pluginDataDir, 'legacy.json');
+    fs.writeFileSync(legacyFile, JSON.stringify({ old: true }));
+
+    await storage.set('legacy', { fresh: true });
+
+    expect(fs.existsSync(legacyFile)).toBe(false); // stale legacy copy removed
+    expect(await storage.get('legacy')).toEqual({ fresh: true });
+    const jsonFiles = fs.readdirSync(pluginDataDir).filter(f => f.endsWith('.json'));
+    expect(jsonFiles).toHaveLength(1); // only the encoded file remains
+  });
+
+  it('deletes a legacy plain-key file', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    fs.writeFileSync(path.join(pluginDataDir, 'legacy.json'), JSON.stringify({ old: true }));
+
+    await storage.delete('legacy');
+
+    expect(fs.existsSync(path.join(pluginDataDir, 'legacy.json'))).toBe(false);
+    expect(await storage.get('legacy')).toBeNull();
+  });
+
+  it('does not mangle a literal legacy filename that happens to start with "key-"', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    // A pre-encoding plugin could have stored a key literally named "key-zzz" -> key-zzz.json.
+    fs.writeFileSync(path.join(pluginDataDir, 'key-zzz.json'), JSON.stringify({ v: 1 }));
+
+    expect(await storage.list()).toContain('key-zzz'); // returned verbatim, not base64-decoded into garbage
+    expect(await storage.get('key-zzz')).toEqual({ v: 1 });
+  });
+
+  it('rejects a key containing a control character (NUL) on set', async () => {
+    await expect(storage.set('a\u0000b', { x: 1 })).rejects.toThrow(/Unsafe plugin storage key/);
+  });
+
   it('rejects a traversing set and writes nothing outside the plugin dir', async () => {
     await expect(storage.set('../../escape', { x: 1 })).rejects.toThrow();
     expect(fs.existsSync(path.join(dataDir, 'escape.json'))).toBe(false);

@@ -679,6 +679,8 @@ describe('WebhookService', () => {
   // ── dispatch (queue mode) ─────────────────────────────────────────
 
   describe('dispatch (queue mode)', () => {
+    afterEach(() => (undiciFetch as jest.Mock).mockReset());
+
     it('should add job to queue when queue is enabled', async () => {
       // Create a new service with queue enabled
       const queueModule: TestingModule = await Test.createTestingModule({
@@ -792,7 +794,6 @@ describe('WebhookService', () => {
         expect.objectContaining({ webhookId: webhook.id, fallback: 'queue_failed' }),
         expect.anything(),
       );
-      mockFetch.mockReset();
     });
   });
 });
