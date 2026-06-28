@@ -394,8 +394,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       throw new BadRequestException('Session is already starting');
     }
     const maxConcurrentSessions = resolveMaxConcurrentSessions(this.configService);
-    if (maxConcurrentSessions !== null && this.engines.size + this.initializingSessions.size >= maxConcurrentSessions) {
-      throw new BadRequestException(`Maximum concurrent sessions reached (${maxConcurrentSessions})`);
+    if (maxConcurrentSessions !== null) {
+      // Count each session once. A session mid-initialization is transiently in BOTH `engines` (set at
+      // the start of initializeEngine) and `initializingSessions` (until start()'s finally), so summing
+      // the two sizes would double-count it and falsely reject new starts at ~half the configured cap.
+      const activeCount = new Set<string>([...this.engines.keys(), ...this.initializingSessions]).size;
+      if (activeCount >= maxConcurrentSessions) {
+        throw new BadRequestException(`Maximum concurrent sessions reached (${maxConcurrentSessions})`);
+      }
     }
     this.initializingSessions.add(id);
 
@@ -1313,17 +1319,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
     // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
     const scope = allowedSessions && allowedSessions.length > 0 ? allowedSessions : null;
-    const sessions = await this.findAll(scope);
-    const byStatus: Record<string, number> = {};
+    // Aggregate status counts in the database instead of loading every row. findAll() is bounded by
+    // DEFAULT_LIST_LIMIT for the HTTP routes, so reusing it here would silently undercount `total` and
+    // `byStatus` on deployments with more sessions than that cap. A grouped COUNT is correct at any
+    // scale and cheaper (no entity hydration).
+    const qb = this.sessionRepository
+      .createQueryBuilder('session')
+      .select('session.status', 'status')
+      .addSelect('COUNT(session.id)', 'count');
+    if (scope) {
+      qb.where('session.id IN (:...scope)', { scope });
+    }
+    const rows = await qb.groupBy('session.status').getRawMany<{ status: string; count: string }>();
 
-    for (const session of sessions) {
-      byStatus[session.status] = (byStatus[session.status] || 0) + 1;
+    const byStatus: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      const count = Number(row.count) || 0;
+      byStatus[row.status] = count;
+      total += count;
     }
 
     const memory = process.memoryUsage();
 
     return {
-      total: sessions.length,
+      total,
       // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
       active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,

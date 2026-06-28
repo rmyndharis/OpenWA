@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
+import { workerConnectionOptions } from '../redis-connection';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
@@ -17,7 +18,9 @@ export interface WebhookJobResult {
   responseTime: number;
 }
 
-@Processor(QUEUE_NAMES.WEBHOOK)
+// Override the Worker's connection so it does NOT inherit the producer's `enableOfflineQueue: false`
+// from the shared BullModule connection — the Worker must tolerate a brief Redis reconnect.
+@Processor(QUEUE_NAMES.WEBHOOK, { connection: workerConnectionOptions() })
 export class WebhookProcessor extends WorkerHost {
   private readonly logger = createLogger('WebhookProcessor');
 
