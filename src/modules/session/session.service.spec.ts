@@ -1136,6 +1136,41 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.received')).toHaveLength(0);
     });
 
+    it('does not process an own-send status echo (type=append) — no dispatch, no WS emit, no DB write', async () => {
+      // Regression guard for the WhatsApp Status feature: posting a status produces an own-send echo
+      // that Baileys delivers as `messages.upsert` with `type: 'append'` (NOT 'notify'). The adapter's
+      // handleMessagesUpsert filters `type !== 'notify'` before processInboundMessage, so the echo never
+      // reaches the engine callbacks. This test pins the engine-neutral last-chance guard —
+      // `isStatusBroadcast` on both onMessageCreate and onMessage — so a future change can't silently
+      // leak a status echo to websockets, webhooks, or the message table. Asserts the full no-side-effect
+      // contract (webhook dispatch + WS emit + DB insert) for completeness, even though the existing
+      // isStatusBroadcast tests above already cover the dispatch-only slice.
+      const callbacks = await startAndCaptureCallbacks();
+      (webhookService.dispatch as jest.Mock).mockClear();
+      (eventsGateway.emitMessage as jest.Mock).mockClear();
+      (eventsGateway.emitMessageSent as jest.Mock).mockClear();
+      (messageRepository.insert as jest.Mock).mockClear();
+
+      const statusEcho = makeMessage({
+        id: 'wa-status-echo',
+        from: 'me@c.us',
+        to: 'status@broadcast',
+        chatId: 'status@broadcast',
+        fromMe: true,
+        isStatusBroadcast: true,
+      });
+
+      // An own-send echo could in principle surface via either callback path; assert neither dispatches.
+      callbacks.onMessageCreate!(statusEcho);
+      callbacks.onMessage!(statusEcho);
+      await flush();
+
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+      expect(eventsGateway.emitMessage).not.toHaveBeenCalled();
+      expect(eventsGateway.emitMessageSent).not.toHaveBeenCalled();
+      expect(messageRepository.insert).not.toHaveBeenCalled();
+    });
+
     // The default hookManager mock returns an empty `data: {}`; echo the message through so the
     // engine-set fields (isLidSender) survive the hook and reach the inline-resolution branch.
     const echoHook = () =>
