@@ -102,6 +102,7 @@
       "call": "Llamada",
       "callMissed": "Llamada perdida",
       "callVideo": "Videollamada",
+      "callVideoMissed": "Videollamada perdida",
       "unsupported": "Mensaje no soportado"
     },
     "actions": {
