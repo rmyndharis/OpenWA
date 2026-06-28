@@ -787,3 +787,54 @@ describe('resolveAuthTimeoutMs (#353 — configurable first-boot init wait)', ()
     expect(resolveAuthTimeoutMs()).toBe(600000);
   });
 });
+
+describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', () => {
+  const ENV = 'MEDIA_DOWNLOAD_ENABLED';
+  const orig = process.env[ENV];
+
+  afterEach(() => {
+    if (orig === undefined) delete process.env[ENV];
+    else process.env[ENV] = orig;
+  });
+
+  it('skips media download and omits the media field when disabled', async () => {
+    process.env[ENV] = 'false';
+
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-media-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessage = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessage };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    const mockMsg = {
+      id: { _serialized: 'MEDIA_OFF_1' },
+      from: '628111@c.us',
+      to: '628111@c.us',
+      body: '',
+      type: 'image',
+      timestamp: 1700000050,
+      fromMe: false,
+      hasMedia: true,
+      _data: { mimetype: 'image/png', size: 5000 },
+      getContact: jest.fn().mockResolvedValue(null),
+      hasQuotedMsg: false,
+    };
+
+    client.emit('message', mockMsg);
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    const msg = onMessage.mock.calls[0][0] as { media?: unknown; type: string };
+    expect(msg.type).toBe('image');
+    expect(msg.media).toBeUndefined();
+  });
+});

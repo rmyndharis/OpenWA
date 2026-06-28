@@ -89,6 +89,17 @@ describe('inbound media cap', () => {
       expect(isMediaDownloadEnabled()).toBe(false);
     });
 
+    it('returns false for case/whitespace variants of false', () => {
+      process.env[ENV] = 'FALSE';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = 'False';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = ' false ';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = ' FALSE ';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
     it('returns false when set to "0"', () => {
       process.env[ENV] = '0';
       expect(isMediaDownloadEnabled()).toBe(false);

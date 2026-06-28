@@ -28,10 +28,10 @@ const DEFAULT_MEDIA_DOWNLOAD_ENABLED = true;
 /**
  * Whether inbound media download is enabled. When false, the engine skips downloading media from
  * incoming messages entirely — no decryption, no memory allocation, no storage. Override via
- * MEDIA_DOWNLOAD_ENABLED; accepts 'false', '0', or 'no' (case-sensitive) to disable.
+ * MEDIA_DOWNLOAD_ENABLED; accepts 'false', '0', or 'no' (case-insensitive, whitespace-tolerant) to disable.
  */
 export function isMediaDownloadEnabled(): boolean {
-  const val = process.env.MEDIA_DOWNLOAD_ENABLED ?? '';
+  const val = (process.env.MEDIA_DOWNLOAD_ENABLED ?? '').trim().toLowerCase();
   return val !== 'false' && val !== '0' && val !== 'no';
 }
 
