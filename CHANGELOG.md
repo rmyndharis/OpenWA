@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Visible placeholder for skipped inbound media.** When `MEDIA_DOWNLOAD_ENABLED=false` (or a media item is over the byte cap), an incoming media message now carries an `omitted` marker and the dashboard chat renders a `📎 Media` placeholder instead of a bare timestamp. The marker reuses the existing `{ mimetype, omitted, sizeBytes }` shape on both the whatsapp-web.js and Baileys engines, so webhook/n8n/dashboard consumers see one consistent contract for "media was present but not downloaded." Thanks @spidgrou. (#501)
+
 ### Fixed
 
 - **Clean install on Node 22+ / npm 11.** `@nestjs/websockets` is now declared as a direct dependency — it was only resolving transitively via `@nestjs/platform-socket.io`, so stricter installs failed with `TS2307: Cannot find module '@nestjs/websockets'`. The `postinstall` script also no longer triggers Node's `DEP0190` deprecation: `shell: true` is retained (so Windows still resolves `npm` via `npm.cmd`) but the command is now passed as a single string instead of an args array. Thanks @abdullah4tech. (#500)
