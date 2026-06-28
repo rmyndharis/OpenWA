@@ -12,11 +12,16 @@ export function sessionTools(session: SessionService): ToolDescriptor[] {
     {
       name: 'SessionFindAll',
       description:
-        'List the WhatsApp sessions this API key may access (id, name, status). Use to discover available sessions before calling session-scoped tools.',
+        'List the WhatsApp sessions this API key may access (id, name, status). Use to discover available sessions before calling session-scoped tools. Supports limit/offset paging.',
       tier: 'read',
-      inputSchema: z.object({}),
-      handler: (_input, apiKey) =>
-        session.findAll(apiKey.allowedSessions).then(ss => ss.map(s => SessionResponseDto.fromEntity(s))),
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(1000).optional(),
+        offset: z.number().int().min(0).optional(),
+      }),
+      handler: (input: { limit?: number; offset?: number }, apiKey) =>
+        session
+          .findAll(apiKey.allowedSessions, { limit: input.limit, offset: input.offset })
+          .then(ss => ss.map(s => SessionResponseDto.fromEntity(s))),
     },
     {
       name: 'SessionFindOne',

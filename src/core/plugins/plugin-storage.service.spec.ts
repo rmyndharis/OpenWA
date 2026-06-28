@@ -27,6 +27,13 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+  const expectOwnerOnly = (p: string, expected: number): void => {
+    expect(fs.existsSync(p)).toBe(true);
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(p).mode & 0o777).toBe(expected);
+    }
+  };
+
   it('round-trips a normal key', async () => {
     await storage.set('state', { a: 1 });
     expect(await storage.get('state')).toEqual({ a: 1 });
@@ -37,8 +44,10 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
   it('creates the per-plugin dir 0o700 and data files 0o600 (persisted secrets not world-readable)', async () => {
     await storage.set('secret', { token: 'shh' });
     const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
-    expect(fs.statSync(pluginDataDir).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(path.join(pluginDataDir, 'secret.json')).mode & 0o777).toBe(0o600);
+    const secretFile = fs.readdirSync(pluginDataDir).find(f => f.endsWith('.json'));
+    expect(secretFile).toBeDefined();
+    expectOwnerOnly(pluginDataDir, 0o700);
+    expectOwnerOnly(path.join(pluginDataDir, secretFile as string), 0o600);
   });
 
   it('is atomic: a write that fails mid-way leaves the previous file intact (no partial overwrite)', async () => {
@@ -67,6 +76,19 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
   it('preserves JID-style keys containing : @ . -', async () => {
     await storage.set('group:sess-1:12345@g.us', { announced: true });
     expect(await storage.get('group:sess-1:12345@g.us')).toEqual({ announced: true });
+    expect(await storage.list()).toContain('group:sess-1:12345@g.us');
+
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    const files = fs.readdirSync(pluginDataDir).filter(f => f.endsWith('.json'));
+    expect(files.some(f => f.includes(':'))).toBe(false);
+  });
+
+  it('reads legacy plain-key files for backwards compatibility', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    fs.writeFileSync(path.join(pluginDataDir, 'legacy.json'), JSON.stringify({ old: true }));
+
+    expect(await storage.get('legacy')).toEqual({ old: true });
+    expect(await storage.list()).toContain('legacy');
   });
 
   it('rejects a traversing set and writes nothing outside the plugin dir', async () => {

@@ -13,7 +13,7 @@ jest.mock('undici', () => {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
@@ -195,7 +195,20 @@ describe('WebhookService', () => {
 
       await service.findAll();
 
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+    });
+
+    it('applies bounded pagination to cross-session listing', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1'], { limit: 5000, offset: -5 });
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { sessionId: In(['sess-1']) },
+        order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
     });
   });
 
@@ -724,6 +737,62 @@ describe('WebhookService', () => {
           backoff: expect.objectContaining({ type: 'exponential' }),
         }),
       );
+    });
+
+    it('falls back to direct delivery when queue add fails', async () => {
+      const queueModule: TestingModule = await Test.createTestingModule({
+        providers: [
+          WebhookService,
+          { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+                if (key === 'queue.enabled') return true;
+                if (key === 'webhook.retryDelay') return 5000;
+                if (key === 'webhook.timeout') return 25000;
+                return def as T;
+              }),
+            },
+          },
+          { provide: HookManager, useValue: hookManager },
+          { provide: getQueueToken(QUEUE_NAMES.WEBHOOK), useValue: webhookQueue },
+        ],
+      }).compile();
+
+      const queueService = queueModule.get<WebhookService>(WebhookService);
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 1 });
+      const queuePayload: WebhookPayload = {
+        event: 'message.received',
+        data: {},
+        timestamp: '',
+        sessionId: 'sess-1',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+      };
+      const mockFetch = undiciFetch as jest.Mock;
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: { sessionId: 'sess-1', event: 'message.received', payload: queuePayload },
+      });
+      webhookQueue.add.mockRejectedValueOnce(new Error('redis down'));
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await queueService.dispatch('sess-1', 'message.received', {});
+
+      expect(webhookQueue.add).toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/webhook',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'webhook:delivered',
+        expect.objectContaining({ webhookId: webhook.id, fallback: 'queue_failed' }),
+        expect.anything(),
+      );
+      mockFetch.mockReset();
     });
   });
 });

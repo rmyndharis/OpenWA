@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-26-dashboard-chats-ux-improvements-design.md`
 
+## Implementation Status
+
+Status on 2026-06-28: shipped in `0.7.7`.
+
+- Automated checks pass: `npm --prefix dashboard run test:unit`, `npm --prefix dashboard run build`, `npm --prefix dashboard run lint`, and `npm --prefix dashboard run i18n:check`.
+- Implemented surface includes React Query message caching, safe linkification/WhatsApp formatting, image lightbox, scroll position memory, and cache mutation helpers including `replaceTempMessage`.
+- Manual smoke matrix below remains the release verification checklist; no dated manual-smoke transcript is stored in this plan.
+- Minor intentional CSS deviation: quoted-message bodies remain single-line/ellipsis in the compact quote preview, while main message bodies preserve newlines.
+
 ## Global Constraints
 
 - **Test runner:** Use Node's built-in `node:test` with `import { test } from 'node:test'` and `import assert from 'node:assert/strict'`. Don't add Vitest, Jest, jsdom, or React Testing Library — they aren't in the repo and the maintainer's pattern is "pure logic in utils, thin glue in React, test the utils."
@@ -1354,8 +1363,8 @@ git commit -m "style(dashboard): chats — formatting rules + lightbox theme + z
 
 After all 8 tasks land:
 
-- [ ] `cd dashboard && npm run test:unit && npm run build && npm run lint` — all green.
-- [ ] `cd dashboard && npm run i18n:check` — green (we didn't add i18n keys; the script should remain happy).
+- [x] `cd dashboard && npm run test:unit && npm run build && npm run lint` — all green.
+- [x] `cd dashboard && npm run i18n:check` — green (we didn't add i18n keys; the script should remain happy).
 - [ ] Manual smoke matrix from Task 7 Step 9 still passes.
 - [ ] Visual check on mobile viewport: pinch-to-zoom works in the lightbox, swipe between photos works.
 

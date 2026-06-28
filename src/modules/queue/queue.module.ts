@@ -27,6 +27,8 @@ export { QUEUE_NAMES } from './queue-names';
           host: configService.get<string>('redis.host', 'localhost'),
           port: configService.get<number>('redis.port', 6379),
           password: configService.get<string>('redis.password'),
+          connectTimeout: configService.get<number>('redis.connectTimeoutMs', 5000),
+          enableOfflineQueue: false,
         },
       }),
     }),

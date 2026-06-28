@@ -8,6 +8,7 @@ import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import { evaluateFilters } from './filters/filter-evaluator';
@@ -99,10 +100,11 @@ export class WebhookService {
     });
   }
 
-  async findAll(allowedSessions?: string[] | null): Promise<Webhook[]> {
+  async findAll(allowedSessions?: string[] | null, opts: ListOptions = {}): Promise<Webhook[]> {
     // A session-restricted key only sees its own sessions' webhooks; an unrestricted key
     // (null/empty allowlist, e.g. ADMIN) sees all — mirroring the ApiKeyGuard allowedSessions model.
-    const options: FindManyOptions<Webhook> = { order: { createdAt: 'DESC' } };
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    const options: FindManyOptions<Webhook> = { order: { createdAt: 'DESC' }, take: limit, skip: offset };
     if (allowedSessions && allowedSessions.length > 0) {
       options.where = { sessionId: In(allowedSessions) };
     }
@@ -327,6 +329,38 @@ export class WebhookService {
             webhookId: webhook.id,
             action: 'webhook_queue_failed',
           });
+
+          try {
+            await this.deliverWebhook(webhook, finalPayload, headers);
+
+            await this.hookManager.execute(
+              'webhook:delivered',
+              { sessionId, event, webhookId: webhook.id, deliveryId, fallback: 'queue_failed' },
+              { sessionId, source: 'WebhookService' },
+            );
+
+            await this.hookManager.execute(
+              'webhook:after',
+              { sessionId, event, webhookId: webhook.id, success: true, fallback: 'queue_failed' },
+              { sessionId, source: 'WebhookService' },
+            );
+          } catch (fallbackError) {
+            await this.hookManager.execute(
+              'webhook:error',
+              {
+                sessionId,
+                event,
+                webhookId: webhook.id,
+                error: `Queue fallback delivery failed: ${String(fallbackError)}`,
+              },
+              { sessionId, source: 'WebhookService' },
+            );
+
+            this.logger.error(`Queue fallback delivery failed for webhook ${webhook.id}`, String(fallbackError), {
+              webhookId: webhook.id,
+              action: 'webhook_queue_fallback_failed',
+            });
+          }
         }
       } else {
         // Direct delivery when queue is disabled

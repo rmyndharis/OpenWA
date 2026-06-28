@@ -38,10 +38,10 @@ All routes are under `$BASE/api/sessions` and require `X-API-Key: $API_KEY` (som
 
 #### GET /api/sessions
 
-List all sessions visible to the key.
+List all sessions visible to the key. Add `limit`/`offset` to page large installations.
 
 ```bash
-curl -X GET "$BASE/api/sessions" \
+curl -X GET "$BASE/api/sessions?limit=100&offset=0" \
   -H "X-API-Key: $API_KEY"
 ```
 
@@ -851,10 +851,10 @@ curl -X GET "$BASE/api/sessions/my-session/webhooks/f1e2d3c4-b5a6-7890-1234-5678
 
 #### GET /api/webhooks
 
-List webhooks visible to the calling key (scoped to its allowed sessions).
+List webhooks visible to the calling key (scoped to its allowed sessions). Add `limit`/`offset` to page large lists.
 
 ```bash
-curl -X GET "$BASE/api/webhooks" \
+curl -X GET "$BASE/api/webhooks?limit=100&offset=0" \
   -H "X-API-Key: $API_KEY"
 ```
 

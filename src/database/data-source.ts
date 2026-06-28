@@ -1,4 +1,5 @@
 import { DataSource } from 'typeorm';
+import * as path from 'path';
 import { loadCliEnv } from './load-cli-env';
 
 // Load env with the same precedence as the app (process.env > .env > data/.env.generated), so the
@@ -6,6 +7,8 @@ import { loadCliEnv } from './load-cli-env';
 loadCliEnv();
 
 const dbType = process.env.DATABASE_TYPE || 'sqlite';
+
+const sourceGlob = (...segments: string[]): string => path.join(__dirname, ...segments).replace(/\\/g, '/');
 
 // SQLite configuration
 const sqliteDataSource = new DataSource({
@@ -15,13 +18,13 @@ const sqliteDataSource = new DataSource({
   // runtime data connection (app.module.ts). A broad '**' glob would also sweep in the main-owned
   // auth/audit entities and pollute `migration:generate` against the data DB with their DDL.
   entities: [
-    __dirname + '/../modules/session/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/webhook/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/message/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/template/**/*.entity{.ts,.js}',
-    __dirname + '/../engine/**/*.entity{.ts,.js}',
+    sourceGlob('..', 'modules', 'session', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'webhook', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'message', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'template', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'engine', '**', '*.entity{.ts,.js}'),
   ],
-  migrations: [__dirname + '/migrations/*{.ts,.js}'],
+  migrations: [sourceGlob('migrations', '*{.ts,.js}')],
   synchronize: false,
   logging: process.env.DATABASE_LOGGING === 'true',
 });
@@ -38,13 +41,13 @@ export const postgresDataSource = new DataSource({
   // runtime data connection (app.module.ts). A broad '**' glob would also sweep in the main-owned
   // auth/audit entities and pollute `migration:generate` against the data DB with their DDL.
   entities: [
-    __dirname + '/../modules/session/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/webhook/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/message/**/*.entity{.ts,.js}',
-    __dirname + '/../modules/template/**/*.entity{.ts,.js}',
-    __dirname + '/../engine/**/*.entity{.ts,.js}',
+    sourceGlob('..', 'modules', 'session', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'webhook', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'message', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'template', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'engine', '**', '*.entity{.ts,.js}'),
   ],
-  migrations: [__dirname + '/migrations/*{.ts,.js}'],
+  migrations: [sourceGlob('migrations', '*{.ts,.js}')],
   synchronize: false, // Never auto-sync in production
   logging: process.env.DATABASE_LOGGING === 'true',
   ssl:

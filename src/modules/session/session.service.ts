@@ -6,7 +6,9 @@ import {
   OnModuleDestroy,
   OnModuleInit,
   OnApplicationBootstrap,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
@@ -14,7 +16,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
-import { paginate, ListOptions } from '../../common/utils/paginate';
+import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import {
   IWhatsAppEngine,
@@ -82,6 +84,12 @@ export function clampReconnectDelay(rawDelay: number, baseDelay: number): number
   return clampNumber(Number.isFinite(rawDelay) ? rawDelay : baseDelay, 0, RECONNECT_DELAY_CAP_MS);
 }
 
+export function resolveMaxConcurrentSessions(configService?: Pick<ConfigService, 'get'>): number | null {
+  const configured = configService?.get<number>('sessions.maxConcurrent', 0) ?? 0;
+  if (!Number.isFinite(configured) || configured <= 0) return null;
+  return Math.floor(configured);
+}
+
 @Injectable()
 export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicationBootstrap {
   private readonly logger = createLogger('SessionService');
@@ -133,6 +141,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    @Optional()
+    private readonly configService?: ConfigService,
   ) {}
 
   /**
@@ -284,11 +294,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return saved;
   }
 
-  async findAll(allowedSessions?: string[] | null): Promise<Session[]> {
+  async findAll(allowedSessions?: string[] | null, opts: ListOptions = {}): Promise<Session[]> {
     // A session-restricted key only lists its own sessions; an unrestricted key (null/empty
     // allowlist) lists all — mirroring the ApiKeyGuard allowedSessions model so a scoped key
     // cannot enumerate every session through this aggregate route.
-    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' } };
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' }, take: limit, skip: offset };
     if (allowedSessions && allowedSessions.length > 0) {
       options.where = { id: In(allowedSessions) };
     }
@@ -381,6 +392,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
     if (this.initializingSessions.has(id)) {
       throw new BadRequestException('Session is already starting');
+    }
+    const maxConcurrentSessions = resolveMaxConcurrentSessions(this.configService);
+    if (maxConcurrentSessions !== null && this.engines.size + this.initializingSessions.size >= maxConcurrentSessions) {
+      throw new BadRequestException(`Maximum concurrent sessions reached (${maxConcurrentSessions})`);
     }
     this.initializingSessions.add(id);
 

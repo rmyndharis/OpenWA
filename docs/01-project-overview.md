@@ -135,7 +135,7 @@ Phase 3 (Advanced)
 ├── Label management
 ├── Status/Stories
 ├── Proxy per session
-├── Horizontal scaling
+├── Horizontal scaling design reference
 └── Metrics & monitoring
 ```
 
@@ -237,8 +237,8 @@ flowchart TB
     
     subgraph Frontend["Dashboard"]
         R[React] --> V[Vite]
-        V --> S[shadcn/ui]
-        S --> L[Lucide Icons]
+        V --> C[Bespoke CSS]
+        C --> L[Lucide Icons]
         L --> UI[Modern UI]
     end
 ```
@@ -256,8 +256,8 @@ flowchart TB
 | Cache | Redis | Fast, pub/sub support |
 | Queue | Bull | Reliable job processing |
 | Dashboard | React + Vite | Fast, modern |
-| Styling | Tailwind CSS | Utility-first CSS |
-| UI Components | shadcn/ui + Lucide | Accessible, polished |
+| Styling | Bespoke CSS modules/stylesheets | Lightweight dashboard styling without Tailwind |
+| UI Components | Custom React components + Lucide | Accessible, polished |
 | Container | Docker | Portable, consistent |
 
 ## 1.9 Constraints & Assumptions

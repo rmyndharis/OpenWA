@@ -89,6 +89,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'WEBHOOK_MAX_RETRIES',
     'WEBHOOK_RETRY_DELAY',
     'DATABASE_POOL_SIZE',
+    'REDIS_CONNECT_TIMEOUT_MS',
+    'MAX_CONCURRENT_SESSIONS',
   ]) {
     checkNonNegativeInt(key);
   }

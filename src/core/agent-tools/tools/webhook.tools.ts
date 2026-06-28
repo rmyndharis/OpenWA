@@ -10,12 +10,18 @@ export function webhookTools(webhook: WebhookService): ToolDescriptor[] {
   return [
     {
       name: 'WebhooksList',
-      description: 'List all webhooks the API key is allowed to see, across all its accessible sessions.',
+      description:
+        'List all webhooks the API key is allowed to see, across all its accessible sessions. Supports limit/offset paging.',
       tier: 'read',
       requiredRole: ApiKeyRole.OPERATOR,
-      inputSchema: z.object({}),
-      handler: (_input, apiKey) =>
-        webhook.findAll(apiKey.allowedSessions).then(ws => WebhookResponseDto.fromEntities(ws)),
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(1000).optional(),
+        offset: z.number().int().min(0).optional(),
+      }),
+      handler: (input: { limit?: number; offset?: number }, apiKey) =>
+        webhook
+          .findAll(apiKey.allowedSessions, { limit: input.limit, offset: input.offset })
+          .then(ws => WebhookResponseDto.fromEntities(ws)),
     },
     {
       name: 'WebhookFindBySession',

@@ -36,14 +36,22 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ STORAGE_TYPE: 's3' })).not.toThrow();
   });
 
-  it('rejects a non-integer rate-limit / webhook / pool-size value (a NaN silently disables throttling)', () => {
+  it('rejects a non-integer rate-limit / webhook / pool-size / redis-timeout / session-cap value', () => {
     expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: 'abc' })).toThrow(/RATE_LIMIT_SHORT_LIMIT/);
     expect(() => validateEnv({ WEBHOOK_TIMEOUT: '10s' })).toThrow(/WEBHOOK_TIMEOUT/);
     expect(() => validateEnv({ DATABASE_POOL_SIZE: '1.5' })).toThrow(/DATABASE_POOL_SIZE/);
+    expect(() => validateEnv({ REDIS_CONNECT_TIMEOUT_MS: 'soon' })).toThrow(/REDIS_CONNECT_TIMEOUT_MS/);
+    expect(() => validateEnv({ MAX_CONCURRENT_SESSIONS: 'many' })).toThrow(/MAX_CONCURRENT_SESSIONS/);
     expect(() => validateEnv({ RATE_LIMIT_LONG_TTL: '-5' })).toThrow(/RATE_LIMIT_LONG_TTL/);
     // valid integers (and unset) still pass
     expect(() =>
-      validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000', DATABASE_POOL_SIZE: '10' }),
+      validateEnv({
+        RATE_LIMIT_SHORT_LIMIT: '10',
+        WEBHOOK_TIMEOUT: '10000',
+        DATABASE_POOL_SIZE: '10',
+        REDIS_CONNECT_TIMEOUT_MS: '5000',
+        MAX_CONCURRENT_SESSIONS: '0',
+      }),
     ).not.toThrow();
     expect(() => validateEnv({})).not.toThrow();
   });

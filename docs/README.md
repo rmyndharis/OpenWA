@@ -56,6 +56,8 @@
 | 21  | [Glossary](./21-glossary.md)                                     | Terms and definitions                             |
 | 22  | [n8n Integration](./22-n8n-integration.md)                       | n8n community nodes for OpenWA                    |
 | 23  | [Community Integrations](./23-community-integrations.md)         | Third-party adapters built on the OpenWA API      |
+| 23-S| [Plugin Sandboxing](./23-plugin-sandboxing.md)                   | Worker isolation, capabilities, and plugin limits |
+| 24  | [MCP Integration](./24-mcp-integration.md)                       | Model Context Protocol tools and auth model       |
 
 **Examples**
 

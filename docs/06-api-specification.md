@@ -167,6 +167,13 @@ List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt
 
 **Auth:** API key  ·  **Scope:** session-scoped (a scoped key sees only its `allowedSessions`; an ADMIN / null-allowlist key lists all)
 
+**Query parameters**
+
+| Name | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | integer (1-1000) | No | `1000` | Max sessions to return; oversized/non-finite values are clamped/fallback to the default window. |
+| `offset` | integer | No | `0` | Sessions to skip for paging; negative/non-finite values resolve to `0`. |
+
 **Response** `200`
 
 ```json
@@ -2900,6 +2907,13 @@ List webhooks visible to the calling API key, scoped to its allowed sessions.
 
 **Auth:** API key (OPERATOR)  ·  **Scope:** session-scoped — derived from the authenticated key, not from any param/query
 
+**Query parameters**
+
+| Name | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `limit` | integer (1-1000) | No | `1000` | Max webhooks to return; oversized/non-finite values are clamped/fallback to the default window. |
+| `offset` | integer | No | `0` | Webhooks to skip for paging; negative/non-finite values resolve to `0`. |
+
 **Response** `200`
 
 ```json
@@ -2919,7 +2933,7 @@ List webhooks visible to the calling API key, scoped to its allowed sessions.
 ]
 ```
 
-Bare array, ordered by `createdAt` descending. If the calling key has a non-empty `allowedSessions` list, results are filtered to `WHERE sessionId IN (allowedSessions)`; a key with null/empty `allowedSessions` (e.g. an unrestricted ADMIN key) sees **all** webhooks. This is the cross-session list; the per-session list lives at `GET /api/sessions/:sessionId/webhooks`.
+Bare array, ordered by `createdAt` descending, bounded by `limit`/`offset`. If the calling key has a non-empty `allowedSessions` list, results are filtered to `WHERE sessionId IN (allowedSessions)`; a key with null/empty `allowedSessions` (e.g. an unrestricted ADMIN key) sees **all** webhooks. This is the cross-session list; the per-session list lives at `GET /api/sessions/:sessionId/webhooks`.
 
 **Errors:** `401` missing/invalid API key · `403` insufficient role
 
@@ -4545,7 +4559,7 @@ Recurring lifecycle events (and `message.reaction`) carry the same content acros
 
 ### Retries with exponential backoff
 
-When the queue is enabled, a non-2xx response, timeout (`WEBHOOK_TIMEOUT`, default `10000` ms), or network error schedules a retry. The number of attempts comes from the webhook's `retryCount` (default `3`) and the delay grows **exponentially** from a base of `WEBHOOK_RETRY_DELAY` (default `5000` ms). Each retry reuses the same `idempotencyKey` and increments `X-OpenWA-Retry-Count`. When the queue is disabled, delivery is direct with the same retry budget applied inline.
+When the queue is enabled, a non-2xx response, timeout (`WEBHOOK_TIMEOUT`, default `10000` ms), or network error schedules a retry. The number of attempts comes from the webhook's `retryCount` (default `3`) and the delay grows **exponentially** from a base of `WEBHOOK_RETRY_DELAY` (default `5000` ms). Each retry reuses the same `idempotencyKey` and increments `X-OpenWA-Retry-Count`. If Redis/BullMQ rejects the initial enqueue, OpenWA logs a `webhook:error` hook event and falls back to direct delivery with the same inline retry budget. When the queue is disabled, delivery is direct with the same retry budget applied inline.
 
 ### SSRF guard on registration
 

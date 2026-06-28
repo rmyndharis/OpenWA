@@ -6,6 +6,7 @@ export default () => ({
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD,
+    connectTimeoutMs: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || '5000', 10),
   },
 
   // Queue configuration
@@ -82,6 +83,12 @@ export default () => ({
     baileys: {
       authDir: process.env.BAILEYS_AUTH_DIR || './data/baileys',
     },
+  },
+
+  sessions: {
+    // 0 = unlimited/backwards-compatible. Set to a positive integer to cap concurrently running or
+    // initializing WhatsApp engines, which protects memory/Chromium-constrained deployments.
+    maxConcurrent: parseInt(process.env.MAX_CONCURRENT_SESSIONS || '0', 10),
   },
 
   // Webhook configuration

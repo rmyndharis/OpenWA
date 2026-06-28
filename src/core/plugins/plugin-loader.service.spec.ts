@@ -180,8 +180,12 @@ describe('PluginLoaderService — enable/config persistence', () => {
 
   it('writes registry.json without group/other access (plugin config can hold secrets)', () => {
     loader.registerBuiltInPlugin(manifest, {}, { apiKey: 'secret' });
-    const mode = fs.statSync(path.join(tmpDir, 'plugins', 'registry.json')).mode & 0o777;
-    expect(mode & 0o077).toBe(0);
+    const registryPath = path.join(tmpDir, 'plugins', 'registry.json');
+    expect(fs.existsSync(registryPath)).toBe(true);
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(registryPath).mode & 0o777;
+      expect(mode & 0o077).toBe(0);
+    }
   });
 
   it('restores the operator config on the next load instead of resetting to the default', () => {

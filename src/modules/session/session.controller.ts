@@ -58,10 +58,19 @@ export class SessionController {
     description: 'List of sessions',
     type: [SessionResponseDto],
   })
-  async findAll(@CurrentApiKey() apiKey?: ApiKey): Promise<SessionResponseDto[]> {
+  @ApiQuery({ name: 'limit', required: false, description: 'Max sessions to return (1-1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of sessions to skip (for paging)' })
+  async findAll(
+    @CurrentApiKey() apiKey?: ApiKey,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<SessionResponseDto[]> {
     // Scope to the key's allowedSessions so a session-restricted key cannot enumerate every
     // session. A null/empty allowlist (e.g. ADMIN) still lists all.
-    const sessions = await this.sessionService.findAll(apiKey?.allowedSessions);
+    const sessions = await this.sessionService.findAll(apiKey?.allowedSessions, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
     return sessions.map(s => this.transformSession(s));
   }
 

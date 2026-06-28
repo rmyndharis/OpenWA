@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
@@ -39,6 +40,7 @@ describe('SessionService', () => {
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
   let webhookService: jest.Mocked<Partial<WebhookService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
+  let configService: jest.Mocked<Partial<ConfigService>>;
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -109,6 +111,10 @@ describe('SessionService', () => {
       execute: jest.fn().mockResolvedValue({ continue: true, data: {} }),
     };
 
+    configService = {
+      get: jest.fn().mockImplementation(<T>(_key: string, def?: T): T => def as T),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
@@ -128,6 +134,7 @@ describe('SessionService', () => {
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
+        { provide: ConfigService, useValue: configService },
       ],
     }).compile();
 
@@ -261,7 +268,7 @@ describe('SessionService', () => {
       const result = await service.findAll();
 
       expect(result).toHaveLength(2);
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
     });
 
     it('scopes results to a session-restricted key', async () => {
@@ -272,6 +279,8 @@ describe('SessionService', () => {
       expect(repository.find).toHaveBeenCalledWith({
         where: { id: In(['sess-1', 'sess-2']) },
         order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
       });
     });
 
@@ -282,8 +291,21 @@ describe('SessionService', () => {
       await service.findAll([]);
 
       expect(repository.find).toHaveBeenCalledTimes(2);
-      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' } });
-      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+    });
+
+    it('applies bounded pagination to the database query', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1'], { limit: 5000, offset: -5 });
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { id: In(['sess-1']) },
+        order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
     });
   });
 
@@ -331,6 +353,19 @@ describe('SessionService', () => {
       await service.start('sess-uuid-1');
       // Engine is now in the map, so a second start is 'already started' (not wedged at 'starting').
       await expect(service.start('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects starting a new session when MAX_CONCURRENT_SESSIONS is reached', async () => {
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | number => {
+        if (key === 'sessions.maxConcurrent') return 1;
+        return def as T;
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: 'sess-2' }));
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      engines.set('sess-1', mockEngine);
+
+      await expect(service.start('sess-2')).rejects.toThrow(/Maximum concurrent sessions reached/);
+      expect(engineFactory.create).not.toHaveBeenCalled();
     });
   });
 
