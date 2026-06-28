@@ -467,7 +467,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
     this.ensureReady();
-    const sent = await this.sock!.sendMessage(chatId, { text });
+    const options = this.withEphemeral(chatId);
+    const sent = options
+      ? await this.sock!.sendMessage(chatId, { text }, options)
+      : await this.sock!.sendMessage(chatId, { text });
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
@@ -1311,14 +1314,34 @@ export class BaileysAdapter implements IWhatsAppEngine {
     ].join('\n');
   }
 
+  /**
+   * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
+   * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
+   * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
+   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. Returning
+   * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
+   * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
+   */
+  private withEphemeral(
+    chatId: string,
+    options?: MiscMessageGenerationOptions,
+  ): MiscMessageGenerationOptions | undefined {
+    const ephemeralExpiration = this.sessionStore.getEphemeralExpiration(chatId);
+    if (ephemeralExpiration === undefined) {
+      return options;
+    }
+    return { ...options, ephemeralExpiration };
+  }
+
   /** Send a Baileys content object and shape the result like the other sends. */
   private async sendContent(
     chatId: string,
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
   ): Promise<MessageResult> {
-    const sent = options
-      ? await this.sock!.sendMessage(chatId, content, options)
+    const merged = this.withEphemeral(chatId, options);
+    const sent = merged
+      ? await this.sock!.sendMessage(chatId, content, merged)
       : await this.sock!.sendMessage(chatId, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>

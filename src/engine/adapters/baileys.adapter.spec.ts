@@ -561,6 +561,18 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
+  it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'hello' },
+      { ephemeralExpiration: 604800 },
+    );
+  });
+
   it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
@@ -1306,6 +1318,41 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
+  });
+
+  it('media sends honor the chat disappearing timer via the funnel (#473)', async () => {
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 86400 }]);
+    await adapter.sendImageMessage('628111@s.whatsapp.net', { mimetype: 'image/png', data: Buffer.from([1]) });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      expect.objectContaining({ image: Buffer.from([1]) }),
+      { ephemeralExpiration: 86400 },
+    );
+  });
+
+  it('replyToMessage merges the disappearing timer with the quoted option (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.replyToMessage('628111@s.whatsapp.net', 'TARGET', 'my reply');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'my reply' },
+      { quoted: stored, ephemeralExpiration: 604800 },
+    );
+  });
+
+  it('react and delete never carry an ephemeral timer (Baileys does not exclude reactions) (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.reactToMessage('628111@s.whatsapp.net', 'TARGET', '👍');
+    await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      react: { text: '👍', key: stored.key },
+    });
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
   });
 

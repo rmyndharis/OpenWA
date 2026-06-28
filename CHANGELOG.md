@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Disappearing-messages support (Baileys engine).** Outbound messages now honor a chat's disappearing-messages timer: the Baileys adapter reads the chat's cached `ephemeralExpiration` and sets it on each send (text, media, and replies), so recipients no longer see _"This message won't disappear — the sender may be using an older version of WhatsApp."_ The timer is applied only when a positive value is known for the chat; when it's unknown, disabled, or not yet synced, the per-message expiration is omitted, exactly as before. Reactions, deletes/revokes, and status posts are unaffected. Thanks @ulises2k for the report. (#473)
+
 ## [0.7.10] - 2026-06-28
 
 ### Added
