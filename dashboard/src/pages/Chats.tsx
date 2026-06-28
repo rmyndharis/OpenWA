@@ -1036,11 +1036,10 @@ export function Chats() {
                           }
                           if (msg.type === 'call') {
                             const call = msg.metadata?.call;
-                            const callLabel = call?.video
-                              ? `📹 ${t('chats.media.callVideo')}`
-                              : call?.missed
-                                ? `📞 ${t('chats.media.callMissed')}`
-                                : `📞 ${t('chats.media.call')}`;
+                            const callKey = call?.video
+                              ? call.missed ? 'callVideoMissed' : 'callVideo'
+                              : call?.missed ? 'callMissed' : 'call';
+                            const callLabel = `${call?.video ? '📹' : '📞'} ${t(`chats.media.${callKey}`)}`;
                             return <div className="message-media-placeholder">{callLabel}</div>;
                           }
                           if (msg.type === 'contact') {

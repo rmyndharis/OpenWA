@@ -102,6 +102,7 @@
       "call": "Call",
       "callMissed": "Missed call",
       "callVideo": "Video call",
+      "callVideoMissed": "Missed video call",
       "unsupported": "Unsupported message"
     },
     "actions": {
