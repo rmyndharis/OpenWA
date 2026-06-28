@@ -22,9 +22,6 @@ export function inboundMediaConcurrency(): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_INBOUND_MEDIA_CONCURRENCY;
 }
 
-/** Default for inbound media download. */
-const DEFAULT_MEDIA_DOWNLOAD_ENABLED = true;
-
 /**
  * Whether inbound media download is enabled. When false, the engine skips downloading media from
  * incoming messages entirely — no decryption, no memory allocation, no storage. Override via
