@@ -740,6 +740,13 @@
   object-fit: cover;
 }
 
+.chats-page .message-media-omitted {
+  color: var(--color-text-muted, #888);
+  font-style: italic;
+  font-size: 0.9em;
+  margin-bottom: 0.25rem;
+}
+
 .chats-page .chat-video-media{
   max-width: 100%;
   max-height: 250px;

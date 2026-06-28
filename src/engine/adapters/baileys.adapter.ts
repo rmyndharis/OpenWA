@@ -1015,8 +1015,21 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'stickerMessage';
     if (isMediaType) {
       if (!isMediaDownloadEnabled()) {
-        // media stays undefined — Media download disabled entirely via MEDIA_DOWNLOAD_ENABLED=false.
-        // The message is emitted without a media field.
+        // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
+        // mimetype is available pre-download from the message content.
+        const normalizedContent = b.normalizeMessageContent(content) ?? content;
+        const subMessage =
+          normalizedContent.imageMessage ??
+          normalizedContent.videoMessage ??
+          normalizedContent.audioMessage ??
+          normalizedContent.documentMessage ??
+          normalizedContent.stickerMessage;
+        media = {
+          mimetype: subMessage?.mimetype ?? '',
+          filename: normalizedContent.documentMessage?.fileName ?? undefined,
+          omitted: true,
+          sizeBytes: coerceDeclaredSize(subMessage?.fileLength),
+        };
       } else {
         // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
         // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.

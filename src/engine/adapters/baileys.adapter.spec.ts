@@ -902,9 +902,11 @@ describe('BaileysAdapter inbound fan-out', () => {
       await new Promise(r => setImmediate(r));
       expect(onMessage).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      const msg = onMessage.mock.calls[0][0] as { media?: unknown; type: string };
+      const msg = onMessage.mock.calls[0][0] as { media?: { omitted?: boolean; mimetype?: string }; type: string };
       expect(msg.type).toBe('image');
-      expect(msg.media).toBeUndefined();
+      expect(msg.media).toBeDefined();
+      expect(msg.media?.omitted).toBe(true);
+      expect(msg.media?.mimetype).toBe('image/png');
       expect(baileys.downloadMediaMessage).not.toHaveBeenCalled();
     } finally {
       if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_ENABLED;

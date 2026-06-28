@@ -202,7 +202,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    */
   private async capInboundMediaFor(msg: Message): Promise<IncomingMessage['media'] | undefined> {
     if (!isMediaDownloadEnabled()) {
-      return undefined;
+      const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
+      return {
+        mimetype: data?.mimetype ?? '',
+        filename: data?.filename || undefined,
+        omitted: true,
+        sizeBytes: coerceDeclaredSize(data?.size),
+      };
     }
     const maxBytes = inboundMediaMaxBytes();
     const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;

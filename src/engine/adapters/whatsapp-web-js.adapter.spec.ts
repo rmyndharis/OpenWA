@@ -834,8 +834,11 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const msg = onMessage.mock.calls[0][0] as { media?: unknown; type: string };
+    const msg = onMessage.mock.calls[0][0] as { media?: { omitted?: boolean; mimetype?: string; sizeBytes?: number }; type: string };
     expect(msg.type).toBe('image');
-    expect(msg.media).toBeUndefined();
+    expect(msg.media).toBeDefined();
+    expect(msg.media?.omitted).toBe(true);
+    expect(msg.media?.mimetype).toBe('image/png');
+    expect(msg.media?.sizeBytes).toBe(5000);
   });
 });
