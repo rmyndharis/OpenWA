@@ -638,6 +638,14 @@ describe('InfraController.getConfig (#226)', () => {
 });
 
 describe('InfraController.getStatus engine (F7 — reads the real engine.puppeteer.* keys)', () => {
+  // Pin the WA-Web version so getStatus does not fire the wa-version registry fetch (no network in tests).
+  const savedWebVer = process.env.WWEBJS_WEB_VERSION;
+  beforeAll(() => (process.env.WWEBJS_WEB_VERSION = 'off'));
+  afterAll(() => {
+    if (savedWebVer === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVer;
+  });
+
   it('reports the saved headless/browserArgs instead of stale defaults from non-existent flat keys', async () => {
     const map: Record<string, unknown> = {
       'engine.type': 'whatsapp-web.js',
@@ -667,6 +675,14 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
 });
 
 describe('InfraController.getStatus storage (reads the real storage.localPath key)', () => {
+  // Pin the WA-Web version so getStatus does not fire the wa-version registry fetch (no network in tests).
+  const savedWebVer = process.env.WWEBJS_WEB_VERSION;
+  beforeAll(() => (process.env.WWEBJS_WEB_VERSION = 'off'));
+  afterAll(() => {
+    if (savedWebVer === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVer;
+  });
+
   const buildController = (map: Record<string, unknown>) => {
     const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
     const cache = { isAvailable: () => Promise.resolve(false) };

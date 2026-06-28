@@ -16,15 +16,20 @@ export const WA_VERSION_REGISTRY_URL =
 const DEFAULT_REMOTE_TEMPLATE = 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html';
 
 // Module-level cache: undefined = not yet resolved, string = the resolved current build. A failed
-// fetch is deliberately NOT cached, so a transient outage doesn't permanently defeat the #488 fix —
-// the next call retries. `inFlight` dedupes concurrent first-boot resolves into a single fetch.
+// fetch is NOT cached permanently — but to avoid re-stalling every call (e.g. each /infra/status poll
+// and every session start/reconnect) on a firewalled/offline host, a failure is rate-limited by
+// `lastFailureAt`: subsequent calls return null instantly for FAILURE_BACKOFF_MS, then retry. `inFlight`
+// dedupes concurrent resolves into a single fetch.
+const FAILURE_BACKOFF_MS = 60_000;
 let cachedCurrentVersion: string | undefined;
 let inFlight: Promise<string | null> | null = null;
+let lastFailureAt = 0;
 
 /** Test-only: reset the resolved-version cache between cases. */
 export function __resetWebVersionCache(): void {
   cachedCurrentVersion = undefined;
   inFlight = null;
+  lastFailureAt = 0;
 }
 
 function buildRemotePin(version: string): WebVersionPin {
@@ -44,6 +49,9 @@ function buildRemotePin(version: string): WebVersionPin {
 export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): Promise<string | null> {
   if (typeof cachedCurrentVersion === 'string') return cachedCurrentVersion;
   if (inFlight) return inFlight;
+  // Within the backoff window after a recent failure, return null instantly without a network call so
+  // a firewalled/offline host doesn't re-stall on every status poll / session start.
+  if (lastFailureAt && Date.now() - lastFailureAt < FAILURE_BACKOFF_MS) return null;
   inFlight = (async (): Promise<string | null> => {
     try {
       const controller = new AbortController();
@@ -57,12 +65,14 @@ export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): P
           cachedCurrentVersion = v; // cache only on success
           return v;
         }
-        return null; // malformed payload — don't cache, retry next time
+        lastFailureAt = Date.now(); // malformed payload — back off, then retry
+        return null;
       } finally {
         clearTimeout(timer);
       }
     } catch {
-      return null; // fetch failed — don't cache, retry next time
+      lastFailureAt = Date.now(); // fetch failed — back off, then retry
+      return null;
     } finally {
       inFlight = null;
     }

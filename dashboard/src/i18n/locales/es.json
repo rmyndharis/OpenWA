@@ -53,7 +53,8 @@
     "errorGeneric": "Ha ocurrido un error",
     "unknownError": "Error desconocido",
     "showApiKey": "Mostrar clave API",
-    "hideApiKey": "Ocultar clave API"
+    "hideApiKey": "Ocultar clave API",
+    "retry": "Reintentar"
   },
   "theme": {
     "light": "Claro",
@@ -665,7 +666,8 @@
       "importConfirm": "La importación REEMPLAZARÁ todos los datos actuales con la copia de seguridad ({{rows}} filas). Esto no se puede deshacer. ¿Continuar?",
       "invalidFile": "Ese archivo no es una copia de seguridad de datos válida de OpenWA.",
       "importTooLarge": "La copia de seguridad supera el límite de la solicitud. Aumenta BODY_SIZE_LIMIT en el servidor e inténtalo de nuevo."
-    }
+    },
+    "statusLoadError": "No se pudo cargar el estado actual de la infraestructura. Actualiza para reintentar."
   },
   "plugins": {
     "title": "Plugins",

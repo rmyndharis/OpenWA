@@ -34,6 +34,10 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'S3_REGION',
   'S3_ACCESS_KEY_ID',
   'S3_SECRET_ACCESS_KEY',
+  // Legacy S3 credential names — compose forwards them blank for backward compat, so clear a blank
+  // forward too (otherwise it could shadow a value in data/.env.generated).
+  'S3_ACCESS_KEY',
+  'S3_SECRET_KEY',
   // Redis selection + connection details (#488)
   'REDIS_ENABLED',
   'REDIS_HOST',

@@ -53,7 +53,8 @@
     "logout": "Disconnetti",
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
-    "unknownError": "Errore sconosciuto"
+    "unknownError": "Errore sconosciuto",
+    "retry": "Riprova"
   },
   "theme": {
     "light": "Chiaro",
@@ -665,7 +666,8 @@
       "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",
       "invalidFile": "Questo file non è un backup dati valido di OpenWA.",
       "importTooLarge": "Il backup supera il limite della richiesta. Aumenta BODY_SIZE_LIMIT sul server e riprova."
-    }
+    },
+    "statusLoadError": "Impossibile caricare lo stato attuale dell'infrastruttura. Aggiorna per riprovare."
   },
   "plugins": {
     "title": "Plugin",

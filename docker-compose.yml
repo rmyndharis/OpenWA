@@ -113,14 +113,17 @@ services:
       # docs/12-troubleshooting-faq.md. (Without this line the var in .env never reaches the container.)
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
       # Storage. Blank-forwarded (see Database note) so a dashboard local↔S3 switch applies; a real
-      # host value pins. Credentials use the canonical S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY names
-      # the app and dashboard read (the legacy S3_ACCESS_KEY / S3_SECRET_KEY are still honored as a
-      # fallback by the storage layer for older setups). S3_REGION is forwarded so external-S3 works.
+      # host value pins. Credentials use the canonical S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY names the
+      # app and dashboard write; the legacy S3_ACCESS_KEY / S3_SECRET_KEY are ALSO forwarded (and read
+      # as a fallback by the storage layer) so existing .env files keep working unchanged. S3_REGION is
+      # forwarded so external-S3 works.
       - STORAGE_TYPE=${STORAGE_TYPE:-}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-}
       - S3_ENDPOINT=${S3_ENDPOINT:-}
       - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
       - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - S3_REGION=${S3_REGION:-}
       - S3_BUCKET=${S3_BUCKET:-}
       # Redis. Blank-forwarded (see Database note) so a dashboard enable/disable applies; a real host

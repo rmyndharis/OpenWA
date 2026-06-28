@@ -98,6 +98,9 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
       'S3_REGION',
       'S3_ACCESS_KEY_ID',
       'S3_SECRET_ACCESS_KEY',
+      // legacy S3 names forwarded blank for backward compat — must also be cleared when blank
+      'S3_ACCESS_KEY',
+      'S3_SECRET_KEY',
       'REDIS_ENABLED',
       'REDIS_HOST',
       'REDIS_PORT',

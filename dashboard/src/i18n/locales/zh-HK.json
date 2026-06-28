@@ -53,7 +53,8 @@
     "logout": "登出",
     "refresh": "重新整理",
     "errorGeneric": "發生錯誤",
-    "unknownError": "未知錯誤"
+    "unknownError": "未知錯誤",
+    "retry": "重試"
   },
   "theme": {
     "light": "淺色",
@@ -665,7 +666,8 @@
       "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",
       "invalidFile": "該檔案並非有效的 OpenWA 資料備份。",
       "importTooLarge": "備份超出請求大小限制。請在伺服器上調高 BODY_SIZE_LIMIT 後重試。"
-    }
+    },
+    "statusLoadError": "無法載入目前的基礎設施狀態。請重新整理以重試。"
   },
   "plugins": {
     "title": "外掛",

@@ -689,11 +689,20 @@ describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve curren
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT cache a transient failure — a later call retries and resolves (#488 review must-fix)', async () => {
+  it('rate-limits a transient failure (no refetch within the backoff window) but does NOT cache it permanently', async () => {
     delete process.env.WWEBJS_WEB_VERSION;
-    expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined(); // transient failure, not cached
+    expect(await resolveWebVersionPin(fetcherFor(null, false))).toBeUndefined(); // transient failure
+
+    // Within the backoff window: a 2nd call returns undefined WITHOUT another network fetch.
+    const blocked = fetcherFor('2.3000.1042251103-alpha');
+    expect(await resolveWebVersionPin(blocked)).toBeUndefined();
+    expect(blocked).not.toHaveBeenCalled();
+
+    // After the window elapses (reset simulates it / a process restart): it retries and resolves —
+    // the failure was never permanently cached (#488 must-fix preserved).
+    __resetWebVersionCache();
     const ok = fetcherFor('2.3000.1042251103-alpha');
-    const pin = await resolveWebVersionPin(ok); // retries
+    const pin = await resolveWebVersionPin(ok);
     expect(pin?.webVersion).toBe('2.3000.1042251103-alpha');
     expect(ok).toHaveBeenCalledTimes(1);
   });

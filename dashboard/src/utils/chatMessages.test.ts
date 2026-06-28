@@ -110,6 +110,20 @@ test('mergeOrAppend replaces in place when id matches', () => {
   assert.equal(after[1].id, 'm-2');
 });
 
+test('mergeOrAppend does NOT downgrade delivery status (a replayed "sent" echo keeps "read")', () => {
+  const before = [msg({ id: 'm-1', status: 'read' })];
+  const after = mergeOrAppend(before, msg({ id: 'm-1', status: 'sent', body: 'echo' }));
+  assert.equal(after.length, 1);
+  assert.equal(after[0].status, 'read'); // forward-only: not downgraded to sent
+  assert.equal(after[0].body, 'echo'); // other fields still update
+});
+
+test('mergeOrAppend keeps existing metadata when the incoming copy carries none', () => {
+  const before = [msg({ id: 'm-1', metadata: { media: { mimetype: 'image/png' } } })];
+  const after = mergeOrAppend(before, msg({ id: 'm-1', metadata: undefined }));
+  assert.deepEqual(after[0].metadata, { media: { mimetype: 'image/png' } });
+});
+
 test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but same waMessageId)', () => {
   // DB-persisted copy: id = UUID, waMessageId = WA serialized id.
   const dbCopy = msg({ id: 'uuid-1', waMessageId: 'true_g@g.us_WA1', body: 'persisted' });

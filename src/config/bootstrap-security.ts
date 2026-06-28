@@ -78,15 +78,31 @@ export function isApiKeyPepperMissingInProduction(nodeEnv?: string, apiKeyPepper
   return nodeEnv === 'production' && !apiKeyPepper?.trim();
 }
 
+/** A built-in S3 endpoint is the bundled MinIO (host `minio`) — or unset (the built-in default). An
+ * external endpoint (e.g. s3.amazonaws.com) is reachable, so its credentials are never exempted. */
+function isInternalS3Endpoint(endpoint?: string): boolean {
+  const e = endpoint?.trim();
+  if (!e) return true;
+  try {
+    return new URL(e).hostname === 'minio';
+  } catch {
+    return false;
+  }
+}
+
 export interface SecretCheckEnv {
   nodeEnv?: string;
   databaseType?: string;
   databasePassword?: string;
   /** POSTGRES_BUILTIN — when 'true', OpenWA runs the bundled Postgres on the internal-only network. */
   postgresBuiltIn?: string;
+  /** DATABASE_HOST — used to confirm a built-in exemption really points at the internal `postgres`. */
+  databaseHost?: string;
   storageType?: string;
   s3AccessKey?: string;
   s3SecretKey?: string;
+  /** S3_ENDPOINT — used to confirm a built-in exemption really points at the internal `minio`. */
+  s3Endpoint?: string;
   /** MINIO_BUILTIN — when 'true', OpenWA runs the bundled MinIO on the internal-only network. */
   minioBuiltIn?: string;
   apiMasterKey?: string;
@@ -110,11 +126,16 @@ export function assertNoDefaultSecretsInProduction(env: SecretCheckEnv): void {
 
   // Built-in datastores run on the internal-only Docker network (not published), so their fixed
   // 'openwa'/'minioadmin' credentials are not internet-reachable — exempt them so selecting the
-  // built-in option doesn't crash-loop a production boot. External datastores are still enforced.
-  if (env.databaseType === 'postgres' && env.postgresBuiltIn !== 'true' && isWeak(env.databasePassword)) {
+  // built-in option doesn't crash-loop a production boot. The exemption requires BOTH the built-in
+  // flag AND an internal host: a host-pinned EXTERNAL datastore (even with the built-in flag set) is
+  // reachable, so its weak credential is still enforced.
+  const dbHost = env.databaseHost?.trim();
+  const dbExempt = env.postgresBuiltIn === 'true' && (!dbHost || dbHost === 'postgres');
+  if (env.databaseType === 'postgres' && !dbExempt && isWeak(env.databasePassword)) {
     problems.push('DATABASE_PASSWORD');
   }
-  if (env.storageType === 's3' && env.minioBuiltIn !== 'true') {
+  const s3Exempt = env.minioBuiltIn === 'true' && isInternalS3Endpoint(env.s3Endpoint);
+  if (env.storageType === 's3' && !s3Exempt) {
     if (isWeak(env.s3AccessKey)) problems.push('S3_ACCESS_KEY');
     if (isWeak(env.s3SecretKey)) problems.push('S3_SECRET_KEY');
   }

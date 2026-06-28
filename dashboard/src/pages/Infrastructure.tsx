@@ -80,7 +80,7 @@ export function Infrastructure() {
   const { t } = useTranslation();
   useDocumentTitle(t('infrastructure.title'));
   const toast = useToast();
-  const { data: infraStatus, isLoading: loading } = useInfraStatusQuery();
+  const { data: infraStatus, isLoading: loading, isError: statusError } = useInfraStatusQuery();
   const { data: savedConfig } = useInfraConfigQuery();
   const { data: engines = [] } = useEnginesQuery();
   const { data: currentEngineData } = useCurrentEngineQuery();
@@ -246,6 +246,24 @@ export function Infrastructure() {
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}
       >
         <Loader2 className="animate-spin" size={32} />
+      </div>
+    );
+  }
+
+  // If the live infrastructure status can't be loaded, do NOT render the editable form: it would seed
+  // from component defaults (sqlite/local/built-in:false) and a Save could flip a running backend to
+  // external+empty. Show an error + retry instead. (#488 review)
+  if (statusError || !infraStatus) {
+    return (
+      <div className="infrastructure-page">
+        <PageHeader title={t('infrastructure.title')} subtitle={t('infrastructure.subtitle')} />
+        <div className="infra-card" style={{ textAlign: 'center', padding: '2.5rem' }}>
+          <AlertTriangle size={32} style={{ color: 'var(--warning, #d97706)', marginBottom: '1rem' }} />
+          <p style={{ margin: 0 }}>{t('infrastructure.statusLoadError')}</p>
+          <button className="btn-secondary" style={{ marginTop: '1.25rem' }} onClick={() => window.location.reload()}>
+            {t('common.retry')}
+          </button>
+        </div>
       </div>
     );
   }

@@ -48,11 +48,31 @@ export interface ChatMessageView extends ChatMessage {
   };
 }
 
+// Delivery ticks only ADVANCE, never regress. Live websocket events (incl. a replayed message.sent on
+// reconnect) and engine acks can arrive out of order, so a late/duplicate lower status must not visually
+// downgrade a row already shown as delivered/read. Mirrors the backend transition rules:
+// pending<sent<delivered<read advances by rank; `failed` only applies from pending/sent and is terminal.
+const DELIVERY_RANK: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 };
+export function mergeDeliveryStatus(
+  current: ChatMessageView['status'] | undefined,
+  incoming: ChatMessageView['status'] | undefined,
+): ChatMessageView['status'] | undefined {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (current === 'failed') return 'failed'; // terminal — nothing advances from failed
+  if (incoming === 'failed') return current === 'pending' || current === 'sent' ? 'failed' : current;
+  if (!(incoming in DELIVERY_RANK)) return current; // unknown status — ignore
+  if (!(current in DELIVERY_RANK)) return incoming;
+  return DELIVERY_RANK[incoming] >= DELIVERY_RANK[current] ? incoming : current;
+}
+
 /**
  * Append `incoming` to `list`. If an entry with the same identity exists, replace it in place.
  * Identity uses the same `waMessageId ?? id` key as mergeChatMessages — a DB row (id=UUID,
  * waMessageId=WA id) and a live WS message (id=WA id) for the same WhatsApp message must dedupe,
- * not double-add. Returns a new array — does not mutate the input.
+ * not double-add. On replace, the delivery status only advances (a replayed lower `sent` echo can't
+ * downgrade a delivered/read row) and existing metadata is kept when the incoming copy carries none.
+ * Returns a new array — does not mutate the input.
  */
 export function mergeOrAppend(
   list: ChatMessageView[],
@@ -60,8 +80,13 @@ export function mergeOrAppend(
 ): ChatMessageView[] {
   const idx = list.findIndex(m => msgKey(m) === msgKey(incoming));
   if (idx === -1) return [...list, incoming];
+  const existing = list[idx];
   const next = list.slice();
-  next[idx] = incoming;
+  next[idx] = {
+    ...incoming,
+    status: mergeDeliveryStatus(existing.status, incoming.status) ?? incoming.status,
+    metadata: incoming.metadata ?? existing.metadata,
+  };
   return next;
 }
 

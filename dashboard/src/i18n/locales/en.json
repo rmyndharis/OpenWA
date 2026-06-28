@@ -53,7 +53,8 @@
     "logout": "Logout",
     "refresh": "Refresh",
     "errorGeneric": "An error occurred",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "retry": "Retry"
   },
   "theme": {
     "light": "Light",
@@ -665,7 +666,8 @@
     },
     "toasts": {
       "saveFailed": "Save Failed"
-    }
+    },
+    "statusLoadError": "Couldn't load the current infrastructure status. Refresh to try again."
   },
   "plugins": {
     "title": "Plugins",

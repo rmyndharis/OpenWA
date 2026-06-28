@@ -131,6 +131,47 @@ describe('assertNoDefaultSecretsInProduction', () => {
     ).toThrow(/DATABASE_PASSWORD/);
   });
 
+  it('does NOT exempt a weak secret when the built-in flag is set but the host is EXTERNAL', () => {
+    // POSTGRES_BUILTIN=true but DATABASE_HOST points at a reachable external DB → still enforced.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        databaseHost: 'db.example.com',
+      }),
+    ).toThrow(/DATABASE_PASSWORD/);
+    // MINIO_BUILTIN=true but S3_ENDPOINT is an external bucket → still enforced.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+        s3Endpoint: 'https://s3.amazonaws.com',
+      }),
+    ).toThrow(/S3_ACCESS_KEY/);
+  });
+
+  it('exempts the built-in defaults when the host is the internal bundled service', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        databaseHost: 'postgres',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+        s3Endpoint: 'http://minio:9000',
+      }),
+    ).not.toThrow();
+  });
+
   it('refuses prod with default MinIO/S3 credentials', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({

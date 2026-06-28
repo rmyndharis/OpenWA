@@ -53,7 +53,8 @@
     "logout": "退出登录",
     "refresh": "刷新",
     "errorGeneric": "发生错误",
-    "unknownError": "未知错误"
+    "unknownError": "未知错误",
+    "retry": "重试"
   },
   "theme": {
     "light": "浅色",
@@ -665,7 +666,8 @@
       "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
       "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
       "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
-    }
+    },
+    "statusLoadError": "无法加载当前基础设施状态。请刷新重试。"
   },
   "plugins": {
     "title": "插件",
