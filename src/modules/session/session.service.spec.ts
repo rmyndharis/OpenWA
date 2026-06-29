@@ -1213,6 +1213,29 @@ describe('SessionService', () => {
       expect(dispatchedEvents('message.received')).toHaveLength(1);
     });
 
+    it('does not persist (no orphan row) when the session is deleted mid hook chain', async () => {
+      // onMessage gates on isLiveEngine synchronously at entry, then awaits the message:received hook
+      // chain before inserting. If delete() completes during that await (the engine leaves the live
+      // map), a late continuation must NOT insert: the messages row has no FK, so an orphan persisted
+      // here is exactly what the session-delete cleanup is meant to prevent.
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockClear();
+      (webhookService.dispatch as jest.Mock).mockClear();
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+
+      // Tear the session out of the live map while message:received is still awaiting.
+      (hookManager.execute as jest.Mock).mockImplementationOnce((_event: string, data: unknown) => {
+        engines.delete('sess-uuid-1');
+        return Promise.resolve({ continue: true, data });
+      });
+
+      callbacks.onMessage!(makeMessage({ id: 'wa-orphan-1', fromMe: false }));
+      await flush();
+
+      expect(messageRepository.insert).not.toHaveBeenCalled();
+      expect(dispatchedEvents('message.received')).toHaveLength(0);
+    });
+
     it('does not process an own-send status echo (type=append) — no dispatch, no WS emit, no DB write', async () => {
       // Regression guard for the WhatsApp Status feature: posting a status produces an own-send echo
       // that Baileys delivers as `messages.upsert` with `type: 'append'` (NOT 'notify'). The adapter's

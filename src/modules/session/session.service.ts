@@ -701,6 +701,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
 
+            // The hook chain above is async; a delete()/teardown can retire this engine while it
+            // awaits. Re-check liveness so a late continuation can't persist an orphan messages row
+            // (the row has no FK, so a session-delete cleanup would never reap it) or dispatch for a
+            // session that no longer exists. Mirrors the synchronous isLiveEngine gate at entry.
+            if (!this.isLiveEngine(id, engine)) return;
+
             // De-duplicate at the source: the engine can re-fire `message` for one inbound message
             // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
             // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
