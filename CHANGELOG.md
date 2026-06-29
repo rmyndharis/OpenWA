@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Outbound @mentions on text and media sends.** `send-text` and the media send routes now accept an optional `mentions` array of WIDs (`<phone>@c.us`) to tag participants — most useful in groups. The contract is engine-neutral: pass neutral `@c.us` WIDs and the active engine (whatsapp-web.js or Baileys) de-normalizes them. For a tag to render and notify, the `text`/`caption` must also contain the matching `@<number>` token. This brings outbound parity with the `mentions` field already surfaced on inbound webhooks. (#530) Thanks @adampalli.
+- **Call and location messages render in the dashboard chat view.** Call logs now show a labeled bubble (voice/video, and "missed" for an unanswered incoming call) instead of an empty message, and shared locations render their map-preview thumbnail with a "📍 Location" label instead of dumping the raw base64 thumbnail as text. A new engine-neutral `call` message type carries the `{ video, missed }` detail, localized across all 10 dashboard locales. Based on work by @softronicve (#494).
 
 ## [0.7.13] - 2026-06-29
 

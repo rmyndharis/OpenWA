@@ -78,6 +78,13 @@
     "logs": "Logs"
   },
   "chats": {
+    "media": {
+      "location": "Location",
+      "call": "Call",
+      "callMissed": "Missed call",
+      "callVideo": "Video call",
+      "callVideoMissed": "Missed video call"
+    },
     "subtitle": "Send and reply to WhatsApp messages in real time",
     "noSessionsTitle": "No connected sessions",
     "noSessionsDesc": "Please connect a WhatsApp session from the <1>Sessions</1> menu first to use the chat feature.",

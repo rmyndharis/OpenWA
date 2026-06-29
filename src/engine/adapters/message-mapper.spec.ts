@@ -122,6 +122,7 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['location', 'location'],
     ['vcard', 'contact'],
     ['multi_vcard', 'contact'],
+    ['call_log', 'call'],
     ['revoked', 'revoked'],
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {

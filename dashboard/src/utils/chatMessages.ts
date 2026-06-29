@@ -54,6 +54,7 @@ export interface ChatMessageView extends ChatMessage {
     media?: MessageMedia;
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    call?: { video: boolean; missed: boolean };
   };
 }
 

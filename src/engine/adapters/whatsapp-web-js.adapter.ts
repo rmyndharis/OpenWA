@@ -74,6 +74,18 @@ export function wwebjsAckToDeliveryStatus(ack: number): DeliveryStatus {
 }
 
 /**
+ * Extract call detail from a whatsapp-web.js `call_log` message, or `undefined` for any other type.
+ * The public Message wrapper doesn't expose call fields, so we read them off the raw `_data`. An
+ * incoming call (`!fromMe`) with no recorded `callDuration` was never answered → missed; an outgoing
+ * call is never "missed". Used by getChatHistory, where `call_log` entries actually appear.
+ */
+export function extractWwebjsCall(msg: Message): { video: boolean; missed: boolean } | undefined {
+  if ((msg.type as string) !== 'call_log') return undefined;
+  const d = (msg as unknown as { _data?: { isVideoCall?: boolean; callDuration?: number } })._data ?? {};
+  return { video: Boolean(d.isVideoCall), missed: !msg.fromMe && !d.callDuration };
+}
+
+/**
  * Whether a per-session proxy URL parses to a supported scheme — defense-in-depth for a stored proxy
  * that bypassed DTO validation (e.g. loaded from the DB on restart). The host is NOT SSRF-blocked: a
  * per-session proxy is operator-chosen egress, and a loopback proxy sidecar is a legitimate setup.
@@ -1322,6 +1334,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       out.chatId = chatId;
       out.isGroup = chatId.endsWith('@g.us');
       out.isStatusBroadcast = chatId === 'status@broadcast';
+      const call = extractWwebjsCall(msg);
+      if (call) out.call = call;
       if (includeMedia && msg.hasMedia) {
         try {
           // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the response/heap.

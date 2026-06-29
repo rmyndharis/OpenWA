@@ -78,6 +78,13 @@
     "logs": "Log"
   },
   "chats": {
+    "media": {
+      "location": "Posizione",
+      "call": "Chiamata",
+      "callMissed": "Chiamata persa",
+      "callVideo": "Videochiamata",
+      "callVideoMissed": "Videochiamata persa"
+    },
     "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",
     "noSessionsTitle": "Nessuna sessione connessa",
     "noSessionsDesc": "Per utilizzare la funzione chat, connetti prima una sessione WhatsApp dal menu <1>Sessioni</1>.",

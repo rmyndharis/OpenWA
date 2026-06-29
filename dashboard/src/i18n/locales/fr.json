@@ -78,6 +78,13 @@
     "logs": "Journaux"
   },
   "chats": {
+    "media": {
+      "location": "Localisation",
+      "call": "Appel",
+      "callMissed": "Appel manqué",
+      "callVideo": "Appel vidéo",
+      "callVideoMissed": "Appel vidéo manqué"
+    },
     "subtitle": "Envoyez et répondez aux messages WhatsApp en temps réel",
     "noSessionsTitle": "Aucune session connectée",
     "noSessionsDesc": "Veuillez d'abord connecter une session WhatsApp depuis le menu <1>Sessions</1> pour utiliser la fonction de discussion.",

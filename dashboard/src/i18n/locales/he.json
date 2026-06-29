@@ -78,6 +78,13 @@
     "logs": "לוגים"
   },
   "chats": {
+    "media": {
+      "location": "מיקום",
+      "call": "שיחה",
+      "callMissed": "שיחה שלא נענתה",
+      "callVideo": "שיחת וידאו",
+      "callVideoMissed": "שיחת וידאו שלא נענתה"
+    },
     "subtitle": "שליחה ומענה להודעות WhatsApp בזמן אמת",
     "noSessionsTitle": "אין סשנים מחוברים",
     "noSessionsDesc": "יש לחבר סשן WhatsApp מתפריט <1>Sessions</1> תחילה כדי להשתמש בתכונת הצ'אט.",

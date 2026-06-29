@@ -499,6 +499,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           const metadata: Record<string, unknown> = {};
           if (m.media) metadata.media = m.media;
           if (m.quotedMessage) metadata.quotedMessage = m.quotedMessage;
+          if (m.call) metadata.call = m.call;
           const row = this.messageRepository.create({
             sessionId: id,
             waMessageId: m.id,
@@ -685,6 +686,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             }
             if (incoming.quotedMessage) {
               metadata.quotedMessage = incoming.quotedMessage;
+            }
+            if (incoming.call) {
+              metadata.call = incoming.call;
             }
 
             const dbMessage = this.messageRepository.create({

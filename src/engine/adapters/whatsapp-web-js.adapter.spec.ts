@@ -8,6 +8,7 @@ import {
   loadRemoteMedia,
   resolveAuthTimeoutMs,
   wwebjsAckToDeliveryStatus,
+  extractWwebjsCall,
 } from './whatsapp-web-js.adapter';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
@@ -908,5 +909,36 @@ describe('outbound mentions (#530)', () => {
       expect.anything(),
       expect.objectContaining({ caption: 'look @62811', mentions: ['62811@c.us'] }),
     );
+  });
+});
+
+describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {
+  const m = (over: Record<string, unknown>) => over as unknown as Parameters<typeof extractWwebjsCall>[0];
+
+  it('returns undefined for a non-call message', () => {
+    expect(extractWwebjsCall(m({ type: 'chat' }))).toBeUndefined();
+  });
+
+  it('flags a video call with a recorded duration as not-missed', () => {
+    expect(
+      extractWwebjsCall(m({ type: 'call_log', fromMe: false, _data: { isVideoCall: true, callDuration: 30 } })),
+    ).toEqual({
+      video: true,
+      missed: false,
+    });
+  });
+
+  it('marks an unanswered incoming voice call (no duration) as missed', () => {
+    expect(extractWwebjsCall(m({ type: 'call_log', fromMe: false, _data: {} }))).toEqual({
+      video: false,
+      missed: true,
+    });
+  });
+
+  it('never marks an outgoing call as missed', () => {
+    expect(extractWwebjsCall(m({ type: 'call_log', fromMe: true, _data: {} }))).toEqual({
+      video: false,
+      missed: false,
+    });
   });
 });

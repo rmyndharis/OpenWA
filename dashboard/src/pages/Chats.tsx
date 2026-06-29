@@ -801,6 +801,39 @@ export function Chats() {
 
                       const renderMedia = () => {
                         if (msg.type === 'revoked') return null;
+                        // location/call have no downloadable media payload — render them before the
+                        // mediaInfo gate. The raw body (a base64 thumbnail / empty token) is suppressed below.
+                        if (msg.type === 'location') {
+                          // WhatsApp location messages carry a base64 JPEG map-preview thumbnail in `body`.
+                          const thumb = msg.body && msg.body.length > 100 ? `data:image/jpeg;base64,${msg.body}` : '';
+                          return (
+                            <div className="message-location">
+                              {thumb && (
+                                <img
+                                  src={thumb}
+                                  alt=""
+                                  style={{ maxWidth: 220, borderRadius: 8, display: 'block', marginBottom: 4 }}
+                                />
+                              )}
+                              <span className="message-media-omitted">📍 {t('chats.media.location')}</span>
+                            </div>
+                          );
+                        }
+                        if (msg.type === 'call') {
+                          const call = msg.metadata?.call;
+                          const callKey = call?.video
+                            ? call.missed
+                              ? 'callVideoMissed'
+                              : 'callVideo'
+                            : call?.missed
+                              ? 'callMissed'
+                              : 'call';
+                          return (
+                            <div className="message-media-omitted">
+                              {`${call?.video ? '📹' : '📞'} ${t(`chats.media.${callKey}`)}`}
+                            </div>
+                          );
+                        }
                         if (!mediaInfo) return null;
                         if (mediaInfo.omitted) {
                           return <div className="message-media-omitted">📎 Media</div>;
@@ -884,7 +917,9 @@ export function Chats() {
                                 <div className="message-text">{t('chats.messageDeleted')}</div>
                               ) : (
                                 msg.body &&
-                                (!mediaInfo || msg.body !== mediaInfo.filename) && (
+                                (!mediaInfo || msg.body !== mediaInfo.filename) &&
+                                msg.type !== 'location' &&
+                                msg.type !== 'call' && (
                                   <MessageBody text={msg.body} className="message-text" />
                                 )
                               )}

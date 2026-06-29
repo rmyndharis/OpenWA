@@ -78,6 +78,13 @@
     "logs": "記錄"
   },
   "chats": {
+    "media": {
+      "location": "位置",
+      "call": "通話",
+      "callMissed": "未接來電",
+      "callVideo": "視像通話",
+      "callVideoMissed": "未接視像通話"
+    },
     "subtitle": "即時傳送和回覆 WhatsApp 訊息",
     "noSessionsTitle": "沒有已連線的工作階段",
     "noSessionsDesc": "請先從 <1>工作階段</1> 選單連線一個 WhatsApp 工作階段，才能使用聊天功能。",

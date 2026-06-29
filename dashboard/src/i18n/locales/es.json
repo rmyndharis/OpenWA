@@ -78,6 +78,13 @@
     "templates": "Plantillas"
   },
   "chats": {
+    "media": {
+      "location": "Ubicación",
+      "call": "Llamada",
+      "callMissed": "Llamada perdida",
+      "callVideo": "Videollamada",
+      "callVideoMissed": "Videollamada perdida"
+    },
     "subtitle": "Envía y responde mensajes de WhatsApp en tiempo real",
     "noSessionsTitle": "Sin sesiones conectadas",
     "noSessionsDesc": "Conecta primero una sesión de WhatsApp desde el menú <1>Sesiones</1> para usar el chat.",

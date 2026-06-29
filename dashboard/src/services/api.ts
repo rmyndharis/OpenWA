@@ -140,6 +140,7 @@ export const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'call',
   'revoked',
   'unknown',
 ] as const;
@@ -166,6 +167,7 @@ export interface ChatMessage {
     media?: { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    call?: { video: boolean; missed: boolean };
   };
 }
 

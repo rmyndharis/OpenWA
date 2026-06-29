@@ -78,6 +78,13 @@
     "templates": "Modelos"
   },
   "chats": {
+    "media": {
+      "location": "Localização",
+      "call": "Chamada",
+      "callMissed": "Chamada perdida",
+      "callVideo": "Chamada de vídeo",
+      "callVideoMissed": "Chamada de vídeo perdida"
+    },
     "subtitle": "Envie e responda mensagens do WhatsApp em tempo real",
     "noSessionsTitle": "Nenhuma sessão conectada",
     "noSessionsDesc": "Conecte primeiro uma sessão do WhatsApp no menu <1>Sessões</1> para usar o chat.",
