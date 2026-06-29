@@ -438,7 +438,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
       // engine we just registered so the session isn't resurrected to READY (mirrors the post-init
       // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
-      if (this.stoppingSessions.has(id)) {
+      // delete() clears its teardown mark before this slow init resolves, so re-check the session row
+      // exists, not just the mark; the findOne below then surfaces a deleted session as NotFound.
+      if (await this.isSessionRetired(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
@@ -1043,6 +1045,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }, delay);
   }
 
+  /**
+   * True once a session must stay down: it is explicitly marked tearing-down, or it was deleted
+   * outright while a slow engine.initialize() was in flight. delete() clears its `stoppingSessions`
+   * mark in its finally (ms) and removes the session row well before a Chromium launch resolves, so
+   * the mark alone can't catch a delete that raced a (re)connect — the session row is the source of
+   * truth a post-init guard must re-check before keeping the engine it just created.
+   */
+  private async isSessionRetired(id: string): Promise<boolean> {
+    if (this.stoppingSessions.has(id)) {
+      return true;
+    }
+    return (await this.sessionRepository.findOne({ where: { id } })) == null;
+  }
+
   private async executeReconnect(id: string, session: Session, state: ReconnectState): Promise<void> {
     // The session may have been stopped/deleted before this fired — don't resurrect it.
     if (this.stoppingSessions.has(id)) {
@@ -1062,9 +1078,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Re-initialize
       await this.initializeEngine(id, session);
 
-      // A stop()/delete() may have run while we awaited init — if so, tear down the engine we
-      // just registered so it isn't orphaned (the session is meant to be down).
-      if (this.stoppingSessions.has(id)) {
+      // A stop()/delete() may have run while we awaited init — if so, tear down the engine we just
+      // registered so it isn't orphaned (the session is meant to be down). delete() clears its
+      // teardown mark before this slow init resolves, so re-check the session row exists, not just
+      // the mark — otherwise a delete that raced the reconnect leaks a live Chromium/socket.
+      if (await this.isSessionRetired(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');

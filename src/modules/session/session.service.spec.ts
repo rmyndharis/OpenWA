@@ -566,6 +566,24 @@ describe('SessionService', () => {
       expect(i.engines.has('sess-uuid-1')).toBe(false);
     });
 
+    it('tears down an engine created when a delete lands during init (session row gone, mark cleared)', async () => {
+      const i = internals();
+      // The delete↔reconnect race: delete() clears its teardown mark in finally (ms) AND removes the
+      // session row, both well before a slow engine.initialize() (Chromium launch) resolves. Unlike
+      // stop(), delete() does not leave the mark set, so the mark alone can't catch it — the post-init
+      // guard must re-check that the session still exists before keeping the engine it just created.
+      mockEngine.initialize.mockImplementation(() => {
+        i.stoppingSessions.delete('sess-uuid-1');
+        (repository.findOne as jest.Mock).mockResolvedValue(null);
+        return Promise.resolve();
+      });
+
+      await i.executeReconnect('sess-uuid-1', createMockSession(), reconnectState);
+
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(i.engines.has('sess-uuid-1')).toBe(false);
+    });
+
     it('still re-initializes when the old engine destroy() hangs (time-bounded teardown)', async () => {
       jest.useFakeTimers();
       try {
@@ -1700,6 +1718,26 @@ describe('SessionService', () => {
       await service.start('sess-uuid-1');
 
       // The engine registered during init must be torn down + removed, not left READY.
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(service.getEngine('sess-uuid-1')).toBeUndefined();
+    });
+
+    it('tears down the just-initialized engine if the session is deleted during start() (row gone, mark cleared)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // Unlike a stop(), a concurrent delete() clears its teardown mark in finally AND removes the
+      // session row before this init resolves — the mark alone can't catch it, so the post-init guard
+      // must re-check existence. start() then surfaces the now-missing session as NotFound.
+      mockEngine.initialize.mockImplementationOnce(() => {
+        (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions.delete('sess-uuid-1');
+        (repository.findOne as jest.Mock).mockResolvedValue(null);
+        return Promise.resolve();
+      });
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow(NotFoundException);
+
       expect(mockEngine.destroy).toHaveBeenCalled();
       expect(service.getEngine('sess-uuid-1')).toBeUndefined();
     });
