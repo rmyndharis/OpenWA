@@ -26,6 +26,19 @@ describe('evaluateFilters', () => {
     expect(evaluateFilters(f, 'message.received', msg({ from: '222@c.us' }))).toBe(false);
   });
 
+  it('matches a bare-digit phone filter against the engine JID across dialects (user-input canonicalization)', () => {
+    // A user-typed phone (bare digits, optionally formatted) collapses to <digits>@c.us and matches the
+    // sender whether the engine emitted @c.us or @s.whatsapp.net.
+    const f = filters({ field: 'sender', operator: 'is', value: ['111'] });
+    expect(evaluateFilters(f, 'message.received', msg({ from: '111@c.us' }))).toBe(true);
+    expect(evaluateFilters(f, 'message.received', msg({ from: '111@s.whatsapp.net' }))).toBe(true);
+    expect(evaluateFilters(f, 'message.received', msg({ from: '222@c.us' }))).toBe(false);
+
+    // Formatting characters are stripped to digits before canonicalization.
+    const formatted = filters({ field: 'sender', operator: 'is', value: ['+1 (11)'] });
+    expect(evaluateFilters(formatted, 'message.received', msg({ from: '111@c.us' }))).toBe(true);
+  });
+
   it('resolves sender to author in group messages', () => {
     const f = filters({ field: 'sender', operator: 'is', value: ['part@c.us'] });
     const groupMsg = msg({ from: '120@g.us', author: 'part@c.us', isGroup: true });

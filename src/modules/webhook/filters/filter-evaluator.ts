@@ -5,7 +5,7 @@ import {
   eventFamily,
   getFieldDefinition,
 } from './filter-types';
-import { WaId } from '../../../engine/identity/wa-id.value';
+import { toNeutralJid } from '../../../engine/identity/wa-id';
 
 /**
  * Resolves a lid JID to its phone user-part when the mapping is known (mirrors the engine adapter's
@@ -19,9 +19,16 @@ export type LidResolver = (jid: string) => string | null;
 // table resolves to its phone) and a user-typed filter value (bare digits or a JID) both collapse to
 // the same neutral string (`<phone>@c.us` / `<id>@g.us` / `<lid>@lid`). So a phone filter now matches
 // the person across user dialects AND any lid resolving to that phone - previously a silent miss.
-const canonicalActor = (jid: string, resolve?: LidResolver): string =>
-  WaId.fromEngineJid(jid, resolve).toNeutral().toLowerCase();
-const canonicalInput = (value: string): string => WaId.fromUserInput(value).toNeutral().toLowerCase();
+const canonicalActor = (jid: string, resolve?: LidResolver): string => toNeutralJid(jid, resolve).toLowerCase();
+const canonicalInput = (value: string): string => {
+  // Bare digits are a phone-addressed user; anything else parses as a JID. Mirrors the engine's
+  // user-input canonicalization (byte-identical to the former WaId.fromUserInput().toNeutral()).
+  const trimmed = value.trim();
+  if (trimmed && !trimmed.includes('@')) {
+    return `${trimmed.replace(/\D/g, '') || trimmed}@c.us`.toLowerCase();
+  }
+  return toNeutralJid(trimmed).toLowerCase();
+};
 
 const toStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
