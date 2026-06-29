@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Failed API-key authentication attempts are now recorded in the audit log.** Rejected or denied keys (invalid, disabled/expired, IP- or session-scope-denied, or insufficient role) previously left no audit entry; the gateway now logs an `api_key_auth_failed` event with the client IP, method, path, and reason, giving administrators a forensic trail for credential probing. Audit logging stays best-effort and never affects the request outcome. (#535)
 - **The SSRF guard blocks the deprecated IPv6 site-local range (`fec0::/10`).** Webhook and server-side media URLs are now rejected when they resolve into `fec0::/10`, closing a gap alongside the already-blocked unique-local and link-local ranges. (#536)
 - **Session-scoped MCP tools require a session id before authorization.** A session-scoped tool invoked without a session id is now rejected, so a session-restricted API key can't be used to drive such a tool against a session outside its scope. (#536)
+- **Contact-card vCards are sanitized on both engines.** Sending a contact whose name or number contained CR/LF could inject extra vCard fields on the whatsapp-web.js engine; both adapters now build the vCard through one shared sanitizing helper (CR/LF stripped, digits-only `waid`). (#537)
 
 ## [0.7.12] - 2026-06-29
 
