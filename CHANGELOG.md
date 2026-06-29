@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Hook re-entrancy is now blocked for sandboxed plugins too.** A plugin running in the worker-thread sandbox could re-fire the hook it was handling by issuing a capability call (for example, sending a message from within a `message:sending` handler), because the re-entrancy guard did not span the worker boundary — looping the event back into the plugin without bound. The host now runs each worker-initiated capability call inside the in-flight hook context, so such a re-fire is short-circuited exactly as it already was for in-process plugins. (#532)
+- **Docker container teardown is constrained to OpenWA-managed services.** The `POST /infra/restart` endpoint passed its `profilesToRemove` list straight to container removal, which resolved containers by a name substring — so an unrecognized or empty profile could stop and remove an unrelated container. Teardown is now restricted to the managed allowlist (`postgres`, `redis`, `minio`) and container resolution requires an exact `openwa-<service>` name match. (#534)
 
 ## [0.7.12] - 2026-06-29
 
