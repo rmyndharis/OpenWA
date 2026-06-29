@@ -14,6 +14,7 @@ import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeor
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { MessageBatch } from '../message/entities/message-batch.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
@@ -366,7 +367,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
 
       // DB removal is NOT best-effort: a genuine failure must surface (500) rather than be swallowed.
+      // messages and message_batches carry a sessionId but have no FK cascade to sessions (unlike
+      // webhooks/templates/baileys_stored_messages), so remove them explicitly in the same transaction
+      // — otherwise deleting a session leaves its full history orphaned forever.
       await this.dataSource.transaction(async manager => {
+        await manager.delete(Message, { sessionId: id });
+        await manager.delete(MessageBatch, { sessionId: id });
         await manager.remove(session);
       });
       this.logger.log(`Session deleted: ${session.name}`, {

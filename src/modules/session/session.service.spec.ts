@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
+import { MessageBatch } from '../message/entities/message-batch.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -68,6 +69,7 @@ describe('SessionService', () => {
         const manager = {
           save: jest.fn().mockImplementation((entity: unknown) => Promise.resolve(entity)),
           remove: jest.fn().mockResolvedValue(undefined),
+          delete: jest.fn().mockResolvedValue({ affected: 0 }),
         };
         return cb(manager);
       }),
@@ -442,6 +444,24 @@ describe('SessionService', () => {
       await service.delete('sess-uuid-1');
 
       expect(mockEngine.destroy).toHaveBeenCalled();
+    });
+
+    it('removes the session messages and bulk batches in the same transaction (no orphaned rows)', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+
+      const managerDelete = jest.fn().mockResolvedValue({ affected: 0 });
+      const managerRemove = jest.fn().mockResolvedValue(undefined);
+      (dataSource.transaction as jest.Mock).mockImplementationOnce(async (cb: (m: unknown) => Promise<unknown>) =>
+        cb({ save: jest.fn(), remove: managerRemove, delete: managerDelete }),
+      );
+
+      await service.delete('sess-uuid-1');
+
+      // These tables carry sessionId but have no FK cascade, so delete() must clean them explicitly.
+      expect(managerDelete).toHaveBeenCalledWith(Message, { sessionId: 'sess-uuid-1' });
+      expect(managerDelete).toHaveBeenCalledWith(MessageBatch, { sessionId: 'sess-uuid-1' });
+      expect(managerRemove).toHaveBeenCalledWith(session);
     });
   });
 
