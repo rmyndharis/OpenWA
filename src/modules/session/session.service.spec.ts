@@ -630,6 +630,20 @@ describe('SessionService', () => {
       expect(result.lastError).toBe('chromium missing');
     });
 
+    it('clears the stored failure reason when the session is deleted (no in-memory leak)', async () => {
+      const callbacks = await startAndCapture();
+      callbacks.onError?.('chromium missing');
+
+      const sessionErrors = (service as unknown as { sessionErrors: Map<string, string> }).sessionErrors;
+      expect(sessionErrors.has('sess-uuid-1')).toBe(true); // precondition: the FAILED reason is recorded
+
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.FAILED }));
+      await service.delete('sess-uuid-1');
+
+      // Without cleanup, the entry would linger forever keyed by a deleted UUID (unbounded growth).
+      expect(sessionErrors.has('sess-uuid-1')).toBe(false);
+    });
+
     it('does not surface lastError once the session has recovered', async () => {
       const callbacks = await startAndCapture();
       callbacks.onError?.('transient failure');

@@ -377,6 +377,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.
       this.stoppingSessions.delete(id);
       this.lastDispatchedStatus.delete(id);
+      // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
+      // again, so leaving it would grow the map without bound across create/fail/delete churn.
+      this.sessionErrors.delete(id);
     }
   }
 
