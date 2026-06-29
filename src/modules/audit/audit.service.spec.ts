@@ -52,6 +52,12 @@ describe('AuditService', () => {
     );
   });
 
+  it('findAll clamps an oversized limit to the max page size (prevents whole-table loads)', async () => {
+    await service.findAll({ limit: 99_999_999 });
+    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { take: number };
+    expect(arg.take).toBe(200);
+  });
+
   it('findAll uses Between only when BOTH dates are present', async () => {
     const start = new Date('2026-01-01T00:00:00Z');
     const end = new Date('2026-02-01T00:00:00Z');
