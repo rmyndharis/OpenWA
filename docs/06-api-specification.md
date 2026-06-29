@@ -125,6 +125,7 @@ All media send routes (`send-image`, `send-video`, `send-audio`, `send-document`
 | `mimetype` | string | conditional | required when `base64` is used | MIME type, e.g. `image/jpeg`, `video/mp4`, `application/pdf` |
 | `filename` | string | no | max 255 chars | Optional file name (also used as the persisted body fallback for documents) |
 | `caption` | string | no | max 1024 chars | Optional caption (not persisted for audio) |
+| `mentions` | string[] | no | array of WIDs | WIDs to @mention in the caption (e.g. `["62811@c.us"]`). See **Mentions** below |
 
 Provide **exactly one** of `url` or `base64`. Omitting both, or supplying `base64` without `mimetype`, returns `400`.
 
@@ -152,6 +153,15 @@ There is a **single shared media byte cap**, not a per-type table. A base64 (or 
 ### Text Limit
 
 `send-text` enforces a maximum body length of **4096 characters** (`text` is `@MaxLength(4096)`). Media captions are limited to **1024 characters**.
+
+### Mentions
+
+`send-text` and the media send routes accept an optional `mentions` array of WIDs (`<phone>@c.us`) to tag participants — most useful in groups. Two things are required for WhatsApp to render a tag and notify the participant:
+
+1. The `mentions` array lists the WID(s), e.g. `["62811@c.us"]`.
+2. The `text`/`caption` contains the matching `@<number>` token, e.g. `Hello @62811`.
+
+The contract is engine-neutral: pass neutral `@c.us` WIDs and the active engine (whatsapp-web.js or Baileys) de-normalizes them internally. Whether a mention surfaces a notification is ultimately client-side — outside a shared group some clients may not render it.
 
 ## 6.4 REST API Reference
 
@@ -864,9 +874,14 @@ Send a plain text message.
 | --- | --- | --- | --- | --- |
 | chatId | string | Yes | non-empty | `phone@c.us` or `groupId@g.us` |
 | text | string | Yes | non-empty, max 4096 | Message text |
+| mentions | string[] | No | array of WIDs | WIDs to @mention (e.g. `["62811@c.us"]`). See **Mentions** below |
 
 ```json
 { "chatId": "628123456789@c.us", "text": "Hello from OpenWA!" }
+```
+
+```json
+{ "chatId": "120363000000000000@g.us", "text": "Hello @62811", "mentions": ["62811@c.us"] }
 ```
 
 **Response** `201`

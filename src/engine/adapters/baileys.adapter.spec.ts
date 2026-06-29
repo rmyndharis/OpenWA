@@ -573,6 +573,23 @@ describe('BaileysAdapter messaging', () => {
     );
   });
 
+  it('sendTextMessage de-normalizes mentions to engine jids (#530)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('120@g.us', 'hi @62811', ['62811@c.us']);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120@g.us', {
+      text: 'hi @62811',
+      mentions: ['62811@s.whatsapp.net'],
+    });
+  });
+
+  it('sendTextMessage omits the mentions key when none are given (no behavior change)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('120@g.us', 'plain', []);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120@g.us', { text: 'plain' });
+  });
+
   it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
@@ -1237,6 +1254,20 @@ describe('BaileysAdapter media sends', () => {
       mimetype: 'image/png',
     });
     expect(res).toEqual({ id: 'M1', timestamp: 1700000005 });
+  });
+
+  it('sendImageMessage de-normalizes media.mentions into the content (#530)', async () => {
+    const adapter = await ready();
+    await adapter.sendImageMessage('120@g.us', {
+      mimetype: 'image/png',
+      data: Buffer.from([1]),
+      caption: 'look @62811',
+      mentions: ['62811@c.us'],
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '120@g.us',
+      expect.objectContaining({ mentions: ['62811@s.whatsapp.net'] }),
+    );
   });
 
   it('resolves a base64 data string to a Buffer (no URL fetch)', async () => {

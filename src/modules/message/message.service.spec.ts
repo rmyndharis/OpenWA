@@ -127,6 +127,16 @@ describe('MessageService', () => {
       expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('628123456789@c.us', 'Hello');
     });
 
+    it('threads mentions through to the engine (#530)', async () => {
+      const input = { chatId: '120@g.us', text: 'hi @62811', mentions: ['62811@c.us'] };
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { sessionId: 'sess-1', input, type: 'text' },
+      });
+      await service.sendText('sess-1', input);
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('120@g.us', 'hi @62811', ['62811@c.us']);
+    });
+
     it('should save outgoing message as pending before sending, then update to sent', async () => {
       await service.sendText('sess-1', {
         chatId: '628123456789@c.us',
@@ -292,6 +302,20 @@ describe('MessageService', () => {
       expect(mockEngine.sendImageMessage).toHaveBeenCalledWith(
         '628123456789@c.us',
         expect.objectContaining({ data: 'iVBORw0KGgoAAAAN...', mimetype: 'image/png' }),
+      );
+    });
+
+    it('threads media mentions into the MediaInput (#530)', async () => {
+      await service.sendImage('sess-1', {
+        chatId: '120@g.us',
+        base64: 'AAAA',
+        mimetype: 'image/png',
+        caption: 'look @62811',
+        mentions: ['62811@c.us'],
+      });
+      expect(mockEngine.sendImageMessage).toHaveBeenCalledWith(
+        '120@g.us',
+        expect.objectContaining({ mentions: ['62811@c.us'] }),
       );
     });
 

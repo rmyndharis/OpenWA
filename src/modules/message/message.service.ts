@@ -64,7 +64,10 @@ export class MessageService {
     await this.simulateTypingIfEnabled(engine, finalDto.chatId, finalDto.text);
 
     try {
-      const result = await engine.sendTextMessage(finalDto.chatId, finalDto.text);
+      // Keep the 2-arg call shape for plain sends; only pass mentions when the caller supplied any.
+      const result = finalDto.mentions?.length
+        ? await engine.sendTextMessage(finalDto.chatId, finalDto.text, finalDto.mentions)
+        : await engine.sendTextMessage(finalDto.chatId, finalDto.text);
 
       // Update with actual WhatsApp message ID and status
       message.waMessageId = result.id;
@@ -662,6 +665,7 @@ export class MessageService {
       data: dto.url || dto.base64!,
       filename: dto.filename,
       caption: dto.caption,
+      mentions: dto.mentions,
     };
   }
 }

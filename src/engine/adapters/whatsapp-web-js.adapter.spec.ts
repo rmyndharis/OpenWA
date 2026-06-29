@@ -873,3 +873,40 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     expect(msg.media?.sizeBytes).toBe(5000);
   });
 });
+
+describe('outbound mentions (#530)', () => {
+  const ready = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+
+  it('sendTextMessage forwards mentions as a wwebjs option (WIDs pass through)', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendTextMessage('120@g.us', 'hi @62811', ['62811@c.us']);
+    expect(sendMessage).toHaveBeenCalledWith('120@g.us', 'hi @62811', { mentions: ['62811@c.us'] });
+  });
+
+  it('sendTextMessage sends no options object when there are no mentions (no behavior change)', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendTextMessage('120@g.us', 'plain');
+    expect(sendMessage).toHaveBeenCalledWith('120@g.us', 'plain');
+  });
+
+  it('sendImageMessage forwards media.mentions alongside the caption', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendImageMessage('120@g.us', {
+      mimetype: 'image/png',
+      data: Buffer.from([1]).toString('base64'),
+      caption: 'look @62811',
+      mentions: ['62811@c.us'],
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      '120@g.us',
+      expect.anything(),
+      expect.objectContaining({ caption: 'look @62811', mentions: ['62811@c.us'] }),
+    );
+  });
+});

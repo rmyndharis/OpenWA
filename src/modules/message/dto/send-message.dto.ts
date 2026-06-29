@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, MaxLength, IsUrl, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsUrl, ValidateIf, IsArray } from 'class-validator';
+
+const MENTIONS_DESCRIPTION =
+  'WIDs to @mention (e.g. ["62811@c.us"]). The text/caption must also contain the @<number> token.';
 
 export class SendTextMessageDto {
   @ApiProperty({
@@ -19,6 +22,12 @@ export class SendTextMessageDto {
   @IsNotEmpty()
   @MaxLength(4096)
   text: string;
+
+  @ApiPropertyOptional({ description: MENTIONS_DESCRIPTION, example: ['628123456789@c.us'], type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mentions?: string[];
 }
 
 export class SendMediaMessageDto {
@@ -73,6 +82,12 @@ export class SendMediaMessageDto {
   @IsString()
   @MaxLength(1024)
   caption?: string;
+
+  @ApiPropertyOptional({ description: MENTIONS_DESCRIPTION, example: ['628123456789@c.us'], type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mentions?: string[];
 }
 
 export class MessageResponseDto {

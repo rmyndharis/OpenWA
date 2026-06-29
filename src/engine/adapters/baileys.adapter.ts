@@ -468,12 +468,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   // ----- Messaging -----
 
-  async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
+  async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
     const options = this.withEphemeral(chatId);
+    const content = { text, ...this.withMentions(mentions) };
     const sent = options
-      ? await this.sock!.sendMessage(chatId, { text }, options)
-      : await this.sock!.sendMessage(chatId, { text });
+      ? await this.sock!.sendMessage(chatId, content, options)
+      : await this.sock!.sendMessage(chatId, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
@@ -510,13 +511,23 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { image: data, caption: media.caption, mimetype });
+    return this.sendContent(chatId, {
+      image: data,
+      caption: media.caption,
+      mimetype,
+      ...this.withMentions(media.mentions),
+    });
   }
 
   async sendVideoMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { video: data, caption: media.caption, mimetype });
+    return this.sendContent(chatId, {
+      video: data,
+      caption: media.caption,
+      mimetype,
+      ...this.withMentions(media.mentions),
+    });
   }
 
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -533,6 +544,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       mimetype,
       fileName: media.filename ?? 'file',
       caption: media.caption,
+      ...this.withMentions(media.mentions),
     });
   }
 
@@ -646,6 +658,16 @@ export class BaileysAdapter implements IWhatsAppEngine {
    */
   private toEngineParticipants(participants: string[]): string[] {
     return participants.map(p => this.sessionStore.toEngineJid(p));
+  }
+
+  /**
+   * Build the `{ mentions }` slice of a Baileys message content, de-normalizing neutral `@c.us` WIDs to
+   * the engine dialect. Returns an empty object when none are given so the content is byte-identical to
+   * the pre-#530 send (no stray `mentions` key). The text must still contain the `@<number>` token for
+   * WhatsApp to render the tag — that is the caller's responsibility.
+   */
+  private withMentions(mentions?: string[]): { mentions?: string[] } {
+    return mentions?.length ? { mentions: this.toEngineParticipants(mentions) } : {};
   }
 
   async leaveGroup(groupId: string): Promise<void> {

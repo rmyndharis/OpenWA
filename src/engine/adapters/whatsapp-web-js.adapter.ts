@@ -752,9 +752,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
-  async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
+  async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
-    const msg = await this.client!.sendMessage(chatId, text);
+    // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
+    // is needed. Omit the options object entirely when none are given to keep today's send behavior.
+    const msg = mentions?.length
+      ? await this.client!.sendMessage(chatId, text, { mentions })
+      : await this.client!.sendMessage(chatId, text);
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -797,6 +801,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     const msg = await this.client!.sendMessage(chatId, messageMedia, {
       caption: media.caption,
+      ...(media.mentions?.length ? { mentions: media.mentions } : {}),
     });
 
     return {
