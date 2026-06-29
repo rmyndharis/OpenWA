@@ -309,10 +309,30 @@ export class BulkMessageService implements OnApplicationBootstrap {
     }
     batch.completedAt = new Date();
     batch.results = results;
+    // The batch is terminal now (never resumed), so drop the base64 media payloads before persisting —
+    // otherwise the message_batches row retains multi-MB media forever. Intermediate (cadence) saves
+    // above keep the payload so a batch interrupted mid-run can still resume from currentIndex.
+    this.stripBatchMediaPayloads(batch.messages);
     await this.batchRepository.save(batch);
 
     this.processingBatches.delete(batch.id);
     this.logger.log(`Batch ${batch.batchId} completed: ${batch.progress.sent} sent, ${batch.progress.failed} failed`);
+  }
+
+  /**
+   * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
+   * terminal (never resumed), so the (often multi-MB) base64 in `message_batches.messages` is dead
+   * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
+   */
+  private stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
+    for (const m of messages) {
+      for (const key of ['image', 'video', 'audio', 'document']) {
+        const media = m.content[key] as { base64?: unknown } | undefined;
+        if (media && typeof media === 'object' && 'base64' in media) {
+          delete media.base64;
+        }
+      }
+    }
   }
 
   private applyVariables(content: BulkMessageContent, variables?: Record<string, string>): BulkMessageContent {

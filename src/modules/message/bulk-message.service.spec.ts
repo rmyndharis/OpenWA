@@ -150,6 +150,27 @@ describe('BulkMessageService.processBatch', () => {
     );
   });
 
+  it('strips base64 media payloads from the stored batch once it completes (footprint)', async () => {
+    const batch = makeBatch(1);
+    batch.messages = [
+      {
+        chatId: 'c0@c.us',
+        type: 'image',
+        content: { image: { base64: 'QkFTRTY0SU1BR0U=', mimetype: 'image/png', filename: 'p.png' } },
+      },
+    ];
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    // A completed batch is terminal (never resumed), so the persisted message_batches.messages must not
+    // retain the (often multi-MB) base64 — only the descriptive fields are kept.
+    const savedBatch = (repo.save.mock.calls as [MessageBatch][]).at(-1)![0];
+    const img = (savedBatch.messages[0].content as { image?: { base64?: unknown; mimetype?: string } }).image;
+    expect(img?.base64).toBeUndefined();
+    expect(img?.mimetype).toBe('image/png');
+  });
+
   it('stops sending when the batch is cancelled in the DB by another instance/restart', async () => {
     // First load is the running batch; the cadence re-read reports a CANCELLED status.
     repo.findOne.mockResolvedValueOnce(makeBatch(3)).mockResolvedValue({ status: BatchStatus.CANCELLED });

@@ -145,8 +145,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -179,8 +178,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -212,8 +210,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -246,8 +243,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -341,8 +337,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -377,8 +372,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -410,8 +404,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -457,8 +450,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -493,8 +485,7 @@ export class MessageService {
         timestamp: result.timestamp,
       };
     } catch (error) {
-      message.status = MessageStatus.FAILED;
-      await this.messageRepository.save(message);
+      await this.saveFailedMessage(message);
       throw this.toClientFacingError(error);
     }
   }
@@ -543,6 +534,20 @@ export class MessageService {
       metadata: data.metadata,
     });
     return this.messageRepository.save(message);
+  }
+
+  /**
+   * Persist a send as FAILED, dropping any outbound media payload first. A failed row's media base64
+   * (often multi-MB) is never displayed or retried, so keeping it only bloats the messages table; the
+   * mimetype/filename are kept so the row still describes what was attempted.
+   */
+  private async saveFailedMessage(message: Message): Promise<void> {
+    const media = (message.metadata as { media?: { data?: unknown } } | undefined)?.media;
+    if (media) {
+      delete media.data;
+    }
+    message.status = MessageStatus.FAILED;
+    await this.messageRepository.save(message);
   }
 
   // ========== Phase 3: Reactions ==========

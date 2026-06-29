@@ -318,6 +318,29 @@ describe('MessageService', () => {
         delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
       }
     });
+
+    it('strips the base64 payload from a FAILED media row but keeps mimetype/filename', async () => {
+      mockEngine.sendImageMessage.mockRejectedValueOnce(new Error('engine down'));
+
+      await expect(
+        service.sendImage('sess-1', {
+          chatId: '628123456789@c.us',
+          base64: 'QUJDREVGISBhIGJpZyBwYXlsb2Fk',
+          mimetype: 'image/png',
+          filename: 'pic.png',
+        }),
+      ).rejects.toThrow();
+
+      // The persisted FAILED row must not retain the (often multi-MB) base64 — it's never displayed
+      // or retried — but should keep the descriptive mimetype/filename.
+      const calls = (repository.save as jest.Mock).mock.calls as [Message][];
+      const saved = calls.at(-1)![0];
+      expect(saved.status).toBe(MessageStatus.FAILED);
+      const media = (saved.metadata as { media?: { data?: unknown; mimetype?: string; filename?: string } }).media;
+      expect(media?.data).toBeUndefined();
+      expect(media?.mimetype).toBe('image/png');
+      expect(media?.filename).toBe('pic.png');
+    });
   });
 
   // ── getMessages pagination guard ──────────────────────────────────

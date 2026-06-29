@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Brazilian Portuguese (pt-BR) locale.** The dashboard is now available in Português (Brasil) — all 9 navigation sections, toasts, dialogs, and form labels are translated. Select it from the language picker on the login screen or the sidebar. Thanks @A831ARD0.
 
+### Performance
+
+- **Failed media sends and completed bulk batches no longer retain their base64 payload.** A failed media send kept its (often multi-MB) base64 in the message row, and a completed bulk batch kept every message's base64 in `message_batches` indefinitely — both are now stripped (mimetype/filename kept), so the `messages` and `message_batches` tables don't grow without bound. (#524)
+- **The dashboard chat view no longer caches full media base64.** Chat history is fetched without media and the per-chat cache is evicted sooner, so browsing several media-rich chats no longer risks OOMing the tab; older history media shows a `📎 Media` placeholder and recent media still renders. (#525)
+
 ## [0.7.11] - 2026-06-29
 
 ### Added

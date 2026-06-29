@@ -501,7 +501,7 @@
     "previewTitle": "Pré-visualização",
     "previewValuePlaceholder": "Valor de exemplo",
     "previewEmpty": "Comece a digitar um modelo para pré-visualizá-lo aqui.",
-    "noPlaceholders": "Use marcadores {{nome}} para testar substituições.",
+    "noPlaceholders": "Use marcadores {{name}} para testar substituições.",
     "savedTitle": "Modelos salvos",
     "count": "{{count}} no total",
     "deleteTitle": "Excluir modelo",
