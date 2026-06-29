@@ -70,3 +70,45 @@ describe('DockerService.buildDockerOptions', () => {
     });
   });
 });
+
+describe('DockerService.getContainerByService exact-name fallback', () => {
+  // Label lookup returns nothing → exercises the name fallback. The fallback must match the exact
+  // OpenWA-managed container name, never a substring (a substring — and especially the empty string —
+  // would let an arbitrary container be resolved and torn down).
+  function withFakeDocker(containers: Array<{ Id: string; Names: string[] }>) {
+    const service = new DockerService();
+    const listContainers = jest
+      .fn()
+      .mockResolvedValueOnce([]) // label-filtered lookup: no match
+      .mockResolvedValueOnce(containers); // fallback: all containers
+    const getContainer = jest.fn((id: string) => ({ id }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      docker: { listContainers, getContainer },
+      isAvailable: true,
+    });
+    return { service, getContainer };
+  }
+
+  it('does not resolve any container for an empty service name', async () => {
+    const { service, getContainer } = withFakeDocker([{ Id: 'abc', Names: ['/openwa-postgres'] }]);
+    expect(await service.getContainerByService('')).toBeNull();
+    expect(getContainer).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve a container by substring of its name', async () => {
+    const { service, getContainer } = withFakeDocker([{ Id: 'abc', Names: ['/openwa-postgres-primary'] }]);
+    // 'postgres' is a substring of 'openwa-postgres-primary' but not the exact managed name.
+    expect(await service.getContainerByService('postgres')).toBeNull();
+    expect(getContainer).not.toHaveBeenCalled();
+  });
+
+  it('resolves the exact openwa-<service> container', async () => {
+    const { service, getContainer } = withFakeDocker([
+      { Id: 'p', Names: ['/openwa-postgres'] },
+      { Id: 'r', Names: ['/openwa-redis'] },
+    ]);
+    const result = await service.getContainerByService('redis');
+    expect(getContainer).toHaveBeenCalledWith('r');
+    expect(result).toEqual({ id: 'r' });
+  });
+});

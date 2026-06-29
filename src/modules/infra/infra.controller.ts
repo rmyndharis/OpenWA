@@ -9,7 +9,7 @@ import { isPathWithin } from '../../common/utils/path-safety';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
 import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
-import { DockerService } from '../docker';
+import { DockerService, MANAGED_DOCKER_PROFILES } from '../docker';
 import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
@@ -645,7 +645,15 @@ export class InfraController {
       // otherwise tear down the very backend the app is running on. (Known minor limitation: switching
       // away from a built-in backend and then reloading the page before restarting can leave the old
       // container running until the next explicit change.)
-      const toRemove = profilesToRemove.filter(p => !profiles.includes(p));
+      // Only ever tear down OpenWA-managed services. An arbitrary profile name (or the empty string)
+      // would otherwise reach removeService and, via container-name matching, could stop an unrelated
+      // container — so constrain teardown to the managed allowlist and drop anything else.
+      const requested = profilesToRemove.filter(p => !profiles.includes(p));
+      const toRemove = requested.filter(p => MANAGED_DOCKER_PROFILES.includes(p));
+      const ignored = requested.filter(p => !MANAGED_DOCKER_PROFILES.includes(p));
+      if (ignored.length > 0) {
+        this.logger.warn('Ignoring non-managed profiles in profilesToRemove', { ignored });
+      }
 
       // First, remove containers for disabled services
       if (toRemove.length > 0) {

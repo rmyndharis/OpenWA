@@ -1,6 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import Docker from 'dockerode';
 
+/**
+ * The only Docker profiles OpenWA manages (and may start/stop/remove). Used to bound teardown so a
+ * caller-supplied profile name can never reach removeService for an unrelated container.
+ */
+export const MANAGED_DOCKER_PROFILES: readonly string[] = ['postgres', 'redis', 'minio'];
+
 interface ContainerInfo {
   id: string;
   name: string;
@@ -181,9 +187,11 @@ export class DockerService implements OnModuleInit {
         return this.docker.getContainer(containers[0].Id);
       }
 
-      // Fallback: try by name
+      // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
+      // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
+      const target = `openwa-${service}`;
       const allContainers = await this.docker.listContainers({ all: true });
-      const match = allContainers.find(c => c.Names?.some(n => n.includes(`openwa-${service}`) || n.includes(service)));
+      const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
 
       if (match) {
         return this.docker.getContainer(match.Id);

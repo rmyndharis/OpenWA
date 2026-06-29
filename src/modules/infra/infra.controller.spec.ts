@@ -784,3 +784,34 @@ describe('InfraController.exportStorage keeps the export import-able and sweeps 
     expect(await exists(result.download)).toBe(false);
   });
 });
+
+describe('InfraController.requestRestart constrains teardown to managed profiles', () => {
+  const buildController = (dockerService: Record<string, unknown>) =>
+    new InfraController(
+      { get: () => undefined } as never,
+      { isInitialized: true } as never,
+      { isInitialized: true } as never,
+      {} as never, // engineFactory
+      dockerService as never,
+      { isAvailable: () => Promise.resolve(false) } as never, // cacheService
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      { shutdown: jest.fn() } as never, // shutdownService
+    );
+
+  it('removes only allowlisted profiles, never an unknown or empty entry', async () => {
+    const removeService = jest.fn().mockResolvedValue(true);
+    const controller = buildController({
+      isDockerAvailable: () => true,
+      removeService,
+      orchestrateProfiles: jest.fn().mockResolvedValue({}),
+    });
+
+    // '' (matches any container by substring) and 'evil' must be dropped; only managed profiles act.
+    await controller.requestRestart({ profilesToRemove: ['', 'evil', 'postgres', 'redis'] });
+
+    const removed = removeService.mock.calls.map(call => String((call as unknown[])[0])).sort();
+    expect(removed).toEqual(['postgres', 'redis']);
+    expect(removed).not.toContain('');
+    expect(removed).not.toContain('evil');
+  });
+});
