@@ -196,7 +196,16 @@ export class BulkMessageService implements OnApplicationBootstrap {
     if (!batch) return;
 
     this.processingBatches.set(batch.id, true);
+    // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
+    // save/send, or normal completion) — otherwise the map leaks an entry per such batch.
+    try {
+      await this.executeBatch(batch);
+    } finally {
+      this.processingBatches.delete(batch.id);
+    }
+  }
 
+  private async executeBatch(batch: MessageBatch): Promise<void> {
     // Update status to processing
     batch.status = BatchStatus.PROCESSING;
     batch.startedAt = new Date();
@@ -315,7 +324,6 @@ export class BulkMessageService implements OnApplicationBootstrap {
     this.stripBatchMediaPayloads(batch.messages);
     await this.batchRepository.save(batch);
 
-    this.processingBatches.delete(batch.id);
     this.logger.log(`Batch ${batch.batchId} completed: ${batch.progress.sent} sent, ${batch.progress.failed} failed`);
   }
 

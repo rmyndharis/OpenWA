@@ -134,6 +134,27 @@ describe('BulkMessageService.processBatch', () => {
   const runProcessBatch = (): Promise<void> =>
     (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch('b1');
 
+  const inFlightMarkers = (): Map<string, boolean> =>
+    (service as unknown as { processingBatches: Map<string, boolean> }).processingBatches;
+
+  it('releases the in-flight marker when the engine is missing (no processingBatches leak)', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(1));
+    sessionService.getEngine.mockReturnValue(undefined); // engine-not-found → early-return path
+
+    await runProcessBatch();
+
+    expect(inFlightMarkers().has('b1')).toBe(false);
+  });
+
+  it('releases the in-flight marker when processing throws (no processingBatches leak)', async () => {
+    repo.findOne.mockResolvedValue(makeBatch(1));
+    repo.save.mockRejectedValueOnce(new Error('db down')); // the first save (→ PROCESSING) throws
+
+    await runProcessBatch().catch(() => undefined);
+
+    expect(inFlightMarkers().has('b1')).toBe(false);
+  });
+
   it('persists every sent message so it appears in chat history / stats', async () => {
     repo.findOne.mockResolvedValue(makeBatch(1));
 
