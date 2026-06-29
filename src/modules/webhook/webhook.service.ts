@@ -238,7 +238,10 @@ export class WebhookService {
         sessionId,
         idempotencyKey,
         deliveryId,
-        data,
+        // Give each webhook its own copy of the event data: a webhook:before hook that mutates
+        // payload.data in place would otherwise bleed that change into every later webhook for this
+        // event (they all shared one object reference).
+        data: structuredClone(data),
       };
 
       // Execute hook before webhook dispatch - plugins can modify payload
@@ -259,6 +262,12 @@ export class WebhookService {
       // Use the plugin-modified payload, falling back to the original if a before-hook returned a
       // result without a `payload` key — otherwise we'd POST an `undefined` body.
       const finalPayload = (hookResult as { payload?: WebhookPayload }).payload ?? payload;
+
+      // The idempotency + delivery ids are server-generated and are the documented dedup key
+      // (receivers dedupe on the X-OpenWA-Idempotency-Key header). Re-assert them onto the post-hook
+      // payload so a webhook:before plugin can't desync the signed body field from the header.
+      finalPayload.idempotencyKey = idempotencyKey;
+      finalPayload.deliveryId = deliveryId;
 
       // Build headers — custom headers FIRST so the system headers below always win.
       const headers: Record<string, string> = {

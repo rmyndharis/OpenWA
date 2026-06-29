@@ -332,6 +332,64 @@ describe('WebhookService', () => {
       expect(body.data).toEqual({ from: '628123456789@c.us' });
     });
 
+    it('keeps the server-canonical idempotency/delivery ids on the signed body, overriding a tampering plugin', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // A webhook:before plugin returns a payload with forged identifiers (other hook events pass through).
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, ctx: { payload?: WebhookPayload }) =>
+        event === 'webhook:before' && ctx.payload
+          ? Promise.resolve({
+              continue: true,
+              data: { payload: { ...ctx.payload, idempotencyKey: 'PLUGIN-FORGED', deliveryId: 'PLUGIN-FORGED' } },
+            })
+          : Promise.resolve({ continue: true, data: {} }),
+      );
+
+      await service.dispatch('sess-1', 'message.received', { from: '628123456789@c.us' });
+
+      const call = mockFetch.mock.calls[0] as [unknown, { headers: Record<string, string>; body: string }];
+      const headers = call[1].headers;
+      const body = JSON.parse(call[1].body) as WebhookPayload;
+      // Receivers dedupe on the header, so the signed body field must equal the header — and both must
+      // be the server's value, not the plugin's forgery.
+      expect(body.idempotencyKey).toBe(headers['X-OpenWA-Idempotency-Key']);
+      expect(body.deliveryId).toBe(headers['X-OpenWA-Delivery-Id']);
+      expect(body.idempotencyKey).not.toBe('PLUGIN-FORGED');
+      expect(body.deliveryId).not.toBe('PLUGIN-FORGED');
+    });
+
+    it("isolates each webhook's data so an in-place before-hook mutation cannot bleed across webhooks", async () => {
+      const a = createMockWebhook({ id: 'wh-a', events: ['message.received'] });
+      const b = createMockWebhook({ id: 'wh-b', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([a, b]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // The hook mutates payload.data in place every time it runs (returns no payload key → finalPayload
+      // is the mutated input). With a shared data object the second webhook would see the first's tag.
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, ctx: { payload?: WebhookPayload }) => {
+        if (event === 'webhook:before' && ctx.payload) {
+          const d = ctx.payload.data as { tag?: number };
+          d.tag = (d.tag ?? 0) + 1;
+          return Promise.resolve({ continue: true, data: { payload: ctx.payload } });
+        }
+        return Promise.resolve({ continue: true, data: {} });
+      });
+
+      await service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+
+      const bodyA = JSON.parse((mockFetch.mock.calls[0] as [unknown, { body: string }])[1].body) as {
+        data: { tag: number };
+      };
+      const bodyB = JSON.parse((mockFetch.mock.calls[1] as [unknown, { body: string }])[1].body) as {
+        data: { tag: number };
+      };
+      // Each webhook starts from its own clone of the original data, so both see exactly one increment.
+      expect(bodyA.data.tag).toBe(1);
+      expect(bodyB.data.tag).toBe(1);
+    });
+
     it('test() probes the receiver using the configured WEBHOOK_TIMEOUT', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.findOne as jest.Mock).mockResolvedValue(webhook);
@@ -660,16 +718,11 @@ describe('WebhookService', () => {
       // Verify signature format
       expect(capturedHeaders['X-OpenWA-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
 
-      // Verify signature correctness
-      const body = JSON.stringify({
-        event: 'message.received',
-        data: {},
-        timestamp: '',
-        sessionId: 'sess-1',
-        idempotencyKey: 'k',
-        deliveryId: 'd',
-      });
-      const expected = `sha256=${crypto.createHmac('sha256', 'test-secret-123').update(body).digest('hex')}`;
+      // Verify signature correctness against the ACTUAL delivered body. The body now carries the
+      // server-canonical idempotency/delivery ids (re-asserted over the plugin's 'k'/'d'), so the
+      // signature is checked against what the receiver actually gets — the real verification contract.
+      const sentBody = (mockFetch.mock.calls[0] as [unknown, { body: string }])[1].body;
+      const expected = `sha256=${crypto.createHmac('sha256', 'test-secret-123').update(sentBody).digest('hex')}`;
       expect(capturedHeaders['X-OpenWA-Signature']).toBe(expected);
 
       mockFetch.mockReset();
