@@ -31,8 +31,10 @@ export class AddBaileysStoredMessages1781000000000 implements MigrationInterface
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX "IDX_baileys_stored_messages_session_created"`);
-    await queryRunner.query(`DROP INDEX "UQ_baileys_stored_messages_session_wamsg"`);
-    await queryRunner.query(`DROP TABLE "baileys_stored_messages"`);
+    // IF EXISTS so revert is idempotent on a synchronize-bootstrapped DB, where this migration was
+    // recorded via the up() hasTable early-return and the named indexes were never created.
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_baileys_stored_messages_session_created"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_baileys_stored_messages_session_wamsg"`);
+    await queryRunner.query(`DROP TABLE IF EXISTS "baileys_stored_messages"`);
   }
 }

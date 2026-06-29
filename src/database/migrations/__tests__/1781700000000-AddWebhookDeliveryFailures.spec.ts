@@ -38,4 +38,10 @@ describe('AddWebhookDeliveryFailures migration', () => {
     await migration.down(runner);
     expect(await tableExists()).toBe(false);
   });
+
+  it('down() does not throw when the index was never created (synchronize-bootstrapped DB)', async () => {
+    const runner = ds.createQueryRunner();
+    // No up(): the named index never existed, so a bare DROP INDEX would error — down() must tolerate it.
+    await expect(new AddWebhookDeliveryFailures1781700000000().down(runner)).resolves.toBeUndefined();
+  });
 });
