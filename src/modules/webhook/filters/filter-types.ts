@@ -45,6 +45,7 @@ export const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'call',
   'revoked',
   'unknown',
 ] as const;
