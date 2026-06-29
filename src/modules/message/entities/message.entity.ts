@@ -41,8 +41,9 @@ export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  // No standalone @Index here: sessionId-only lookups are already served by the composite indexes
+  // that lead with sessionId — (sessionId, createdAt) above and the unique (sessionId, waMessageId).
   @Column()
-  @Index()
   sessionId: string;
 
   @Column({ nullable: true })
