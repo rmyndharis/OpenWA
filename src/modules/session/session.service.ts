@@ -620,6 +620,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (message.isStatusBroadcast) {
           return;
         }
+        // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
+        // A message is ephemeral when its chat has a disappearing-messages timer (ephemeralDuration > 0).
+        if (
+          process.env.STORE_EPHEMERAL_MESSAGES === 'false' &&
+          message.ephemeralDuration &&
+          message.ephemeralDuration > 0
+        ) {
+          this.logger.debug('Skipping ephemeral message', {
+            sessionId: id,
+            messageId: message.id,
+            chatId: message.chatId,
+            ephemeralDuration: message.ephemeralDuration,
+          });
+          return;
+        }
         this.logger.debug(`Message received from ${message.from}`, {
           sessionId: id,
           messageId: message.id,

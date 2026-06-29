@@ -52,7 +52,7 @@ export interface RawMessageFields {
   /** WIDs @mentioned in the message; whatsapp-web.js attaches this to every Message. */
   mentionedIds?: string[];
   /** Raw wwebjs payload; `notifyName` carries the sender's push name without an extra lookup. */
-  _data?: { notifyName?: string };
+  _data?: { notifyName?: string; ephemeralDuration?: number };
 }
 
 /**
@@ -100,6 +100,11 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
   const pushName = msg._data?.notifyName;
   if (pushName) {
     incoming.contact = { pushName };
+  }
+
+  // Ephemeral/disappearing-messages timer, when the chat has one set.
+  if (msg._data?.ephemeralDuration && msg._data.ephemeralDuration > 0) {
+    incoming.ephemeralDuration = msg._data.ephemeralDuration;
   }
 
   return incoming;

@@ -69,6 +69,10 @@ export interface IncomingMessage {
    * code can skip these without matching an engine-specific pseudo-JID (e.g. `status@broadcast`).
    */
   isStatusBroadcast?: boolean;
+  /** WhatsApp ephemeral/disappearing-messages timer in seconds. Set per-chat on each message
+   *  in the raw payload. 0 or undefined = no disappearing timer.
+   *  Known values: 86400 (24h), 604800 (7d), 7776000 (90d). */
+  ephemeralDuration?: number;
   /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
   author?: string;
   /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
@@ -227,9 +231,15 @@ export interface Status {
   expiresAt: Date;
 }
 
-export interface TextStatusOptions {
+export interface StatusPostOptions {
+  /** REQUIRED. Neutral JIDs (@c.us / @lid) permitted to see the status. Maps to Baileys statusJidList. */
+  recipients: string[];
+  /** Hex background colour (#RRGGBB). Text status only. */
   backgroundColor?: string;
+  /** Font index. Text status only. */
   font?: number;
+  /** Caption. Image/video status only. */
+  caption?: string;
 }
 
 export interface StatusResult {
@@ -475,9 +485,9 @@ export interface IWhatsAppEngine {
   // Status/Stories (Phase 3)
   getContactStatuses(): Promise<Status[]>;
   getContactStatus(contactId: string): Promise<Status[]>;
-  postTextStatus(text: string, options?: TextStatusOptions): Promise<StatusResult>;
-  postImageStatus(media: MediaInput, caption?: string): Promise<StatusResult>;
-  postVideoStatus(media: MediaInput, caption?: string): Promise<StatusResult>;
+  postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult>;
+  postImageStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult>;
+  postVideoStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult>;
   deleteStatus(statusId: string): Promise<void>;
 
   // Catalog (Phase 3) - WhatsApp Business only

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Disappearing-messages support (Baileys engine).** Outbound messages now honor a chat's disappearing-messages timer: the Baileys adapter reads the chat's cached `ephemeralExpiration` and sets it on each send (text, media, and replies), so recipients no longer see _"This message won't disappear — the sender may be using an older version of WhatsApp."_ The timer is applied only when a positive value is known for the chat; when it's unknown, disabled, or not yet synced, the per-message expiration is omitted, exactly as before. Reactions, deletes/revokes, and status posts are unaffected. Thanks @ulises2k for the report. (#473)
+
+- **Selective skip for disappearing messages.** New `STORE_EPHEMERAL_MESSAGES` env var (default `true`). Set to `false` to skip persisting and dispatching incoming disappearing messages (those with `ephemeralDuration > 0`) — no DB insert, no webhook dispatch, no websocket event. Backward compatible; existing deployments are unaffected. The `ephemeralDuration` field is also surfaced on `IncomingMessage` for consumers that want to handle it themselves. Thanks @spidgrou. (#506)
+
+## [0.7.10] - 2026-06-28
+
+### Added
+
+- **WhatsApp Status posting (Baileys only).** The three status `send-*` endpoints now post to the status feed on the Baileys engine: `POST /api/sessions/:id/status/send-text`, `/send-image`, and `/send-video` accept a required `recipients[]` body field (1–256 JIDs, each `@c.us` or `@lid`; passed to the engine as `statusJidList` — an empty array is rejected with `400`). Image/video take an optional `image.mimetype` / `video.mimetype`; the service defaults to `image/jpeg` / `video/mp4`. A whatsapp-web.js session returns `501`: WA Web removed `WAWebStatusGatingUtils.canCheckStatusRankingPosterGating` around 2026-04-30, so the wwebjs path is upstream-blocked. `@c.us` recipients are reliable; `@lid` is best-effort (unverified), and the posting account's own phone may briefly show a "waiting for this status update" notice while recipients view it normally. Thanks @CharlesLightjarvis for the report. (#455)
+
+- **Visible placeholder for skipped inbound media.** When `MEDIA_DOWNLOAD_ENABLED=false` (or a media item is over the byte cap), an incoming media message now carries an `omitted` marker and the dashboard chat renders a `📎 Media` placeholder instead of a bare timestamp. The marker reuses the existing `{ mimetype, omitted, sizeBytes }` shape on both the whatsapp-web.js and Baileys engines, so webhook/n8n/dashboard consumers see one consistent contract for "media was present but not downloaded." Thanks @spidgrou. (#501)
+
+### Fixed
+
+- **Status image/video no longer hardcode `image/jpeg` / `video/mp4`.** The `SendImageStatusDto` / `SendVideoStatusDto` media input now accepts an optional `mimetype`; the service applies `mimetype ?? 'image/jpeg'` (or `'video/mp4'`) instead of always passing the hardcoded value to the engine. (#455)
+
+- **Clean install on Node 22+ / npm 11.** `@nestjs/websockets` is now declared as a direct dependency — it was only resolving transitively via `@nestjs/platform-socket.io`, so stricter installs failed with `TS2307: Cannot find module '@nestjs/websockets'`. The `postinstall` script also no longer triggers Node's `DEP0190` deprecation: `shell: true` is retained (so Windows still resolves `npm` via `npm.cmd`) but the command is now passed as a single string instead of an args array. Thanks @abdullah4tech. (#500)
+
+### Changed
+
+- **Italian translation update.** Improved the `messageTester` page title in the Italian (`it`) dashboard locale to use natural Italian instead of an anglicism. Thanks @albanobattistella. (#497)
+
 ## [0.7.9] - 2026-06-28
 
 ### Added
