@@ -123,6 +123,15 @@ export class EngineFactory implements OnModuleInit {
   }
 
   private createFallbackEngine(options: EngineCreateOptions): IWhatsAppEngine {
+    // This legacy fallback can only construct the whatsapp-web.js adapter. If a different engine was
+    // requested (e.g. ENGINE_TYPE=baileys) and its plugin wasn't available, building wwebjs here would
+    // silently run the WRONG engine — fail loudly so the misconfiguration is visible instead.
+    if (this.engineType !== 'whatsapp-web.js') {
+      throw new Error(
+        `Engine '${this.engineType}' is unavailable and has no direct fallback; cannot start the session.`,
+      );
+    }
+
     // Legacy direct creation (fallback)
     return new WhatsAppWebJsAdapter({
       sessionId: options.sessionId,

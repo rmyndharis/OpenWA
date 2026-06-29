@@ -90,4 +90,20 @@ describe('EngineFactory', () => {
     const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
     expect(() => factory.create({ sessionId: 'sess-2' })).not.toThrow();
   });
+
+  it('throws instead of silently building whatsapp-web.js when a non-wwebjs engine has no plugin', () => {
+    // The legacy fallback only builds wwebjs; reaching it with ENGINE_TYPE=baileys must fail loudly
+    // rather than run the wrong engine.
+    const pluginLoader = {
+      getPlugin: jest.fn().mockReturnValue(undefined),
+    } as unknown as PluginLoaderService;
+
+    const factory = new EngineFactory(
+      buildConfigService({ 'engine.type': 'baileys' }),
+      pluginLoader,
+      buildMessageStore(),
+      buildLidStore(),
+    );
+    expect(() => factory.create({ sessionId: 'sess-b' })).toThrow(/baileys/i);
+  });
 });

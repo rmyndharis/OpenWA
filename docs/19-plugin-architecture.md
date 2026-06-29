@@ -444,6 +444,12 @@ the permission-checked `messages` / `engine` / `net` capabilities. The capabilit
 `assertPermission` (and, for messages/engine, `resolveEngine` → `assertSessionAllowed`) before doing any
 work, so a missing grant or out-of-scope session fails fast with a `PluginCapabilityError`.
 
+> ⚠️ **`ctx.storage` is plugin-scoped, not per-session — unlike `ctx.config`.** `ctx.config` is merged
+> automatically for the firing session, but `ctx.storage` is a single namespace shared across **all** of a
+> plugin's sessions. A multi-session plugin that keys state by a fixed string (mirroring the per-session
+> config model) will have one session overwrite another's. Prefix storage keys with the session id (e.g.
+> `ctx.storage.set(\`${sessionId}:lastSeen\`, …)`) whenever state must be isolated per session.
+
 ## 19.7 Built-in Plugins
 
 The only plugins **shipped** as built-ins are the two WhatsApp **engine adapters**, registered

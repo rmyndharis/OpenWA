@@ -63,6 +63,25 @@ describe('LoggerService', () => {
     });
   });
 
+  describe('secret redaction', () => {
+    it('redacts the values of secret-named keys in the metadata', () => {
+      logger.log('auth', { password: 'hunter2', apiKey: 'abc123', userId: 'u1' });
+
+      const output = getLogOutput(consoleSpy) as unknown as Record<string, unknown>;
+      expect(output.password).toBe('[REDACTED]');
+      expect(output.apiKey).toBe('[REDACTED]');
+      expect(output.userId).toBe('u1');
+    });
+
+    it('redacts secret-named keys nested inside the metadata', () => {
+      logger.log('cfg', { config: { redisPassword: 'p', host: 'h' } });
+
+      const output = getLogOutput(consoleSpy) as unknown as { config: { redisPassword: string; host: string } };
+      expect(output.config.redisPassword).toBe('[REDACTED]');
+      expect(output.config.host).toBe('h');
+    });
+  });
+
   describe('error', () => {
     it('should log error messages to console.error', () => {
       const errorSpy = jest.spyOn(console, 'error');
