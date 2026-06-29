@@ -618,6 +618,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+    runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
@@ -630,6 +631,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       capDispatcher,
       onHookSubscribe,
       onLog,
+      runWithHookGuard,
     );
   }
 
@@ -745,6 +747,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       (verb, args) => dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
       onLog,
+      // Re-establish the in-flight hook context for worker-initiated capability calls, so a sandboxed
+      // plugin that sends from within a send hook can't loop the event back into itself unboundedly.
+      (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
     );
     this.sandboxHosts.set(pluginId, host);
     try {

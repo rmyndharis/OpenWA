@@ -35,6 +35,11 @@ export class PluginWorkerHost {
     number,
     { resolve: (result: { healthy: boolean; message?: string }) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  // Hook events currently dispatched to the worker and not yet settled, as a multiset. While the
+  // worker handles a hook it may issue capability calls that round-trip to the host; those run inside
+  // this in-flight set so a capability that re-fires the same event is short-circuited (HookManager's
+  // AsyncLocalStorage re-entrancy guard does not span the worker IPC boundary).
+  private readonly inFlightHookEvents = new Map<string, number>();
 
   constructor(
     private readonly channel: PluginWorkerChannel,
@@ -46,9 +51,24 @@ export class PluginWorkerHost {
     private readonly onHookSubscribe?: (event: string, priority?: number) => void,
     // Routes a worker plugin's ctx.logger.* call to the host's per-plugin logger.
     private readonly onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+    // Runs a worker-initiated capability call inside the in-flight hook context, so a capability that
+    // re-fires an event this worker is currently handling is short-circuited (re-entrancy across IPC).
+    // Absent => capability calls run with no hook guard (e.g. before the bridge is wired, or in tests).
+    private readonly runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
+  }
+
+  private incInFlightHook(event: string): void {
+    this.inFlightHookEvents.set(event, (this.inFlightHookEvents.get(event) ?? 0) + 1);
+  }
+
+  private decInFlightHook(event: string): void {
+    const count = this.inFlightHookEvents.get(event);
+    if (count === undefined) return;
+    if (count <= 1) this.inFlightHookEvents.delete(event);
+    else this.inFlightHookEvents.set(event, count - 1);
   }
 
   /**
@@ -66,13 +86,20 @@ export class PluginWorkerHost {
     onTimeout?: () => void;
   }): Promise<{ continue: boolean; data?: unknown }> {
     const id = this.nextId++;
+    this.incInFlightHook(options.event);
     return new Promise(resolve => {
+      // settle decrements the in-flight counter on every exit path (worker result, timeout, or crash
+      // drain) since it is what the hookPending entry's resolve runs.
+      const settle = (result: { continue: boolean; data?: unknown }): void => {
+        this.decInFlightHook(options.event);
+        resolve(result);
+      };
       const timer = setTimeout(() => {
         this.hookPending.delete(id);
         options.onTimeout?.();
-        resolve({ continue: true });
+        settle({ continue: true });
       }, options.timeoutMs);
-      this.hookPending.set(id, { resolve, timer });
+      this.hookPending.set(id, { resolve: settle, timer });
       this.channel.postMessage({
         kind: 'hook',
         id,
@@ -224,7 +251,14 @@ export class PluginWorkerHost {
       return;
     }
     try {
-      const result = await this.capDispatcher(message.verb, message.args);
+      const dispatcher = this.capDispatcher;
+      const run = (): Promise<unknown> => dispatcher(message.verb, message.args);
+      // Run inside the in-flight hook context so a capability that re-fires an event this worker is
+      // currently handling is short-circuited by HookManager's re-entrancy guard (which otherwise
+      // can't see across the IPC boundary). No hooks in flight => run directly, no wrapping cost.
+      const inFlight = [...this.inFlightHookEvents.keys()];
+      const result =
+        this.runWithHookGuard && inFlight.length > 0 ? await this.runWithHookGuard(inFlight, run) : await run();
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: true, result });
     } catch (error) {
       this.channel.postMessage({
