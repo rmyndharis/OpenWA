@@ -198,12 +198,13 @@ describe('BulkMessageService.processBatch', () => {
 
 describe('BulkMessageService.createBatch base64 media cap', () => {
   let service: BulkMessageService;
-  let repo: { findOne: jest.Mock; save: jest.Mock };
+  let repo: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
 
   beforeEach(async () => {
     repo = {
       findOne: jest.fn().mockResolvedValue(undefined),
       save: jest.fn().mockImplementation(b => Promise.resolve(b)),
+      create: jest.fn().mockImplementation((b: MessageBatch) => b),
     };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -234,5 +235,25 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     } finally {
       delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
     }
+  });
+
+  it('scopes the batchId uniqueness check to the session (no cross-session collision/oracle)', async () => {
+    // Simulate a DB where batchId 'dup' exists only under session 's1'.
+    repo.findOne.mockImplementation((opts: { where: { batchId?: string; sessionId?: string } }) => {
+      const w = opts.where;
+      const existsForS1 = w.batchId === 'dup' && (w.sessionId === undefined || w.sessionId === 's1');
+      return Promise.resolve(existsForS1 ? { id: 'b1', batchId: 'dup', sessionId: 's1' } : undefined);
+    });
+
+    // A different session reusing the same batchId must succeed — the check is (batchId, sessionId)-scoped,
+    // so it neither collides with another tenant's namespace nor leaks that the id is in use elsewhere.
+    await expect(
+      service.createBatch('s2', {
+        messages: [{ chatId: 'c0@c.us', type: 'text', content: { text: { body: 'hi' } } }],
+        batchId: 'dup',
+      } as unknown as SendBulkMessageDto),
+    ).resolves.toBeDefined();
+
+    expect(repo.findOne).toHaveBeenCalledWith({ where: { batchId: 'dup', sessionId: 's2' } });
   });
 });

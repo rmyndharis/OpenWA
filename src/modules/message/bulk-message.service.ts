@@ -107,8 +107,10 @@ export class BulkMessageService implements OnApplicationBootstrap {
 
     const batchId = dto.batchId || `batch_${randomUUID().split('-')[0]}`;
 
-    // Check if batchId already exists
-    const existing = await this.batchRepository.findOne({ where: { batchId } });
+    // Check if this batchId already exists FOR THIS SESSION. Scoping by sessionId (matching how
+    // getBatchStatus/cancelBatch already query) makes (sessionId, batchId) the namespace: one session
+    // can't deny another a batchId, and the 400-vs-202 difference can't probe another session's ids.
+    const existing = await this.batchRepository.findOne({ where: { batchId, sessionId } });
     if (existing) {
       throw new BadRequestException(`Batch ID '${batchId}' already exists`);
     }
