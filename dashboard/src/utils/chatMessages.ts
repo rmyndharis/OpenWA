@@ -2,6 +2,11 @@ import type { ChatMessage, EngineHistoryMessage, MessageType } from '../services
 
 export type { EngineHistoryMessage };
 
+// Message types whose history rows carry media. History is fetched WITHOUT media (footprint), so such
+// a row arrives with no payload — surface it as the omitted placeholder (📎 Media) instead of an empty
+// bubble. The DB copy of a recent message still wins in mergeChatMessages, so its real media is kept.
+const HISTORY_MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
+
 // Normalize an engine history message into the DB ChatMessage shape the thread renders. Historical
 // messages have no live delivery state, so default to `read` (they are old/already-seen); real status
 // for current-session messages still comes from the DB copy and live websocket acks.
@@ -18,7 +23,11 @@ export function mapEngineHistoryMessage(h: EngineHistoryMessage): ChatMessage {
     status: 'read',
     timestamp: h.timestamp,
     createdAt: new Date((h.timestamp ?? 0) * 1000).toISOString(),
-    metadata: h.media ? { media: h.media } : undefined,
+    metadata: h.media
+      ? { media: h.media }
+      : HISTORY_MEDIA_TYPES.has(h.type)
+        ? { media: { mimetype: '', omitted: true } }
+        : undefined,
   };
 }
 

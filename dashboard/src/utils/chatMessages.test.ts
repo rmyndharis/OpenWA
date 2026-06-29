@@ -48,6 +48,23 @@ test('mapEngineHistoryMessage: derives createdAt from the unix timestamp', () =>
   assert.equal(Date.parse(m.createdAt), 1782053533 * 1000);
 });
 
+test('mapEngineHistoryMessage: a media-type message with no loaded media gets an omitted marker', () => {
+  // History is fetched without media (footprint), so an old media message arrives with no payload —
+  // surface it as the omitted placeholder (📎 Media) instead of an empty bubble.
+  const m = mapEngineHistoryMessage(hist({ type: 'image', media: undefined }));
+  assert.equal(m.metadata?.media?.omitted, true);
+});
+
+test('mapEngineHistoryMessage: a media message that DID carry media keeps it (no marker override)', () => {
+  const m = mapEngineHistoryMessage(hist({ type: 'image', media: { mimetype: 'image/png', data: 'BASE64' } }));
+  assert.equal(m.metadata?.media?.data, 'BASE64');
+  assert.equal(m.metadata?.media?.omitted, undefined);
+});
+
+test('mapEngineHistoryMessage: a text message gets no media metadata', () => {
+  assert.equal(mapEngineHistoryMessage(hist({ type: 'text' })).metadata, undefined);
+});
+
 test('mergeChatMessages: an engine-only message (no DB row) is included — the backfill case', () => {
   const merged = mergeChatMessages([], [mapEngineHistoryMessage(hist())]);
   assert.equal(merged.length, 1);

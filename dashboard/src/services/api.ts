@@ -163,7 +163,7 @@ export interface ChatMessage {
   timestamp?: number;
   createdAt: string;
   metadata?: {
-    media?: { mimetype: string; filename?: string; data?: string };
+    media?: { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
   };
