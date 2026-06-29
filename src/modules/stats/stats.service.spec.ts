@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { StatsService, timeSeriesTimestampSql, hourBucketSql } from './stats.service';
+import { StatsService, timeSeriesTimestampSql, hourBucketSql, maxCreatedAtSql } from './stats.service';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 
@@ -18,6 +18,14 @@ describe('stats SQL dialect helpers', () => {
     expect(timeSeriesTimestampSql('postgres', 'hour')).toBe(`to_char(m."createdAt", 'YYYY-MM-DD HH24:00:00')`);
     expect(timeSeriesTimestampSql('postgres', 'day')).toBe(`to_char(m."createdAt", 'YYYY-MM-DD')`);
     expect(hourBucketSql('postgres')).toBe(`CAST(EXTRACT(HOUR FROM m."createdAt") AS INTEGER)`);
+  });
+
+  it('formats MAX(createdAt) to an identical text timestamp on both engines (lastActive parity)', () => {
+    // Postgres returns a timestamp the driver hydrates to a JS Date (serialized to a different ISO
+    // string than SQLite's stored text); pinning both to the same to_char/strftime format keeps the
+    // lastActive field stable regardless of the backing database.
+    expect(maxCreatedAtSql('sqlite')).toBe(`strftime('%Y-%m-%d %H:%M:%S', MAX(m.createdAt))`);
+    expect(maxCreatedAtSql('postgres')).toBe(`to_char(MAX(m."createdAt"), 'YYYY-MM-DD HH24:MI:SS')`);
   });
 });
 
