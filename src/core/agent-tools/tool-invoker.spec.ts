@@ -52,6 +52,22 @@ describe('invokeTool', () => {
     expect(a.validateApiKey).toHaveBeenCalledWith('rawkey', undefined, 's1');
   });
 
+  it('fails closed for a sessionScoped tool when no sessionId is supplied (no auth with an unscoped id)', async () => {
+    const a = auth();
+    // A sessionScoped tool whose input omits sessionId (e.g. an optional/loose schema): the per-key
+    // allowedSessions check would be skipped if undefined reached validateApiKey, so fence it here.
+    const scoped: ToolDescriptor = {
+      ...readTool,
+      sessionScoped: true,
+      inputSchema: z.object({ sessionId: z.string().optional() }),
+      handler: () => Promise.resolve('ok'),
+    };
+    await expect(invokeTool(scoped, {}, 'rawkey', a as unknown as AuthService)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(a.validateApiKey).not.toHaveBeenCalled();
+  });
+
   it('rejects when validateApiKey throws for an out-of-scope session', async () => {
     const a = auth();
     (a.validateApiKey as jest.Mock).mockRejectedValueOnce(

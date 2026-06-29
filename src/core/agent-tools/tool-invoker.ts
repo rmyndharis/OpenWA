@@ -30,6 +30,14 @@ export async function invokeTool(
   const probe = (rawInput ?? {}) as Record<string, unknown>;
   const sessionId = tool.sessionScoped && typeof probe.sessionId === 'string' ? probe.sessionId : undefined;
 
+  // Fail closed: a sessionScoped tool MUST carry a non-empty sessionId before auth. Otherwise an
+  // undefined scope would skip the per-key allowedSessions check inside validateApiKey, letting a
+  // session-restricted key drive the tool against any session. This enforces the fence at the runtime
+  // boundary regardless of an individual tool's input schema.
+  if (tool.sessionScoped && !sessionId) {
+    throw new BadRequestException('sessionId is required for this tool');
+  }
+
   const apiKey = await authService.validateApiKey(rawKey, undefined, sessionId);
   onAuthenticated?.(apiKey.id);
 
