@@ -52,6 +52,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history is required for `git subtree split`
+          persist-credentials: false # stop the GITHUB_TOKEN extraheader from shadowing the PAT in the push URL
 
       - name: Split and force-push to the mirror repo
         env:

@@ -38,7 +38,7 @@ export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): Ch
 
 // ChatMessageView extends ChatMessage with the view-only fields the chat page renders.
 // Lifted from Chats.tsx so hooks/utils can share the same shape.
-type MessageMedia = { mimetype: string; filename?: string; data?: string };
+type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
 
 export interface ChatMessageView extends ChatMessage {
   metadata?: {

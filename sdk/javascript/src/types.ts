@@ -500,6 +500,10 @@ export interface DeleteChatRequest {
 
 // ── Status / Stories ──────────────────────────────────────────────
 
+/**
+ * Weak shape returned by the GET status endpoints (`list`/`fromContact`).
+ * The server payload there is loose/different; fields are all optional.
+ */
 export interface StatusRecord {
   id?: string;
   statusId?: string;
@@ -508,8 +512,22 @@ export interface StatusRecord {
   timestamp?: string | number;
 }
 
+/**
+ * Result of a status POST (`send-text`/`send-image`/`send-video`).
+ * Mirrors the backend `StatusResult` exactly.
+ */
+export interface StatusResult {
+  statusId: string;
+  /** ISO 8601 timestamp of the post. */
+  timestamp: string;
+  /** ISO 8601 expiry timestamp. */
+  expiresAt: string;
+}
+
 export interface SendTextStatusRequest {
   text: string;
+  /** Recipient JIDs the status is addressed to (required by the server; empty → 400). */
+  recipients: string[];
   /** Hex background color, e.g. `#25D366`. */
   backgroundColor?: string;
   /** Font index supported by WhatsApp status. */
@@ -520,17 +538,23 @@ export interface SendTextStatusRequest {
 export interface StatusMediaInput {
   url?: string;
   base64?: string;
+  /** Optional explicit mimetype (inferred from URL/bytes when omitted). */
+  mimetype?: string;
 }
 
 /** Server expects a nested `{ image: { url|base64 } }` body, not flat media fields. */
 export interface SendImageStatusRequest {
   image: StatusMediaInput;
+  /** Recipient JIDs the status is addressed to (required by the server; empty → 400). */
+  recipients: string[];
   caption?: string;
 }
 
 /** Server expects a nested `{ video: { url|base64 } }` body, not flat media fields. */
 export interface SendVideoStatusRequest {
   video: StatusMediaInput;
+  /** Recipient JIDs the status is addressed to (required by the server; empty → 400). */
+  recipients: string[];
   caption?: string;
 }
 

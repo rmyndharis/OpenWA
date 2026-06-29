@@ -561,6 +561,18 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
+  it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'hello' },
+      { ephemeralExpiration: 604800 },
+    );
+  });
+
   it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
@@ -902,9 +914,11 @@ describe('BaileysAdapter inbound fan-out', () => {
       await new Promise(r => setImmediate(r));
       expect(onMessage).toHaveBeenCalledTimes(1);
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      const msg = onMessage.mock.calls[0][0] as { media?: unknown; type: string };
+      const msg = onMessage.mock.calls[0][0] as { media?: { omitted?: boolean; mimetype?: string }; type: string };
       expect(msg.type).toBe('image');
-      expect(msg.media).toBeUndefined();
+      expect(msg.media).toBeDefined();
+      expect(msg.media?.omitted).toBe(true);
+      expect(msg.media?.mimetype).toBe('image/png');
       expect(baileys.downloadMediaMessage).not.toHaveBeenCalled();
     } finally {
       if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_ENABLED;
@@ -1307,6 +1321,41 @@ describe('BaileysAdapter store-backed ops', () => {
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
   });
 
+  it('media sends honor the chat disappearing timer via the funnel (#473)', async () => {
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 86400 }]);
+    await adapter.sendImageMessage('628111@s.whatsapp.net', { mimetype: 'image/png', data: Buffer.from([1]) });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      expect.objectContaining({ image: Buffer.from([1]) }),
+      { ephemeralExpiration: 86400 },
+    );
+  });
+
+  it('replyToMessage merges the disappearing timer with the quoted option (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.replyToMessage('628111@s.whatsapp.net', 'TARGET', 'my reply');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'my reply' },
+      { quoted: stored, ephemeralExpiration: 604800 },
+    );
+  });
+
+  it('react and delete never carry an ephemeral timer (Baileys does not exclude reactions) (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.reactToMessage('628111@s.whatsapp.net', 'TARGET', '👍');
+    await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      react: { text: '👍', key: stored.key },
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
+  });
+
   it('throws when the referenced message is not in the store', async () => {
     fakeStore.getMessage.mockResolvedValue(null);
     const adapter = await ready();
@@ -1670,5 +1719,83 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     fakeSock.fire('connection.update', { connection: 'open' });
     expect(await adapter.deleteChat('628999@s.whatsapp.net')).toBe(false);
     expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysAdapter status posting', () => {
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+  });
+
+  const ready = async (): Promise<BaileysAdapter> => {
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks());
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  it('postTextStatus sends to status@broadcast with denormalized statusJidList + styling, no store write', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'STATUS1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    const result = await adapter.postTextStatus('hello', {
+      recipients: ['628111@c.us', '628222@lid'],
+      backgroundColor: '#25D366',
+      font: 2,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { text: 'hello' },
+      {
+        statusJidList: ['628111@s.whatsapp.net', '628222@lid'],
+        backgroundColor: '#25D366',
+        font: 2,
+      },
+    );
+    expect(result.statusId).toBe('STATUS1');
+    expect(result.expiresAt.getTime() - result.timestamp.getTime()).toBe(24 * 3_600_000);
+    expect(fakeStore.put).not.toHaveBeenCalled();
+  });
+
+  it('postImageStatus resolves media and threads recipients', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'IMG1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    await adapter.postImageStatus(
+      { mimetype: 'image/png', data: Buffer.from([1, 2, 3]) },
+      { recipients: ['628111@c.us'], caption: 'cap' },
+    );
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { image: Buffer.from([1, 2, 3]), caption: 'cap', mimetype: 'image/png' },
+      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+    );
+    expect(fakeStore.put).not.toHaveBeenCalled();
+  });
+
+  it('postVideoStatus resolves media and threads recipients', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'VID1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    await adapter.postVideoStatus({ mimetype: 'video/mp4', data: 'AAAA' }, { recipients: ['628111@c.us'] });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4' },
+      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+    );
+  });
+
+  it('deleteStatus revokes by constructing the key from statusId (no store lookup)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'STATUS1' } });
+    const adapter = await ready();
+    await adapter.deleteStatus('STATUS1');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('status@broadcast', {
+      delete: {
+        remoteJid: 'status@broadcast',
+        fromMe: true,
+        id: 'STATUS1',
+        participant: '628999@s.whatsapp.net',
+      },
+    });
+    expect(fakeStore.getMessage).not.toHaveBeenCalled();
   });
 });

@@ -76,6 +76,28 @@ describe('BaileysSessionStore', () => {
     expect(store.lastMessage('unknown@s.whatsapp.net')).toBeNull();
   });
 
+  describe('getEphemeralExpiration (#473)', () => {
+    it('returns the cached disappearing-messages timer for a chat', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(604800);
+    });
+
+    it('accepts a neutral @c.us id and folds it to the engine dialect for lookup', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', ephemeralExpiration: 86400 }]);
+      expect(store.getEphemeralExpiration('628111@c.us')).toBe(86400);
+    });
+
+    it('returns undefined when the chat is unknown, disabled (0), or null (no forced disappear)', () => {
+      store.upsertChats([{ id: '628222@s.whatsapp.net', ephemeralExpiration: 0 }]);
+      store.upsertChats([{ id: '628333@s.whatsapp.net', ephemeralExpiration: null }]);
+      store.upsertChats([{ id: '628444@s.whatsapp.net' }]); // field absent
+      expect(store.getEphemeralExpiration('628222@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('628333@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('628444@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('nope@s.whatsapp.net')).toBeUndefined();
+    });
+  });
+
   it('resolves a phone jid to its user-part, a lid via lidPnMappings, and a contact phoneNumber', () => {
     expect(store.resolvePhone('628111@s.whatsapp.net')).toBe('628111');
     store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);

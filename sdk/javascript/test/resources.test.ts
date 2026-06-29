@@ -124,13 +124,13 @@ describe('WebhooksResource — exact paths', () => {
 describe('StatusResource — nested media bodies', () => {
   it('sendImage/sendVideo forward the server-required nested {image|video:{...}} shape', async () => {
     const t = new MockTransport()
-      .on('POST', /\/status\/send-image$/, { body: { statusId: 's1' } })
-      .on('POST', /\/status\/send-video$/, { body: { statusId: 's2' } });
+      .on('POST', /\/status\/send-image$/, { body: { statusId: 's1', timestamp: '2025-01-01T00:00:00.000Z', expiresAt: '2025-01-02T00:00:00.000Z' } })
+      .on('POST', /\/status\/send-video$/, { body: { statusId: 's2', timestamp: '2025-01-01T00:00:00.000Z', expiresAt: '2025-01-02T00:00:00.000Z' } });
     const c = client(t);
-    await c.status.sendImage('s', { image: { url: 'http://img' }, caption: 'hi' });
-    expect(t.lastCall!.body).toEqual({ image: { url: 'http://img' }, caption: 'hi' });
-    await c.status.sendVideo('s', { video: { url: 'http://vid' } });
-    expect(t.lastCall!.body).toEqual({ video: { url: 'http://vid' } });
+    await c.status.sendImage('s', { image: { url: 'http://img' }, recipients: ['a@c.us'], caption: 'hi' });
+    expect(t.lastCall!.body).toEqual({ image: { url: 'http://img' }, recipients: ['a@c.us'], caption: 'hi' });
+    await c.status.sendVideo('s', { video: { url: 'http://vid' }, recipients: ['a@c.us'] });
+    expect(t.lastCall!.body).toEqual({ video: { url: 'http://vid' }, recipients: ['a@c.us'] });
   });
 });
 

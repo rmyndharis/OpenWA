@@ -32,7 +32,7 @@ import {
   Status,
   StatusResult,
   ChatSummary,
-  TextStatusOptions,
+  StatusPostOptions,
 } from '../interfaces/whatsapp-engine.interface';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -467,7 +467,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
     this.ensureReady();
-    const sent = await this.sock!.sendMessage(chatId, { text });
+    const options = this.withEphemeral(chatId);
+    const sent = options
+      ? await this.sock!.sendMessage(chatId, { text }, options)
+      : await this.sock!.sendMessage(chatId, { text });
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
@@ -797,17 +800,44 @@ export class BaileysAdapter implements IWhatsAppEngine {
   getContactStatus(_contactId: string): Promise<Status[]> {
     return this.unsupported('getContactStatus');
   }
-  postTextStatus(_text: string, _options?: TextStatusOptions): Promise<StatusResult> {
-    return this.unsupported('postTextStatus');
+  postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postStatus({ text }, options);
   }
-  postImageStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    return this.unsupported('postImageStatus');
+  postImageStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus('image', media, options);
   }
-  postVideoStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    return this.unsupported('postVideoStatus');
+  postVideoStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus('video', media, options);
   }
-  deleteStatus(_statusId: string): Promise<void> {
-    return this.unsupported('deleteStatus');
+  private async postMediaStatus(
+    kind: 'image' | 'video',
+    media: MediaInput,
+    options: StatusPostOptions,
+  ): Promise<StatusResult> {
+    this.ensureReady();
+    const { data, mimetype } = await this.resolveMediaBuffer(media);
+    const content: AnyMessageContent =
+      kind === 'image'
+        ? { image: data, caption: options.caption, mimetype }
+        : { video: data, caption: options.caption, mimetype };
+    return this.postStatus(content, options);
+  }
+  /**
+   * Best-effort status revoke. Unlike deleteMessage, status messages are NOT persisted, so the revoke
+   * key must be constructed from statusId alone (no messageStore lookup). The participant is the
+   * engine-dialect self JID (`<me>@s.whatsapp.net`). The revoke shape is empirically UNVERIFIED — the
+   * live spike only tested posting; if WhatsApp rejects it, fall back to EngineNotSupportedError.
+   */
+  async deleteStatus(statusId: string): Promise<void> {
+    this.ensureReady();
+    await this.sock!.sendMessage('status@broadcast', {
+      delete: {
+        remoteJid: 'status@broadcast',
+        fromMe: true,
+        id: statusId,
+        participant: this.sessionStore.toEngineJid(this.normalizedSelfJid()),
+      },
+    });
   }
   getCatalog(): Promise<Catalog | null> {
     return this.unsupported('getCatalog');
@@ -1015,8 +1045,21 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'stickerMessage';
     if (isMediaType) {
       if (!isMediaDownloadEnabled()) {
-        // media stays undefined — Media download disabled entirely via MEDIA_DOWNLOAD_ENABLED=false.
-        // The message is emitted without a media field.
+        // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
+        // mimetype is available pre-download from the message content.
+        const normalizedContent = b.normalizeMessageContent(content) ?? content;
+        const subMessage =
+          normalizedContent.imageMessage ??
+          normalizedContent.videoMessage ??
+          normalizedContent.audioMessage ??
+          normalizedContent.documentMessage ??
+          normalizedContent.stickerMessage;
+        media = {
+          mimetype: subMessage?.mimetype ?? '',
+          filename: normalizedContent.documentMessage?.fileName ?? undefined,
+          omitted: true,
+          sizeBytes: coerceDeclaredSize(subMessage?.fileLength),
+        };
       } else {
         // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
         // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
@@ -1271,14 +1314,34 @@ export class BaileysAdapter implements IWhatsAppEngine {
     ].join('\n');
   }
 
+  /**
+   * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
+   * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
+   * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
+   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. Returning
+   * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
+   * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
+   */
+  private withEphemeral(
+    chatId: string,
+    options?: MiscMessageGenerationOptions,
+  ): MiscMessageGenerationOptions | undefined {
+    const ephemeralExpiration = this.sessionStore.getEphemeralExpiration(chatId);
+    if (ephemeralExpiration === undefined) {
+      return options;
+    }
+    return { ...options, ephemeralExpiration };
+  }
+
   /** Send a Baileys content object and shape the result like the other sends. */
   private async sendContent(
     chatId: string,
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
   ): Promise<MessageResult> {
-    const sent = options
-      ? await this.sock!.sendMessage(chatId, content, options)
+    const merged = this.withEphemeral(chatId, options);
+    const sent = merged
+      ? await this.sock!.sendMessage(chatId, content, merged)
       : await this.sock!.sendMessage(chatId, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
@@ -1297,6 +1360,33 @@ export class BaileysAdapter implements IWhatsAppEngine {
       throw new MessageNotFoundError(messageId);
     }
     return found;
+  }
+
+  /**
+   * Post a status (story) to `status@broadcast` with a denormalized `statusJidList` (the allow-list of
+   * neutral recipients folded back to the engine dialect). Image/video variants route through here too.
+   * The outbound status echo is NOT persisted — status isn't a chat message (the inbound filter in
+   * handleMessagesUpsert already skips `type:'append'` echoes).
+   */
+  private async postStatus(content: AnyMessageContent, options: StatusPostOptions): Promise<StatusResult> {
+    this.ensureReady();
+    const statusJidList = options.recipients.map(r => this.sessionStore.toEngineJid(r));
+    const sent = await this.sock!.sendMessage('status@broadcast', content, {
+      statusJidList,
+      backgroundColor: options.backgroundColor,
+      font: options.font,
+    });
+    return this.toStatusResult(sent);
+  }
+
+  /** Shape a Baileys send result into a StatusResult; expiresAt is timestamp + 24h (WhatsApp status TTL). */
+  private toStatusResult(sent: WAMessage | undefined): StatusResult {
+    const ts = sent?.messageTimestamp ? new Date(this.toUnixSeconds(sent.messageTimestamp) * 1000) : new Date();
+    return {
+      statusId: sent?.key?.id ?? '',
+      timestamp: ts,
+      expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
+    };
   }
 
   private unsupported(method: string): Promise<any> {

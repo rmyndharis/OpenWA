@@ -40,7 +40,7 @@ import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import './Chats.css';
 
-type MessageMedia = { mimetype: string; filename?: string; data?: string };
+type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
 
 // mergeDeliveryStatus (forward-only delivery-tick merge) is shared with mergeOrAppend in utils/chatMessages
 // so the WS append path and the ack path apply the exact same rule.
@@ -793,6 +793,9 @@ export function Chats() {
                       const renderMedia = () => {
                         if (msg.type === 'revoked') return null;
                         if (!mediaInfo) return null;
+                        if (mediaInfo.omitted) {
+                          return <div className="message-media-omitted">📎 Media</div>;
+                        }
                         const mediaSrc = getMediaSrc(mediaInfo);
                         if (!mediaSrc) return null;
 

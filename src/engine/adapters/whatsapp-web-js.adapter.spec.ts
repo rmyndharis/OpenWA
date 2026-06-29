@@ -12,6 +12,7 @@ import {
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { fetch as undiciFetch } from 'undici';
@@ -619,6 +620,33 @@ describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () =>
   });
 });
 
+describe('WhatsAppWebJsAdapter status methods (Baileys-only, surface HTTP 501, #455)', () => {
+  // The 4 status methods are Baileys-only; the wwebjs adapter stubs each to EngineNotSupportedError
+  // (which extends NestJS NotImplementedException -> HTTP 501). This locks the new-contract signatures
+  // (postTextStatus(text, options) / postImage|VideoStatus(media, options) / deleteStatus(statusId))
+  // so a future refactor that silently starts returning data instead of throwing is caught here.
+  const readyAdapter = (): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    // ensureReady() requires both status === READY and a non-null client before the method body runs.
+    (adapter as unknown as { client: unknown }).client = {};
+    return adapter;
+  };
+  const media = { mimetype: 'image/png', data: 'iVBOR' };
+  const options = { recipients: ['628111@c.us'] };
+
+  it.each([
+    ['postTextStatus', ['hello', options]] as const,
+    ['postImageStatus', [media, options]] as const,
+    ['postVideoStatus', [media, options]] as const,
+    ['deleteStatus', ['STATUS1']] as const,
+  ])('%s rejects with EngineNotSupportedError (501)', async (method, args) => {
+    await expect(
+      (readyAdapter() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method](...args),
+    ).rejects.toBeInstanceOf(EngineNotSupportedError);
+  });
+});
+
 describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve current WA-Web build)', () => {
   const orig = { v: process.env.WWEBJS_WEB_VERSION, p: process.env.WWEBJS_WEB_VERSION_REMOTE_PATH };
   const fetcherFor = (currentVersion: unknown, ok = true) =>
@@ -834,8 +862,14 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const msg = onMessage.mock.calls[0][0] as { media?: unknown; type: string };
+    const msg = onMessage.mock.calls[0][0] as {
+      media?: { omitted?: boolean; mimetype?: string; sizeBytes?: number };
+      type: string;
+    };
     expect(msg.type).toBe('image');
-    expect(msg.media).toBeUndefined();
+    expect(msg.media).toBeDefined();
+    expect(msg.media?.omitted).toBe(true);
+    expect(msg.media?.mimetype).toBe('image/png');
+    expect(msg.media?.sizeBytes).toBe(5000);
   });
 });

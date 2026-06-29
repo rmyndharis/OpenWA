@@ -127,6 +127,19 @@ export class BaileysSessionStore {
     return m ? { key: m.key, timestamp: m.timestamp } : null;
   }
 
+  /**
+   * The chat's disappearing-messages timer in seconds (#473), or `undefined` when no timer is known.
+   * Only a positive value is returned: `0` / `null` / absent all mean "no known timer", so the caller
+   * omits the per-message `ephemeralExpiration` and reproduces today's send behavior (Baileys' own send
+   * guard is truthy). This keeps a stale-empty or boot-window cache from ever forcing a message to
+   * disappear. Folds a neutral `@c.us` id to the engine dialect first, like the other chat lookups.
+   */
+  getEphemeralExpiration(chatId: string): number | undefined {
+    const chat = this.chats.get(chatId) ?? this.chats.get(this.toEngineJid(chatId));
+    const exp = chat?.ephemeralExpiration;
+    return typeof exp === 'number' && exp > 0 ? exp : undefined;
+  }
+
   resolvePhone(id: string): string | null {
     const parsed = parseWaId(id);
     // A user id (@c.us / @s.whatsapp.net) already carries the phone as its user-part. The @c.us case

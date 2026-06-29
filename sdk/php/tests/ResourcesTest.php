@@ -182,6 +182,24 @@ class ResourcesTest extends TestCase
         $this->assertStringContainsString('/chats/typing', $backend->calls()[4]['url']);
     }
 
+    // ── Status (Stories) ──────────────────────────────────────────────
+
+    public function testStatusSendForwardsRequiredRecipientsAndNestedMedia(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['statusId' => 's1', 'timestamp' => '2025-01-01T00:00:00.000Z', 'expiresAt' => '2025-01-02T00:00:00.000Z']);
+        $backend->on(200, ['statusId' => 's2', 'timestamp' => '2025-01-01T00:00:00.000Z', 'expiresAt' => '2025-01-02T00:00:00.000Z']);
+        $backend->on(200, ['statusId' => 's3', 'timestamp' => '2025-01-01T00:00:00.000Z', 'expiresAt' => '2025-01-02T00:00:00.000Z']);
+        $client = $backend->makeClient();
+        // Server requires `recipients` on every status post; media posts use a nested {image|video:{...}} body.
+        $client->status->sendText('s', ['text' => 'hi', 'recipients' => ['a@c.us']]);
+        $this->assertSame(['text' => 'hi', 'recipients' => ['a@c.us']], $backend->lastCall()['body']);
+        $client->status->sendImage('s', ['image' => ['url' => 'http://img'], 'recipients' => ['a@c.us'], 'caption' => 'c']);
+        $this->assertSame(['image' => ['url' => 'http://img'], 'recipients' => ['a@c.us'], 'caption' => 'c'], $backend->lastCall()['body']);
+        $client->status->sendVideo('s', ['video' => ['url' => 'http://vid'], 'recipients' => ['a@c.us']]);
+        $this->assertSame(['video' => ['url' => 'http://vid'], 'recipients' => ['a@c.us']], $backend->lastCall()['body']);
+    }
+
     public function testHealthAndAuth(): void
     {
         $backend = new MockBackend();
