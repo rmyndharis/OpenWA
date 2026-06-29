@@ -53,9 +53,13 @@ export class SettingsController {
   }
 
   @Get()
+  @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get application settings' })
   @ApiResponse({ status: 200, description: 'Current settings' })
   get(): Settings {
+    // Settings expose environment-derived configuration (debug flag, reconnect policy, rate-limit
+    // thresholds, base URL). Gate the read at ADMIN, matching the PUT below and the rest of the
+    // admin-config surface — a VIEWER or session-scoped key has no business reading server config.
     return this.settings;
   }
 
