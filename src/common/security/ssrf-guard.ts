@@ -133,6 +133,7 @@ export function isBlockedAddress(ip: string): boolean {
     const firstHextet = lower.split(':')[0];
     if (firstHextet.startsWith('fc') || firstHextet.startsWith('fd')) return true; // ULA fc00::/7
     if (/^fe[89ab]/.test(firstHextet)) return true; // link-local fe80::/10
+    if (/^fe[c-f]/.test(firstHextet)) return true; // deprecated site-local fec0::/10 (RFC 3879)
 
     // IPv6 forms that embed an IPv4 — 6to4 (2002::/16), NAT64 (64:ff9b::/96), and the deprecated
     // IPv4-compatible ::/96 — are classified by the embedded address so they reach the IPv4 blocklist,

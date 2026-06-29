@@ -38,6 +38,8 @@ describe('isBlockedAddress', () => {
     ['fc00::1', 'IPv6 ULA fc00::/7'],
     ['fd12:3456::1', 'IPv6 ULA fd'],
     ['fe80::1', 'IPv6 link-local'],
+    ['fec0::1', 'IPv6 site-local fec0::/10 (deprecated, RFC 3879)'],
+    ['feff::1', 'IPv6 site-local upper bound feff'],
     ['::ffff:127.0.0.1', 'IPv4-mapped loopback (dotted)'],
     ['::ffff:7f00:1', 'IPv4-mapped loopback (hex)'],
     ['::ffff:0a00:0001', 'IPv4-mapped RFC1918 (hex, zero-padded)'],
