@@ -5,6 +5,7 @@ import { randomBytes } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { writeSecretFile } from '../../common/utils/secret-file';
+import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
@@ -262,56 +263,10 @@ export class AuthService implements OnModuleInit {
   }
 
   private isIpAllowed(clientIp: string, allowedIps: string[]): boolean {
-    // Support both exact match and CIDR notation
-    for (const entry of allowedIps) {
-      if (entry.includes('/')) {
-        // CIDR notation (e.g., "10.0.0.0/24")
-        if (this.ipInCidr(clientIp, entry)) {
-          return true;
-        }
-      } else {
-        // Exact match
-        if (clientIp === entry) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Check if an IPv4 address is within a CIDR range
-   * @param ip - Client IP address (e.g., "192.168.1.100")
-   * @param cidr - CIDR notation (e.g., "192.168.1.0/24")
-   */
-  private ipInCidr(ip: string, cidr: string): boolean {
-    try {
-      const [range, bitsStr] = cidr.split('/');
-      const bits = parseInt(bitsStr, 10);
-
-      if (isNaN(bits) || bits < 0 || bits > 32) {
-        return false;
-      }
-
-      const mask = ~(2 ** (32 - bits) - 1);
-      const ipNum = this.ipToNumber(ip);
-      const rangeNum = this.ipToNumber(range);
-
-      return (ipNum & mask) === (rangeNum & mask);
-    } catch (error) {
-      this.logger.warn(`Invalid CIDR format: ${cidr}`, { error: String(error) });
-      return false;
-    }
-  }
-
-  /**
-   * Convert IPv4 address string to 32-bit number
-   */
-  private ipToNumber(ip: string): number {
-    const parts = ip.split('.');
-    if (parts.length !== 4) return 0;
-
-    return parts.reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+    // Delegate to the shared, hardened matcher (also used by the throttler and the API-key guard's IP
+    // resolution): it handles both an exact IP entry and CIDR notation, and — unlike the previous local
+    // parser — rejects a malformed octet instead of coercing it into range.
+    return allowedIps.some(entry => ipMatches(clientIp, entry));
   }
 
   hasPermission(apiKey: ApiKey, requiredRole: ApiKeyRole): boolean {
