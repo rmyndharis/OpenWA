@@ -1159,6 +1159,8 @@ describe('SessionService', () => {
 
       expect(messageRepository.insert).toHaveBeenCalled();
       expect(dispatchedEvents('message.received')).toHaveLength(1);
+    });
+
     it('does not process an own-send status echo (type=append) — no dispatch, no WS emit, no DB write', async () => {
       // Regression guard for the WhatsApp Status feature: posting a status produces an own-send echo
       // that Baileys delivers as `messages.upsert` with `type: 'append'` (NOT 'notify'). The adapter's
