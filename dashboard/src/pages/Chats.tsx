@@ -180,6 +180,15 @@ export function Chats() {
     }
   }, [selectedSessionId, loadChats]);
 
+  // Revoke the object URL created for an image-attachment preview once it is replaced, cleared, or
+  // the page unmounts. The cleanup runs with the previous value on every change, so this single
+  // effect covers all paths (new file, remove, session switch) — otherwise each preview leaks a
+  // blob held for the lifetime of the document.
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
   const markChatRead = useCallback(
     (chatId: string) => {
       void sessionApi.markChatRead(selectedSessionId, chatId).catch(err => {
