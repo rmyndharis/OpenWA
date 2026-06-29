@@ -8,6 +8,8 @@ import { QUEUE_NAMES } from '../queue-names';
 import { workerConnectionOptions, webhookWorkerConcurrency } from '../redis-connection';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
+import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
+import { recordWebhookDeliveryFailure, statusCodeFromError } from '../../webhook/utils/record-delivery-failure';
 import { HookManager } from '../../../core/hooks';
 import { withSafeFetch, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
 
@@ -29,6 +31,8 @@ export class WebhookProcessor extends WorkerHost {
   constructor(
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
+    @InjectRepository(WebhookDeliveryFailure, 'data')
+    private readonly failureRepository: Repository<WebhookDeliveryFailure>,
     private readonly hookManager: HookManager,
     private readonly configService: ConfigService,
   ) {
@@ -128,7 +132,8 @@ export class WebhookProcessor extends WorkerHost {
         action: 'webhook_failed',
       });
 
-      // Execute error hook only on final failure (all retries exhausted)
+      // On final failure (all retries exhausted): fire the error hook AND persist a durable record so
+      // the lost event is visible after the BullMQ failed-set / logs roll off.
       if (isFinalAttempt) {
         await this.hookManager.execute(
           'webhook:error',
@@ -142,6 +147,17 @@ export class WebhookProcessor extends WorkerHost {
           },
           { sessionId, source: 'WebhookProcessor' },
         );
+        await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+          webhookId,
+          sessionId,
+          event,
+          url,
+          idempotencyKey: payload.idempotencyKey,
+          deliveryId: payload.deliveryId,
+          attempts: job.attemptsMade + 1,
+          lastStatusCode: statusCodeFromError(errorMessage),
+          lastError: errorMessage,
+        });
       }
 
       // Re-throw to trigger BullMQ retry

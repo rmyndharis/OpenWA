@@ -6,6 +6,8 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
+import { recordWebhookDeliveryFailure, statusCodeFromError } from './utils/record-delivery-failure';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
@@ -50,6 +52,8 @@ export class WebhookService {
   constructor(
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
+    @InjectRepository(WebhookDeliveryFailure, 'data')
+    private readonly failureRepository: Repository<WebhookDeliveryFailure>,
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
@@ -109,6 +113,21 @@ export class WebhookService {
       options.where = { sessionId: In(allowedSessions) };
     }
     return this.webhookRepository.find(options);
+  }
+
+  /**
+   * Recently-failed webhook deliveries (most recent first), so an operator can see what was lost during
+   * a receiver outage. ADMIN-only operational data; an optional sessionId narrows it. Bounded by the
+   * shared pagination window.
+   */
+  async listDeliveryFailures(opts: ListOptions & { sessionId?: string } = {}): Promise<WebhookDeliveryFailure[]> {
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    return this.failureRepository.find({
+      where: opts.sessionId ? { sessionId: opts.sessionId } : {},
+      order: { createdAt: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
   }
 
   async findOne(sessionId: string, id: string): Promise<Webhook> {
@@ -469,6 +488,20 @@ export class WebhookService {
         await this.delay(delay * attempt);
         return this.deliverWebhook(webhook, payload, headers, attempt + 1);
       }
+      // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
+      // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
+      const errMessage = error instanceof Error ? error.message : String(error);
+      await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+        webhookId: webhook.id,
+        sessionId: payload.sessionId,
+        event: payload.event,
+        url: webhook.url,
+        idempotencyKey: payload.idempotencyKey,
+        deliveryId: payload.deliveryId,
+        attempts: attempt,
+        lastStatusCode: statusCodeFromError(errMessage),
+        lastError: errMessage,
+      });
       throw error;
     }
   }

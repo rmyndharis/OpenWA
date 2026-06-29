@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { WebhookService } from './webhook.service';
 import { WebhookResponseDto } from './dto';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
@@ -9,6 +10,25 @@ import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 @Controller('webhooks')
 export class WebhooksListController {
   constructor(private readonly webhookService: WebhookService) {}
+
+  @Get('delivery-failures')
+  @RequireRole(ApiKeyRole.ADMIN)
+  @ApiOperation({ summary: 'List recently-failed webhook deliveries (all retries exhausted)' })
+  @ApiResponse({ status: 200, description: 'Permanently-failed webhook deliveries, most recent first' })
+  @ApiQuery({ name: 'sessionId', required: false, description: 'Filter to a single session' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max records to return (1-1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of records to skip (for paging)' })
+  async deliveryFailures(
+    @Query('sessionId') sessionId?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<WebhookDeliveryFailure[]> {
+    return this.webhookService.listDeliveryFailures({
+      sessionId,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+  }
 
   @Get()
   @RequireRole(ApiKeyRole.OPERATOR)

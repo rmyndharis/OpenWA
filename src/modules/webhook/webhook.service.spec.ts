@@ -20,6 +20,7 @@ import * as crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { WebhookService, WebhookPayload } from './webhook.service';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { WebhookFilters } from './filters/filter-types';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { HookManager } from '../../core/hooks';
@@ -48,6 +49,7 @@ function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
 describe('WebhookService', () => {
   let service: WebhookService;
   let repository: jest.Mocked<Partial<Repository<Webhook>>>;
+  let failureRepository: jest.Mocked<Partial<Repository<WebhookDeliveryFailure>>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let webhookQueue: jest.Mocked<Record<string, jest.Mock>>;
@@ -61,6 +63,11 @@ describe('WebhookService', () => {
       save: jest.fn(),
       remove: jest.fn(),
       update: jest.fn(),
+    };
+
+    failureRepository = {
+      insert: jest.fn().mockResolvedValue({}),
+      find: jest.fn().mockResolvedValue([]),
     };
 
     configService = {
@@ -90,6 +97,7 @@ describe('WebhookService', () => {
       providers: [
         WebhookService,
         { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+        { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
         { provide: ConfigService, useValue: configService },
         { provide: HookManager, useValue: hookManager },
         { provide: LidMappingStoreService, useValue: lidStore },
@@ -740,6 +748,7 @@ describe('WebhookService', () => {
         providers: [
           WebhookService,
           { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
           {
             provide: ConfigService,
             useValue: {
@@ -799,6 +808,7 @@ describe('WebhookService', () => {
         providers: [
           WebhookService,
           { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
           {
             provide: ConfigService,
             useValue: {
@@ -846,6 +856,51 @@ describe('WebhookService', () => {
         'webhook:delivered',
         expect.objectContaining({ webhookId: webhook.id, fallback: 'queue_failed' }),
         expect.anything(),
+      );
+    });
+  });
+
+  describe('delivery-failure dead-letter', () => {
+    it('records a durable failure when a direct delivery exhausts its retries', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 1 });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: {
+          payload: {
+            event: 'message.received',
+            timestamp: '',
+            sessionId: 'sess-1',
+            idempotencyKey: 'k',
+            deliveryId: 'd',
+            data: {},
+          },
+        },
+      });
+      const mockFetch = undiciFetch as jest.Mock;
+      mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+      await service.dispatch('sess-1', 'message.received', {});
+
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webhookId: webhook.id,
+          attempts: 1,
+          lastStatusCode: 500,
+          lastError: 'HTTP 500: Server Error',
+        }),
+      );
+      mockFetch.mockReset();
+    });
+
+    it('listDeliveryFailures queries most-recent-first, optionally scoped to a session', async () => {
+      (failureRepository.find as jest.Mock).mockResolvedValue([{ id: 'f1' }]);
+
+      const out = await service.listDeliveryFailures({ sessionId: 's1', limit: 10 });
+
+      expect(out).toHaveLength(1);
+      expect(failureRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: 's1' }, order: { createdAt: 'DESC' } }),
       );
     });
   });
