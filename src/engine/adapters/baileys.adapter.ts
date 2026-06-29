@@ -46,7 +46,9 @@ import {
   coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
+  inboundMediaTimeoutMs,
   isMediaDownloadEnabled,
+  withInboundDownloadTimeout,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -981,28 +983,39 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * for under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
    */
   private async downloadInboundMediaCapped(msg: WAMessage, maxBytes: number): Promise<Buffer | null> {
-    const b = await this.loadLib();
-    const stream = (await b.downloadMediaMessage(
-      msg,
-      'stream',
-      {},
-      {
-        logger: createSilentLogger(),
-        reuploadRequest: this.sock!.updateMediaMessage,
-      },
-    )) as AsyncIterable<Buffer> & { destroy?: () => void };
+    // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
+    // download/read error still rejects (propagating to the caller's catch as before); only a
+    // wall-clock timeout or the byte-cap overflow resolves to null.
+    let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
+    const download = (async (): Promise<Buffer | null> => {
+      const b = await this.loadLib();
+      stream = (await b.downloadMediaMessage(
+        msg,
+        'stream',
+        {},
+        {
+          logger: createSilentLogger(),
+          reuploadRequest: this.sock!.updateMediaMessage,
+        },
+      )) as AsyncIterable<Buffer> & { destroy?: () => void };
 
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of stream) {
-      total += chunk.length;
-      if (total > maxBytes) {
-        stream.destroy?.();
-        return null;
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of stream) {
+        total += chunk.length;
+        if (total > maxBytes) {
+          stream.destroy?.();
+          return null;
+        }
+        chunks.push(chunk);
       }
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks);
+      return Buffer.concat(chunks);
+    })();
+
+    // A slow/trickling sender never trips the byte cap, so without a deadline it pins a concurrency
+    // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, destroy the stream
+    // and treat it as no usable media (same null the cap-abort returns).
+    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => stream?.destroy?.());
   }
 
   private async mapMessage(msg: WAMessage, contentType: string | undefined): Promise<IncomingMessage> {
@@ -1090,9 +1103,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
             const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
             if (buf === null) {
               media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
-              this.logger.warn('Inbound media exceeded MEDIA_DOWNLOAD_MAX_BYTES mid-download; aborted', {
-                msgId: msg.key.id,
-              });
+              this.logger.warn(
+                'Inbound media download aborted (over MEDIA_DOWNLOAD_MAX_BYTES or past MEDIA_DOWNLOAD_TIMEOUT_MS); emitting omitted marker',
+                { msgId: msg.key.id },
+              );
             } else {
               // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
               // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.

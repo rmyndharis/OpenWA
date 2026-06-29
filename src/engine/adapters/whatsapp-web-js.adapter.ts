@@ -53,7 +53,9 @@ import {
   coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
+  inboundMediaTimeoutMs,
   isMediaDownloadEnabled,
+  withInboundDownloadTimeout,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -225,7 +227,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         sizeBytes: declared,
       };
     }
-    const media = await this.inboundLimiter.run(() => msg.downloadMedia());
+    // Bound the download by a wall-clock deadline: msg.downloadMedia() can't be aborted, so a
+    // trickling sender would otherwise pin a concurrency slot indefinitely. On timeout the slot is
+    // released (the run task resolves null) and the message is emitted without media.
+    const media = await this.inboundLimiter.run(() =>
+      withInboundDownloadTimeout(msg.downloadMedia(), inboundMediaTimeoutMs(), () =>
+        this.logger.warn(
+          'Inbound media download timed out (MEDIA_DOWNLOAD_TIMEOUT_MS); emitting message without media',
+          {
+            msgId: msg.id._serialized,
+          },
+        ),
+      ),
+    );
     if (!media) return undefined;
     const capped = capInboundMedia({
       mimetype: media.mimetype,
