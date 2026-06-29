@@ -606,13 +606,19 @@ describe('BaileysAdapter messaging', () => {
 
 describe('BaileysAdapter inbound fan-out', () => {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-  const baileys = jest.requireMock('@whiskeysockets/baileys') as { getContentType: jest.Mock };
+  const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+    getContentType: jest.Mock;
+    normalizeMessageContent: jest.Mock;
+  };
 
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
     jest.clearAllMocks();
     baileys.getContentType.mockReturnValue('conversation');
+    // clearAllMocks() wipes call history but keeps implementations, so a prior test's
+    // normalizeMessageContent override would leak into the next; reset it to the identity default.
+    baileys.normalizeMessageContent.mockImplementation((c: unknown) => c);
   });
 
   it('routes an inbound (not fromMe) message to onMessage with a neutral shape', async () => {
@@ -971,6 +977,44 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg.media.mimetype).toBe('application/pdf');
     expect(msg.media.filename).toBe('report.pdf');
     expect(msg.media.data).toBe(docBuf.toString('base64'));
+  });
+
+  it('extracts ephemeralDuration from an ephemeralMessage-wrapped inbound message (disappearing chat)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+      getContentType: jest.Mock;
+      normalizeMessageContent: jest.Mock;
+    };
+    baileys.getContentType.mockReturnValue('extendedTextMessage');
+    // A live disappearing message arrives wrapped in `ephemeralMessage`; normalizeMessageContent unwraps
+    // it to the inner content carrying the timer on `contextInfo.expiration`. Reading the raw (wrapped)
+    // content would miss it — the exact case this guards.
+    baileys.normalizeMessageContent.mockReturnValue({
+      extendedTextMessage: { text: 'vanishes', contextInfo: { expiration: 86400 } },
+    });
+
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'EPH1' },
+          message: {
+            ephemeralMessage: {
+              message: { extendedTextMessage: { text: 'vanishes', contextInfo: { expiration: 86400 } } },
+            },
+          },
+          messageTimestamp: 1700000040,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { ephemeralDuration?: number };
+    expect(msg.ephemeralDuration).toBe(86400);
   });
 
   it('inbound location: populates the location field with coordinates', async () => {

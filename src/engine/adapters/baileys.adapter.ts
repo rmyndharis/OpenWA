@@ -1113,16 +1113,21 @@ export class BaileysAdapter implements IWhatsAppEngine {
       }
     }
 
-    // --- quoted message ---
+    // --- quoted message + disappearing-messages timer ---
     let quotedMessage: IncomingMessage['quotedMessage'];
+    // Read context off the NORMALIZED content: a live disappearing message arrives wrapped in
+    // `ephemeralMessage` (also viewOnce / documentWithCaption), whose inner content carries the
+    // contextInfo. The raw wrapper exposes none at top level, so both the quote and the timer
+    // (`contextInfo.expiration`) would be missed if we read the raw content here.
+    const normalizedForContext = b.normalizeMessageContent(content) ?? content;
     const subForContext =
-      content.extendedTextMessage ??
-      content.imageMessage ??
-      content.videoMessage ??
-      content.audioMessage ??
-      content.documentMessage ??
-      content.stickerMessage ??
-      content.locationMessage;
+      normalizedForContext.extendedTextMessage ??
+      normalizedForContext.imageMessage ??
+      normalizedForContext.videoMessage ??
+      normalizedForContext.audioMessage ??
+      normalizedForContext.documentMessage ??
+      normalizedForContext.stickerMessage ??
+      normalizedForContext.locationMessage;
     const contextInfo = (
       subForContext as
         | {
