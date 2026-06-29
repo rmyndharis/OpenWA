@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bulk batch ids are unique per session, not globally.** A batch id claimed by one session no longer prevents another session from using the same id — the uniqueness constraint is now scoped to `(session, batchId)`, matching the per-session lookup, so an explicit cross-session reuse no longer fails with a `500`. Reusing an id within the same session is still rejected with a clear `400`. Existing databases are migrated in place. (#531)
 - **A message arriving while a session is being deleted is no longer persisted as an orphan.** The inbound-message handler re-checks that the session is still live after its asynchronous processing, so a message that races a session deletion can't leave behind a `messages` row (which has no cascade) for a session that no longer exists. (#531)
+- **Per-session stats return a consistent `lastActive` timestamp on SQLite and PostgreSQL.** `GET /stats/sessions/:id` previously emitted a different `topChats[].lastActive` format depending on the database (an ISO date-time on PostgreSQL versus the stored text on SQLite); it is now formatted to a stable `YYYY-MM-DD HH:MM:SS` on both. (#533)
+- **The uuid id default now works on PostgreSQL 12 and older.** Id generation relies on a `gen_random_uuid()` column default, which is a core built-in only from PostgreSQL 13; on older servers it lives in the `pgcrypto` extension. The migration now enables `pgcrypto` first, so a fresh deploy against PostgreSQL ≤ 12 no longer fails on startup or first insert. (#533)
 
 ### Security
 
