@@ -53,6 +53,9 @@ describe('isBlockedAddress', () => {
     ['2002:c0a8::', '6to4 of RFC1918 net 192.168.0.0 (compressed)'],
     ['::127.0.0.1', 'IPv4-compatible loopback (deprecated, dotted)'],
     ['::a9fe:a9fe', 'IPv4-compatible cloud metadata (deprecated, hex)'],
+    ['::ffff:0:7f00:1', 'IPv4-translatable loopback 127.0.0.1 (RFC6052, hex)'],
+    ['::ffff:0:127.0.0.1', 'IPv4-translatable loopback (RFC6052, dotted tail)'],
+    ['::ffff:0:a9fe:a9fe', 'IPv4-translatable cloud metadata 169.254.169.254 (RFC6052)'],
   ])('blocks %s (%s)', ip => {
     expect(isBlockedAddress(ip)).toBe(true);
   });
@@ -65,6 +68,7 @@ describe('isBlockedAddress', () => {
     ['::ffff:0808:0808', 'IPv4-mapped public 8.8.8.8 (hex)'],
     ['2002:0808:0808::', '6to4 of public 8.8.8.8 stays allowed'],
     ['64:ff9b::0808:0808', 'NAT64 of public 8.8.8.8 stays allowed'],
+    ['::ffff:0:0808:0808', 'IPv4-translatable public 8.8.8.8 stays allowed'],
   ])('allows %s (%s)', ip => {
     expect(isBlockedAddress(ip)).toBe(false);
   });

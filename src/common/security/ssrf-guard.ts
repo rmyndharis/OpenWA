@@ -150,6 +150,19 @@ export function isBlockedAddress(ip: string): boolean {
       if (hextets.slice(0, 6).every(h => h === 0) && (hextets[6] | hextets[7]) !== 0) {
         return isBlockedAddress(hextetsToV4(hextets[6], hextets[7])); // IPv4-compatible ::/96
       }
+      // RFC6052 IPv4-translatable (::ffff:0:a.b.c.d → 0:0:0:0:ffff:0:X:X): embeds an IPv4 in the
+      // low 32 bits just like the mapped/NAT64 forms, so a NAT64/SIIT translator could otherwise
+      // reach an internal IPv4 through it. Classify by the embedded address (public stays allowed).
+      if (
+        hextets[0] === 0 &&
+        hextets[1] === 0 &&
+        hextets[2] === 0 &&
+        hextets[3] === 0 &&
+        hextets[4] === 0xffff &&
+        hextets[5] === 0
+      ) {
+        return isBlockedAddress(hextetsToV4(hextets[6], hextets[7]));
+      }
     }
     return false;
   }
