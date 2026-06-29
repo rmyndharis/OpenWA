@@ -6,6 +6,8 @@ import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { REQUIRED_ROLE_KEY, PUBLIC_KEY, SESSION_SCOPED_KEY } from '../decorators/auth.decorators';
 import { resolveClientIp } from '../../../common/utils/ip';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../audit/entities/audit-log.entity';
 
 @Injectable()
 export class ApiKeyGuard implements CanActivate {
@@ -13,6 +15,7 @@ export class ApiKeyGuard implements CanActivate {
     private readonly authService: AuthService,
     private readonly reflector: Reflector,
     private readonly configService: ConfigService,
+    private readonly auditService: AuditService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -24,6 +27,25 @@ export class ApiKeyGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest<Request>();
+    try {
+      return await this.authorize(request, context);
+    } catch (err) {
+      // Record rejected/denied authentication attempts so the audit log has a forensic trail for
+      // credential probing. Fire-and-forget: audit logging is best-effort and must never turn a
+      // 401/403 into a failure of the guard itself.
+      if (err instanceof UnauthorizedException || err instanceof ForbiddenException) {
+        void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+          ipAddress: this.getClientIp(request),
+          method: request.method,
+          path: request.path,
+          errorMessage: err.message,
+        });
+      }
+      throw err;
+    }
+  }
+
+  private async authorize(request: Request, context: ExecutionContext): Promise<boolean> {
     const apiKeyHeader = this.extractApiKey(request);
 
     if (!apiKeyHeader) {

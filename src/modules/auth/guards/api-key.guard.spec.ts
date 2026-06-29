@@ -4,6 +4,8 @@ import { ConfigService } from '@nestjs/config';
 import { ApiKeyGuard } from './api-key.guard';
 import { AuthService } from '../auth.service';
 import { ApiKey, ApiKeyRole } from '../entities/api-key.entity';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../audit/entities/audit-log.entity';
 
 function createMockApiKey(overrides: Partial<ApiKey> = {}): ApiKey {
   return {
@@ -50,12 +52,18 @@ describe('ApiKeyGuard', () => {
   let authService: jest.Mocked<Partial<AuthService>>;
   let reflector: jest.Mocked<Reflector>;
   let configService: jest.Mocked<Partial<ConfigService>>;
+  let auditService: jest.Mocked<Partial<AuditService>>;
 
   function buildGuard(trustedProxies: string[] = []): ApiKeyGuard {
     configService = {
       get: jest.fn().mockReturnValue(trustedProxies),
     };
-    return new ApiKeyGuard(authService as AuthService, reflector, configService as ConfigService);
+    return new ApiKeyGuard(
+      authService as AuthService,
+      reflector,
+      configService as ConfigService,
+      auditService as AuditService,
+    );
   }
 
   beforeEach(() => {
@@ -67,6 +75,10 @@ describe('ApiKeyGuard', () => {
     reflector = {
       getAllAndOverride: jest.fn(),
     } as unknown as jest.Mocked<Reflector>;
+
+    auditService = {
+      logWarn: jest.fn().mockResolvedValue(null),
+    };
 
     guard = buildGuard();
   });
@@ -126,6 +138,41 @@ describe('ApiKeyGuard', () => {
     const context = createMockContext({ 'x-api-key': 'bad-key' });
 
     await expect(guard.canActivate(context)).rejects.toThrow('Invalid API key');
+  });
+
+  it('records an API_KEY_AUTH_FAILED audit event when a key is rejected (with ip + reason)', async () => {
+    reflector.getAllAndOverride.mockReturnValueOnce(false); // not public
+    (authService.validateApiKey as jest.Mock).mockRejectedValue(new UnauthorizedException('Invalid API key'));
+
+    const context = createMockContext({ 'x-api-key': 'bad-key' }, {}, '203.0.113.9');
+    await expect(guard.canActivate(context)).rejects.toThrow('Invalid API key');
+    await new Promise(resolve => setImmediate(resolve)); // let the fire-and-forget audit write settle
+
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ ipAddress: '203.0.113.9', errorMessage: 'Invalid API key' }),
+    );
+  });
+
+  it('records an audit event when a missing key is rejected', async () => {
+    reflector.getAllAndOverride.mockReturnValueOnce(false);
+
+    const context = createMockContext({}); // no key
+    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(auditService.logWarn).toHaveBeenCalledWith(AuditAction.API_KEY_AUTH_FAILED, expect.any(Object));
+  });
+
+  it('does not record an audit event on a successful authorization', async () => {
+    reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey());
+
+    const context = createMockContext({ 'x-api-key': 'good-key' });
+    await guard.canActivate(context);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(auditService.logWarn).not.toHaveBeenCalled();
   });
 
   it('should reject when role permission is insufficient', async () => {
