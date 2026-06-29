@@ -1061,7 +1061,7 @@ curl "$BASE/api/stats/sessions/9f1c2d3e-…" \
 
 #### GET /api/settings
 
-Read runtime settings (env-derived). Any valid API key.
+Read runtime settings (env-derived). ADMIN key required (`403` otherwise).
 
 ```bash
 curl "$BASE/api/settings" \

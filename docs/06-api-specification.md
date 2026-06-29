@@ -3544,7 +3544,7 @@ Notes: raw handler return. `session.status` is the `SessionStatus` enum value. `
 
 Get application settings (environment-derived; `general`/`api`/`notifications` groups).
 
-**Auth:** API key — any valid role (no `@RequireRole`).
+**Auth:** API key (ADMIN). Settings expose server configuration, so a VIEWER or session-scoped key is rejected with `403`.
 
 **Response** `200`
 
@@ -3571,7 +3571,7 @@ Get application settings (environment-derived; `general`/`api`/`notifications` g
 
 Notes: raw return of an in-memory `Settings` object built once in the controller constructor from `ConfigService` (snapshotted at construction, not re-read per request). `general.sessionTimeout` is `floor(webhook.timeout / 60000)` minutes; `api.rateLimitWindow` is in ms; `enableDocs`/`notifications.*` are partly hardcoded (`enableDocs: true`, `emailEnabled: false`, `notificationEmail: ''`, `webhookAlerts: true`).
 
-**Errors:** `401` — missing/invalid `X-API-Key`.
+**Errors:** `401` — missing/invalid `X-API-Key` · `403` — API key lacks the ADMIN role.
 
 #### PUT /api/settings
 
