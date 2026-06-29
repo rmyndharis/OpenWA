@@ -28,3 +28,18 @@ export function workerConnectionOptions(): WorkerConnectionOptions {
     connectTimeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS || '5000', 10),
   };
 }
+
+/** Default number of webhook deliveries the Worker processes in parallel. */
+const DEFAULT_WEBHOOK_WORKER_CONCURRENCY = 10;
+
+/**
+ * Webhook Worker concurrency. BullMQ defaults a Worker to 1, which serializes ALL webhook deliveries
+ * process-wide: one slow or timing-out receiver head-of-line-blocks every other session's webhooks
+ * until it finishes (up to WEBHOOK_TIMEOUT + retries). Running several in parallel decouples healthy
+ * receivers from a stuck one. Override via WEBHOOK_WORKER_CONCURRENCY; a non-positive/garbage value
+ * falls back to the default. (Read at module import like workerConnectionOptions above.)
+ */
+export function webhookWorkerConcurrency(): number {
+  const parsed = parseInt(process.env.WEBHOOK_WORKER_CONCURRENCY || '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_WEBHOOK_WORKER_CONCURRENCY;
+}

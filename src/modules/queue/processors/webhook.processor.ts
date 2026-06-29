@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
-import { workerConnectionOptions } from '../redis-connection';
+import { workerConnectionOptions, webhookWorkerConcurrency } from '../redis-connection';
 import { WebhookJobData } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { HookManager } from '../../../core/hooks';
@@ -19,8 +19,10 @@ export interface WebhookJobResult {
 }
 
 // Override the Worker's connection so it does NOT inherit the producer's `enableOfflineQueue: false`
-// from the shared BullModule connection — the Worker must tolerate a brief Redis reconnect.
-@Processor(QUEUE_NAMES.WEBHOOK, { connection: workerConnectionOptions() })
+// from the shared BullModule connection — the Worker must tolerate a brief Redis reconnect. Set an
+// explicit concurrency: BullMQ defaults a Worker to 1, which serializes every session's webhook
+// deliveries behind one slow/timing-out receiver.
+@Processor(QUEUE_NAMES.WEBHOOK, { connection: workerConnectionOptions(), concurrency: webhookWorkerConcurrency() })
 export class WebhookProcessor extends WorkerHost {
   private readonly logger = createLogger('WebhookProcessor');
 

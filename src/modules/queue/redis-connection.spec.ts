@@ -1,4 +1,4 @@
-import { workerConnectionOptions } from './redis-connection';
+import { workerConnectionOptions, webhookWorkerConcurrency } from './redis-connection';
 
 describe('workerConnectionOptions (webhook Worker connection)', () => {
   const ORIGINAL_ENV = process.env;
@@ -38,5 +38,30 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
       password: 'secret',
       connectTimeout: 1234,
     });
+  });
+});
+
+describe('webhookWorkerConcurrency', () => {
+  const ORIGINAL_ENV = process.env;
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it('defaults to 10 so deliveries do not serialize behind one slow receiver', () => {
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.WEBHOOK_WORKER_CONCURRENCY;
+    expect(webhookWorkerConcurrency()).toBe(10);
+  });
+
+  it('honors a positive override', () => {
+    process.env = { ...ORIGINAL_ENV, WEBHOOK_WORKER_CONCURRENCY: '25' };
+    expect(webhookWorkerConcurrency()).toBe(25);
+  });
+
+  it('falls back to the default for a non-positive/garbage override', () => {
+    process.env = { ...ORIGINAL_ENV, WEBHOOK_WORKER_CONCURRENCY: '0' };
+    expect(webhookWorkerConcurrency()).toBe(10);
+    process.env = { ...ORIGINAL_ENV, WEBHOOK_WORKER_CONCURRENCY: 'abc' };
+    expect(webhookWorkerConcurrency()).toBe(10);
   });
 });
