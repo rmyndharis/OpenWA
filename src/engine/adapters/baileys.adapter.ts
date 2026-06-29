@@ -41,6 +41,7 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
+import { buildVCard } from './vcard';
 import {
   capInboundMedia,
   coerceDeclaredSize,
@@ -556,7 +557,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
     this.ensureReady();
     return this.sendContent(chatId, {
-      contacts: { displayName: contact.name, contacts: [{ vcard: this.buildVCard(contact) }] },
+      contacts: { displayName: contact.name, contacts: [{ vcard: buildVCard(contact) }] },
     });
   }
 
@@ -1326,20 +1327,6 @@ export class BaileysAdapter implements IWhatsAppEngine {
   }
 
   /** Build a minimal WhatsApp-compatible vCard from a neutral contact card. */
-  private buildVCard(contact: ContactCard): string {
-    const clean = (s: string): string => s.replace(/[\r\n]+/g, ' ');
-    const name = clean(contact.name);
-    const number = clean(contact.number);
-    const waid = number.replace(/\D/g, '');
-    return [
-      'BEGIN:VCARD',
-      'VERSION:3.0',
-      `FN:${name}`,
-      `TEL;type=CELL;type=VOICE;waid=${waid}:${number}`,
-      'END:VCARD',
-    ].join('\n');
-  }
-
   /**
    * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
    * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is

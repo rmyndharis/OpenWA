@@ -48,6 +48,7 @@ import {
   GroupCreateResult,
 } from '../types/whatsapp-web-js.types';
 import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
+import { buildVCard } from './vcard';
 import {
   capInboundMedia,
   coerceDeclaredSize,
@@ -910,14 +911,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
     this.ensureReady();
-    // Create vCard format
-    const vcard = [
-      'BEGIN:VCARD',
-      'VERSION:3.0',
-      `FN:${contact.name}`,
-      `TEL;type=CELL;type=VOICE;waid=${contact.number}:+${contact.number}`,
-      'END:VCARD',
-    ].join('\n');
+    // Shared builder sanitizes name/number (strips CR/LF, digits-only waid) so a crafted contact
+    // can't inject extra vCard fields — the previous inline build interpolated raw values.
+    const vcard = buildVCard(contact);
 
     const msg = await this.client!.sendMessage(chatId, vcard, {
       parseVCards: true,
