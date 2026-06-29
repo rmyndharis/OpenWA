@@ -126,4 +126,18 @@ describe('buildIncomingMessageFromBaileys', () => {
     const r = buildIncomingMessageFromBaileys({ ...base, pushName: 'Alice' });
     expect(r.contact).toEqual({ pushName: 'Alice' });
   });
+
+  it('maps ephemeralDuration when present on the fields', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, ephemeralDuration: 604800 });
+    expect(r.ephemeralDuration).toBe(604800);
+  });
+
+  it('omits ephemeralDuration when absent from the fields', () => {
+    expect(buildIncomingMessageFromBaileys(base).ephemeralDuration).toBeUndefined();
+  });
+
+  it('omits ephemeralDuration when ephemeralDuration is 0', () => {
+    const r = buildIncomingMessageFromBaileys({ ...base, ephemeralDuration: 0 });
+    expect(r.ephemeralDuration).toBeUndefined();
+  });
 });

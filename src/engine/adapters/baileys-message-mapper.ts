@@ -83,6 +83,8 @@ export interface BaileysIncomingFields {
   location?: IncomingMessage['location'];
   /** Pre-extracted quoted message context. Populated by the adapter when `contextInfo` is present. */
   quotedMessage?: IncomingMessage['quotedMessage'];
+  /** Ephemeral/disappearing-messages timer from `contextInfo.expiration` on the Baileys message. */
+  ephemeralDuration?: number;
 }
 
 /**
@@ -141,6 +143,11 @@ export function buildIncomingMessageFromBaileys(
 
   if (fields.quotedMessage) {
     incoming.quotedMessage = fields.quotedMessage;
+  }
+
+  // Ephemeral/disappearing-messages timer, when the chat has one set.
+  if (fields.ephemeralDuration && fields.ephemeralDuration > 0) {
+    incoming.ephemeralDuration = fields.ephemeralDuration;
   }
 
   return incoming;

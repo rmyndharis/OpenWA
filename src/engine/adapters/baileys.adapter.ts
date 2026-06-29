@@ -1125,7 +1125,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
       content.locationMessage;
     const contextInfo = (
       subForContext as
-        | { contextInfo?: { stanzaId?: string | null; quotedMessage?: Record<string, unknown> | null } }
+        | {
+            contextInfo?: {
+              stanzaId?: string | null;
+              quotedMessage?: Record<string, unknown> | null;
+              expiration?: number | null;
+            };
+          }
         | undefined
     )?.contextInfo;
     if (contextInfo?.quotedMessage && contextInfo.stanzaId) {
@@ -1161,6 +1167,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         media,
         location,
         quotedMessage,
+        ephemeralDuration: contextInfo?.expiration ?? undefined,
       },
       jid => this.sessionStore.toNeutralJid(jid),
     );
