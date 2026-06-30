@@ -27,6 +27,23 @@ export class PluginsService {
     private readonly configService: ConfigService,
   ) {}
 
+  // Serialize the directory/lifecycle-mutating operations (enable/disable/uninstall/update/install) for a
+  // given plugin id so two of them on the SAME id can't interleave (e.g. enable racing uninstall, or two
+  // updates racing on the backup dir). Mirrors the promise-chain serializer in session.service.ts.
+  private readonly opChains = new Map<string, Promise<unknown>>();
+
+  private serialize<T>(id: string, op: () => Promise<T>): Promise<T> {
+    const prior = this.opChains.get(id) ?? Promise.resolve();
+    const next = prior.catch(() => undefined).then(op);
+    this.opChains.set(id, next);
+    void next
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.opChains.get(id) === next) this.opChains.delete(id);
+      });
+    return next;
+  }
+
   findAll(): PluginDto[] {
     const plugins = this.pluginLoader.getAllPlugins();
 
@@ -83,7 +100,11 @@ export class PluginsService {
     };
   }
 
-  async enable(id: string): Promise<{ success: boolean; message: string }> {
+  enable(id: string): Promise<{ success: boolean; message: string }> {
+    return this.serialize(id, () => this.enableInner(id));
+  }
+
+  private async enableInner(id: string): Promise<{ success: boolean; message: string }> {
     const plugin = this.pluginLoader.getPlugin(id);
 
     if (!plugin) {
@@ -105,7 +126,11 @@ export class PluginsService {
     }
   }
 
-  async disable(id: string): Promise<{ success: boolean; message: string }> {
+  disable(id: string): Promise<{ success: boolean; message: string }> {
+    return this.serialize(id, () => this.disableInner(id));
+  }
+
+  private async disableInner(id: string): Promise<{ success: boolean; message: string }> {
     const plugin = this.pluginLoader.getPlugin(id);
 
     if (!plugin) {
@@ -302,7 +327,10 @@ export class PluginsService {
         `Failed to download plugin from URL: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return this.install({ buffer });
+    // Peek the id (the SSRF download stays outside the lock) so the install — which writes the plugin
+    // directory — is serialized against any concurrent uninstall/update of the same id.
+    const { manifest } = parsePluginPackage(buffer);
+    return this.serialize(manifest.id, () => Promise.resolve(this.install({ buffer })));
   }
 
   /**
@@ -344,7 +372,11 @@ export class PluginsService {
    * directory is backed up and restored if the swap or reload of the new version fails, so a bad update
    * never leaves the plugin broken.
    */
-  async updatePackage(id: string, buffer: Buffer): Promise<PluginDto> {
+  updatePackage(id: string, buffer: Buffer): Promise<PluginDto> {
+    return this.serialize(id, () => this.updatePackageInner(id, buffer));
+  }
+
+  private async updatePackageInner(id: string, buffer: Buffer): Promise<PluginDto> {
     const plugin = this.pluginLoader.getPlugin(id);
     if (!plugin) {
       throw new NotFoundException(`Plugin ${id} not found`);
@@ -361,7 +393,9 @@ export class PluginsService {
 
     const wasEnabled = plugin.status === PluginStatus.ENABLED;
     const dir = path.join(this.pluginLoader.getPluginsDir(), id);
-    const backup = `${dir}.bak`;
+    // Dot-prefixed sibling inside pluginsDir: same filesystem (so the rename stays EXDEV-safe) but
+    // skipped by the loader's directory scan, so a crash mid-update can't leave it loaded as a duplicate.
+    const backup = path.join(this.pluginLoader.getPluginsDir(), `.${id}.bak`);
 
     // Stop the running plugin (terminates its sandbox worker) but keep its registry entry so config survives.
     await this.pluginLoader.unloadPlugin(id);
@@ -420,7 +454,11 @@ export class PluginsService {
   }
 
   /** Uninstall an installed user plugin: disable, unload, and delete its files. Built-ins are protected. */
-  async uninstall(id: string): Promise<{ success: boolean; message: string }> {
+  uninstall(id: string): Promise<{ success: boolean; message: string }> {
+    return this.serialize(id, () => this.uninstallInner(id));
+  }
+
+  private async uninstallInner(id: string): Promise<{ success: boolean; message: string }> {
     const plugin = this.pluginLoader.getPlugin(id);
     if (!plugin) {
       throw new NotFoundException(`Plugin ${id} not found`);

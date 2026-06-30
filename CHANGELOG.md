@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin's stored secret array is no longer wiped when its length changes.** When a plugin config had a list of secret values (e.g. API keys), adding or removing an entry from the dashboard sent every other value back as the masked sentinel; on save, the merge couldn't position-match them and silently dropped all of them. Surviving entries now keep their stored secret across an append or removal, while a genuinely-new or edited row is still never grafted with a stored value. (#544)
+- **A crash midway through a plugin update no longer leaves a backup that loads as a duplicate.** The in-place update backup is now a dot-prefixed sibling directory, and the loader skips dot-prefixed directories, so a half-finished update can't be re-loaded on the next boot as a second copy of the same plugin id. (#544)
+
+### Changed
+
+- **Sandboxed plugins have a ceiling on concurrent host capability calls.** A single worker-thread plugin can now have at most 32 capability calls (message sends, network fetches, storage writes) running host-side at once; a burst beyond that is rejected (the plugin sees a thrown error) rather than amplified into unbounded host work. (#544)
+- **Plugin lifecycle operations on the same plugin are serialized.** Enable, disable, update, uninstall, and install for a given plugin id now run one at a time, so two operations firing together can no longer race on the plugin's directory or runtime state. (#544)
+
 ## [0.7.14] - 2026-06-30
 
 ### Added
