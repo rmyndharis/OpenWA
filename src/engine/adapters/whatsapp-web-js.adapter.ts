@@ -1278,6 +1278,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * toggle a single label by reading the current set, mutating it, and writing the whole set back.
    * Labels are a WhatsApp Business feature — the write throws `[LT01]` on a personal account; channels
    * carry no labels at all. Both are surfaced as a 422 rather than an opaque 500.
+   *
+   * The read and write are separate calls, so two concurrent single-label writes to the SAME chat can
+   * lose an update (last write wins, as a full-set replace). Acceptable for low-frequency label admin;
+   * serialize per (sessionId, chatId) if that ever becomes a real workload.
    */
   private async changeChatLabel(chatId: string, labelId: string, add: boolean): Promise<void> {
     if (isChannelJid(chatId)) {
