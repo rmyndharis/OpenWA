@@ -56,6 +56,9 @@ interface IncomingWsMessage {
   fromMe?: boolean;
   media?: MessageMedia;
   quotedMessage?: { id: string; body: string };
+  // The backend emits `call` as a top-level field on the live `message.received` event (it's only
+  // folded into `metadata` on the persisted/history path), so declare it here to carry it through.
+  call?: { video: boolean; missed: boolean };
   metadata?: ChatMessageView['metadata'];
 }
 
@@ -220,6 +223,7 @@ export function Chats() {
         metadata: newMsg.metadata || {
           media: newMsg.media,
           quotedMessage: newMsg.quotedMessage,
+          call: newMsg.call,
         },
       };
 
@@ -243,7 +247,8 @@ export function Chats() {
 
         const updatedChats = [...prevChats];
         const targetChat = { ...updatedChats[chatIndex] };
-        targetChat.lastMessage = newMsg.body;
+        // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
+        targetChat.lastMessage = newMsg.type === 'location' ? `📍 ${t('chats.media.location')}` : newMsg.body;
         targetChat.timestamp = newMsg.timestamp;
 
         if (!newMsg.fromMe && (!activeChat || activeChat.id !== targetChat.id)) {
@@ -255,7 +260,7 @@ export function Chats() {
         return updatedChats;
       });
     },
-    [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended],
+    [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended, t],
   );
 
   const handleIncomingMessageAck = useCallback(
@@ -601,20 +606,23 @@ export function Chats() {
 
   const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
 
-  const formatChatTime = (timestamp?: number) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp * 1000);
-    const today = new Date();
-    if (date.toDateString() === today.toDateString()) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) {
-      return t('chats.yesterday');
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+  const formatChatTime = useCallback(
+    (timestamp?: number) => {
+      if (!timestamp) return '';
+      const date = new Date(timestamp * 1000);
+      const today = new Date();
+      if (date.toDateString() === today.toDateString()) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      if (date.toDateString() === yesterday.toDateString()) {
+        return t('chats.yesterday');
+      }
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    },
+    [t],
+  );
 
   const filteredChats = chats.filter(
     c =>
@@ -633,9 +641,9 @@ export function Chats() {
           url: getMediaSrc(m.metadata?.media),
           alt: m.body || m.metadata?.media?.filename || '',
           senderName: undefined,
-          timestamp: m.createdAt,
+          timestamp: formatChatTime(m.timestamp || Math.floor(new Date(m.createdAt).getTime() / 1000)),
         })),
-    [messages],
+    [messages, formatChatTime],
   );
 
   return (

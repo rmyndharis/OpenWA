@@ -873,6 +873,45 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     expect(msg.media?.mimetype).toBe('image/png');
     expect(msg.media?.sizeBytes).toBe(5000);
   });
+
+  it('surfaces call detail on a live incoming call_log message (#494)', async () => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-call-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessage = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessage };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    const mockMsg = {
+      id: { _serialized: 'CALL_1' },
+      from: '628111@c.us',
+      to: '628111@c.us',
+      body: '',
+      type: 'call_log',
+      timestamp: 1700000060,
+      fromMe: false,
+      hasMedia: false,
+      _data: { isVideoCall: true }, // no callDuration on an incoming call => missed
+      getContact: jest.fn().mockResolvedValue(null),
+      hasQuotedMsg: false,
+    };
+
+    client.emit('message', mockMsg);
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { call?: { video: boolean; missed: boolean } };
+    expect(msg.call).toEqual({ video: true, missed: true });
+  });
 });
 
 describe('outbound mentions (#530)', () => {

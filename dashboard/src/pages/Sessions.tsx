@@ -52,12 +52,26 @@ export function Sessions() {
     }
   }, [t, queryClient]);
 
+  // Mirror the latest sessions in a ref so the WS handler can compare against the current status without
+  // depending on `sessions` (which would churn the callback identity and re-subscribe the socket). Kept
+  // in sync with every state update (fetch / create / delete / WS) via the effect below.
+  const sessionsRef = useRef<Session[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
   const { isConnected, subscribe } = useWebSocket({
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
-        setSessions(prev =>
-          prev.map(s => (s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s)),
+        const prev = sessionsRef.current.find(s => s.id === event.sessionId);
+        // Some engines double-signal one transition; only react to an ACTUAL status change so the toast
+        // and the failed-refresh don't fire on every redundant envelope. Update the ref synchronously so
+        // a duplicate arriving in the same tick (before the sync effect runs) is also caught.
+        if (prev && prev.status === event.status) return;
+        sessionsRef.current = sessionsRef.current.map(s =>
+          s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s,
         );
+        setSessions(sessionsRef.current);
         if (event.status === 'ready') {
           toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
         } else if (event.status === 'disconnected') {
@@ -89,8 +103,10 @@ export function Sessions() {
   const currentSessionName = useRef<string>('');
 
   const fetchQR = useCallback(async (sessionId: string) => {
-    // Guard: if session is already connected, stop polling immediately.
-    const currentSession = sessions.find(s => s.id === sessionId);
+    // Guard: if session is already connected, stop polling immediately. Read the ref (not `sessions`)
+    // so fetchQR keeps a stable identity — otherwise the polling interval is torn down and restarted on
+    // every sessions update.
+    const currentSession = sessionsRef.current.find(s => s.id === sessionId);
     if (currentSession?.status === 'ready') {
       setQrData(null);
       currentSessionName.current = '';
@@ -116,7 +132,7 @@ export function Sessions() {
         fetchSessions();
       }
     }
-  }, [sessions]);
+  }, [fetchSessions]);
 
   useEffect(() => {
     if (qrData) {

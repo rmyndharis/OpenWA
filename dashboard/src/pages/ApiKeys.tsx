@@ -302,8 +302,12 @@ export function ApiKeys() {
                 <button className="btn-secondary" onClick={() => setShowModal(false)}>
                   {t('common.cancel')}
                 </button>
-                <button className="btn-primary" onClick={handleCreate}>
-                  {t('common.create')}
+                <button
+                  className="btn-primary"
+                  onClick={handleCreate}
+                  disabled={createMutation.isPending || !newKey.name}
+                >
+                  {createMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
                 </button>
               </div>
             )}

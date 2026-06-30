@@ -432,6 +432,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           }
         }
 
+        // Surface call-log detail on the live path too (getChatHistory already does this), so a missed/
+        // video incoming call renders a labeled bubble instead of a generic "Call".
+        const call = extractWwebjsCall(msg);
+        if (call) incomingMessage.call = call;
+
         this.callbacks.onMessage?.(incomingMessage);
       } catch (error) {
         this.logger.error('Error processing incoming message', String(error));
@@ -1514,7 +1519,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         isGroup: Boolean(chat.isGroup),
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
-        lastMessage: chat.lastMessage?.body || undefined,
+        // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
+        lastMessage: chat.lastMessage?.type === MessageTypes.LOCATION ? '📍' : chat.lastMessage?.body || undefined,
       });
     }
 
