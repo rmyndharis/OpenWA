@@ -189,7 +189,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     }
 
     // An internal reconnect (transient drop) overwrites this.sock WITHOUT going through
-    // disconnect/logout/destroy, so the previous socket's WebSocket and the 9 ev listeners we
+    // disconnect/logout/destroy, so the previous socket's WebSocket and the 10 ev listeners we
     // register below would leak on every reconnect. Tear the prior socket down first. Detach OUR
     // connection.update listener BEFORE end(): Baileys' own end() synchronously emits a synthetic
     // connection.update {connection:'close'}, which — if still wired — would re-enter
@@ -206,6 +206,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         previous.ev.removeAllListeners('chats.upsert');
         previous.ev.removeAllListeners('chats.update');
         previous.ev.removeAllListeners('messaging-history.set');
+        previous.ev.removeAllListeners('chats.phoneNumberShare');
         previous.end(undefined);
       } catch {
         // end() may already have run from Baileys' own close handler — a safe no-op.
@@ -930,7 +931,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // sender resolves to its phone in this message and for later contact lookups (#362). The pairs
       // also write through to the persistent lid->phone table via addLidMappings.
       this.sessionStore.recordKeyLidMappings(msg.key);
-      const contentType = b.getContentType(msg.message ?? undefined);
+      // A live disappearing message (also viewOnce / documentWithCaption / edited) arrives wrapped, so the
+      // raw `getContentType` returns the OUTER wrapper key (e.g. 'ephemeralMessage') and downstream type/
+      // body/media/location detection would miss the real inner content. Normalize ONCE so the true inner
+      // type drives routing here AND mapMessage. normalizeMessageContent leaves protocolMessage and
+      // reactionMessage untouched, so the early-return branches below still match.
+      const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+      const contentType = b.getContentType(normalizedRoot);
 
       // --- protocolMessage REVOKE: don't emit onMessage ---
       if (contentType === 'protocolMessage') {
@@ -1044,14 +1051,18 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private async mapMessage(msg: WAMessage, contentType: string | undefined): Promise<IncomingMessage> {
     const b = await this.loadLib();
     const content = msg.message ?? {};
+    // Read body/isPtt off the NORMALIZED content: a disappearing message (ephemeralMessage), a captioned
+    // document (documentWithCaptionMessage) and viewOnce/edited wrappers nest the real text/caption under
+    // an inner message, so the raw wrapper exposes none at top level. Identity no-op when unwrapped.
+    const normalized = b.normalizeMessageContent(content) ?? content;
 
     // Body: text first, then media caption as fallback.
     const body =
-      content.conversation ??
-      content.extendedTextMessage?.text ??
-      content.imageMessage?.caption ??
-      content.videoMessage?.caption ??
-      content.documentMessage?.caption ??
+      normalized.conversation ??
+      normalized.extendedTextMessage?.text ??
+      normalized.imageMessage?.caption ??
+      normalized.videoMessage?.caption ??
+      normalized.documentMessage?.caption ??
       '';
 
     // --- location ---
@@ -1172,6 +1183,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
               stanzaId?: string | null;
               quotedMessage?: Record<string, unknown> | null;
               expiration?: number | null;
+              mentionedJid?: string[] | null;
             };
           }
         | undefined
@@ -1202,7 +1214,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         participant: msg.key.participant ?? undefined,
         body,
         contentType,
-        isPtt: content.audioMessage?.ptt === true,
+        isPtt: normalized.audioMessage?.ptt === true,
         timestamp: this.toUnixSeconds(msg.messageTimestamp),
         pushName: msg.pushName ?? undefined,
         selfJid: this.normalizedSelfJid(),
@@ -1210,6 +1222,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         location,
         quotedMessage,
         ephemeralDuration: contextInfo?.expiration ?? undefined,
+        mentionedJids: contextInfo?.mentionedJid ?? undefined,
       },
       jid => this.sessionStore.toNeutralJid(jid),
     );

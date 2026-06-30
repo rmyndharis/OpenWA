@@ -4,6 +4,11 @@ import { DeliveryStatus, IncomingMessage, MessageType } from '../interfaces/what
  * Map a Baileys message content-type token (from `getContentType`) to the engine-neutral
  * {@link MessageType}. `audioMessage` splits on the `ptt` flag into `voice` vs `audio`,
  * mirroring the wwjs `ptt -> voice` mapping. Anything unmapped becomes `unknown`.
+ *
+ * Note: Baileys surfaces phone calls through the dedicated `call` socket event (a `WACallEvent`),
+ * never as a message content type returned by `getContentType`, so `call`-typed messages are
+ * intentionally not produced on this engine — unlike the wwjs adapter, which sources call detail
+ * from the gated `getChatHistory` path.
  */
 export function mapBaileysMessageType(contentType: string | undefined, isPtt = false): MessageType {
   switch (contentType) {
@@ -85,6 +90,8 @@ export interface BaileysIncomingFields {
   quotedMessage?: IncomingMessage['quotedMessage'];
   /** Ephemeral/disappearing-messages timer from `contextInfo.expiration` on the Baileys message. */
   ephemeralDuration?: number;
+  /** @mentioned engine JIDs from `contextInfo.mentionedJid`; normalized and surfaced as `mentionedIds`. */
+  mentionedJids?: string[];
 }
 
 /**
@@ -148,6 +155,12 @@ export function buildIncomingMessageFromBaileys(
   // Ephemeral/disappearing-messages timer, when the chat has one set.
   if (fields.ephemeralDuration && fields.ephemeralDuration > 0) {
     incoming.ephemeralDuration = fields.ephemeralDuration;
+  }
+
+  // @mentioned WIDs, normalized to the neutral convention — parity with the wwjs adapter
+  // (message-mapper.ts:90), consumed by command targeting and the `mentions` webhook filter.
+  if (fields.mentionedJids && fields.mentionedJids.length > 0) {
+    incoming.mentionedIds = fields.mentionedJids.map(normalizeJid);
   }
 
   return incoming;

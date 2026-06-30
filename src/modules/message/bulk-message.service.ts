@@ -22,9 +22,9 @@ import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp
 interface BulkMessageContent {
   text?: string;
   caption?: string;
-  image?: { url?: string; base64?: string; mimetype?: string };
-  video?: { url?: string; base64?: string; mimetype?: string };
-  audio?: { url?: string; base64?: string; mimetype?: string };
+  image?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+  video?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+  audio?: { url?: string; base64?: string; mimetype?: string; filename?: string };
   document?: { url?: string; base64?: string; mimetype?: string; filename?: string };
 }
 
@@ -397,7 +397,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
               media: {
                 mimetype: media.mimetype,
                 data: media.url ?? media.base64,
-                filename: content.document?.filename,
+                filename: media.filename,
               },
             }
           : undefined,
