@@ -1,4 +1,13 @@
-import { IsString, IsOptional, ValidateNested, IsArray, ArrayMinSize, ArrayMaxSize, Matches } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  ValidateNested,
+  IsArray,
+  ArrayMinSize,
+  ArrayMaxSize,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 class StatusMediaInput {
@@ -22,6 +31,7 @@ export class SendImageStatusDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   caption?: string;
 
   @IsArray()
@@ -39,6 +49,7 @@ export class SendVideoStatusDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   caption?: string;
 
   @IsArray()
