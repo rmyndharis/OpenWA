@@ -12,6 +12,7 @@ import {
 } from './whatsapp-web-js.adapter';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
+import * as qrcode from 'qrcode';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
@@ -24,6 +25,14 @@ jest.mock('undici', () => {
   const actual = jest.requireActual<typeof import('undici')>('undici');
   return { __esModule: true, ...actual, fetch: jest.fn() };
 });
+
+// Deterministic QR encode: the real qrcode.toDataURL is an unmocked multi-ms macrotask, so timing-based
+// waits are flaky. Mocking it to resolve on the microtask queue lets the 'qr' handler settle within a
+// couple of awaited flushes. No existing wwebjs spec emits 'qr', so only the QR tests are affected.
+jest.mock('qrcode', () => ({
+  __esModule: true,
+  toDataURL: jest.fn(() => Promise.resolve('data:image/png;base64,FAKEQR')),
+}));
 
 describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
   // Regression-locks the integer boundary the decoupling moved behaviour into, incl. the
@@ -546,6 +555,51 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(onReady).not.toHaveBeenCalled();
   });
 
+  // A 'qr' IPC buffered by a wedged page can flush during the awaited client.destroy() (teardown sets
+  // tearingDown + DISCONNECTED first), and must not resurrect the adapter to QR_READY / re-emit a stale QR.
+  // The guard returns BEFORE the qrcode encode, so spying on qrcode.toDataURL gives a deterministic check
+  // (no timing dependence on the real ~ms encode): guarded => never called; unguarded => called (regression).
+  it('ignores a qr event fired during teardown (status stays disconnected, no stale QR emitted)', async () => {
+    (qrcode.toDataURL as unknown as jest.Mock).mockClear();
+    const adapter = newAdapter();
+    const teardownWait = deferredVoid();
+    const { client } = attachFakeClient(adapter);
+    const onQRCode = jest.fn();
+    (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+    client.destroy = jest.fn().mockReturnValue(teardownWait.promise);
+
+    const teardown = adapter.disconnect();
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+
+    client.emit('qr', '2@abc'); // buffered QR flushed mid-destroy — must NOT flip to QR_READY
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(qrcode.toDataURL as unknown as jest.Mock).not.toHaveBeenCalled(); // guard short-circuits before the encode
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onQRCode).not.toHaveBeenCalled();
+
+    teardownWait.resolve();
+    await teardown;
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onQRCode).not.toHaveBeenCalled();
+  });
+
+  // Guards against over-suppression: the legitimate first QR still reaches QR_READY + onQRCode. Await the
+  // real completion signal (the onQRCode callback) rather than guessing microtask-flush counts.
+  it('emits the normal first qr (status becomes qr_ready and onQRCode is called)', async () => {
+    (qrcode.toDataURL as unknown as jest.Mock).mockClear();
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter);
+    const qrDone = deferredVoid();
+    const onQRCode = jest.fn(() => qrDone.resolve());
+    (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+
+    client.emit('qr', '2@abc');
+    await qrDone.promise;
+    expect(adapter.getStatus()).toBe(EngineStatus.QR_READY);
+    expect(onQRCode).toHaveBeenCalledTimes(1);
+  });
+
   // A wedged page can make getState() hang (the exact #251/#273 condition). The probe must keep its
   // own cadence (a hung probe can't stall the loop) and still honor the 90s give-up deadline.
   it('keeps probing and self-heals (clears auth + disconnects) when getState hangs past the deadline', async () => {
@@ -940,5 +994,121 @@ describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)
       video: false,
       missed: false,
     });
+  });
+});
+
+describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the real download settles)', () => {
+  const ENV_KEYS = [
+    'INBOUND_MEDIA_CONCURRENCY',
+    'MEDIA_DOWNLOAD_TIMEOUT_MS',
+    'MEDIA_DOWNLOAD_MAX_BYTES',
+    'MEDIA_DOWNLOAD_ENABLED',
+  ];
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    saved = {};
+    ENV_KEYS.forEach(k => (saved[k] = process.env[k]));
+  });
+  afterEach(() => {
+    ENV_KEYS.forEach(k => {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    });
+    jest.useRealTimers();
+  });
+
+  type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
+  const defer = <T>(): Deferred<T> => {
+    let resolve: (v: T) => void = () => undefined;
+    let reject: (e: unknown) => void = () => undefined;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: 'media-1', sessionDataPath: './data/sessions', puppeteer: {} });
+
+  it('does not start a second download until the first real download settles, even after the caller times out', async () => {
+    process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+    process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '20';
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = String(10 * 1024 * 1024);
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const downloads: Deferred<{ mimetype: string; data: string }>[] = [];
+    const makeMsg = (id: string): unknown => ({
+      id: { _serialized: id },
+      _data: { size: 100, mimetype: 'image/png' },
+      downloadMedia: jest.fn(() => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        const d = defer<{ mimetype: string; data: string }>();
+        downloads.push(d);
+        return d.promise.finally(() => {
+          inFlight--;
+        });
+      }),
+    });
+    const cap = (m: unknown): Promise<unknown> =>
+      (adapter as unknown as { capInboundMediaFor: (msg: unknown) => Promise<unknown> }).capInboundMediaFor(m);
+
+    const r1 = cap(makeMsg('m1')); // download1 starts synchronously (slot 1)
+    const r2 = cap(makeMsg('m2')); // parks on the limiter; download2 must NOT start
+    expect(downloads.length).toBe(1);
+
+    // Time out BOTH callers' wall-clock deadline while the real download is still pending. With the old
+    // coupling this freed the slot and admitted download2 (inFlight 2); the fix holds the slot.
+    await jest.advanceTimersByTimeAsync(25);
+    expect(await r1).toBeUndefined(); // caller unblocked on the timeout race
+    expect(downloads.length).toBe(1); // download2 still not started — slot held by the pending real download1
+    expect(maxInFlight).toBe(1);
+
+    // The real download1 finally settles -> the slot transfers and download2 may now start.
+    downloads[0].resolve({ mimetype: 'image/png', data: Buffer.from('a').toString('base64') });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(downloads.length).toBe(2);
+    expect(maxInFlight).toBe(1);
+
+    // Settle the rest so nothing dangles.
+    await jest.advanceTimersByTimeAsync(25);
+    expect(await r2).toBeUndefined();
+    downloads[1].resolve({ mimetype: 'image/png', data: Buffer.from('b').toString('base64') });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(maxInFlight).toBe(1);
+  });
+
+  it('propagates a rejecting download to the caller and releases the slot for the next download', async () => {
+    process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+    process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '10000'; // long: we want the reject, not the timeout
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = String(10 * 1024 * 1024);
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const calls: string[] = [];
+    const makeMsg = (id: string, behavior: 'reject' | 'resolve'): unknown => ({
+      id: { _serialized: id },
+      _data: { size: 100, mimetype: 'image/png' },
+      downloadMedia: jest.fn(() => {
+        calls.push(id);
+        return behavior === 'reject'
+          ? Promise.reject(new Error('download blew up'))
+          : Promise.resolve({ mimetype: 'image/png', data: Buffer.from('ok').toString('base64') });
+      }),
+    });
+    const cap = (m: unknown): Promise<unknown> =>
+      (adapter as unknown as { capInboundMediaFor: (msg: unknown) => Promise<unknown> }).capInboundMediaFor(m);
+
+    await expect(cap(makeMsg('bad', 'reject'))).rejects.toThrow('download blew up');
+    // Slot must have been released despite the rejection — the next download proceeds and resolves.
+    const media = (await cap(makeMsg('good', 'resolve'))) as { mimetype: string; data: string };
+    expect(media.data).toBe(Buffer.from('ok').toString('base64'));
+    expect(calls).toEqual(['bad', 'good']);
   });
 });

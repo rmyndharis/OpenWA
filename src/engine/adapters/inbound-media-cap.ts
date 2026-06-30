@@ -34,10 +34,12 @@ export function inboundMediaTimeoutMs(): number {
 /**
  * Bound an inbound media download by a wall-clock deadline. The byte cap and concurrency limiter don't
  * bound TIME: a remote sender can trickle bytes slowly (never tripping the cap) and hold a concurrency
- * slot indefinitely — a slow-loris on the inbound pipeline. On timeout `onTimeout` runs (e.g. destroy
- * the stream so the abandoned download can't keep allocating) and the result resolves `null`, the same
- * "no usable media" sentinel the byte-cap abort returns. A late rejection from the abandoned download is
- * swallowed so it can't surface as an unhandled rejection after the race has already settled.
+ * slot indefinitely — a slow-loris on the inbound pipeline. On timeout `onTimeout` runs — a best-effort
+ * hook to abort the source where it's abortable (e.g. destroy a Baileys stream) — and the result resolves
+ * `null`, the same "no usable media" sentinel the byte-cap abort returns. A non-abortable source (the wwjs
+ * `downloadMedia()`) can't be stopped, so that caller must instead hold its concurrency slot until the real
+ * download settles. A late rejection from the abandoned download is swallowed so it can't surface as an
+ * unhandled rejection after the race has already settled.
  */
 export function withInboundDownloadTimeout<T>(
   promise: Promise<T>,

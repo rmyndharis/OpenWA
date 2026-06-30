@@ -46,6 +46,12 @@ const SANDBOX_HEALTH_TIMEOUT_MS = 5000;
 const SANDBOX_LIFECYCLE_TIMEOUT_MS = 30000;
 
 /**
+ * Max concurrent worker-initiated capability calls per sandboxed plugin. A burst beyond this is rejected
+ * (the plugin sees a thrown Error) rather than amplified into unbounded host-side sends/fetches/writes.
+ */
+const SANDBOX_MAX_INFLIGHT_CAPS = 32;
+
+/**
  * Host process.env keys an untrusted plugin worker is allowed to see. Everything else — secrets like
  * API_MASTER_KEY, API_KEY_PEPPER, the DATABASE_/REDIS_ vars, DOCKER_HOST — is withheld. The worker is
  * a thread, so it needs no PATH to start and require() resolves via module paths, not env.
@@ -153,7 +159,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // Skip non-directories and dot-prefixed dirs (e.g. a crash-leftover `.<id>.bak` update backup),
+      // so a half-finished update can't be re-loaded as a duplicate-id plugin on the next boot.
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
 
       const pluginPath = path.join(dir, entry.name);
       const manifestPath = path.join(pluginPath, 'manifest.json');
@@ -632,6 +640,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       onHookSubscribe,
       onLog,
       runWithHookGuard,
+      SANDBOX_MAX_INFLIGHT_CAPS,
     );
   }
 
