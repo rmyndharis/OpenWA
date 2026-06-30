@@ -296,6 +296,50 @@ describe('PluginLoaderService — uninstall', () => {
   });
 });
 
+describe('PluginLoaderService — skips dot-prefixed directories on load (crash-leftover .bak)', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-dotskip-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const writePlugin = (dirName: string, id: string): void => {
+    const dir = path.join(pluginsDir, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({ id, name: id, version: '1.0.0', type: 'extension', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+  };
+
+  it('does not scan a crash-leftover .<id>.bak directory (no duplicate-id load race)', () => {
+    writePlugin('svc-plg', 'svc-plg');
+    writePlugin('.svc-plg.bak', 'svc-plg'); // a leftover update backup carrying the SAME manifest id
+
+    const loadSpy = jest.spyOn(loader, 'loadPlugin');
+    loader.onModuleInit();
+
+    const scanned = loadSpy.mock.calls.map(c => c[0]);
+    expect(scanned).toContain(path.join(pluginsDir, 'svc-plg'));
+    expect(scanned).not.toContain(path.join(pluginsDir, '.svc-plg.bak'));
+  });
+});
+
 describe('PluginLoaderService — enable concurrency', () => {
   let tmpDir: string;
   let loader: PluginLoaderService;

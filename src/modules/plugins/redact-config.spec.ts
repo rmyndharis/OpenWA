@@ -281,6 +281,36 @@ describe('restoreSecretConfig (scalar-secret array)', () => {
       keys: [],
     });
   });
+
+  it('preserves stored secrets when a new key is appended (length grows)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL, SECRET_SENTINEL, 'brand-new'] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2', 'k3', 'brand-new'] });
+  });
+
+  it('preserves stored secrets when a blank trailing entry is appended (the blank is dropped)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL, SECRET_SENTINEL, ''] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2', 'k3'] });
+  });
+
+  it('preserves the remaining stored secrets when the last key is removed (length shrinks)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2'] });
+  });
 });
 
 // A composite field (object/array) that is itself marked secret:true must be masked as ONE unit on

@@ -121,13 +121,21 @@ function restoreValue(
       value: incoming
         .map((item, i) => {
           const s = elementSignature(item, itemField);
-          // Prefer an unambiguous content match — a row keeps its secret across reorder / insert /
-          // removal. When the signature can't disambiguate (scalar-secret elements all mask to the
-          // sentinel; duplicate rows; or a row whose NON-secret field was edited), fall back to the
-          // same index, but only when the array length is unchanged: a same-length round-trip is an
-          // in-place edit (position i is the same logical row), whereas a length change is a true
-          // insert/removal where positional binding could graft a stored secret onto a new row.
-          const match = sigCount.get(s) === 1 ? sigFirst.get(s) : sameLength ? existingArr[i] : undefined;
+          // Resolution order: (1) an unambiguous content match keeps a row's secret across
+          // reorder/insert/removal; (2) on an unchanged length, fall back to the positional twin (an
+          // in-place edit — position i is the same logical row, incl. a non-secret-field rename); (3) on a
+          // length change, bind the positional twin ONLY when its masked signature still equals this
+          // element's, so an append/removal keeps each surviving sentinel's stored secret while a
+          // genuinely-new or signature-changed row at that position is never grafted with a stored secret.
+          const twin = existingArr[i];
+          const match =
+            sigCount.get(s) === 1
+              ? sigFirst.get(s)
+              : sameLength
+                ? twin
+                : twin !== undefined && elementSignature(twin, itemField) === s
+                  ? twin
+                  : undefined;
           return restoreValue(item, match, itemField);
         })
         // Honor keep:false like restoreObject does (drop the element) rather than emitting `.value`
