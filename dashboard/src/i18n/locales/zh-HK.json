@@ -289,6 +289,24 @@
       "success": "工作階段已強制終止。你現在可以重新啟動它。",
       "failedTitle": "強制終止失敗",
       "failed": "無法強制終止工作階段。"
+    },
+    "pairing": {
+      "tabQr": "QR 碼",
+      "tabPhone": "以電話號碼連結",
+      "phoneLabel": "電話號碼",
+      "phonePlaceholder": "例如：919876543210",
+      "phoneHint": "只可輸入數字（不可有 +、空格或連字號），須為國際格式（國家代碼 + 號碼）。",
+      "invalidPhone": "請輸入有效的電話號碼：6 至 15 位數字，國家代碼在前，不可有符號。",
+      "generateButton": "產生配對碼",
+      "generating": "正在產生配對碼...",
+      "codeLabel": "你的配對碼",
+      "changeNumber": "更改號碼／重新索取配對碼",
+      "instructions": "配對說明",
+      "step1": "<strong>1.</strong> 在手機上開啟 WhatsApp",
+      "step2": "<strong>2.</strong> 點按<strong>選單</strong>或<strong>設定</strong>，然後選擇<strong>已連結裝置</strong>",
+      "step3": "<strong>3.</strong> 點按<strong>連結裝置</strong>，然後點按<strong>改用電話號碼連結</strong>",
+      "step4": "<strong>4.</strong> 在手機上輸入上方顯示的 8 位字元配對碼",
+      "waitingConnection": "正在等待你的手機完成連結…"
     }
   },
   "webhooks": {

@@ -289,6 +289,24 @@
       "success": "La sesión se cerró de forma forzada. Ya puedes reiniciarla.",
       "failedTitle": "Error al forzar el cierre",
       "failed": "No se pudo forzar el cierre de la sesión."
+    },
+    "pairing": {
+      "tabQr": "Código QR",
+      "tabPhone": "Vincular con número de teléfono",
+      "phoneLabel": "Número de teléfono",
+      "phonePlaceholder": "ej., 919876543210",
+      "phoneHint": "Solo dígitos (sin +, espacios ni guiones) en formato internacional (código de país + número).",
+      "invalidPhone": "Introduce un número de teléfono válido: 6-15 dígitos, primero el código de país, sin símbolos.",
+      "generateButton": "Generar código de vinculación",
+      "generating": "Generando código de vinculación...",
+      "codeLabel": "Tu código de vinculación",
+      "changeNumber": "Cambiar número / Solicitar nuevo código",
+      "instructions": "Instrucciones de vinculación",
+      "step1": "<strong>1.</strong> Abre WhatsApp en tu teléfono",
+      "step2": "<strong>2.</strong> Toca <strong>Menú</strong> o <strong>Ajustes</strong> y selecciona <strong>Dispositivos vinculados</strong>",
+      "step3": "<strong>3.</strong> Toca <strong>Vincular dispositivo</strong> y luego toca <strong>Vincular con número de teléfono</strong>",
+      "step4": "<strong>4.</strong> Introduce en tu teléfono el código de 8 caracteres que se muestra arriba",
+      "waitingConnection": "Esperando a que tu teléfono se vincule…"
     }
   },
   "webhooks": {

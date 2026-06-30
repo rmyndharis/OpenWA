@@ -289,6 +289,24 @@
       "success": "La sessione è stata terminata forzatamente. Puoi riavviarla ora.",
       "failedTitle": "Terminazione forzata non riuscita",
       "failed": "Impossibile terminare forzatamente la sessione."
+    },
+    "pairing": {
+      "tabQr": "Codice QR",
+      "tabPhone": "Collega con numero di telefono",
+      "phoneLabel": "Numero di Telefono",
+      "phonePlaceholder": "es., 919876543210",
+      "phoneHint": "Solo cifre (senza +, spazi o trattini) in formato internazionale (prefisso del paese + numero).",
+      "invalidPhone": "Inserisci un numero di telefono valido: 6–15 cifre, prefisso del paese per primo, senza simboli.",
+      "generateButton": "Genera codice di abbinamento",
+      "generating": "Generazione del codice di abbinamento in corso...",
+      "codeLabel": "Il tuo codice di abbinamento",
+      "changeNumber": "Cambia numero / Richiedi nuovo codice",
+      "instructions": "Istruzioni per l'abbinamento",
+      "step1": "<strong>1.</strong> Apri WhatsApp sul tuo telefono",
+      "step2": "<strong>2.</strong> Tocca <strong>Menu</strong> o <strong>Impostazioni</strong> e seleziona <strong>Dispositivi collegati</strong>",
+      "step3": "<strong>3.</strong> Tocca <strong>Collega un dispositivo</strong>, poi tocca <strong>Collega con numero di telefono</strong>",
+      "step4": "<strong>4.</strong> Inserisci sul tuo telefono il codice di 8 caratteri mostrato sopra",
+      "waitingConnection": "In attesa del collegamento del tuo telefono…"
     }
   },
   "webhooks": {

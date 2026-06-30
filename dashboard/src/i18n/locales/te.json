@@ -289,6 +289,24 @@
       "success": "సెషన్ బలవంతంగా ఆపబడింది. మీరు ఇప్పుడు దాన్ని పునఃప్రారంభించవచ్చు.",
       "failedTitle": "బలవంతంగా ఆపడం విఫలమైంది",
       "failed": "సెషన్‌ను బలవంతంగా ఆపడం విఫలమైంది."
+    },
+    "pairing": {
+      "tabQr": "QR కోడ్",
+      "tabPhone": "ఫోన్ నంబర్‌తో లింక్ చేయండి",
+      "phoneLabel": "ఫోన్ నంబర్",
+      "phonePlaceholder": "ఉదాహరణకు, 919876543210",
+      "phoneHint": "అంతర్జాతీయ ఆకృతిలో (కంట్రీ కోడ్ + నంబర్) సంఖ్యలు మాత్రమే (+, ఖాళీలు, లేదా డాష్‌లు లేకుండా).",
+      "invalidPhone": "చెల్లుబాటు అయ్యే ఫోన్ నంబర్‌ను నమోదు చేయండి: 6–15 సంఖ్యలు, ముందుగా కంట్రీ కోడ్, ఎలాంటి చిహ్నాలు లేకుండా.",
+      "generateButton": "పెయిరింగ్ కోడ్‌ను రూపొందించండి",
+      "generating": "పెయిరింగ్ కోడ్‌ను రూపొందిస్తోంది...",
+      "codeLabel": "మీ పెయిరింగ్ కోడ్",
+      "changeNumber": "నంబర్ మార్చు / కొత్త కోడ్‌ను అభ్యర్థించు",
+      "instructions": "పెయిరింగ్ సూచనలు",
+      "step1": "<strong>1.</strong> మీ ఫోన్‌లో వాట్సాప్ తెరవండి",
+      "step2": "<strong>2.</strong> <strong>మెనూ</strong> లేదా <strong>Settings</strong> పై నొక్కి, <strong>Linked Devices</strong> ఎంచుకోండి",
+      "step3": "<strong>3.</strong> <strong>Link a Device</strong> పై నొక్కి, ఆపై <strong>Link with phone number instead</strong> పై నొక్కండి",
+      "step4": "<strong>4.</strong> పైన చూపిన 8-అక్షరాల కోడ్‌ను మీ ఫోన్‌లో నమోదు చేయండి",
+      "waitingConnection": "మీ ఫోన్ లింక్ అయ్యే వరకు వేచి ఉంది…"
     }
   },
   "webhooks": {

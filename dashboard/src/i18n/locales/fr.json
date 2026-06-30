@@ -289,6 +289,24 @@
       "success": "L'arrêt forcé de la session a réussi. Vous pouvez la redémarrer maintenant.",
       "failedTitle": "Échec de l'arrêt forcé",
       "failed": "Échec de l'arrêt forcé de la session."
+    },
+    "pairing": {
+      "tabQr": "Code QR",
+      "tabPhone": "Lier avec un numéro de téléphone",
+      "phoneLabel": "Numéro de téléphone",
+      "phonePlaceholder": "ex. : 919876543210",
+      "phoneHint": "Chiffres uniquement (sans +, espaces ni tirets) au format international (indicatif du pays + numéro).",
+      "invalidPhone": "Saisissez un numéro de téléphone valide : 6 à 15 chiffres, indicatif du pays en premier, sans symboles.",
+      "generateButton": "Générer le code de liaison",
+      "generating": "Génération du code de liaison...",
+      "codeLabel": "Votre code de liaison",
+      "changeNumber": "Changer de numéro / Demander un nouveau code",
+      "instructions": "Instructions de liaison",
+      "step1": "<strong>1.</strong> Ouvrez WhatsApp sur votre téléphone",
+      "step2": "<strong>2.</strong> Appuyez sur <strong>Menu</strong> ou <strong>Paramètres</strong> et sélectionnez <strong>Appareils connectés</strong>",
+      "step3": "<strong>3.</strong> Appuyez sur <strong>Connecter un appareil</strong>, puis sur <strong>Lier avec un numéro de téléphone</strong>",
+      "step4": "<strong>4.</strong> Saisissez sur votre téléphone le code à 8 caractères affiché ci-dessus",
+      "waitingConnection": "En attente de la liaison de votre téléphone…"
     }
   },
   "webhooks": {

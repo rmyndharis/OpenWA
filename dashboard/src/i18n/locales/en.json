@@ -296,6 +296,7 @@
       "phoneLabel": "Phone Number",
       "phonePlaceholder": "e.g., 919876543210",
       "phoneHint": "Digits only (no +, spaces, or dashes) in international format (country code + number).",
+      "invalidPhone": "Enter a valid phone number: 6–15 digits, country code first, no symbols.",
       "generateButton": "Generate Pairing Code",
       "generating": "Generating pairing code...",
       "codeLabel": "Your Pairing Code",
@@ -304,7 +305,8 @@
       "step1": "<strong>1.</strong> Open WhatsApp on your phone",
       "step2": "<strong>2.</strong> Tap <strong>Menu</strong> or <strong>Settings</strong> and select <strong>Linked Devices</strong>",
       "step3": "<strong>3.</strong> Tap <strong>Link a Device</strong>, then tap <strong>Link with phone number instead</strong>",
-      "step4": "<strong>4.</strong> Enter the 8-character code shown above on your phone"
+      "step4": "<strong>4.</strong> Enter the 8-character code shown above on your phone",
+      "waitingConnection": "Waiting for your phone to link…"
     }
   },
   "webhooks": {

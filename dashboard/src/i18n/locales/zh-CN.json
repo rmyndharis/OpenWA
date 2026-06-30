@@ -289,6 +289,24 @@
       "success": "会话已被强制终止。您现在可以重新启动它。",
       "failedTitle": "强制终止失败",
       "failed": "强制终止会话失败。"
+    },
+    "pairing": {
+      "tabQr": "QR 码",
+      "tabPhone": "使用电话号码关联",
+      "phoneLabel": "电话号码",
+      "phonePlaceholder": "例如：919876543210",
+      "phoneHint": "仅填数字（不含 +、空格或连字符），使用国际格式（国家/地区代码 + 号码）。",
+      "invalidPhone": "请输入有效的电话号码：6–15 位数字，国家/地区代码在前，不含任何符号。",
+      "generateButton": "生成配对码",
+      "generating": "正在生成配对码...",
+      "codeLabel": "您的配对码",
+      "changeNumber": "更换号码 / 重新获取配对码",
+      "instructions": "配对说明",
+      "step1": "<strong>1.</strong> 在手机上打开 WhatsApp",
+      "step2": "<strong>2.</strong> 点击<strong>菜单</strong>或<strong>设置</strong>，然后选择<strong>已关联设备</strong>",
+      "step3": "<strong>3.</strong> 点击<strong>关联设备</strong>，然后点击<strong>改用电话号码关联</strong>",
+      "step4": "<strong>4.</strong> 在手机上输入上方显示的 8 位字符配对码",
+      "waitingConnection": "正在等待您的手机完成关联…"
     }
   },
   "webhooks": {

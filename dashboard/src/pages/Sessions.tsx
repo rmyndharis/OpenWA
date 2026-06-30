@@ -107,37 +107,39 @@ export function Sessions() {
   const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentSessionName = useRef<string>('');
 
-  const fetchQR = useCallback(async (sessionId: string) => {
-    // Guard: if session is already connected, stop polling immediately. Read the ref (not `sessions`)
-    // so fetchQR keeps a stable identity — otherwise the polling interval is torn down and restarted on
-    // every sessions update.
-    const currentSession = sessionsRef.current.find(s => s.id === sessionId);
-    if (currentSession?.status === 'ready') {
-      setQrData(null);
-      currentSessionName.current = '';
-      return;
-    }
-    try {
-      const qr = await sessionApi.getQR(sessionId);
-      setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
-      if (qr.status === 'ready') {
+  const fetchQR = useCallback(
+    async (sessionId: string) => {
+      // Guard: if session is already connected, stop polling immediately. Read the ref (not `sessions`)
+      // so fetchQR keeps a stable identity — otherwise the polling interval is torn down and restarted on
+      // every sessions update.
+      const currentSession = sessionsRef.current.find(s => s.id === sessionId);
+      if (currentSession?.status === 'ready') {
         setQrData(null);
         currentSessionName.current = '';
-        fetchSessions();
+        return;
       }
-    } catch {
-      // Keep qrData alive so the polling interval keeps retrying until the QR
-      // is ready. Only stop polling if the session itself has failed.
-      const updated = await sessionApi.get(sessionId).catch(() => null);
-      const stillInitializing = updated &&
-        ['initializing', 'connecting', 'qr_ready'].includes(updated.status);
-      if (!stillInitializing) {
-        setQrData(null);
-        currentSessionName.current = '';
-        fetchSessions();
+      try {
+        const qr = await sessionApi.getQR(sessionId);
+        setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
+        if (qr.status === 'ready') {
+          setQrData(null);
+          currentSessionName.current = '';
+          fetchSessions();
+        }
+      } catch {
+        // Keep qrData alive so the polling interval keeps retrying until the QR
+        // is ready. Only stop polling if the session itself has failed.
+        const updated = await sessionApi.get(sessionId).catch(() => null);
+        const stillInitializing = updated && ['initializing', 'connecting', 'qr_ready'].includes(updated.status);
+        if (!stillInitializing) {
+          setQrData(null);
+          currentSessionName.current = '';
+          fetchSessions();
+        }
       }
-    }
-  }, [fetchSessions]);
+    },
+    [fetchSessions],
+  );
 
   useEffect(() => {
     if (qrData) {
@@ -151,7 +153,7 @@ export function Sessions() {
     };
   }, [qrData, fetchQR]);
 
-    const handleCloseQRModal = useCallback(() => {
+  const handleCloseQRModal = useCallback(() => {
     setQrData(null);
     setPairingMode(false);
     setPhoneNumber('');
@@ -162,7 +164,7 @@ export function Sessions() {
   const handleGeneratePairingCode = async () => {
     if (!qrData || !phoneNumber.trim()) return;
     if (!/^[0-9]{6,15}$/.test(phoneNumber.trim())) {
-      setPairingError(t('sessions.create.invalidChars'));
+      setPairingError(t('sessions.pairing.invalidPhone'));
       return;
     }
     try {
@@ -177,7 +179,7 @@ export function Sessions() {
     }
   };
 
-const handleCreate = async () => {
+  const handleCreate = async () => {
     if (!newSessionName.trim()) return;
     try {
       setCreating(true);
@@ -202,7 +204,9 @@ const handleCreate = async () => {
       setSessions(sessions.filter(s => s.id !== id));
       toast.success(
         t('sessions.delete.successTitle'),
-        session ? t('sessions.delete.successDescNamed', { name: session.name }) : t('sessions.delete.successDescGeneric'),
+        session
+          ? t('sessions.delete.successDescNamed', { name: session.name })
+          : t('sessions.delete.successDescGeneric'),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('sessions.delete.errorDefault');
@@ -238,6 +242,12 @@ const handleCreate = async () => {
     // Nothing to show for an already-connected session.
     if (session?.status === 'ready') return;
     const sessionName = session?.name || '';
+    // Reset any pairing sub-state from a previous open so a freshly opened modal never shows a
+    // stale code/phone belonging to a different session.
+    setPairingMode(false);
+    setPhoneNumber('');
+    setPairingCode(null);
+    setPairingError(null);
     // Show loading state immediately so the modal opens and polling starts
     // even before Chromium has finished initializing.
     setQrData({ sessionId: id, sessionName, qrCode: '' });
@@ -434,8 +444,10 @@ const handleCreate = async () => {
             </div>
             <div className="modal-body" style={{ textAlign: 'center' }}>
               {!pairingCode && (
-                <div className="pairing-tabs">
+                <div className="pairing-tabs" role="tablist">
                   <button
+                    role="tab"
+                    aria-selected={!pairingMode}
                     className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
                     onClick={() => {
                       setPairingMode(false);
@@ -445,6 +457,8 @@ const handleCreate = async () => {
                     {t('sessions.pairing.tabQr')}
                   </button>
                   <button
+                    role="tab"
+                    aria-selected={pairingMode}
                     className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
                     onClick={() => {
                       setPairingMode(true);
@@ -462,9 +476,15 @@ const handleCreate = async () => {
                   <>
                     <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
                     <div className="qr-instructions">
-                      <p className="qr-step"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} /></p>
-                      <p className="qr-step"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} /></p>
-                      <p className="qr-step"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} /></p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} />
+                      </p>
                     </div>
                     <p className="qr-auto-refresh">
                       <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
@@ -478,42 +498,24 @@ const handleCreate = async () => {
                 )
               ) : (
                 // Pairing Code Content
-                <div className="pairing-container">
-                  {pairingError && (
-                    <div style={{
-                      background: '#FEE2E2',
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      color: '#DC2626',
-                      marginBottom: '1rem',
-                      fontSize: '0.875rem',
-                      textAlign: 'left'
-                    }}>
-                      {pairingError}
-                    </div>
-                  )}
+                <div className="pairing-container" role="tabpanel">
+                  {pairingError && <div className="pairing-error">{pairingError}</div>}
 
                   {!pairingCode ? (
-                    <div className="pairing-form" style={{ textAlign: 'left' }}>
-                      <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                    <div className="pairing-form">
+                      <label htmlFor="pairing-phone" className="pairing-label">
                         {t('sessions.pairing.phoneLabel')}
                       </label>
                       <input
-                        type="text"
+                        id="pairing-phone"
+                        className="pairing-input"
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={15}
                         placeholder={t('sessions.pairing.phonePlaceholder')}
                         value={phoneNumber}
                         onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
                         onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
-                        style={{
-                          width: '100%',
-                          padding: '0.875rem 1rem',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius)',
-                          fontSize: '0.9375rem',
-                          background: 'var(--bg-light)',
-                          marginBottom: '0.5rem',
-                          boxSizing: 'border-box'
-                        }}
                       />
                       <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
                         {t('sessions.pairing.phoneHint')}
@@ -521,7 +523,7 @@ const handleCreate = async () => {
                       <button
                         className="btn-primary"
                         onClick={handleGeneratePairingCode}
-                        disabled={requestingPairing || !phoneNumber.trim()}
+                        disabled={requestingPairing || !/^[0-9]{6,15}$/.test(phoneNumber.trim())}
                         style={{ width: '100%', justifyContent: 'center' }}
                       >
                         {requestingPairing ? (
@@ -542,15 +544,21 @@ const handleCreate = async () => {
                       <div className="pairing-code-display">
                         {pairingCode.substring(0, 4)} - {pairingCode.substring(4)}
                       </div>
-                      
-                      <div className="pairing-instructions">
-                        <p style={{ margin: '0 0 0.5rem', fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
-                          {t('sessions.pairing.instructions')}
+
+                      <div className="qr-instructions">
+                        <p className="pairing-instructions-title">{t('sessions.pairing.instructions')}</p>
+                        <p className="qr-step">
+                          <Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} />
                         </p>
-                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} /></p>
-                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} /></p>
-                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} /></p>
-                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} /></p>
+                        <p className="qr-step">
+                          <Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} />
+                        </p>
+                        <p className="qr-step">
+                          <Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} />
+                        </p>
+                        <p className="qr-step">
+                          <Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} />
+                        </p>
                       </div>
 
                       <div style={{ marginTop: '1.5rem' }}>
@@ -595,7 +603,9 @@ const handleCreate = async () => {
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">{t('sessions.details.status')}</span>
-                  <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
+                  <span className={`status-badge ${selectedSession.status}`}>
+                    {formatStatus(selectedSession.status)}
+                  </span>
                 </div>
                 <div className="detail-item">
                   <span className="detail-label">{t('sessions.details.sessionId')}</span>
@@ -612,7 +622,9 @@ const handleCreate = async () => {
                 <div className="detail-item">
                   <span className="detail-label">{t('sessions.details.lastActive')}</span>
                   <span className="detail-value">
-                    {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
+                    {selectedSession.lastActive
+                      ? new Date(selectedSession.lastActive).toLocaleString()
+                      : t('common.never')}
                   </span>
                 </div>
               </div>

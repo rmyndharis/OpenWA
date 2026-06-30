@@ -289,6 +289,24 @@
       "success": "הסשן נסגר בכוח. ניתן להפעיל אותו מחדש כעת.",
       "failedTitle": "הסגירה בכוח נכשלה",
       "failed": "סגירת הסשן בכוח נכשלה."
+    },
+    "pairing": {
+      "tabQr": "קוד QR",
+      "tabPhone": "קישור עם מספר טלפון",
+      "phoneLabel": "מספר טלפון",
+      "phonePlaceholder": "לדוגמה: 919876543210",
+      "phoneHint": "ספרות בלבד (ללא +, רווחים או מקפים) בפורמט בין-לאומי (קידומת מדינה + מספר).",
+      "invalidPhone": "יש להזין מספר טלפון תקין: 6–15 ספרות, קידומת המדינה תחילה, ללא סימנים.",
+      "generateButton": "יצירת קוד קישור",
+      "generating": "יוצר קוד קישור...",
+      "codeLabel": "קוד הקישור שלך",
+      "changeNumber": "שינוי מספר / בקשת קוד חדש",
+      "instructions": "הוראות קישור",
+      "step1": "<strong>1.</strong> יש לפתוח את WhatsApp במכשיר",
+      "step2": "<strong>2.</strong> יש להקיש על <strong>תפריט</strong> או <strong>הגדרות</strong> ולבחור <strong>מכשירים מקושרים</strong>",
+      "step3": "<strong>3.</strong> יש להקיש על <strong>קישור מכשיר</strong>, ולאחר מכן על <strong>קישור עם מספר טלפון במקום זאת</strong>",
+      "step4": "<strong>4.</strong> יש להזין במכשיר את הקוד בן 8 התווים המוצג למעלה",
+      "waitingConnection": "ממתין לקישור המכשיר שלך…"
     }
   },
   "webhooks": {
