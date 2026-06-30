@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A message that was sent is no longer reported as failed when only its persistence hiccups.** After the engine accepts a message, a transient database fault while saving the `SENT` state is now logged and the call still returns success — instead of marking the already-delivered message permanently `FAILED` (and, for text sends, firing `message:failed`) and returning an error. Genuine send failures are unchanged. (#PRR)
 - **Incoming call messages show their real detail in the dashboard.** Call detail (`video` / `missed`) is now attached on the live whatsapp-web.js inbound path — as it already was on history — so an incoming call renders a specific labeled bubble instead of a generic "Call". (#548)
 - **Location messages no longer dump a base64 thumbnail in the chat list.** Both the live dashboard handler and the engine's chat summary now show a "📍 Location" label as the last-message preview instead of the multi-KB base64 map thumbnail. (#548)
 - **Logs pagination can reach every page.** The numbered pager was frozen at pages 1–5 (pages 6+ were only reachable by repeated "Next" clicks and the active highlight was lost); it now slides a centered, clamped window around the current page. (#548)

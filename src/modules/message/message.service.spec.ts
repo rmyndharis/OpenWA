@@ -157,6 +157,20 @@ describe('MessageService', () => {
       expect(repository.save).toHaveBeenCalledTimes(2);
     });
 
+    it('returns success (not FAILED) when persisting the SENT state fails after a successful send', async () => {
+      // 1st save (PENDING) ok; 2nd save (SENT-state, after WhatsApp already accepted the message) throws.
+      (repository.save as jest.Mock)
+        .mockImplementationOnce((msg: unknown) => Promise.resolve(msg))
+        .mockRejectedValueOnce(new Error('transient db fault'));
+
+      const result = await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'Hello' });
+
+      // The send succeeded, so it is reported as success — not rethrown, not marked FAILED.
+      expect(result.messageId).toBe('wa-msg-1');
+      expect(result.timestamp).toBe(1706868000);
+      expect(hookManager.execute).not.toHaveBeenCalledWith('message:failed', expect.anything(), expect.anything());
+    });
+
     it('executes the message:sending hook (message:sent now fires once from the engine message_create path)', async () => {
       await service.sendText('sess-1', {
         chatId: '628123456789@c.us',
