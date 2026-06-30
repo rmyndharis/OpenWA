@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inbound @mentions are surfaced on the Baileys engine.** An incoming message that tags participants now exposes the tagged WIDs as `mentionedIds` (normalized to the neutral `@c.us` convention), reaching parity with the whatsapp-web.js engine and feeding the existing `mentions` webhook filter and command-targeting. (#542)
+
+### Fixed
+
+- **Disappearing-messages (ephemeral) inbound messages no longer lose their content on Baileys.** A message in a chat with disappearing messages enabled arrives wrapped, so its text, media, location, and resolved type were silently dropped (the message surfaced empty and typed `unknown`). The adapter now reads the unwrapped inner content, so the body, voice/media/location detail, and correct type are preserved. (#542)
+- **Captioned documents surface their caption on Baileys.** A `documentWithCaptionMessage` now contributes its caption to the message body instead of an empty string. (#542)
+- **Inbound media downloads on whatsapp-web.js stay within the configured concurrency limit.** When a download exceeded its wall-clock deadline, its slot was freed while the un-abortable download kept running, letting a slow sender push the number of simultaneous in-flight downloads above `INBOUND_MEDIA_CONCURRENCY`. The slot is now held until the real download settles, bounding peak memory. (#542)
+- **A stale QR code can no longer be emitted while a whatsapp-web.js session is shutting down.** A QR event buffered by the browser page could flush during teardown and flip a disconnecting session back to `QR_READY`; the handler now ignores QR events once teardown has begun. (#542)
+- **Bulk send persists the correct filename for every media type.** A bulk image/video/audio message now records its own `filename` in the stored message metadata instead of only documents'. (#542)
+
 ## [0.7.14] - 2026-06-30
 
 ### Added
