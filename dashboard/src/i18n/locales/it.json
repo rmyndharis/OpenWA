@@ -83,7 +83,9 @@
       "call": "Chiamata",
       "callMissed": "Chiamata persa",
       "callVideo": "Videochiamata",
-      "callVideoMissed": "Videochiamata persa"
+      "callVideoMissed": "Videochiamata persa",
+      "omitted": "Media",
+      "image": "Immagine"
     },
     "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",
     "noSessionsTitle": "Nessuna sessione connessa",

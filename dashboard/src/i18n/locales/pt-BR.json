@@ -83,7 +83,9 @@
       "call": "Chamada",
       "callMissed": "Chamada perdida",
       "callVideo": "Chamada de vídeo",
-      "callVideoMissed": "Chamada de vídeo perdida"
+      "callVideoMissed": "Chamada de vídeo perdida",
+      "omitted": "Mídia",
+      "image": "Imagem"
     },
     "subtitle": "Envie e responda mensagens do WhatsApp em tempo real",
     "noSessionsTitle": "Nenhuma sessão conectada",

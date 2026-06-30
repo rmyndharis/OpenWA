@@ -83,7 +83,9 @@
       "call": "مكالمة",
       "callMissed": "مكالمة فائتة",
       "callVideo": "مكالمة فيديو",
-      "callVideoMissed": "مكالمة فيديو فائتة"
+      "callVideoMissed": "مكالمة فيديو فائتة",
+      "omitted": "وسائط",
+      "image": "صورة"
     },
     "subtitle": "أرسل ورد على رسائل واتساب في الوقت الفعلي",
     "noSessionsTitle": "لا توجد جلسات متصلة",
@@ -303,10 +305,14 @@
     "available": "الأحداث المتاحة",
     "saveChanges": "حفظ التغييرات",
     "filters": {
+      "badge": "{{count}} عامل تصفية",
+      "badge_zero": "بدون عوامل تصفية",
+      "badge_two": "عاملا تصفية",
+      "badge_few": "{{count}} عوامل تصفية",
+      "badge_many": "{{count}} عامل تصفية",
+      "badge_other": "{{count}} عوامل تصفية",
       "title": "عوامل التصفية (اختياري)",
       "hint": "يتم التفعيل فقط عند تطابق جميع الشروط. ينطبق على أحداث الرسائل.",
-      "badge": "{{count}} عامل تصفية",
-      "badge_other": "{{count}} عوامل تصفية",
       "addCondition": "إضافة شرط",
       "removeCondition": "إزالة الشرط",
       "caseSensitive": "حساس لحالة الأحرف",

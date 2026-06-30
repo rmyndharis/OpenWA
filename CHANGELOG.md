@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard chat media labels are localized.** The omitted-media placeholder and the chat image `alt` text were hardcoded English; both now use the `chats.media.*` translation keys, added across all 10 locales. (#547)
+- **Spanish template-test hint interpolates correctly again.** The `templates.noPlaceholders` string had its `{{name}}` interpolation token localized to `{{nombre}}`, which broke substitution; the token is restored while the surrounding prose stays Spanish. (#547)
+- **Arabic and Hebrew filter-count badges use the correct plural form.** The `webhooks.filters.badge` count was missing the required CLDR plural categories for Arabic (zero/two/few/many) and Hebrew (two), so i18next fell back to the singular noun; the missing forms are now provided. (#547)
+
+### Changed
+
+- **The i18n parity check now catches more than missing keys.** It additionally hard-fails on a translated string whose `{{placeholder}}` tokens differ from the reference (the bug class above), and warns when a long value is byte-identical to English (likely untranslated) — giving a CI signal for locale drift. (#547)
+
 ## [0.7.14] - 2026-06-30
 
 ### Added

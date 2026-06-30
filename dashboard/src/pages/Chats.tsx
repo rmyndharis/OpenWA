@@ -836,7 +836,7 @@ export function Chats() {
                         }
                         if (!mediaInfo) return null;
                         if (mediaInfo.omitted) {
-                          return <div className="message-media-omitted">📎 Media</div>;
+                          return <div className="message-media-omitted">📎 {t('chats.media.omitted')}</div>;
                         }
                         const mediaSrc = getMediaSrc(mediaInfo);
                         if (!mediaSrc) return null;
@@ -848,7 +848,7 @@ export function Chats() {
                               <div className="message-media-image">
                                 <img
                                   src={mediaSrc}
-                                  alt={mediaInfo.filename || 'WhatsApp Image'}
+                                  alt={mediaInfo.filename || t('chats.media.image')}
                                   className="chat-image-media"
                                   onClick={() => {
                                     const idx = imageMedia.findIndex(x => x.id === msg.id);

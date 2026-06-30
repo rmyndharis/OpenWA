@@ -83,7 +83,9 @@
       "call": "通話",
       "callMissed": "未接來電",
       "callVideo": "視像通話",
-      "callVideoMissed": "未接視像通話"
+      "callVideoMissed": "未接視像通話",
+      "omitted": "媒體",
+      "image": "圖片"
     },
     "subtitle": "即時傳送和回覆 WhatsApp 訊息",
     "noSessionsTitle": "沒有已連線的工作階段",
