@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Link a WhatsApp session by pairing code from the dashboard.** The session connect modal now offers a "Link with Phone Number" tab next to the QR code: enter a phone number in international format and the dashboard requests an 8-character pairing code — via the existing `POST /sessions/:id/pairing-code` endpoint — to type into WhatsApp on the phone, a QR-free way to link a device. The phone field is constrained to digits with a numeric keypad, the code/instructions are fully localized across all 10 dashboard locales, and the pairing panel is keyboard- and screen-reader-accessible. (#551) Thanks @akash247777.
 
+### Fixed
+
+- **Pairing code renders in the correct order in right-to-left locales.** In Arabic/Hebrew the 8-character code's two halves could be transposed by the bidi algorithm (a code like `1234ABCD` shown as `ABCD - 1234`), causing the user to type the wrong code; the code display is now isolated to left-to-right. The pairing connect modal also no longer disappears mid-link on the whatsapp-web.js engine (it stayed mounted only through `authenticating`), and a rapid double-Enter can no longer fire overlapping pairing-code requests. (#552)
+
 ## [0.7.15] - 2026-06-30
 
 ### Added
