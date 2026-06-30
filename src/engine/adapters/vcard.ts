@@ -9,13 +9,18 @@ import { ContactCard } from '../interfaces/whatsapp-engine.interface';
  */
 export function buildVCard(contact: ContactCard): string {
   const clean = (s: string): string => s.replace(/[\r\n]+/g, ' ');
+  // Escape the vCard structural characters in a text value (RFC 6350 §3.4). Backslash MUST be escaped
+  // first so the backslashes we add for ; and , are not themselves doubled. NOTE: the source literals
+  // are double-backslashed on purpose — `'\\;'` is a literal backslash+semicolon, whereas `'\;'` would
+  // be a JS no-op (the unknown escape collapses to just `;`).
+  const esc = (s: string): string => s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,');
   const name = clean(contact.name);
   const number = clean(contact.number);
   const waid = number.replace(/\D/g, '');
   return [
     'BEGIN:VCARD',
     'VERSION:3.0',
-    `FN:${name}`,
+    `FN:${esc(name)}`,
     `TEL;type=CELL;type=VOICE;waid=${waid}:${number}`,
     'END:VCARD',
   ].join('\n');

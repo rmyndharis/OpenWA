@@ -14,6 +14,7 @@ import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
+import { ImportStorageDto } from './dto/import-storage.dto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -1190,7 +1191,7 @@ export class InfraController {
   @ApiBody({ description: 'Path to tar.gz file to import' })
   @ApiResponse({ status: 200, description: 'Import result' })
   async importStorage(
-    @Body() body: { filePath: string },
+    @Body() body: ImportStorageDto,
   ): Promise<{ imported: boolean; count: number; storageType: string }> {
     const { filePath } = body;
 

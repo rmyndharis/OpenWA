@@ -83,7 +83,9 @@
       "call": "Appel",
       "callMissed": "Appel manqué",
       "callVideo": "Appel vidéo",
-      "callVideoMissed": "Appel vidéo manqué"
+      "callVideoMissed": "Appel vidéo manqué",
+      "omitted": "Média",
+      "image": "Image"
     },
     "subtitle": "Envoyez et répondez aux messages WhatsApp en temps réel",
     "noSessionsTitle": "Aucune session connectée",

@@ -83,7 +83,9 @@
       "call": "Llamada",
       "callMissed": "Llamada perdida",
       "callVideo": "Videollamada",
-      "callVideoMissed": "Videollamada perdida"
+      "callVideoMissed": "Videollamada perdida",
+      "omitted": "Multimedia",
+      "image": "Imagen"
     },
     "subtitle": "Envía y responde mensajes de WhatsApp en tiempo real",
     "noSessionsTitle": "Sin sesiones conectadas",
@@ -508,7 +510,7 @@
     "previewTitle": "Vista previa",
     "previewValuePlaceholder": "Valor de ejemplo",
     "previewEmpty": "Empieza a escribir una plantilla para previsualizarla aquí.",
-    "noPlaceholders": "Usa marcadores {{nombre}} para probar sustituciones.",
+    "noPlaceholders": "Usa marcadores {{name}} para probar sustituciones.",
     "savedTitle": "Plantillas guardadas",
     "count": "{{count}} en total",
     "deleteTitle": "Eliminar plantilla",

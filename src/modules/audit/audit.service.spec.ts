@@ -58,6 +58,12 @@ describe('AuditService', () => {
     expect(arg.take).toBe(200);
   });
 
+  it('findAll clamps a negative offset to 0 (no negative skip reaches the query)', async () => {
+    await service.findAll({ offset: -5 });
+    const arg = (repo.findAndCount.mock.calls as unknown[][])[0][0] as { skip: number };
+    expect(arg.skip).toBe(0);
+  });
+
   it('findAll uses Between only when BOTH dates are present', async () => {
     const start = new Date('2026-01-01T00:00:00Z');
     const end = new Date('2026-02-01T00:00:00Z');

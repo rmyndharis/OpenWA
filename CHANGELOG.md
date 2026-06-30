@@ -18,6 +18,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **QR polling no longer churns its own interval.** The poll callback reads the latest sessions via a ref, so it keeps a stable identity instead of being torn down and restarted on every sessions update. (#548)
 - **Editing a webhook clears its message-filters when no message events remain selected**, matching the create path and the (hidden) filter UI. (#548)
 - **A session-status toast fires once per real transition.** A double-signalled WS `session.status` event no longer produces a duplicate toast (and redundant refresh); the handler compares against the current status before reacting. (#548)
+- **Dashboard chat media labels are localized.** The omitted-media placeholder and the chat image `alt` text were hardcoded English; both now use the `chats.media.*` translation keys, added across all 10 locales. (#547)
+- **Spanish template-test hint interpolates correctly again.** The `templates.noPlaceholders` string had its `{{name}}` interpolation token localized to `{{nombre}}`, which broke substitution; the token is restored while the surrounding prose stays Spanish. (#547)
+- **Arabic and Hebrew filter-count badges use the correct plural form.** The `webhooks.filters.badge` count was missing the required CLDR plural categories for Arabic (zero/two/few/many) and Hebrew (two), so i18next fell back to the singular noun; the missing forms are now provided. (#547)
+
+### Changed
+
+- **The i18n parity check now catches more than missing keys.** It additionally hard-fails on a translated string whose `{{placeholder}}` tokens differ from the reference (the bug class above), and warns when a long value is byte-identical to English (likely untranslated) — giving a CI signal for locale drift. (#547)
+### Security
+
+- **Contact-card names escape vCard structural characters.** A contact whose name contained a backslash, semicolon, or comma could alter the structure of the generated vCard's `FN` field; those characters are now escaped per the vCard spec, complementing the existing CR/LF stripping. (#545)
+- **Request inputs are bounded against oversized payloads.** Several endpoints accepted unbounded strings or arrays: bulk message `text`/`caption` now match the single-send caps (4096 / 1024), bulk `variables` must be an object, the `mentions` array is capped in size and per-entry length, group name/subject/description, status text/caption, contact name/number, reply text, and reaction emoji now have length limits, and `POST /infra/storage/import` validates its body through a DTO so the global whitelist applies. (#545)
+
+### Fixed
+
+- **The audit-log listing rejects a negative offset.** `GET /audit?offset=-N` previously passed a negative skip to the query driver; the offset is now clamped to a non-negative value. (#545)
+- **API-key lifecycle operations are now recorded in the audit log.** Creating, deleting, and revoking an API key previously left no audit entry (only failed authentication was logged). Each now writes an `api_key_created` / `api_key_deleted` / `api_key_revoked` event with the acting admin key, the client IP, and the target key — giving administrators a forensic trail for credential management. (#546)
+
+### Fixed
+
+- **A session status change is no longer broadcast twice over WebSocket.** Some engines signal one transition through both a generic state callback and a dedicated one; the WebSocket `session.status` emit is now de-duplicated the same way the webhook dispatch already was, so connected dashboards receive one event per transition. (#546)
+- **A slow webhook receiver no longer delays delivery to the others.** When the queue is disabled (or a queue add fails and falls back to direct delivery), the webhooks matching one event are now dispatched concurrently instead of sequentially, so one hanging or retrying endpoint can't head-of-line-block delivery to its siblings. (#546)
+### Fixed
+
+- **A plugin's stored secret array is no longer wiped when its length changes.** When a plugin config had a list of secret values (e.g. API keys), adding or removing an entry from the dashboard sent every other value back as the masked sentinel; on save, the merge couldn't position-match them and silently dropped all of them. Surviving entries now keep their stored secret across an append or removal, while a genuinely-new or edited row is still never grafted with a stored value. (#544)
+- **A crash midway through a plugin update no longer leaves a backup that loads as a duplicate.** The in-place update backup is now a dot-prefixed sibling directory, and the loader skips dot-prefixed directories, so a half-finished update can't be re-loaded on the next boot as a second copy of the same plugin id. (#544)
+
+### Changed
+
+- **Sandboxed plugins have a ceiling on concurrent host capability calls.** A single worker-thread plugin can now have at most 32 capability calls (message sends, network fetches, storage writes) running host-side at once; a burst beyond that is rejected (the plugin sees a thrown error) rather than amplified into unbounded host work. (#544)
+- **Plugin lifecycle operations on the same plugin are serialized.** Enable, disable, update, uninstall, and install for a given plugin id now run one at a time, so two operations firing together can no longer race on the plugin's directory or runtime state. (#544)
+- **Boot migrations are no longer aborted by the runtime query timeout on PostgreSQL.** The `data` connection sets a `statement_timeout` to bound live queries, and that limit was inherited by the migrations that run at startup — so on a large existing deployment a backfill plus `CREATE UNIQUE INDEX` over the `messages` or `templates` table could exceed it and fail boot. The two affected migrations now lift the timeout for their own transaction (PostgreSQL-only, transaction-scoped via `SET LOCAL`, a no-op on SQLite); the runtime timeout that protects live traffic is unchanged. (#543)
+- **The templates migration revert is idempotent on a synchronize-bootstrapped database.** `AddTemplates` now drops its index and table with `IF EXISTS`, so a `down()` no longer errors when the schema was created by `synchronize` and the migration-only `IDX_templates_sessionId` index was never created. (#543)
+### Added
+
+- **Inbound @mentions are surfaced on the Baileys engine.** An incoming message that tags participants now exposes the tagged WIDs as `mentionedIds` (normalized to the neutral `@c.us` convention), reaching parity with the whatsapp-web.js engine and feeding the existing `mentions` webhook filter and command-targeting. (#542)
+
+### Fixed
+
+- **Disappearing-messages (ephemeral) inbound messages no longer lose their content on Baileys.** A message in a chat with disappearing messages enabled arrives wrapped, so its text, media, location, and resolved type were silently dropped (the message surfaced empty and typed `unknown`). The adapter now reads the unwrapped inner content, so the body, voice/media/location detail, and correct type are preserved. (#542)
+- **Captioned documents surface their caption on Baileys.** A `documentWithCaptionMessage` now contributes its caption to the message body instead of an empty string. (#542)
+- **Inbound media downloads on whatsapp-web.js stay within the configured concurrency limit.** When a download exceeded its wall-clock deadline, its slot was freed while the un-abortable download kept running, letting a slow sender push the number of simultaneous in-flight downloads above `INBOUND_MEDIA_CONCURRENCY`. The slot is now held until the real download settles, bounding peak memory. (#542)
+- **A stale QR code can no longer be emitted while a whatsapp-web.js session is shutting down.** A QR event buffered by the browser page could flush during teardown and flip a disconnecting session back to `QR_READY`; the handler now ignores QR events once teardown has begun. (#542)
+- **Bulk send persists the correct filename for every media type.** A bulk image/video/audio message now records its own `filename` in the stored message metadata instead of only documents'. (#542)
 
 ## [0.7.14] - 2026-06-30
 

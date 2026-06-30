@@ -319,6 +319,35 @@ describe('WebhookService', () => {
       timeoutSpy.mockRestore();
     });
 
+    it('dispatches to sibling webhooks concurrently — a slow receiver does not block the others', async () => {
+      const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
+      const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([wA, wB]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+
+      let resolveSlow: (v: unknown) => void = () => undefined;
+      const slow = new Promise(r => (resolveSlow = r));
+      const calledUrls: string[] = [];
+      mockFetch.mockImplementation((url: string) => {
+        calledUrls.push(url);
+        return url.includes('a.example') ? slow : Promise.resolve({ ok: true, status: 200 });
+      });
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      // Flush until both fetches fire (or give up): with the old sequential loop, only A ever fires while
+      // it hangs, so this exhausts and the assertion below fails — exactly the regression we guard.
+      for (let i = 0; i < 20 && calledUrls.length < 2; i++) {
+        await new Promise(r => setImmediate(r));
+      }
+
+      // B is delivered even though A is still hanging — sequential code would not have reached B yet.
+      expect(calledUrls).toEqual(expect.arrayContaining(['https://a.example/hook', 'https://b.example/hook']));
+
+      resolveSlow({ ok: true, status: 200 });
+      await dispatchP;
+    });
+
     it('falls back to the original payload when a before-hook omits payload (no undefined body)', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

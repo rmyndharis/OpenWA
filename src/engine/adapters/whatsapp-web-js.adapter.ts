@@ -240,19 +240,38 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         sizeBytes: declared,
       };
     }
-    // Bound the download by a wall-clock deadline: msg.downloadMedia() can't be aborted, so a
-    // trickling sender would otherwise pin a concurrency slot indefinitely. On timeout the slot is
-    // released (the run task resolves null) and the message is emitted without media.
-    const media = await this.inboundLimiter.run(() =>
-      withInboundDownloadTimeout(msg.downloadMedia(), inboundMediaTimeoutMs(), () =>
-        this.logger.warn(
-          'Inbound media download timed out (MEDIA_DOWNLOAD_TIMEOUT_MS); emitting message without media',
-          {
-            msgId: msg.id._serialized,
-          },
+    // msg.downloadMedia() can't be aborted, so freeing the slot the moment the wall-clock deadline fires
+    // would admit a fresh download while the abandoned one is still materialising in heap — letting the
+    // number of in-flight downloads exceed inboundMediaConcurrency(). Instead, HOLD the slot until the real
+    // download settles; the caller still unblocks on the timeout race and emits the message without media.
+    // boundedReady adopts the timeout-bounded race (a Promise resolving a Promise flattens), so awaiting it
+    // unblocks the caller once the task is admitted AND the deadline-or-download settles — yielding the
+    // media or null on timeout.
+    let resolveBounded: (value: MessageMedia | null | PromiseLike<MessageMedia | null>) => void = () => undefined;
+    const boundedReady = new Promise<MessageMedia | null>(resolve => {
+      resolveBounded = resolve;
+    });
+    const slotHeld = this.inboundLimiter.run(() => {
+      const download = msg.downloadMedia();
+      resolveBounded(
+        withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () =>
+          this.logger.warn(
+            'Inbound media download timed out (MEDIA_DOWNLOAD_TIMEOUT_MS); emitting message without media',
+            {
+              msgId: msg.id._serialized,
+            },
+          ),
         ),
-      ),
-    );
+      );
+      // Keep the slot occupied until the underlying download truly settles, not the timeout race.
+      return download.then(
+        () => undefined,
+        () => undefined,
+      );
+    });
+    // The slot-holder runs in the background; never let it surface as an unhandled rejection.
+    void slotHeld.catch(() => undefined);
+    const media = await boundedReady;
     if (!media) return undefined;
     const capped = capInboundMedia({
       mimetype: media.mimetype,
@@ -343,6 +362,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('qr', async (qr: string) => {
+      // A 'qr' buffered by a wedged page can flush during the awaited client.destroy() (teardown sets
+      // tearingDown + DISCONNECTED first) or after recoverFromStuckAuth() nulls this.client. Ignore it so a
+      // late event can't resurrect a disconnecting adapter to QR_READY and re-emit a stale QR. Mirrors the
+      // 'authenticated' guard below; the normal first QR is unaffected (not tearing down, not FAILED, client set).
+      if (this.tearingDown || this.status === EngineStatus.FAILED || !this.client) {
+        return;
+      }
       try {
         this.qrCode = await qrcode.toDataURL(qr);
         this.setStatus(EngineStatus.QR_READY);

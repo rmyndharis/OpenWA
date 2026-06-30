@@ -83,7 +83,9 @@
       "call": "שיחה",
       "callMissed": "שיחה שלא נענתה",
       "callVideo": "שיחת וידאו",
-      "callVideoMissed": "שיחת וידאו שלא נענתה"
+      "callVideoMissed": "שיחת וידאו שלא נענתה",
+      "omitted": "מדיה",
+      "image": "תמונה"
     },
     "subtitle": "שליחה ומענה להודעות WhatsApp בזמן אמת",
     "noSessionsTitle": "אין סשנים מחוברים",
@@ -303,10 +305,11 @@
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
     "filters": {
+      "badge": "{{count}} מסנן",
+      "badge_two": "שני מסננים",
+      "badge_other": "{{count}} מסננים",
       "title": "מסננים (אופציונלי)",
       "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
-      "badge": "{{count}} מסנן",
-      "badge_other": "{{count}} מסננים",
       "addCondition": "הוספת תנאי",
       "removeCondition": "הסרת תנאי",
       "caseSensitive": "תלוי רישיות",

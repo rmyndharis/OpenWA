@@ -17,6 +17,12 @@ export class AddTemplateNameUnique1781100000000 implements MigrationInterface {
   name = 'AddTemplateNameUnique1781100000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    if (queryRunner.connection.options.type === 'postgres') {
+      // See AddMessagesWaMessageIdUnique: lift the runtime statement_timeout for this migration
+      // transaction so the dedup UPDATE / CREATE UNIQUE INDEX over templates is not aborted. SET LOCAL is
+      // transaction-scoped and a no-op on SQLite (which rejects it syntactically — hence the guard).
+      await queryRunner.query('SET LOCAL statement_timeout = 0');
+    }
     if (!(await queryRunner.hasTable('templates'))) return;
 
     // Keep the earliest row per (sessionId, name) — createdAt ASC, id ASC as a stable tiebreak —

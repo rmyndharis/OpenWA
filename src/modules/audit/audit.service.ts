@@ -142,7 +142,9 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       where,
       order: { createdAt: 'DESC' },
       take,
-      skip: options.offset || 0,
+      // Clamp to a non-negative skip: a negative offset (e.g. from an unvalidated `?offset=-5`) would
+      // otherwise reach the query driver verbatim.
+      skip: options.offset && options.offset > 0 ? options.offset : 0,
     });
 
     return { data, total };

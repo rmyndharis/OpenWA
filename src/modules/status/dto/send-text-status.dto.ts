@@ -1,7 +1,19 @@
-import { IsString, IsOptional, IsInt, Min, Max, Matches, IsArray, ArrayMinSize, ArrayMaxSize } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsInt,
+  Min,
+  Max,
+  Matches,
+  MaxLength,
+  IsArray,
+  ArrayMinSize,
+  ArrayMaxSize,
+} from 'class-validator';
 
 export class SendTextStatusDto {
   @IsString()
+  @MaxLength(4096)
   text: string;
 
   @IsOptional()
