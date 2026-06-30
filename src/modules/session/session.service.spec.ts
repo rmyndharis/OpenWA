@@ -1459,6 +1459,19 @@ describe('SessionService', () => {
       expect(qrStatus).toHaveLength(1);
     });
 
+    it('does not double-EMIT session.status over WS when the same status is reported twice', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (eventsGateway.emitSessionStatus as jest.Mock).mockClear();
+      callbacks.onStateChanged!(EngineStatus.QR_READY);
+      callbacks.onQRCode!('qr-data-abc'); // same QR_READY transition, second signal
+      await flush();
+
+      const qrEmits = ((eventsGateway.emitSessionStatus as jest.Mock).mock.calls as unknown[][]).filter(
+        c => c[1] === SessionStatus.QR_READY,
+      );
+      expect(qrEmits).toHaveLength(1);
+    });
+
     it('persists and dispatches message.received only once when the engine re-fires the same message', async () => {
       const callbacks = await startAndCaptureCallbacks();
       (messageRepository.insert as jest.Mock).mockReset();
