@@ -34,6 +34,7 @@ import {
   ReactionEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { resolveWebVersionPin } from '../wa-web-version';
+import { isChannelJid } from '../identity/wa-id';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -1242,6 +1243,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getChatLabels(chatId: string): Promise<Label[]> {
     this.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, which has no getLabels() and carries no chat labels.
+      // Return empty instead of letting the unguarded call throw a TypeError (HTTP 500).
+      return [];
+    }
     const chat = await this.client!.getChatById(chatId);
     const labels = await (chat as unknown as GroupChat).getLabels();
     if (!labels) {
@@ -1570,6 +1576,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async markUnread(chatId: string): Promise<boolean> {
     this.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, which has no markUnread() — there is no unread
+      // state to toggle on a channel. Report the no-op rather than throwing a TypeError.
+      return false;
+    }
     try {
       const chat = await this.client!.getChatById(chatId);
       // Chat.markUnread() resolves void, so synthesize the boolean from a clean call.
@@ -1583,6 +1594,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async deleteChat(chatId: string): Promise<boolean> {
     this.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, which has no delete() (only the destructive
+      // deleteChannel()); a generic chat-delete must not silently unsubscribe a channel.
+      return false;
+    }
     try {
       const chat = await this.client!.getChatById(chatId);
       return await chat.delete();
@@ -1594,6 +1610,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async sendChatState(chatId: string, state: ChatState): Promise<void> {
     this.ensureReady();
+    if (isChannelJid(chatId)) {
+      // A channel resolves to a wwebjs `Channel`, which has no presence methods
+      // (sendStateTyping/sendStateRecording/clearState). Presence is best-effort, so no-op.
+      return;
+    }
     try {
       const chat = await this.client!.getChatById(chatId);
       if (state === 'typing') {

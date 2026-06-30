@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sending to — or operating on — a WhatsApp Channel (newsletter) no longer logs internal errors.** On the whatsapp-web.js engine a channel JID (`…@newsletter`) resolves to a `Channel`, which has none of the per-chat operations; the gateway now skips those for channels instead of throwing. The typing indicator that precedes a send, the typing/recording presence endpoint and its MCP tool, mark-unread, and delete-chat now cleanly no-op for a channel (presence does nothing; mark-unread and delete-chat report no change) rather than emitting an internal `TypeError`. Fetching chat labels for a channel previously failed with HTTP 500 — it now returns an empty list. Direct chats, groups, and broadcast lists are unaffected. (#554) Thanks @DanielOberlechner.
+
 ## [0.7.16] - 2026-06-30
 
 ### Added

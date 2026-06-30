@@ -1,4 +1,4 @@
-import { parseWaId, toNeutralJid, userPart } from './wa-id';
+import { isChannelJid, parseWaId, toNeutralJid, userPart } from './wa-id';
 
 describe('wa-id', () => {
   describe('userPart', () => {
@@ -25,6 +25,23 @@ describe('wa-id', () => {
       expect(parseWaId('123@broadcast')).toMatchObject({ kind: 'broadcast', userPart: '123' });
       expect(parseWaId('ABC@NEWSLETTER')).toMatchObject({ kind: 'newsletter', userPart: 'abc' });
       expect(parseWaId('AbCd@LID')).toMatchObject({ kind: 'lid', userPart: 'abcd' });
+    });
+  });
+
+  describe('isChannelJid', () => {
+    it('is true only for a @newsletter (channel) JID', () => {
+      expect(isChannelJid('120363401234567890@newsletter')).toBe(true);
+      expect(isChannelJid('ABC@NEWSLETTER')).toBe(true); // case-insensitive
+    });
+
+    it('is false for user, group, lid, broadcast and status JIDs (they resolve to a real Chat)', () => {
+      expect(isChannelJid('628111@c.us')).toBe(false);
+      expect(isChannelJid('628111@s.whatsapp.net')).toBe(false);
+      expect(isChannelJid('120-456@g.us')).toBe(false);
+      expect(isChannelJid('111@lid')).toBe(false);
+      expect(isChannelJid('123@broadcast')).toBe(false);
+      expect(isChannelJid('status@broadcast')).toBe(false);
+      expect(isChannelJid('not-a-jid')).toBe(false);
     });
   });
 

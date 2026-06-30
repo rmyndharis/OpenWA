@@ -265,6 +265,80 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
   });
 });
 
+describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks Chat methods)', () => {
+  const NEWSLETTER = '120363401234567890@newsletter';
+  const USER = '628111@c.us';
+
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  describe('sendChatState', () => {
+    it('no-ops on a newsletter JID without resolving a Channel (the #554 TypeError path)', async () => {
+      const getChatById = jest.fn();
+      await expect(readyAdapter({ getChatById }).sendChatState(NEWSLETTER, 'typing')).resolves.toBeUndefined();
+      expect(getChatById).not.toHaveBeenCalled();
+    });
+
+    it('still drives typing presence on a user JID', async () => {
+      const sendStateTyping = jest.fn().mockResolvedValue(undefined);
+      const getChatById = jest.fn().mockResolvedValue({ sendStateTyping });
+      await readyAdapter({ getChatById }).sendChatState(USER, 'typing');
+      expect(getChatById).toHaveBeenCalledWith(USER);
+      expect(sendStateTyping).toHaveBeenCalled();
+    });
+  });
+
+  describe('markUnread', () => {
+    it('returns false and skips getChatById on a newsletter JID', async () => {
+      const getChatById = jest.fn();
+      await expect(readyAdapter({ getChatById }).markUnread(NEWSLETTER)).resolves.toBe(false);
+      expect(getChatById).not.toHaveBeenCalled();
+    });
+
+    it('marks a user chat unread (returns true)', async () => {
+      const markUnread = jest.fn().mockResolvedValue(undefined);
+      const getChatById = jest.fn().mockResolvedValue({ markUnread });
+      await expect(readyAdapter({ getChatById }).markUnread(USER)).resolves.toBe(true);
+      expect(markUnread).toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteChat', () => {
+    it('returns false and skips getChatById on a newsletter JID (does not route to deleteChannel)', async () => {
+      const getChatById = jest.fn();
+      await expect(readyAdapter({ getChatById }).deleteChat(NEWSLETTER)).resolves.toBe(false);
+      expect(getChatById).not.toHaveBeenCalled();
+    });
+
+    it('deletes a user chat (returns the underlying delete result)', async () => {
+      const del = jest.fn().mockResolvedValue(true);
+      const getChatById = jest.fn().mockResolvedValue({ delete: del });
+      await expect(readyAdapter({ getChatById }).deleteChat(USER)).resolves.toBe(true);
+      expect(del).toHaveBeenCalled();
+    });
+  });
+
+  describe('getChatLabels', () => {
+    it('returns [] on a newsletter JID instead of throwing (was an unguarded HTTP 500)', async () => {
+      const getChatById = jest.fn();
+      await expect(readyAdapter({ getChatById }).getChatLabels(NEWSLETTER)).resolves.toEqual([]);
+      expect(getChatById).not.toHaveBeenCalled();
+    });
+
+    it('maps labels through for a user JID', async () => {
+      const getLabels = jest.fn().mockResolvedValue([{ id: 1, name: 'VIP', hexColor: '#fff' }]);
+      const getChatById = jest.fn().mockResolvedValue({ getLabels });
+      await expect(readyAdapter({ getChatById }).getChatLabels(USER)).resolves.toEqual([
+        { id: '1', name: 'VIP', hexColor: '#fff' },
+      ]);
+    });
+  });
+});
+
 describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', () => {
   const newAdapter = (): WhatsAppWebJsAdapter =>
     new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });

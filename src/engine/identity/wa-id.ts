@@ -99,3 +99,14 @@ export function toNeutralJid(jid: string, resolvePhone?: (jid: string) => string
       return jid;
   }
 }
+
+/**
+ * True for a channel/newsletter JID (`<id>@newsletter`). whatsapp-web.js resolves these to a `Channel`,
+ * which — unlike a `Chat` — has no per-chat presence (`sendStateTyping`/`sendStateRecording`/`clearState`),
+ * `markUnread`, `delete`, or `getLabels`. The wwebjs adapter uses this to skip those Chat-only operations
+ * instead of letting `getChatById` hand back a `Channel` that throws `TypeError`. Broadcast lists and
+ * `status@broadcast` resolve to a real `Chat` and are intentionally NOT matched here.
+ */
+export function isChannelJid(jid: string): boolean {
+  return parseWaId(jid).kind === 'newsletter';
+}
