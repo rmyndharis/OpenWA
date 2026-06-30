@@ -660,6 +660,50 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(msg).toMatchObject({ id: 'IN1', body: 'hi there', type: 'text', fromMe: false });
   });
 
+  it('surfaces inbound @mentions as neutral mentionedIds (contextInfo.mentionedJid)', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '120@g.us', participant: '628222@s.whatsapp.net', fromMe: false, id: 'IN_MENTION' },
+          message: {
+            extendedTextMessage: { text: '@628111 hi', contextInfo: { mentionedJid: ['628111@s.whatsapp.net'] } },
+          },
+          messageTimestamp: 1700000002,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { mentionedIds?: string[] };
+    expect(msg.mentionedIds).toEqual(['628111@c.us']);
+  });
+
+  it('omits mentionedIds on an inbound message without @mentions', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'IN_NOMENTION' },
+          message: { conversation: 'plain text' },
+          messageTimestamp: 1700000003,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { mentionedIds?: string[] };
+    expect(msg.mentionedIds).toBeUndefined();
+  });
+
   it('canonicalizes an inbound message JID from @s.whatsapp.net to @c.us', async () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();
@@ -988,9 +1032,12 @@ describe('BaileysAdapter inbound fan-out', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as {
       type: string;
+      body: string;
       media: { mimetype: string; filename?: string; data: string };
     };
     expect(msg.type).toBe('document');
+    // The caption rides under the unwrapped documentMessage; reading the raw wrapper would lose it.
+    expect(msg.body).toBe('Q1 report');
     expect(msg.media.mimetype).toBe('application/pdf');
     expect(msg.media.filename).toBe('report.pdf');
     expect(msg.media.data).toBe(docBuf.toString('base64'));
@@ -1002,10 +1049,16 @@ describe('BaileysAdapter inbound fan-out', () => {
       getContentType: jest.Mock;
       normalizeMessageContent: jest.Mock;
     };
-    baileys.getContentType.mockReturnValue('extendedTextMessage');
+    // Mirror real Baileys: getContentType returns the OUTER key for a wrapped message ('ephemeralMessage')
+    // and the inner key once normalized ('extendedTextMessage'). This forces the test through the
+    // production normalize-then-getContentType path instead of a mock shortcut — if the adapter forgot to
+    // normalize before reading the type/body, the assertions below would fail.
+    baileys.getContentType.mockImplementation((m?: { ephemeralMessage?: unknown }) =>
+      m?.ephemeralMessage ? 'ephemeralMessage' : 'extendedTextMessage',
+    );
     // A live disappearing message arrives wrapped in `ephemeralMessage`; normalizeMessageContent unwraps
-    // it to the inner content carrying the timer on `contextInfo.expiration`. Reading the raw (wrapped)
-    // content would miss it — the exact case this guards.
+    // it to the inner content carrying the body and the timer on `contextInfo.expiration`. Reading the raw
+    // (wrapped) content would miss both — the exact case this guards.
     baileys.normalizeMessageContent.mockReturnValue({
       extendedTextMessage: { text: 'vanishes', contextInfo: { expiration: 86400 } },
     });
@@ -1030,8 +1083,55 @@ describe('BaileysAdapter inbound fan-out', () => {
     await new Promise(r => setImmediate(r));
     expect(onMessage).toHaveBeenCalledTimes(1);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    const msg = onMessage.mock.calls[0][0] as { ephemeralDuration?: number };
+    const msg = onMessage.mock.calls[0][0] as { type: string; body: string; ephemeralDuration?: number };
+    // The body and type are derived from the normalized inner content, not the ephemeralMessage wrapper.
+    expect(msg.type).toBe('text');
+    expect(msg.body).toBe('vanishes');
     expect(msg.ephemeralDuration).toBe(86400);
+  });
+
+  it('wrapped voice note in a disappearing chat maps to type voice', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+      getContentType: jest.Mock;
+      normalizeMessageContent: jest.Mock;
+    };
+    baileys.getContentType.mockImplementation((m?: { ephemeralMessage?: unknown }) =>
+      m?.ephemeralMessage ? 'ephemeralMessage' : 'audioMessage',
+    );
+    baileys.normalizeMessageContent.mockReturnValue({
+      audioMessage: { ptt: true, mimetype: 'audio/ogg; codecs=opus' },
+    });
+
+    const prev = process.env.MEDIA_DOWNLOAD_ENABLED;
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'false'; // omitted-marker path: no download mock needed
+    try {
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'EPHVOICE1' },
+            message: {
+              ephemeralMessage: {
+                message: { audioMessage: { ptt: true, mimetype: 'audio/ogg; codecs=opus' } },
+              },
+            },
+            messageTimestamp: 1700000041,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { type: string };
+      expect(msg.type).toBe('voice');
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_ENABLED;
+      else process.env.MEDIA_DOWNLOAD_ENABLED = prev;
+    }
   });
 
   it('inbound location: populates the location field with coordinates', async () => {

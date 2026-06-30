@@ -92,7 +92,12 @@ describe('BulkMessageService.processBatch', () => {
   let service: BulkMessageService;
   let repo: { findOne: jest.Mock; save: jest.Mock };
   let messageService: { saveOutgoingMessage: jest.Mock };
-  let engine: { sendTextMessage: jest.Mock };
+  let engine: {
+    sendTextMessage: jest.Mock;
+    sendImageMessage?: jest.Mock;
+    sendVideoMessage?: jest.Mock;
+    sendAudioMessage?: jest.Mock;
+  };
   let sessionService: { getEngine: jest.Mock; findOne: jest.Mock };
 
   const makeBatch = (messageCount: number): MessageBatch =>
@@ -190,6 +195,28 @@ describe('BulkMessageService.processBatch', () => {
     const img = (savedBatch.messages[0].content as { image?: { base64?: unknown; mimetype?: string } }).image;
     expect(img?.base64).toBeUndefined();
     expect(img?.mimetype).toBe('image/png');
+  });
+
+  it('persists the media filename from the chosen media type (image), not just from document', async () => {
+    engine.sendImageMessage = jest.fn().mockResolvedValue({ id: 'waimg', timestamp: 222 });
+    const batch = makeBatch(1);
+    batch.messages = [
+      {
+        chatId: 'c0@c.us',
+        type: 'image',
+        content: { image: { base64: 'QkFTRTY0SU1BR0U=', mimetype: 'image/png', filename: 'p.png' } },
+      },
+    ];
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    const imageSave = (
+      messageService.saveOutgoingMessage.mock.calls as Array<
+        [string, { type: string; metadata?: { media?: { filename?: string } } }]
+      >
+    ).find(([, payload]) => payload.type === 'image');
+    expect(imageSave?.[1].metadata?.media?.filename).toBe('p.png');
   });
 
   it('stops sending when the batch is cancelled in the DB by another instance/restart', async () => {
