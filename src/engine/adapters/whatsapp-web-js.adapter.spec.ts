@@ -13,6 +13,7 @@ import {
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
 import * as qrcode from 'qrcode';
+import { UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
@@ -350,6 +351,71 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
         { id: '1', name: 'VIP', hexColor: '#fff' },
       ]);
     });
+  });
+});
+
+describe('WhatsAppWebJsAdapter chat labels (add/remove via read-modify-write, Business-only)', () => {
+  const USER = '628111@c.us';
+  const NEWSLETTER = '120363401234567890@newsletter';
+
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  // whatsapp-web.js has no add-/remove-one primitive: addOrRemoveLabels(ids, chats) REPLACES the chat's
+  // label set with `ids`. A client mock that reports the chat already carries label 'A'.
+  const clientWith = (existing: string[], addOrRemoveLabels: jest.Mock) => ({
+    getChatById: jest.fn().mockResolvedValue({
+      getLabels: jest.fn().mockResolvedValue(existing.map(id => ({ id, name: id, hexColor: '#fff' }))),
+    }),
+    addOrRemoveLabels,
+  });
+
+  it('adds a label by writing back the union of the existing set and the new id', async () => {
+    const addOrRemoveLabels = jest.fn().mockResolvedValue(undefined);
+    await readyAdapter(clientWith(['A'], addOrRemoveLabels)).addLabelToChat(USER, 'B');
+    expect(addOrRemoveLabels).toHaveBeenCalledWith(['A', 'B'], [USER]);
+  });
+
+  it('is idempotent when adding a label the chat already has', async () => {
+    const addOrRemoveLabels = jest.fn().mockResolvedValue(undefined);
+    await readyAdapter(clientWith(['A', 'B'], addOrRemoveLabels)).addLabelToChat(USER, 'B');
+    expect(addOrRemoveLabels).toHaveBeenCalledWith(['A', 'B'], [USER]);
+  });
+
+  it('removes a label by writing back the set without it (keeping the rest)', async () => {
+    const addOrRemoveLabels = jest.fn().mockResolvedValue(undefined);
+    await readyAdapter(clientWith(['A', 'B'], addOrRemoveLabels)).removeLabelFromChat(USER, 'A');
+    expect(addOrRemoveLabels).toHaveBeenCalledWith(['B'], [USER]);
+  });
+
+  it('maps the whatsapp-web.js [LT01] "Only Whatsapp business" write error to 422', async () => {
+    const addOrRemoveLabels = jest
+      .fn()
+      .mockRejectedValue(new Error('Evaluation failed: [LT01] Only Whatsapp business'));
+    await expect(readyAdapter(clientWith(['A'], addOrRemoveLabels)).addLabelToChat(USER, 'B')).rejects.toBeInstanceOf(
+      UnprocessableEntityException,
+    );
+  });
+
+  it('rethrows a generic write failure unchanged (does not mask it as 422)', async () => {
+    const addOrRemoveLabels = jest.fn().mockRejectedValue(new Error('puppeteer detached'));
+    await expect(readyAdapter(clientWith(['A'], addOrRemoveLabels)).addLabelToChat(USER, 'B')).rejects.toThrow(
+      'puppeteer detached',
+    );
+  });
+
+  it('rejects with 422 for a channel JID and never touches the client', async () => {
+    const addOrRemoveLabels = jest.fn();
+    const client = clientWith(['A'], addOrRemoveLabels);
+    await expect(readyAdapter(client).addLabelToChat(NEWSLETTER, 'B')).rejects.toBeInstanceOf(
+      UnprocessableEntityException,
+    );
+    expect(client.getChatById).not.toHaveBeenCalled();
+    expect(addOrRemoveLabels).not.toHaveBeenCalled();
   });
 });
 
