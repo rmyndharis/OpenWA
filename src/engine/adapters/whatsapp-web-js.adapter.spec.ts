@@ -290,6 +290,20 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
       expect(getChatById).toHaveBeenCalledWith(USER);
       expect(sendStateTyping).toHaveBeenCalled();
     });
+
+    it('drives recording presence on a user JID', async () => {
+      const sendStateRecording = jest.fn().mockResolvedValue(undefined);
+      const getChatById = jest.fn().mockResolvedValue({ sendStateRecording });
+      await readyAdapter({ getChatById }).sendChatState(USER, 'recording');
+      expect(sendStateRecording).toHaveBeenCalled();
+    });
+
+    it('clears presence on a user JID for the paused state', async () => {
+      const clearState = jest.fn().mockResolvedValue(undefined);
+      const getChatById = jest.fn().mockResolvedValue({ clearState });
+      await readyAdapter({ getChatById }).sendChatState(USER, 'paused');
+      expect(clearState).toHaveBeenCalled();
+    });
   });
 
   describe('markUnread', () => {
