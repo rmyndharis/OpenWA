@@ -128,9 +128,12 @@ export function Sessions() {
         }
       } catch {
         // Keep qrData alive so the polling interval keeps retrying until the QR
-        // is ready. Only stop polling if the session itself has failed.
+        // is ready. Only stop polling if the session itself has failed. 'authenticating' is included so
+        // the modal (and the pairing-code panel mounted in it) survives the brief post-link handshake
+        // instead of being torn down mid-pairing — it closes on the real 'ready'/'failed' transition.
         const updated = await sessionApi.get(sessionId).catch(() => null);
-        const stillInitializing = updated && ['initializing', 'connecting', 'qr_ready'].includes(updated.status);
+        const stillInitializing =
+          updated && ['initializing', 'connecting', 'qr_ready', 'authenticating'].includes(updated.status);
         if (!stillInitializing) {
           setQrData(null);
           currentSessionName.current = '';
@@ -162,6 +165,9 @@ export function Sessions() {
   }, []);
 
   const handleGeneratePairingCode = async () => {
+    // Guard against a second concurrent request: the button is disabled while in flight, but the
+    // input's Enter handler is not, so a rapid double-Enter would otherwise fire overlapping POSTs.
+    if (requestingPairing) return;
     if (!qrData || !phoneNumber.trim()) return;
     if (!/^[0-9]{6,15}$/.test(phoneNumber.trim())) {
       setPairingError(t('sessions.pairing.invalidPhone'));

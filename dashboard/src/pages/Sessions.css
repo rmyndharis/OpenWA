@@ -779,13 +779,13 @@
   padding: 0.75rem;
   border-radius: 8px;
   font-size: 0.875rem;
-  text-align: left;
+  text-align: start;
   color: var(--error);
   background: rgb(239 68 68 / 0.12);
 }
 
 .sessions-page .pairing-form {
-  text-align: left;
+  text-align: start;
 }
 
 .sessions-page .pairing-label {
@@ -809,6 +809,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* Force LTR so the two code halves never get reordered by the bidi algorithm in RTL locales. */
+  direction: ltr;
+  unicode-bidi: isolate;
   gap: 0.75rem;
   font-size: 2rem;
   font-weight: 700;
