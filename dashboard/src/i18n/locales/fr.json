@@ -264,7 +264,7 @@
       "stop": "Arrêter",
       "reconnect": "Reconnecter",
       "delete": "Supprimer",
-      "killStuck": "Kill Stuck"
+      "killStuck": "Arrêter (bloquée)"
     },
     "toasts": {
       "readyTitle": "Session prête",
@@ -281,14 +281,14 @@
       "error": "Erreur"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "Arrêter la session bloquée",
+      "message": "Voulez-vous vraiment forcer l'arrêt de la session « {{name}} » ?",
+      "warning": "Cela mettra fin de force au processus du navigateur WhatsApp. La session devra peut-être être rescannée au redémarrage.",
+      "confirm": "Arrêter la session",
+      "successTitle": "Session arrêtée",
+      "success": "L'arrêt forcé de la session a réussi. Vous pouvez la redémarrer maintenant.",
+      "failedTitle": "Échec de l'arrêt forcé",
+      "failed": "Échec de l'arrêt forcé de la session."
     }
   },
   "webhooks": {
@@ -372,47 +372,47 @@
   },
   "templates": {
     "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "subtitle": "Créez des templates de message réutilisables pour chaque session WhatsApp",
+    "createTitle": "Créer un template",
+    "editTitle": "Modifier le template",
+    "newTemplate": "Nouveau template",
+    "createTemplate": "Créer le template",
+    "saveChanges": "Enregistrer les modifications",
+    "viewOnly": "Lecture seule",
+    "noSessions": "Aucune session",
+    "sessionHint": "Enregistré dans {{name}}",
+    "namePlaceholder": "ex. : confirmation-commande",
+    "header": "En-tête",
+    "headerPlaceholder": "Ligne d'introduction (facultatif)",
+    "body": "Corps",
+    "bodyPlaceholder": "Bonjour {{customer}}, votre commande {{orderId}} est prête.",
+    "footer": "Pied de page",
+    "footerPlaceholder": "Ligne de conclusion (facultatif)",
+    "previewTitle": "Aperçu",
+    "previewValuePlaceholder": "Exemple de valeur",
+    "previewEmpty": "Commencez à rédiger un template pour l'afficher ici.",
+    "noPlaceholders": "Utilisez des variables {{name}} pour tester les substitutions.",
+    "savedTitle": "Templates enregistrés",
+    "count": "{{count}} au total",
+    "deleteTitle": "Supprimer le template",
+    "deleteConfirm": "Supprimer le template « {{name}} » ? Cette action est irréversible.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "Copier le nom du template"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "Aucun template enregistré",
+      "description": "Créez un template réutilisable pour accélérer vos réponses et notifications courantes.",
+      "noSessionsTitle": "Aucune session disponible",
+      "noSessionsDesc": "Créez une session WhatsApp avant d'ajouter des templates."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "Template créé avec succès",
+      "createFailed": "Échec de la création du template : {{message}}",
+      "updated": "Template mis à jour avec succès",
+      "updateFailed": "Échec de la mise à jour du template : {{message}}",
+      "deleted": "Template supprimé avec succès",
+      "deleteFailed": "Échec de la suppression du template : {{message}}",
+      "copied": "Nom du template copié"
     }
   },
   "apiKeys": {

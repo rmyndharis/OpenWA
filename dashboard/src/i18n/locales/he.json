@@ -264,7 +264,7 @@
       "stop": "עצירה",
       "reconnect": "התחברות מחדש",
       "delete": "מחיקה",
-      "killStuck": "Kill Stuck"
+      "killStuck": "סגור תקוע"
     },
     "toasts": {
       "readyTitle": "ה-Session מוכן",
@@ -281,14 +281,14 @@
       "error": "שגיאה"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "סגירת סשן תקוע",
+      "message": "האם אתם בטוחים שברצונכם לסגור בכוח את הסשן \"{{name}}\"?",
+      "warning": "פעולה זו תסיים בכוח את תהליך הדפדפן של WhatsApp. ייתכן שיהיה צורך לסרוק מחדש את הסשן לאחר ההפעלה מחדש.",
+      "confirm": "סגור סשן",
+      "successTitle": "הסשן נסגר",
+      "success": "הסשן נסגר בכוח. ניתן להפעיל אותו מחדש כעת.",
+      "failedTitle": "הסגירה בכוח נכשלה",
+      "failed": "סגירת הסשן בכוח נכשלה."
     }
   },
   "webhooks": {
@@ -372,48 +372,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "תבניות",
+    "subtitle": "צרו תבניות הודעה לשימוש חוזר עבור כל סשן WhatsApp",
+    "createTitle": "יצירת תבנית",
+    "editTitle": "עריכת תבנית",
+    "newTemplate": "תבנית חדשה",
+    "createTemplate": "צור תבנית",
+    "saveChanges": "שמירת שינויים",
+    "viewOnly": "צפייה בלבד",
+    "noSessions": "אין סשנים",
+    "sessionHint": "נשמר תחת {{name}}",
+    "namePlaceholder": "לדוגמה, order-confirmation",
+    "header": "כותרת",
+    "headerPlaceholder": "שורת פתיחה (אופציונלי)",
+    "body": "גוף ההודעה",
+    "bodyPlaceholder": "שלום {{customer}}, ההזמנה שלך {{orderId}} מוכנה.",
+    "footer": "כותרת תחתונה",
+    "footerPlaceholder": "שורת סיום (אופציונלי)",
+    "previewTitle": "תצוגה מקדימה",
+    "previewValuePlaceholder": "ערך לדוגמה",
+    "previewEmpty": "התחילו לכתוב תבנית כדי לראות אותה כאן בתצוגה מקדימה.",
+    "noPlaceholders": "השתמשו במצייני מיקום {{name}} כדי לבדוק החלפות.",
+    "savedTitle": "תבניות שמורות",
+    "count": "{{count}} בסך הכול",
+    "deleteTitle": "מחיקת תבנית",
+    "deleteConfirm": "למחוק את התבנית \"{{name}}\"? לא ניתן לבטל פעולה זו.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "העתקת שם התבנית"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "אין תבניות שמורות",
+      "description": "צרו תבנית לשימוש חוזר כדי לזרז תשובות והתראות נפוצות.",
+      "noSessionsTitle": "אין סשנים זמינים",
+      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "התבנית נוצרה בהצלחה",
+      "createFailed": "יצירת התבנית נכשלה: {{message}}",
+      "updated": "התבנית עודכנה בהצלחה",
+      "updateFailed": "עדכון התבנית נכשל: {{message}}",
+      "deleted": "התבנית נמחקה בהצלחה",
+      "deleteFailed": "מחיקת התבנית נכשלה: {{message}}",
+      "copied": "שם התבנית הועתק"
     }
   },
   "apiKeys": {

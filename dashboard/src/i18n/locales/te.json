@@ -264,7 +264,7 @@
       "stop": "ఆపివేయి",
       "reconnect": "మళ్లీ కనెక్ట్ చేయి",
       "delete": "తొలగించు",
-      "killStuck": "Kill Stuck"
+      "killStuck": "నిలిచిపోయినదాన్ని ఆపండి"
     },
     "toasts": {
       "readyTitle": "సెషన్ సిద్ధంగా ఉంది",
@@ -281,14 +281,14 @@
       "error": "లోపం"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "నిలిచిపోయిన సెషన్‌ను ఆపండి",
+      "message": "\"{{name}}\" సెషన్‌ను బలవంతంగా ఆపాలని మీరు ఖచ్చితంగా అనుకుంటున్నారా?",
+      "warning": "ఇది WhatsApp బ్రౌజర్ ప్రాసెస్‌ను బలవంతంగా ముగిస్తుంది. పునఃప్రారంభంలో సెషన్‌ను మళ్లీ స్కాన్ చేయాల్సి రావచ్చు.",
+      "confirm": "సెషన్‌ను ఆపండి",
+      "successTitle": "సెషన్ ఆపబడింది",
+      "success": "సెషన్ బలవంతంగా ఆపబడింది. మీరు ఇప్పుడు దాన్ని పునఃప్రారంభించవచ్చు.",
+      "failedTitle": "బలవంతంగా ఆపడం విఫలమైంది",
+      "failed": "సెషన్‌ను బలవంతంగా ఆపడం విఫలమైంది."
     }
   },
   "webhooks": {
@@ -371,48 +371,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "టెంప్లేట్‌లు",
+    "subtitle": "ప్రతి WhatsApp సెషన్‌కు పునర్వినియోగ మెసేజ్ టెంప్లేట్‌లను సృష్టించండి",
+    "createTitle": "టెంప్లేట్ సృష్టించండి",
+    "editTitle": "టెంప్లేట్‌ను సవరించండి",
+    "newTemplate": "కొత్త టెంప్లేట్",
+    "createTemplate": "టెంప్లేట్ సృష్టించండి",
+    "saveChanges": "మార్పులను సేవ్ చేయండి",
+    "viewOnly": "వీక్షణ మాత్రమే",
+    "noSessions": "సెషన్‌లు లేవు",
+    "sessionHint": "{{name}} కింద సేవ్ చేయబడింది",
+    "namePlaceholder": "ఉదా., order-confirmation",
+    "header": "హెడర్",
+    "headerPlaceholder": "ఐచ్ఛిక పరిచయ లైన్",
+    "body": "బాడీ",
+    "bodyPlaceholder": "హాయ్ {{customer}}, మీ ఆర్డర్ {{orderId}} సిద్ధంగా ఉంది.",
+    "footer": "ఫుటర్",
+    "footerPlaceholder": "ఐచ్ఛిక ముగింపు లైన్",
+    "previewTitle": "ప్రివ్యూ",
+    "previewValuePlaceholder": "నమూనా విలువ",
+    "previewEmpty": "ఇక్కడ ప్రివ్యూ చూడటానికి టెంప్లేట్ రాయడం ప్రారంభించండి.",
+    "noPlaceholders": "సబ్‌స్టిట్యూషన్‌లను పరీక్షించడానికి {{name}} ప్లేస్‌హోల్డర్‌లను ఉపయోగించండి.",
+    "savedTitle": "సేవ్ చేసిన టెంప్లేట్‌లు",
+    "count": "మొత్తం {{count}}",
+    "deleteTitle": "టెంప్లేట్‌ను తొలగించండి",
+    "deleteConfirm": "\"{{name}}\" టెంప్లేట్‌ను తొలగించాలా? ఈ చర్యను రద్దు చేయలేరు.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "టెంప్లేట్ పేరును కాపీ చేయండి"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "టెంప్లేట్‌లు ఏవీ సేవ్ కాలేదు",
+      "description": "సాధారణ ప్రత్యుత్తరాలు మరియు నోటిఫికేషన్‌లను వేగవంతం చేయడానికి పునర్వినియోగ టెంప్లేట్‌ను సృష్టించండి.",
+      "noSessionsTitle": "సెషన్‌లు అందుబాటులో లేవు",
+      "noSessionsDesc": "టెంప్లేట్‌లను జోడించే ముందు WhatsApp సెషన్‌ను సృష్టించండి."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "టెంప్లేట్ విజయవంతంగా సృష్టించబడింది",
+      "createFailed": "టెంప్లేట్ సృష్టించడం విఫలమైంది: {{message}}",
+      "updated": "టెంప్లేట్ విజయవంతంగా నవీకరించబడింది",
+      "updateFailed": "టెంప్లేట్ నవీకరించడం విఫలమైంది: {{message}}",
+      "deleted": "టెంప్లేట్ విజయవంతంగా తొలగించబడింది",
+      "deleteFailed": "టెంప్లేట్ తొలగించడం విఫలమైంది: {{message}}",
+      "copied": "టెంప్లేట్ పేరు కాపీ చేయబడింది"
     }
   },
   "apiKeys": {

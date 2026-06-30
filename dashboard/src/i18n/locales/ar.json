@@ -264,7 +264,7 @@
       "stop": "إيقاف",
       "reconnect": "إعادة الاتصال",
       "delete": "حذف",
-      "killStuck": "Kill Stuck"
+      "killStuck": "إنهاء العالقة"
     },
     "toasts": {
       "readyTitle": "الجلسة جاهزة",
@@ -281,14 +281,14 @@
       "error": "خطأ"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "إنهاء جلسة عالقة",
+      "message": "هل أنت متأكد أنك تريد إنهاء الجلسة \"{{name}}\" قسريًا؟",
+      "warning": "سيؤدي هذا إلى إنهاء عملية متصفح WhatsApp قسريًا. قد تحتاج الجلسة إلى إعادة المسح عند إعادة التشغيل.",
+      "confirm": "إنهاء الجلسة",
+      "successTitle": "تم إنهاء الجلسة",
+      "success": "تم إنهاء الجلسة قسريًا. يمكنك إعادة تشغيلها الآن.",
+      "failedTitle": "فشل الإنهاء القسري",
+      "failed": "فشل إنهاء الجلسة قسريًا."
     }
   },
   "webhooks": {
@@ -375,48 +375,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "القوالب",
+    "subtitle": "أنشئ قوالب رسائل قابلة لإعادة الاستخدام لكل جلسة WhatsApp",
+    "createTitle": "إنشاء قالب",
+    "editTitle": "تعديل القالب",
+    "newTemplate": "قالب جديد",
+    "createTemplate": "إنشاء قالب",
+    "saveChanges": "حفظ التغييرات",
+    "viewOnly": "عرض فقط",
+    "noSessions": "لا توجد جلسات",
+    "sessionHint": "محفوظ ضمن {{name}}",
+    "namePlaceholder": "مثال: order-confirmation",
+    "header": "الترويسة",
+    "headerPlaceholder": "سطر افتتاحي اختياري",
+    "body": "المتن",
+    "bodyPlaceholder": "مرحبًا {{customer}}، طلبك {{orderId}} جاهز.",
+    "footer": "التذييل",
+    "footerPlaceholder": "سطر ختامي اختياري",
+    "previewTitle": "معاينة",
+    "previewValuePlaceholder": "قيمة تجريبية",
+    "previewEmpty": "ابدأ بكتابة قالب لمعاينته هنا.",
+    "noPlaceholders": "استخدم العناصر النائبة {{name}} لاختبار الاستبدالات.",
+    "savedTitle": "القوالب المحفوظة",
+    "count": "{{count}} إجمالًا",
+    "deleteTitle": "حذف القالب",
+    "deleteConfirm": "هل تريد حذف القالب \"{{name}}\"؟ لا يمكن التراجع عن هذا الإجراء.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "نسخ اسم القالب"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "لا توجد قوالب محفوظة",
+      "description": "أنشئ قالبًا قابلًا لإعادة الاستخدام لتسريع الردود والإشعارات الشائعة.",
+      "noSessionsTitle": "لا توجد جلسات متاحة",
+      "noSessionsDesc": "أنشئ جلسة WhatsApp قبل إضافة القوالب."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "تم إنشاء القالب بنجاح",
+      "createFailed": "فشل إنشاء القالب: {{message}}",
+      "updated": "تم تحديث القالب بنجاح",
+      "updateFailed": "فشل تحديث القالب: {{message}}",
+      "deleted": "تم حذف القالب بنجاح",
+      "deleteFailed": "فشل حذف القالب: {{message}}",
+      "copied": "تم نسخ اسم القالب"
     }
   },
   "apiKeys": {

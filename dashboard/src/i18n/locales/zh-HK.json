@@ -264,7 +264,7 @@
       "stop": "停止",
       "reconnect": "重新連線",
       "delete": "刪除",
-      "killStuck": "Kill Stuck"
+      "killStuck": "強制終止"
     },
     "toasts": {
       "readyTitle": "工作階段就緒",
@@ -281,14 +281,14 @@
       "error": "錯誤"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "強制終止卡住的工作階段",
+      "message": "確定要強制終止工作階段「{{name}}」嗎？",
+      "warning": "這會強制結束 WhatsApp 瀏覽器程序。工作階段重新啟動後可能需要重新掃描。",
+      "confirm": "終止工作階段",
+      "successTitle": "工作階段已終止",
+      "success": "工作階段已強制終止。你現在可以重新啟動它。",
+      "failedTitle": "強制終止失敗",
+      "failed": "無法強制終止工作階段。"
     }
   },
   "webhooks": {
@@ -371,48 +371,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "範本",
+    "subtitle": "為每個 WhatsApp 工作階段建立可重用的訊息範本",
+    "createTitle": "建立範本",
+    "editTitle": "編輯範本",
+    "newTemplate": "新範本",
+    "createTemplate": "建立範本",
+    "saveChanges": "儲存變更",
+    "viewOnly": "僅供檢視",
+    "noSessions": "沒有工作階段",
+    "sessionHint": "儲存於 {{name}}",
+    "namePlaceholder": "例如：order-confirmation",
+    "header": "標題",
+    "headerPlaceholder": "可選的開首句",
+    "body": "內文",
+    "bodyPlaceholder": "你好 {{customer}}，你的訂單 {{orderId}} 已經準備好。",
+    "footer": "頁尾",
+    "footerPlaceholder": "可選的結尾句",
+    "previewTitle": "預覽",
+    "previewValuePlaceholder": "範例值",
+    "previewEmpty": "開始撰寫範本，即可在此預覽。",
+    "noPlaceholders": "使用 {{name}} 佔位符測試替換效果。",
+    "savedTitle": "已儲存的範本",
+    "count": "共 {{count}} 個",
+    "deleteTitle": "刪除範本",
+    "deleteConfirm": "確定刪除範本「{{name}}」？此操作無法復原。",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "複製範本名稱"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "未儲存任何範本",
+      "description": "建立可重用的範本，加快常用回覆和通知的速度。",
+      "noSessionsTitle": "沒有可用的工作階段",
+      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。"
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "範本建立成功",
+      "createFailed": "建立範本失敗：{{message}}",
+      "updated": "範本更新成功",
+      "updateFailed": "更新範本失敗：{{message}}",
+      "deleted": "範本刪除成功",
+      "deleteFailed": "刪除範本失敗：{{message}}",
+      "copied": "已複製範本名稱"
     }
   },
   "apiKeys": {
