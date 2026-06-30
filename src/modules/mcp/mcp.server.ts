@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import type { HttpAdapterHost } from '@nestjs/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -10,6 +10,7 @@ import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.s
 import type { AuthService } from '../auth/auth.service';
 import { handleToolError, jsonToolResult, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
+import { resolveClientIp } from '../../common/utils/ip';
 
 const logger = new Logger('McpServer');
 
@@ -96,11 +97,39 @@ export interface MountMcpServerOptions {
  * Creating a new McpServer per request is safe and avoids the single-transport constraint;
  * tool registration is O(n) pure function calls with no I/O overhead.
  */
+/**
+ * Pre-auth, per-IP throttle for the raw-Express /mcp mount. The global Nest throttler doesn't cover this
+ * mount (it bypasses the guard pipeline) and the per-key limiter only fires AFTER key validation — so a
+ * missing/invalid/revoked key otherwise reaches a DB lookup unthrottled. This gates by resolved client IP
+ * first and returns a JSON-RPC 429 directly (raw Express wouldn't convert a thrown HttpException).
+ */
+export function createIpThrottle(ipRateLimiter: KeyRateLimiter): RequestHandler {
+  return (req, res, next) => {
+    const trustedProxies = (process.env.TRUSTED_PROXIES ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const ip = resolveClientIp(req, trustedProxies);
+    try {
+      ipRateLimiter.check(ip);
+      next();
+    } catch (err) {
+      const status = err instanceof HttpException ? err.getStatus() : 429;
+      res.status(status).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: err instanceof Error ? err.message : 'MCP rate limit exceeded' },
+        id: null,
+      });
+    }
+  };
+}
+
 export function mountMcpServer(
   httpAdapter: HttpAdapter,
   registry: ToolRegistryService,
   authService: AuthService,
   rateLimiter: KeyRateLimiter,
+  ipRateLimiter: KeyRateLimiter,
   options: MountMcpServerOptions = {},
 ): void {
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
@@ -132,5 +161,7 @@ export function mountMcpServer(
   };
 
   const adapter = httpAdapter as unknown as { post: (path: string, ...handlers: RequestHandler[]) => unknown };
-  adapter.post(basePath, express.json(), handler);
+  // ipThrottle runs BEFORE express.json()/handler so an unauthenticated flood is rejected before any body
+  // parsing or DB lookup.
+  adapter.post(basePath, createIpThrottle(ipRateLimiter), express.json(), handler);
 }

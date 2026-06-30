@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The MCP endpoint has a pre-authentication per-IP rate limit.** The `/mcp` mount is raw Express and bypasses the global REST throttler, and the per-key limiter only fires after key validation — so a flood of missing/invalid/revoked keys reached a database lookup unthrottled. A sliding-window per-IP throttle now runs before key validation (keyed on the resolved client IP, honoring `TRUSTED_PROXIES`), tunable via `MCP_IP_RATE_LIMIT_MAX` (default 120) / `MCP_IP_RATE_LIMIT_WINDOW_MS` (default 60000). (#PRR)
 - **Contact-card names escape vCard structural characters.** A contact whose name contained a backslash, semicolon, or comma could alter the structure of the generated vCard's `FN` field; those characters are now escaped per the vCard spec, complementing the existing CR/LF stripping. (#545)
 - **Request inputs are bounded against oversized payloads.** Several endpoints accepted unbounded strings or arrays: bulk message `text`/`caption` now match the single-send caps (4096 / 1024), bulk `variables` must be an object, the `mentions` array is capped in size and per-entry length, group name/subject/description, status text/caption, contact name/number, reply text, and reaction emoji now have length limits, and `POST /infra/storage/import` validates its body through a DTO so the global whitelist applies. (#545)
 

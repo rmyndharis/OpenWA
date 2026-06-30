@@ -152,7 +152,12 @@ posture when an agent only needs to observe.
   calls. Buckets are pruned when idle. This is independent of the REST throttler.
   Tune with `MCP_RATE_LIMIT_MAX` (default `60`) and `MCP_RATE_LIMIT_WINDOW_MS`
   (default `60000`). Any missing, blank, non-positive, or non-numeric value falls back
-  to the default.
+  to the default. A **second, pre-auth per-IP throttle** runs on the `/mcp` mount *before*
+  key validation (the raw Express mount bypasses the global REST throttler, so a
+  missing/invalid key would otherwise reach a DB lookup unthrottled). It keys on the
+  resolved client IP (honoring `TRUSTED_PROXIES`) and is tuned with `MCP_IP_RATE_LIMIT_MAX`
+  (default `120`) and `MCP_IP_RATE_LIMIT_WINDOW_MS` (default `60000`), with the same
+  fallback rules — independent of the per-key vars.
 - **Response parity.** Tools reuse the REST response DTOs, so sensitive fields the REST
   API strips (e.g. webhook HMAC secrets and custom headers, session proxy URLs and engine
   config) are **not** exposed over MCP.
@@ -168,6 +173,8 @@ MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compos
 MCP_READONLY=true                     # read tools only
 MCP_RATE_LIMIT_MAX=60                 # max tool calls per key per window (default 60)
 MCP_RATE_LIMIT_WINDOW_MS=60000        # sliding window in ms (default 60000 = 1 min)
+MCP_IP_RATE_LIMIT_MAX=120             # pre-auth per-IP request cap per window (default 120)
+MCP_IP_RATE_LIMIT_WINDOW_MS=60000     # per-IP window in ms (default 60000 = 1 min)
 ```
 
 Point an MCP client at `POST /mcp`. For Claude Code, a `.mcp.json` at your project root
