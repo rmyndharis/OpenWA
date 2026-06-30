@@ -607,16 +607,16 @@
       "queueTitle": "启用 BullMQ 队列系统",
       "queueDesc": "使用消息队列可靠地投递消息和 Webhook",
       "statsTitle": "队列统计",
-      "messageQueue": "消息队列",
       "webhookQueue": "Webhook 队列",
       "pending": "待处理",
       "completed": "已完成",
       "failed": "失败",
-      "clearFailed": "清除失败任务",
       "viewBullMq": "查看 Bull MQ 仪表盘",
       "disabledTitle": "Redis 已禁用",
       "disabledDesc": "启用 Redis 以使用缓存、会话存储和 BullMQ 消息队列。",
-      "passwordOptional": "（可选）"
+      "passwordOptional": "（可选）",
+      "bullMqUrlCopied": "已复制 Bull MQ 仪表板网址",
+      "bullMqUrlHint": "请使用 ADMIN API 密钥打开 — 浏览器标签页无法进行身份验证。"
     },
     "storage": {
       "title": "存储配置",

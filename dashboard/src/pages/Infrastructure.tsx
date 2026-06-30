@@ -8,13 +8,13 @@ import {
   ExternalLink,
   Loader2,
   CheckCircle,
-  Trash2,
   Cpu,
   AlertTriangle,
   Download,
   Upload,
 } from 'lucide-react';
 import { infraApi, API_BASE_URL } from '../services/api';
+import { copyToClipboard } from '../utils/clipboard';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   useInfraStatusQuery,
@@ -123,7 +123,6 @@ export function Infrastructure() {
   });
 
   const [queueStats, setQueueStats] = useState({
-    messages: { pending: 0, completed: 0, failed: 0 } as QueueStats,
     webhooks: { pending: 0, completed: 0, failed: 0 } as QueueStats,
   });
 
@@ -157,7 +156,7 @@ export function Infrastructure() {
   useEffect(() => {
     if (!infraStatus) return;
     setRedisConfig(prev => ({ ...prev, connected: infraStatus.redis.connected }));
-    setQueueStats({ messages: infraStatus.queue.messages, webhooks: infraStatus.queue.webhooks });
+    setQueueStats({ webhooks: infraStatus.queue.webhooks });
   }, [infraStatus]);
 
   // Seed the EDITABLE selections from live /status ONCE (the running selection), guarded so a refetch
@@ -870,23 +869,6 @@ export function Infrastructure() {
                   <h3>{t('infrastructure.redis.statsTitle')}</h3>
                   <div className="stats-row">
                     <div className="queue-stat-card">
-                      <h4>{t('infrastructure.redis.messageQueue')}</h4>
-                      <div className="stat-values">
-                        <div className="stat-item pending">
-                          <span className="value">{queueStats.messages.pending}</span>
-                          <span className="label">{t('infrastructure.redis.pending')}</span>
-                        </div>
-                        <div className="stat-item completed">
-                          <span className="value">{queueStats.messages.completed.toLocaleString()}</span>
-                          <span className="label">{t('infrastructure.redis.completed')}</span>
-                        </div>
-                        <div className="stat-item failed">
-                          <span className="value">{queueStats.messages.failed}</span>
-                          <span className="label">{t('infrastructure.redis.failed')}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="queue-stat-card">
                       <h4>{t('infrastructure.redis.webhookQueue')}</h4>
                       <div className="stat-values">
                         <div className="stat-item pending">
@@ -905,13 +887,24 @@ export function Infrastructure() {
                     </div>
                   </div>
                   <div className="queue-actions">
-                    <button className="btn-danger-outline">
-                      <Trash2 size={16} />
-                      {t('infrastructure.redis.clearFailed')}
-                    </button>
                     <button
                       className="btn-outline"
-                      onClick={() => window.open(`${API_BASE_URL}/admin/queues`, '_blank')}
+                      onClick={() => {
+                        // The BullBoard route requires an ADMIN API key in the X-API-Key header — a plain
+                        // browser tab can't send one, so copy the URL for use with an authenticated client
+                        // / reverse proxy instead of opening a tab that 401s.
+                        const base = API_BASE_URL.startsWith('http')
+                          ? API_BASE_URL
+                          : `${window.location.origin}${API_BASE_URL}`;
+                        void copyToClipboard(`${base}/admin/queues`).then(ok => {
+                          if (ok) {
+                            toast.success(
+                              t('infrastructure.redis.bullMqUrlCopied'),
+                              t('infrastructure.redis.bullMqUrlHint'),
+                            );
+                          }
+                        });
+                      }}
                     >
                       <ExternalLink size={16} />
                       {t('infrastructure.redis.viewBullMq')}

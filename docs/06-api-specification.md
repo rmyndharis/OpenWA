@@ -3646,7 +3646,6 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
   "redis": { "enabled": false, "connected": false, "host": "localhost", "port": 6379 },
   "queue": {
     "enabled": false,
-    "messages": { "pending": 0, "completed": 0, "failed": 0 },
     "webhooks": { "pending": 0, "completed": 0, "failed": 0 }
   },
   "storage": { "type": "local", "path": "./data/media" },
@@ -3659,7 +3658,7 @@ Aggregate infrastructure status (database, Redis, queue, storage, engine).
 }
 ```
 
-The `queue.messages`/`queue.webhooks` counters are hardcoded to zeros (not live job counts); `redis.connected` is a live probe. `storage` only ever returns `type`+`path` here (no `bucket`).
+The `queue.webhooks` counters are live BullMQ job counts (`pending` = waiting + active + delayed; plus `completed`/`failed`), degrading to zeros when the queue is disabled or Redis is unreachable. `redis.connected` is a live probe. `storage` only ever returns `type`+`path` here (no `bucket`).
 
 **Errors:** `401` missing/invalid key · `403` key role < ADMIN
 

@@ -607,16 +607,16 @@
       "queueTitle": "Activer le système de file d'attente BullMQ",
       "queueDesc": "Utiliser des files d'attente pour une livraison fiable des messages et des webhooks",
       "statsTitle": "Statistiques de la file d'attente",
-      "messageQueue": "File d'attente des messages",
       "webhookQueue": "File d'attente des webhooks",
       "pending": "En attente",
       "completed": "Terminé",
       "failed": "Échoué",
-      "clearFailed": "Effacer les tâches échouées",
       "viewBullMq": "Voir le tableau de bord Bull MQ",
       "disabledTitle": "Redis est désactivé",
       "disabledDesc": "Activez Redis pour le cache, le stockage des sessions et les files d'attente de messages BullMQ.",
-      "passwordOptional": "(optionnel)"
+      "passwordOptional": "(optionnel)",
+      "bullMqUrlCopied": "URL du tableau de bord Bull MQ copiée",
+      "bullMqUrlHint": "Ouvrez-le avec une clé d'API ADMIN — un onglet de navigateur ne peut pas s'authentifier."
     },
     "storage": {
       "title": "Configuration du stockage",

@@ -91,6 +91,51 @@ describe('InfraController.importStorage filePath validation (Vuln 3)', () => {
   });
 });
 
+describe('InfraController.getStatus queue job counts (F-18)', () => {
+  function buildStatusController(opts: { queueEnabled: boolean; queue?: { getJobCounts: jest.Mock } }) {
+    const configService = {
+      get: (key: string, def?: unknown) => (key === 'queue.enabled' ? opts.queueEnabled : def),
+    };
+    const dataSource = { isInitialized: true } as unknown;
+    const engineFactory = { create: jest.fn() };
+    const dockerService = { isDockerAvailable: () => false, getRunningBuiltinServices: jest.fn() };
+    const cacheService = { isAvailable: jest.fn().mockResolvedValue(false), refreshS3Availability: jest.fn() };
+    const storageService = { refreshS3Availability: jest.fn() };
+    const shutdownService = {};
+    return new InfraController(
+      configService as never,
+      dataSource as never,
+      dataSource as never,
+      engineFactory as never,
+      dockerService as never,
+      cacheService as never,
+      storageService as never,
+      shutdownService as never,
+      opts.queue as never,
+    );
+  }
+
+  it('reports live webhook job counts when the queue is enabled (pending = wait+active+delayed)', async () => {
+    const getJobCounts = jest.fn().mockResolvedValue({ wait: 2, active: 1, delayed: 3, completed: 10, failed: 1 });
+    const controller = buildStatusController({ queueEnabled: true, queue: { getJobCounts } });
+
+    const status = await controller.getStatus();
+
+    expect(getJobCounts).toHaveBeenCalledWith('wait', 'active', 'delayed', 'completed', 'failed');
+    expect(status.queue).toEqual({ enabled: true, webhooks: { pending: 6, completed: 10, failed: 1 } });
+  });
+
+  it('reports zeros (and does not touch the queue) when the queue is disabled', async () => {
+    const getJobCounts = jest.fn();
+    const controller = buildStatusController({ queueEnabled: false, queue: { getJobCounts } });
+
+    const status = await controller.getStatus();
+
+    expect(getJobCounts).not.toHaveBeenCalled();
+    expect(status.queue).toEqual({ enabled: false, webhooks: { pending: 0, completed: 0, failed: 0 } });
+  });
+});
+
 describe('InfraController.saveConfig SSL reject-unauthorized', () => {
   function writtenEnv(config: unknown): string {
     const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);

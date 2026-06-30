@@ -611,16 +611,16 @@
       "queueTitle": "تفعيل نظام قوائم BullMQ",
       "queueDesc": "استخدام قوائم الرسائل لتوصيل موثوق للرسائل والويب هوك",
       "statsTitle": "إحصائيات القوائم",
-      "messageQueue": "قائمة الرسائل",
       "webhookQueue": "قائمة الويب هوك",
       "pending": "في الانتظار",
       "completed": "مكتمل",
       "failed": "فشل",
-      "clearFailed": "مسح المهام الفاشلة",
       "viewBullMq": "عرض لوحة Bull MQ",
       "disabledTitle": "Redis معطّل",
       "disabledDesc": "فعّل Redis للتخزين المؤقت وتخزين الجلسات وقوائم رسائل BullMQ.",
-      "passwordOptional": "(اختياري)"
+      "passwordOptional": "(اختياري)",
+      "bullMqUrlCopied": "تم نسخ رابط لوحة Bull MQ",
+      "bullMqUrlHint": "افتحه باستخدام مفتاح API بصلاحية ADMIN — لا يمكن لعلامة تبويب المتصفح المصادقة."
     },
     "storage": {
       "title": "إعدادات التخزين",

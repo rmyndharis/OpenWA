@@ -212,7 +212,6 @@ export interface InfraStatus {
   redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
     enabled: boolean;
-    messages: { pending: number; completed: number; failed: number };
     webhooks: { pending: number; completed: number; failed: number };
   };
   storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };

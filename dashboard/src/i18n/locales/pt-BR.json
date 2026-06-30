@@ -607,16 +607,16 @@
       "queueTitle": "Habilitar sistema de filas BullMQ",
       "queueDesc": "Use filas de mensagens para entrega confiável de mensagens e webhooks",
       "statsTitle": "Estatísticas das filas",
-      "messageQueue": "Fila de mensagens",
       "webhookQueue": "Fila de webhooks",
       "pending": "Pendente",
       "completed": "Concluído",
       "failed": "Falhou",
-      "clearFailed": "Limpar trabalhos com falha",
       "viewBullMq": "Ver painel BullMQ",
       "disabledTitle": "Redis está desabilitado",
       "disabledDesc": "Habilite o Redis para cache, armazenamento de sessões e filas de mensagens BullMQ.",
-      "passwordOptional": "(opcional)"
+      "passwordOptional": "(opcional)",
+      "bullMqUrlCopied": "URL do painel do Bull MQ copiada",
+      "bullMqUrlHint": "Abra com uma chave de API ADMIN — uma aba do navegador não consegue autenticar."
     },
     "storage": {
       "title": "Configuração de armazenamento",

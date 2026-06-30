@@ -607,16 +607,16 @@
       "queueTitle": "Enable BullMQ Queue System",
       "queueDesc": "Use message queues for reliable message and webhook delivery",
       "statsTitle": "Queue Statistics",
-      "messageQueue": "Message Queue",
       "webhookQueue": "Webhook Queue",
       "pending": "Pending",
       "completed": "Completed",
       "failed": "Failed",
-      "clearFailed": "Clear Failed Jobs",
       "viewBullMq": "View Bull MQ Dashboard",
       "disabledTitle": "Redis is Disabled",
       "disabledDesc": "Enable Redis for caching, session storage, and BullMQ message queues.",
-      "passwordOptional": "(optional)"
+      "passwordOptional": "(optional)",
+      "bullMqUrlCopied": "Bull MQ dashboard URL copied",
+      "bullMqUrlHint": "Open it with an ADMIN API key — a browser tab can't authenticate."
     },
     "storage": {
       "title": "Storage Configuration",

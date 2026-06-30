@@ -607,16 +607,16 @@
       "queueTitle": "Habilitar sistema de colas BullMQ",
       "queueDesc": "Usa colas de mensajes para entrega fiable de mensajes y webhooks",
       "statsTitle": "Estadísticas de colas",
-      "messageQueue": "Cola de mensajes",
       "webhookQueue": "Cola de webhooks",
       "pending": "Pendiente",
       "completed": "Completado",
       "failed": "Fallido",
-      "clearFailed": "Limpiar trabajos fallidos",
       "viewBullMq": "Ver panel BullMQ",
       "disabledTitle": "Redis está deshabilitado",
       "disabledDesc": "Habilita Redis para caché, almacenamiento de sesiones y colas de mensajes BullMQ.",
-      "passwordOptional": "(opcional)"
+      "passwordOptional": "(opcional)",
+      "bullMqUrlCopied": "URL del panel de Bull MQ copiada",
+      "bullMqUrlHint": "Ábrelo con una clave de API ADMIN: una pestaña del navegador no puede autenticarse."
     },
     "storage": {
       "title": "Configuración de almacenamiento",

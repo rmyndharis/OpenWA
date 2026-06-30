@@ -1,5 +1,8 @@
-import { Controller, Get, Put, Post, Body, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, BadRequestException, Optional } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { QUEUE_NAMES } from '../queue/queue-names';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -28,7 +31,6 @@ interface InfraStatus {
   redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
     enabled: boolean;
-    messages: { pending: number; completed: number; failed: number };
     webhooks: { pending: number; completed: number; failed: number };
   };
   storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
@@ -239,6 +241,9 @@ export class InfraController {
     private readonly cacheService: CacheService,
     private readonly storageService: StorageService,
     private readonly shutdownService: ShutdownService,
+    @Optional()
+    @InjectQueue(QUEUE_NAMES.WEBHOOK)
+    private readonly webhookQueue?: Queue,
   ) {}
 
   @Get('status')
@@ -308,6 +313,22 @@ export class InfraController {
     // Re-probe (throttled) so a MinIO/S3 that came up after boot is reflected, not latched unreachable.
     const s3Available = storageType === 's3' ? await this.storageService.refreshS3Availability() : undefined;
 
+    // Live webhook-queue depth (the only real queue). pending = waiting + active + delayed. Degrades to
+    // zeros when the queue is disabled or Redis is unreachable, so the panel never errors the status read.
+    let webhooks = { pending: 0, completed: 0, failed: 0 };
+    if (queueEnabled && this.webhookQueue) {
+      try {
+        const counts = await this.webhookQueue.getJobCounts('wait', 'active', 'delayed', 'completed', 'failed');
+        webhooks = {
+          pending: (counts.wait ?? 0) + (counts.active ?? 0) + (counts.delayed ?? 0),
+          completed: counts.completed ?? 0,
+          failed: counts.failed ?? 0,
+        };
+      } catch (error) {
+        this.logger.warn('Failed to read webhook queue job counts', { error: String(error) });
+      }
+    }
+
     return {
       database: { connected: dbConnected, type: dbType, host: dbHost, builtIn: dbBuiltIn },
       redis: {
@@ -319,8 +340,7 @@ export class InfraController {
       },
       queue: {
         enabled: queueEnabled,
-        messages: { pending: 0, completed: 0, failed: 0 },
-        webhooks: { pending: 0, completed: 0, failed: 0 },
+        webhooks,
       },
       storage: {
         type: storageType,

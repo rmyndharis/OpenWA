@@ -607,16 +607,16 @@
       "queueTitle": "啟用 BullMQ 佇列系統",
       "queueDesc": "使用訊息佇列可靠地傳遞訊息和 Webhook",
       "statsTitle": "佇列統計",
-      "messageQueue": "訊息佇列",
       "webhookQueue": "Webhook 佇列",
       "pending": "待處理",
       "completed": "已完成",
       "failed": "失敗",
-      "clearFailed": "清除失敗任務",
       "viewBullMq": "查看 Bull MQ 控制面板",
       "disabledTitle": "Redis 已停用",
       "disabledDesc": "啟用 Redis 以使用快取、工作階段儲存及 BullMQ 訊息佇列。",
-      "passwordOptional": "（選填）"
+      "passwordOptional": "（選填）",
+      "bullMqUrlCopied": "已複製 Bull MQ 儀表板網址",
+      "bullMqUrlHint": "請使用 ADMIN API 金鑰開啟 — 瀏覽器分頁無法進行身份驗證。"
     },
     "storage": {
       "title": "儲存空間設定",

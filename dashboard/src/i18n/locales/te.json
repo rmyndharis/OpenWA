@@ -607,16 +607,16 @@
       "queueTitle": "BullMQ క్యూ సిస్టమ్‌ను ప్రారంభించండి",
       "queueDesc": "నమ్మకమైన సందేశం మరియు వెబ్‌హుక్ డెలివరీ కోసం సందేశ క్యూలను ఉపయోగించండి",
       "statsTitle": "క్యూ గణాంకాలు",
-      "messageQueue": "సందేశ క్యూ",
       "webhookQueue": "వెబ్‌హుక్ క్యూ",
       "pending": "పెండింగ్",
       "completed": "పూర్తయింది",
       "failed": "విఫలమైంది",
-      "clearFailed": "విఫలమైన జాబ్స్‌ను క్లియర్ చేయి",
       "viewBullMq": "Bull MQ డ్యాష్‌బోర్డ్‌ను చూడండి",
       "disabledTitle": "Redis నిలిపివేయబడింది",
       "disabledDesc": "క్యాషింగ్, సెషన్ స్టోరేజ్ మరియు BullMQ సందేశ క్యూల కోసం Redisని ప్రారంభించండి.",
-      "passwordOptional": "(ఐచ్ఛికం)"
+      "passwordOptional": "(ఐచ్ఛికం)",
+      "bullMqUrlCopied": "Bull MQ డాష్‌బోర్డ్ URL కాపీ చేయబడింది",
+      "bullMqUrlHint": "దాన్ని ADMIN API కీతో తెరవండి — బ్రౌజర్ ట్యాబ్ ప్రామాణీకరించలేదు."
     },
     "storage": {
       "title": "స్టోరేజ్ కాన్ఫిగరేషన్",

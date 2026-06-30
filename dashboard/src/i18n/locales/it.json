@@ -607,16 +607,16 @@
       "queueTitle": "Abilita Sistema di Code BullMQ",
       "queueDesc": "Usa le code di messaggi per una consegna affidabile di messaggi e webhook",
       "statsTitle": "Statistiche delle Code",
-      "messageQueue": "Coda Messaggi",
       "webhookQueue": "Coda Webhook",
       "pending": "In attesa",
       "completed": "Completati",
       "failed": "Falliti",
-      "clearFailed": "Cancella Processi Falliti",
       "viewBullMq": "Visualizza Dashboard BullMQ",
       "disabledTitle": "Redis è Disabilitato",
       "disabledDesc": "Abilita Redis per la cache, lo storage delle sessioni e le code di messaggi BullMQ.",
-      "passwordOptional": "(opzionale)"
+      "passwordOptional": "(opzionale)",
+      "bullMqUrlCopied": "URL della dashboard Bull MQ copiato",
+      "bullMqUrlHint": "Aprilo con una chiave API ADMIN: una scheda del browser non può autenticarsi."
     },
     "storage": {
       "title": "Configurazione di Archiviazione",

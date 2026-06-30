@@ -608,16 +608,16 @@
       "queueTitle": "הפעלת מערכת התורים BullMQ",
       "queueDesc": "שימוש בתורי הודעות לאספקה אמינה של הודעות ו-Webhooks",
       "statsTitle": "סטטיסטיקות תור",
-      "messageQueue": "תור הודעות",
       "webhookQueue": "תור Webhooks",
       "pending": "בהמתנה",
       "completed": "הושלמו",
       "failed": "נכשלו",
-      "clearFailed": "ניקוי משימות שנכשלו",
       "viewBullMq": "פתיחת Bull MQ Dashboard",
       "disabledTitle": "Redis מושבת",
       "disabledDesc": "יש להפעיל את Redis למטמון, אחסון Sessions ותורי הודעות BullMQ.",
-      "passwordOptional": "(אופציונלי)"
+      "passwordOptional": "(אופציונלי)",
+      "bullMqUrlCopied": "כתובת לוח Bull MQ הועתקה",
+      "bullMqUrlHint": "פתח אותו עם מפתח API מסוג ADMIN — לשונית דפדפן אינה יכולה לאמת."
     },
     "storage": {
       "title": "הגדרות אחסון",
