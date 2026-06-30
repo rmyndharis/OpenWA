@@ -110,9 +110,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
 
-  // Last session.status value dispatched to webhooks per session. Some engines signal one transition
-  // via BOTH onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards the
-  // webhook POST against firing the same status twice. Cleared on delete().
+  // Last session.status value broadcast per session. Some engines signal one transition via BOTH
+  // onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards both the WS emit
+  // and the webhook POST against firing the same status twice. Cleared on delete().
   private readonly lastDispatchedStatus = new Map<string, SessionStatus>();
 
   // Sessions currently being stopped/deleted. An in-flight executeReconnect awaits
@@ -1346,13 +1346,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       status,
       action: 'status_update',
     });
-    // Emit real-time event to connected WebSocket clients
-    this.eventsGateway.emitSessionStatus(id, status);
-    // Mirror the status change to subscribed webhooks. Some engines signal one transition via both
-    // onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which would POST the same
-    // status twice — dispatch only when the status actually changed from the last one we sent.
+    // Mirror the status change to WS clients AND subscribed webhooks — both de-duped. Some engines signal
+    // one transition via both onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which
+    // would otherwise emit/POST the same status twice; only act when it actually changed from the last one.
     if (this.lastDispatchedStatus.get(id) !== status) {
       this.lastDispatchedStatus.set(id, status);
+      this.eventsGateway.emitSessionStatus(id, status);
       void this.webhookService.dispatch(id, 'session.status', { sessionId: id, status });
     }
   }

@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The audit-log listing rejects a negative offset.** `GET /audit?offset=-N` previously passed a negative skip to the query driver; the offset is now clamped to a non-negative value. (#545)
+- **API-key lifecycle operations are now recorded in the audit log.** Creating, deleting, and revoking an API key previously left no audit entry (only failed authentication was logged). Each now writes an `api_key_created` / `api_key_deleted` / `api_key_revoked` event with the acting admin key, the client IP, and the target key — giving administrators a forensic trail for credential management. (#546)
+
+### Fixed
+
+- **A session status change is no longer broadcast twice over WebSocket.** Some engines signal one transition through both a generic state callback and a dedicated one; the WebSocket `session.status` emit is now de-duplicated the same way the webhook dispatch already was, so connected dashboards receive one event per transition. (#546)
+- **A slow webhook receiver no longer delays delivery to the others.** When the queue is disabled (or a queue add fails and falls back to direct delivery), the webhooks matching one event are now dispatched concurrently instead of sequentially, so one hanging or retrying endpoint can't head-of-line-block delivery to its siblings. (#546)
 ### Fixed
 
 - **A plugin's stored secret array is no longer wiped when its length changes.** When a plugin config had a list of secret values (e.g. API keys), adding or removing an entry from the dashboard sent every other value back as the masked sentinel; on save, the merge couldn't position-match them and silently dropped all of them. Surviving entries now keep their stored secret across an append or removal, while a genuinely-new or edited row is still never grafted with a stored value. (#544)
