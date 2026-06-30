@@ -738,3 +738,77 @@
 .sessions-page .btn-sm:hover{
   background: var(--primary-hover);
 }
+
+/* Pairing Code Mode Specific Styles */
+.pairing-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  background: var(--bg-light);
+  padding: 0.25rem;
+  border-radius: 8px;
+}
+
+.pairing-tab-btn {
+  flex: 1;
+  padding: 0.5rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pairing-tab-btn.active {
+  background: var(--bg-white);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.pairing-container {
+  padding: 0.5rem 0;
+}
+
+.pairing-code-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--bg-light);
+  border: 2px dashed var(--border);
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  letter-spacing: 0.1em;
+  font-family: 'JetBrains Mono', monospace;
+  margin: 1.5rem 0;
+}
+
+.pairing-instructions {
+  margin-top: 1.5rem;
+  text-align: left;
+  background: var(--bg-light);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.pairing-step {
+  margin: 0;
+  padding: 0.5rem 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.pairing-step:last-child {
+  border-bottom: none;
+}
+
+.pairing-step strong {
+  color: var(--text-primary);
+}

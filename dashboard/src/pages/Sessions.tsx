@@ -24,6 +24,11 @@ export function Sessions() {
   const [newSessionName, setNewSessionName] = useState('');
   const [creating, setCreating] = useState(false);
   const [qrData, setQrData] = useState<{ sessionId: string; sessionName: string; qrCode: string } | null>(null);
+  const [pairingMode, setPairingMode] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [requestingPairing, setRequestingPairing] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -146,7 +151,33 @@ export function Sessions() {
     };
   }, [qrData, fetchQR]);
 
-  const handleCreate = async () => {
+    const handleCloseQRModal = useCallback(() => {
+    setQrData(null);
+    setPairingMode(false);
+    setPhoneNumber('');
+    setPairingCode(null);
+    setPairingError(null);
+  }, []);
+
+  const handleGeneratePairingCode = async () => {
+    if (!qrData || !phoneNumber.trim()) return;
+    if (!/^[0-9]{6,15}$/.test(phoneNumber.trim())) {
+      setPairingError(t('sessions.create.invalidChars'));
+      return;
+    }
+    try {
+      setRequestingPairing(true);
+      setPairingError(null);
+      const res = await sessionApi.requestPairingCode(qrData.sessionId, phoneNumber.trim());
+      setPairingCode(res.pairingCode);
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : t('common.errorGeneric'));
+    } finally {
+      setRequestingPairing(false);
+    }
+  };
+
+const handleCreate = async () => {
     if (!newSessionName.trim()) return;
     try {
       setCreating(true);
@@ -390,34 +421,156 @@ export function Sessions() {
       )}
 
       {qrData && (
-        <div className="modal-overlay" onClick={() => setQrData(null)}>
+        <div className="modal-overlay" onClick={handleCloseQRModal}>
           <div className="modal qr-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <div className="modal-title">
-                <h2>{t('sessions.qr.title')}</h2>
+                <h2>{pairingMode ? t('sessions.pairing.tabPhone') : t('sessions.qr.title')}</h2>
                 <span className="session-name">{qrData.sessionName}</span>
               </div>
-              <button className="btn-close" onClick={() => setQrData(null)} aria-label={t('common.close')}>
+              <button className="btn-close" onClick={handleCloseQRModal} aria-label={t('common.close')}>
                 <X size={20} color="#64748b" />
               </button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center' }}>
-              {qrData.qrCode ? (
-                <>
-                  <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
-                  <div className="qr-instructions">
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} /></p>
+              {!pairingCode && (
+                <div className="pairing-tabs">
+                  <button
+                    className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
+                    onClick={() => {
+                      setPairingMode(false);
+                      setPairingError(null);
+                    }}
+                  >
+                    {t('sessions.pairing.tabQr')}
+                  </button>
+                  <button
+                    className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
+                    onClick={() => {
+                      setPairingMode(true);
+                      setPairingError(null);
+                    }}
+                  >
+                    {t('sessions.pairing.tabPhone')}
+                  </button>
+                </div>
+              )}
+
+              {!pairingMode ? (
+                // QR Code Content
+                qrData.qrCode ? (
+                  <>
+                    <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
+                    <div className="qr-instructions">
+                      <p className="qr-step"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} /></p>
+                      <p className="qr-step"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} /></p>
+                      <p className="qr-step"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} /></p>
+                    </div>
+                    <p className="qr-auto-refresh">
+                      <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
+                    </p>
+                  </>
+                ) : (
+                  <div style={{ padding: '2rem' }}>
+                    <Loader2 className="animate-spin" size={48} />
+                    <p>{t('sessions.qr.generating')}</p>
                   </div>
-                  <p className="qr-auto-refresh">
-                    <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
-                  </p>
-                </>
+                )
               ) : (
-                <div style={{ padding: '2rem' }}>
-                  <Loader2 className="animate-spin" size={48} />
-                  <p>{t('sessions.qr.generating')}</p>
+                // Pairing Code Content
+                <div className="pairing-container">
+                  {pairingError && (
+                    <div style={{
+                      background: '#FEE2E2',
+                      padding: '0.75rem',
+                      borderRadius: '8px',
+                      color: '#DC2626',
+                      marginBottom: '1rem',
+                      fontSize: '0.875rem',
+                      textAlign: 'left'
+                    }}>
+                      {pairingError}
+                    </div>
+                  )}
+
+                  {!pairingCode ? (
+                    <div className="pairing-form" style={{ textAlign: 'left' }}>
+                      <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>
+                        {t('sessions.pairing.phoneLabel')}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={t('sessions.pairing.phonePlaceholder')}
+                        value={phoneNumber}
+                        onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
+                        style={{
+                          width: '100%',
+                          padding: '0.875rem 1rem',
+                          border: '1px solid var(--border)',
+                          borderRadius: 'var(--radius)',
+                          fontSize: '0.9375rem',
+                          background: 'var(--bg-light)',
+                          marginBottom: '0.5rem',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                      <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
+                        {t('sessions.pairing.phoneHint')}
+                      </p>
+                      <button
+                        className="btn-primary"
+                        onClick={handleGeneratePairingCode}
+                        disabled={requestingPairing || !phoneNumber.trim()}
+                        style={{ width: '100%', justifyContent: 'center' }}
+                      >
+                        {requestingPairing ? (
+                          <>
+                            <Loader2 className="animate-spin" size={16} />
+                            <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
+                          </>
+                        ) : (
+                          t('sessions.pairing.generateButton')
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <label style={{ display: 'block', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        {t('sessions.pairing.codeLabel')}
+                      </label>
+                      <div className="pairing-code-display">
+                        {pairingCode.substring(0, 4)} - {pairingCode.substring(4)}
+                      </div>
+                      
+                      <div className="pairing-instructions">
+                        <p style={{ margin: '0 0 0.5rem', fontWeight: 600, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
+                          {t('sessions.pairing.instructions')}
+                        </p>
+                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} /></p>
+                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} /></p>
+                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} /></p>
+                        <p className="qr-step"><Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} /></p>
+                      </div>
+
+                      <div style={{ marginTop: '1.5rem' }}>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => {
+                            setPairingCode(null);
+                            setPhoneNumber('');
+                          }}
+                          style={{ width: '100%' }}
+                        >
+                          {t('sessions.pairing.changeNumber')}
+                        </button>
+                      </div>
+
+                      <p className="qr-auto-refresh">
+                        <RefreshCw size={14} className="spin-slow" /> {t('sessions.pairing.waitingConnection')}
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
             </div>

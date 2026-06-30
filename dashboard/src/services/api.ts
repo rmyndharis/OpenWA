@@ -392,6 +392,11 @@ export const sessionApi = {
   stop: (id: string) => request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
   forceKill: (id: string) => request<Session>(`/sessions/${id}/force-kill`, { method: 'POST' }),
   getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
+  requestPairingCode: (id: string, phoneNumber: string) =>
+    request<{ pairingCode: string; status: string }>(`/sessions/${id}/pairing-code`, {
+      method: 'POST',
+      body: JSON.stringify({ phoneNumber }),
+    }),
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
     request<{ id: string; name: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
