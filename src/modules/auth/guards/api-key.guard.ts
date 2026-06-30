@@ -78,6 +78,9 @@ export class ApiKeyGuard implements CanActivate {
 
     // Attach API key to request for use in controllers
     (request as Request & { apiKey: typeof apiKey }).apiKey = apiKey;
+    // Expose the trusted-proxy-aware client IP so controllers (e.g. the audit trail on key lifecycle
+    // ops) reuse the already-resolved value instead of re-deriving it.
+    (request as Request & { clientIp?: string }).clientIp = clientIp;
 
     return true;
   }

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsLatitude, IsLongitude, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsLatitude, IsLongitude, IsBoolean, MaxLength } from 'class-validator';
 
 /**
  * Validated DTOs for the message action endpoints. These replaced inline
@@ -21,14 +21,16 @@ export class SendLocationDto {
   @IsLongitude()
   longitude: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxLength: 1024 })
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   description?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxLength: 1024 })
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   address?: string;
 }
 
@@ -38,14 +40,16 @@ export class SendContactDto {
   @IsNotEmpty()
   chatId: string;
 
-  @ApiProperty()
+  @ApiProperty({ maxLength: 255 })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255)
   contactName: string;
 
-  @ApiProperty()
+  @ApiProperty({ maxLength: 30 })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(30)
   contactNumber: string;
 }
 
@@ -60,9 +64,10 @@ export class ReplyMessageDto {
   @IsNotEmpty()
   quotedMessageId: string;
 
-  @ApiProperty()
+  @ApiProperty({ maxLength: 4096 })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(4096)
   text: string;
 }
 
@@ -95,8 +100,9 @@ export class ReactMessageDto {
   messageId: string;
 
   // Empty string is VALID — it removes the reaction (endpoint contract). So @IsString, not @IsNotEmpty.
-  @ApiProperty({ description: 'Emoji to react with. Send an empty string to remove the reaction.' })
+  @ApiProperty({ description: 'Emoji to react with. Send an empty string to remove the reaction.', maxLength: 32 })
   @IsString()
+  @MaxLength(32)
   emoji: string;
 }
 

@@ -19,6 +19,9 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     ['contactMessage', false, 'contact'],
     [undefined, false, 'unknown'],
     ['pollCreationMessage', false, 'unknown'],
+    // Regression trap: calls arrive via the `call` socket event, never as a message content type,
+    // so any call-ish token must stay 'unknown' (no accidental mapping).
+    ['callLogMessage', false, 'unknown'],
   ])('maps %s (ptt=%s) -> %s', (raw, ptt, expected) => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     expect(mapBaileysMessageType(raw as string | undefined, ptt as boolean)).toBe(expected);
@@ -139,5 +142,19 @@ describe('buildIncomingMessageFromBaileys', () => {
   it('omits ephemeralDuration when ephemeralDuration is 0', () => {
     const r = buildIncomingMessageFromBaileys({ ...base, ephemeralDuration: 0 });
     expect(r.ephemeralDuration).toBeUndefined();
+  });
+
+  it('maps mentionedIds, normalizing each JID, when present', () => {
+    const normalize = (jid: string) => jid.replace('@s.whatsapp.net', '@c.us');
+    const r = buildIncomingMessageFromBaileys(
+      { ...base, mentionedJids: ['111@s.whatsapp.net', '222@s.whatsapp.net'] },
+      normalize,
+    );
+    expect(r.mentionedIds).toEqual(['111@c.us', '222@c.us']);
+  });
+
+  it('omits mentionedIds when absent or empty', () => {
+    expect(buildIncomingMessageFromBaileys(base).mentionedIds).toBeUndefined();
+    expect(buildIncomingMessageFromBaileys({ ...base, mentionedJids: [] }).mentionedIds).toBeUndefined();
   });
 });

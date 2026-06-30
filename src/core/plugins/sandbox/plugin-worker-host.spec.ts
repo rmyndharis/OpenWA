@@ -161,6 +161,37 @@ describe('PluginWorkerHost', () => {
 
       expect(ch.sent.find(m => m.kind === 'cap-result')).toMatchObject({ id: 9, ok: false });
     });
+
+    it('rejects a cap request over the in-flight limit and recovers after the in-flight one settles', async () => {
+      const ch = new FakeChannel();
+      let resolveFirst: (v: unknown) => void = () => undefined;
+      const dispatcher = jest
+        .fn()
+        .mockImplementationOnce(() => new Promise(r => (resolveFirst = r))) // first cap hangs, holding the slot
+        .mockResolvedValue({ ok: true });
+      // maxInFlightCaps = 1 (6th positional arg)
+      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, 1);
+
+      ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] }); // takes the only slot
+      await flush();
+      ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [] }); // over the limit
+      await flush();
+
+      expect(dispatcher).toHaveBeenCalledTimes(1); // the over-limit cap is rejected before dispatch
+      const rejected = ch.sent.find(m => m.kind === 'cap-result' && m.id === 2) as
+        { ok: boolean; error?: string } | undefined;
+      expect(rejected?.ok).toBe(false);
+      expect(rejected?.error).toMatch(/too many concurrent/);
+
+      resolveFirst({ ok: true }); // free the slot
+      await flush();
+      ch.reply({ kind: 'cap', id: 3, verb: 'messages.sendText', args: [] });
+      await flush();
+
+      expect(dispatcher).toHaveBeenCalledTimes(2); // slot released → a fresh cap dispatches
+      const ok3 = ch.sent.find(m => m.kind === 'cap-result' && m.id === 3) as { ok: boolean } | undefined;
+      expect(ok3?.ok).toBe(true);
+    });
   });
 
   describe('hook bridge', () => {

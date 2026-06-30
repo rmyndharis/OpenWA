@@ -29,6 +29,24 @@ describe('SendTextMessageDto mentions', () => {
     });
     expect(errors.length).toBeGreaterThan(0);
   });
+
+  it('rejects an oversized mentions array (> 1024 entries)', async () => {
+    const errors = await validateDto(SendTextMessageDto, {
+      chatId: 'g@g.us',
+      text: 'hi',
+      mentions: Array.from({ length: 1025 }, (_, i) => `${i}@c.us`),
+    });
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a mention WID longer than the per-element cap', async () => {
+    const errors = await validateDto(SendTextMessageDto, {
+      chatId: 'g@g.us',
+      text: 'hi',
+      mentions: ['a'.repeat(65) + '@c.us'],
+    });
+    expect(errors.length).toBeGreaterThan(0);
+  });
 });
 
 describe('SendMediaMessageDto mentions', () => {

@@ -31,7 +31,9 @@ export class AddTemplates1779840000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP INDEX "IDX_templates_sessionId"`);
-    await queryRunner.query(`DROP TABLE "templates"`);
+    // IF EXISTS so revert is idempotent on a synchronize-bootstrapped DB, where this migration was
+    // recorded via the up() hasTable early-return and the named index was never created.
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_templates_sessionId"`);
+    await queryRunner.query(`DROP TABLE IF EXISTS "templates"`);
   }
 }

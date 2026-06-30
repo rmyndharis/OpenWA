@@ -27,4 +27,14 @@ describe('buildVCard', () => {
       'END:VCARD',
     ]);
   });
+
+  it('escapes vCard structural characters (backslash, semicolon, comma) in FN', () => {
+    // name = Acme;Corp,Ltd\X (one literal backslash before X)
+    const vcard = buildVCard({ name: 'Acme;Corp,Ltd\\X', number: '628123' });
+    const fnLine = vcard.split('\n').find(l => l.startsWith('FN:'));
+    // backslash escaped first, then ; and , — so the value carries a literal backslash before each.
+    expect(fnLine).toBe('FN:Acme\\;Corp\\,Ltd\\\\X');
+    // the bare (unescaped) structural sequence must not survive — proves the escape isn't a JS no-op.
+    expect(fnLine?.includes('Acme;Corp')).toBe(false);
+  });
 });

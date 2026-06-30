@@ -3,10 +3,12 @@ import {
   IsString,
   IsIn,
   IsArray,
+  IsObject,
   IsOptional,
   IsNumber,
   IsBoolean,
   ValidateNested,
+  MaxLength,
   Min,
   Max,
   ArrayMaxSize,
@@ -36,9 +38,10 @@ class BulkMediaDto {
 }
 
 class BulkMessageContentDto {
-  @ApiPropertyOptional({ description: 'Text content for text messages' })
+  @ApiPropertyOptional({ description: 'Text content for text messages', maxLength: 4096 })
   @IsOptional()
   @IsString()
+  @MaxLength(4096)
   text?: string;
 
   // Typed nested DTOs (not bare object literals) so the global ValidationPipe's whitelist /
@@ -68,9 +71,10 @@ class BulkMessageContentDto {
   @Type(() => BulkMediaDto)
   document?: BulkMediaDto;
 
-  @ApiPropertyOptional({ description: 'Caption for media messages' })
+  @ApiPropertyOptional({ description: 'Caption for media messages', maxLength: 1024 })
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   caption?: string;
 }
 
@@ -90,6 +94,7 @@ class BulkMessageItemDto {
 
   @ApiPropertyOptional({ description: 'Variables for template substitution' })
   @IsOptional()
+  @IsObject()
   variables?: Record<string, string>;
 }
 

@@ -41,6 +41,9 @@ export class PluginWorkerHost {
   // AsyncLocalStorage re-entrancy guard does not span the worker IPC boundary).
   private readonly inFlightHookEvents = new Map<string, number>();
 
+  // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
+  private inFlightCaps = 0;
+
   constructor(
     private readonly channel: PluginWorkerChannel,
     // Runs a worker-initiated capability call host-side (validating permission + session scope before
@@ -55,6 +58,11 @@ export class PluginWorkerHost {
     // re-fires an event this worker is currently handling is short-circuited (re-entrancy across IPC).
     // Absent => capability calls run with no hook guard (e.g. before the bridge is wired, or in tests).
     private readonly runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+    // Max worker-initiated capability calls the host will run concurrently for this worker. When this many
+    // cap requests are in flight, further cap messages are rejected with an error cap-result (the worker
+    // sees a thrown Error) instead of queuing host-side work — bounding the aggregate sendText/net.fetch/
+    // storage load a single sandboxed plugin can trigger. Absent/undefined => no cap (legacy behavior).
+    private readonly maxInFlightCaps?: number,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
@@ -246,10 +254,20 @@ export class PluginWorkerHost {
   }
 
   private async handleCapRequest(message: Extract<WorkerToHostMessage, { kind: 'cap' }>): Promise<void> {
+    if (this.maxInFlightCaps !== undefined && this.inFlightCaps >= this.maxInFlightCaps) {
+      this.channel.postMessage({
+        kind: 'cap-result',
+        id: message.id,
+        ok: false,
+        error: `capability call rejected: too many concurrent capability calls (limit ${this.maxInFlightCaps})`,
+      });
+      return;
+    }
     if (!this.capDispatcher) {
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: 'no capability dispatcher' });
       return;
     }
+    this.inFlightCaps++;
     try {
       const dispatcher = this.capDispatcher;
       const run = (): Promise<unknown> => dispatcher(message.verb, message.args);
@@ -267,6 +285,8 @@ export class PluginWorkerHost {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      this.inFlightCaps--;
     }
   }
 

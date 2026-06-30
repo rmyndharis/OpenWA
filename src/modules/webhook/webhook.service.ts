@@ -246,8 +246,10 @@ export class WebhookService {
     const occurredAt = new Date().toISOString();
     const idempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
-    // Dispatch to all matching webhooks
-    for (const webhook of matchingWebhooks) {
+    // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
+    // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
+    // recursive retry with backoff sleeps).
+    const tasks = matchingWebhooks.map(async webhook => {
       // Generate unique delivery ID for each webhook
       const deliveryId = generateDeliveryId();
 
@@ -275,7 +277,7 @@ export class WebhookService {
           webhookId: webhook.id,
           action: 'webhook_cancelled_by_plugin',
         });
-        continue;
+        return;
       }
 
       // Use the plugin-modified payload, falling back to the original if a before-hook returned a
@@ -426,7 +428,8 @@ export class WebhookService {
           });
         }
       }
-    }
+    });
+    await Promise.allSettled(tasks);
   }
 
   /**
