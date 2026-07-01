@@ -1188,8 +1188,11 @@ describe('outbound voice note (PTT)', () => {
       mimetype: 'audio/mpeg',
       data: Buffer.from([1]).toString('base64'),
     });
-    const opts = sendMessage.mock.calls[0][2] as { sendAudioAsVoice?: boolean };
-    expect(opts.sendAudioAsVoice).toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledWith(
+      '628@c.us',
+      expect.anything(),
+      expect.not.objectContaining({ sendAudioAsVoice: true }),
+    );
   });
 });
 
