@@ -169,8 +169,8 @@ describe('PluginWorkerHost', () => {
         .fn()
         .mockImplementationOnce(() => new Promise(r => (resolveFirst = r))) // first cap hangs, holding the slot
         .mockResolvedValue({ ok: true });
-      // maxInFlightCaps = 1 (6th positional arg)
-      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, 1);
+      // maxInFlightCaps = 1 (7th positional arg)
+      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, undefined, 1);
 
       ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] }); // takes the only slot
       await flush();
@@ -285,7 +285,7 @@ describe('PluginWorkerHost', () => {
     it('routes a worker log message to onLog', async () => {
       const ch = new FakeChannel();
       const onLog = jest.fn();
-      new PluginWorkerHost(ch, undefined, undefined, onLog);
+      new PluginWorkerHost(ch, undefined, undefined, undefined, onLog);
 
       ch.reply({ kind: 'log', level: 'warn', message: 'heads up', meta: { x: 1 } });
       await flush();
@@ -413,7 +413,7 @@ describe('PluginWorkerHost', () => {
         return { messageId: 'wamid' };
       };
 
-      const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, (events, run) =>
+      const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, undefined, (events, run) =>
         hm.runInFlight(events as HookEvent[], run),
       );
 

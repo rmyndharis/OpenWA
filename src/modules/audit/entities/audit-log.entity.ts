@@ -27,6 +27,11 @@ export enum AuditAction {
   WEBHOOK_DELETED = 'webhook_deleted',
   WEBHOOK_TRIGGERED = 'webhook_triggered',
   WEBHOOK_FAILED = 'webhook_failed',
+
+  // Integration plugin-instance events
+  INTEGRATION_INSTANCE_CREATED = 'integration_instance_created',
+  INTEGRATION_INSTANCE_SECRET_REGENERATED = 'integration_instance_secret_regenerated',
+  INTEGRATION_INSTANCE_DELETED = 'integration_instance_deleted',
 }
 
 export enum AuditSeverity {

@@ -1,6 +1,7 @@
 import {
   BaileysIncomingFields,
   buildIncomingMessageFromBaileys,
+  extractBaileysBody,
   mapBaileysMessageType,
   mapBaileysStatus,
 } from './baileys-message-mapper';
@@ -17,6 +18,12 @@ describe('mapBaileysMessageType (baileys content-type -> neutral MessageType)', 
     ['stickerMessage', false, 'sticker'],
     ['locationMessage', false, 'location'],
     ['contactMessage', false, 'contact'],
+    // WhatsApp Business interactive shapes carry their display text (e.g. OTP codes) and are flattened
+    // to `text` so consumers render them and read the body over the standard API (#562).
+    ['interactiveMessage', false, 'text'],
+    ['buttonsMessage', false, 'text'],
+    ['templateMessage', false, 'text'],
+    ['interactiveResponseMessage', false, 'text'],
     [undefined, false, 'unknown'],
     ['pollCreationMessage', false, 'unknown'],
     // Regression trap: calls arrive via the `call` socket event, never as a message content type,
@@ -43,6 +50,62 @@ describe('mapBaileysStatus (proto WAMessageStatus -> neutral DeliveryStatus)', (
   it('returns null for an unknown/absent status so the adapter skips the ack', () => {
     expect(mapBaileysStatus(undefined)).toBeNull();
     expect(mapBaileysStatus(99)).toBeNull();
+  });
+});
+
+describe('extractBaileysBody (inbound text/caption + interactive shapes)', () => {
+  it('returns plain conversation text', () => {
+    expect(extractBaileysBody({ conversation: 'hi' })).toBe('hi');
+  });
+
+  it('falls back to extendedTextMessage text', () => {
+    expect(extractBaileysBody({ extendedTextMessage: { text: 'hey' } })).toBe('hey');
+  });
+
+  it('falls back to a media caption', () => {
+    expect(extractBaileysBody({ imageMessage: { caption: 'pic' } })).toBe('pic');
+    expect(extractBaileysBody({ videoMessage: { caption: 'clip' } })).toBe('clip');
+    expect(extractBaileysBody({ documentMessage: { caption: 'doc' } })).toBe('doc');
+  });
+
+  // #562: business interactive messages (OTP/verification codes) were dropped as empty body.
+  it('extracts interactiveMessage body text', () => {
+    expect(extractBaileysBody({ interactiveMessage: { body: { text: 'Your code is 123456' } } })).toBe(
+      'Your code is 123456',
+    );
+  });
+
+  it('extracts buttonsMessage contentText', () => {
+    expect(extractBaileysBody({ buttonsMessage: { contentText: 'Verification: 987654' } })).toBe(
+      'Verification: 987654',
+    );
+  });
+
+  it('extracts templateMessage hydrated content text (both field aliases)', () => {
+    expect(extractBaileysBody({ templateMessage: { hydratedTemplate: { hydratedContentText: 'OTP 4242' } } })).toBe(
+      'OTP 4242',
+    );
+    expect(
+      extractBaileysBody({ templateMessage: { hydratedFourRowTemplate: { hydratedContentText: 'OTP 1111' } } }),
+    ).toBe('OTP 1111');
+  });
+
+  it('extracts interactiveResponseMessage body text', () => {
+    expect(extractBaileysBody({ interactiveResponseMessage: { body: { text: 'Selected: Yes' } } })).toBe(
+      'Selected: Yes',
+    );
+  });
+
+  it('prefers plain text over an interactive fallback when both are present', () => {
+    expect(extractBaileysBody({ conversation: 'plain', interactiveMessage: { body: { text: 'ignored' } } })).toBe(
+      'plain',
+    );
+  });
+
+  it('returns empty string when no extractable text is present', () => {
+    expect(extractBaileysBody({})).toBe('');
+    expect(extractBaileysBody({ interactiveMessage: {} })).toBe('');
+    expect(extractBaileysBody({ templateMessage: {} })).toBe('');
   });
 });
 

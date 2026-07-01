@@ -817,7 +817,7 @@ export interface MessageStats {
   timeSeries: MessageTimeSeriesPoint[];
   byType: Record<string, number>;
   bySession: Array<{ sessionId: string; name: string; sent: number; received: number }>;
-  topChats: Array<{ chatId: string; messageCount: number }>;
+  topChats: Array<{ chatId: string; chatName?: string | null; messageCount: number }>;
 }
 
 export const statsApi = {

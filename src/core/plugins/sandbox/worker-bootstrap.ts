@@ -2,6 +2,7 @@ import { parentPort } from 'worker_threads';
 import { HostToWorkerMessage, WorkerToHostMessage } from './protocol';
 import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability';
 import { WorkerHookRegistry, WorkerHookHandler, hookConfigStore } from './worker-hooks';
+import { WebhookRegistry, WebhookHandler } from './worker-webhooks';
 
 /**
  * Worker entry for an untrusted plugin. Loads the plugin module and drives its lifecycle in response
@@ -29,6 +30,7 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 const capClient = new WorkerCapabilityClient(send);
 const hookRegistry = new WorkerHookRegistry(send);
+const webhookRegistry = new WebhookRegistry(send);
 
 // ctx.logger proxy: forwards to the host's per-plugin logger (the same one in-process plugins use).
 const logger = {
@@ -57,6 +59,10 @@ port.on('message', (message: HostToWorkerMessage) => {
     void hookRegistry.handleHook(message);
     return;
   }
+  if (message.kind === 'webhook') {
+    void webhookRegistry.handleWebhook(message);
+    return;
+  }
   void handle(message);
 });
 
@@ -80,6 +86,7 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
         ...buildSandboxContext(capClient),
         registerHook: (event: string, handler: WorkerHookHandler, priority?: number) =>
           hookRegistry.register(event, handler, priority),
+        registerWebhook: (route: string, handler: WebhookHandler) => webhookRegistry.register(route, handler),
       };
       send({ kind: 'ready' });
     } catch (error) {

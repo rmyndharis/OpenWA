@@ -575,6 +575,32 @@ Delivered additively whenever ready, per SemVer (not gated to one version). The 
 | Performance Benchmarks | P1       | ☐ Open | Documented performance metrics   |
 | Memory Optimization    | P1       | ☐ Open | Reduced memory per session       |
 
+### Integration Fabric — inbound integrations for plugins (in progress)
+
+A core substrate that lets sandboxed marketplace plugins implement bidirectional external integrations
+(helpdesk agent inboxes, chatbot flow builders, CRMs) **without running their own server**. Until now a
+plugin could only make outbound calls; the Integration Fabric adds a governed **inbound** path — the core
+receives a signature-verified webhook, dedups and queues it, and hands it to the plugin, which replies to
+the WhatsApp chat through a normalized capability. The core owns ingress, verification, ordering,
+delivery, and the dead-letter queue; the plugin owns only provider-specific logic. Plugins consume it
+through a stable, versioned **Integration SDK (v1)**. Motivated by #553.
+
+Delivered in phases (additive; see [25 - Integration Fabric](./25-integration-fabric.md) for the
+architecture and design rationale):
+
+| Phase | Scope                                                                                                                                                                          | Status                         |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| P0    | Core substrate: inbound webhook RPC, `@Public` ingress endpoint with HMAC-over-raw-body verification, plugin-instance primitive, normalized send capability, identity/dedup/DLQ tables, ingress queue. SDK v1 frozen. | ✅ Merged (internal substrate) |
+| P1    | Scale-correctness: per-conversation FIFO ordering, per-instance fairness, DLQ redrive, bot/human handover.                                                                    | ✅ Merged (internal substrate) |
+| P2    | Operator provisioning (mint plugin instances and secrets, dashboard) + the first adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.           | 📋 Planned                     |
+| P3    | Second adapter (chatbot flow builder) — validates the substrate generalizes.                                                                                                 | 📋 Planned                     |
+| P4    | Developer experience: SDK reference docs, compatibility test suite, secret rotation, multi-node routing.                                                                      | 📋 Planned                     |
+
+> **P0 and P1 are an internal foundation, not a user-facing feature yet.** The ingress flow requires an
+> operator provisioning step (minting a plugin instance and its secret) that lands in P2; until then it is
+> reachable only by direct configuration. The public SDK reference and the first ready-to-use adapter
+> arrive in P2–P4.
+
 ### v1.0.0 - Enterprise Ready
 
 | Feature             | Priority | Description                    |

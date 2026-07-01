@@ -691,10 +691,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               metadata.call = incoming.call;
             }
 
+            const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
+
             const dbMessage = this.messageRepository.create({
               sessionId: id,
               waMessageId: incoming.id,
               chatId: incoming.chatId,
+              chatName,
               from: incoming.from,
               to: incoming.to,
               body: incoming.body,

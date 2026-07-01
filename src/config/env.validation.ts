@@ -87,6 +87,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'DATABASE_POOL_SIZE',
     'REDIS_CONNECT_TIMEOUT_MS',
     'MAX_CONCURRENT_SESSIONS', // 0 = unlimited
+    'INGRESS_INSTANCE_TTL',
   ]) {
     checkNonNegativeInt(key);
   }
@@ -102,7 +103,13 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       errors.push(`${key} must be a positive integer (got "${raw}")`);
     }
   };
-  for (const key of ['RATE_LIMIT_SHORT_LIMIT', 'RATE_LIMIT_MEDIUM_LIMIT', 'RATE_LIMIT_LONG_LIMIT', 'WEBHOOK_TIMEOUT']) {
+  for (const key of [
+    'RATE_LIMIT_SHORT_LIMIT',
+    'RATE_LIMIT_MEDIUM_LIMIT',
+    'RATE_LIMIT_LONG_LIMIT',
+    'WEBHOOK_TIMEOUT',
+    'INGRESS_INSTANCE_LIMIT',
+  ]) {
     checkPositiveInt(key);
   }
 

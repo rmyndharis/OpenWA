@@ -1,4 +1,6 @@
 import { WorkerToHostMessage, HostToWorkerMessage } from './protocol';
+import { ConversationSendEnvelope } from '../plugin.interfaces';
+import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
 
 /**
  * Worker-side correlation for capability calls. Each `call` posts a `cap` request and resolves when
@@ -49,6 +51,12 @@ export interface SandboxCapabilityContext {
   net: {
     fetch(url: string, init?: unknown): Promise<unknown>;
   };
+  conversations: {
+    send(env: ConversationSendEnvelope): Promise<unknown>;
+  };
+  handover: {
+    set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
+  };
 }
 
 /** Build the proxy capability context handed to a sandboxed plugin in the worker. */
@@ -74,6 +82,12 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
     },
     net: {
       fetch: (url, init) => client.call('net.fetch', [url, init]),
+    },
+    conversations: {
+      send: env => client.call('conversation.send', [env]),
+    },
+    handover: {
+      set: (key, state) => client.call('handover.set', [key, state]),
     },
   };
 }

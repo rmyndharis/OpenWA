@@ -7,8 +7,14 @@ import type { LidMappingStore } from '../identity/lid-mapping-store.service';
  * Baileys `Contact` does not include a `phoneNumber` field, but WhatsApp Business events may supply
  * the resolved phone JID alongside the lid-based id. We extend the input type locally so callers can
  * pass `phoneNumber` when available (e.g. from `contacts.upsert` payloads that carry lid+pn pairs).
+ *
+ * `jid` is declared locally as well: it carries the contact's phone `@s.whatsapp.net` on
+ * `@whiskeysockets/baileys` 6.7.x, but the field was dropped from `Contact` in 6.17.x. Declaring it
+ * here (optional) keeps the `merged.jid` phone fallback type-safe across both engine versions — the
+ * value is read at runtime on 6.7.x and is simply `undefined` (harmlessly skipped) on newer Baileys,
+ * instead of becoming an `error`-typed access that trips the type-aware `no-unsafe-*` lint rules.
  */
-type BaileysContactWithPhone = BaileysContact & { phoneNumber?: string };
+type BaileysContactWithPhone = BaileysContact & { phoneNumber?: string; jid?: string };
 
 interface LastMessage {
   key: WAMessageKey;

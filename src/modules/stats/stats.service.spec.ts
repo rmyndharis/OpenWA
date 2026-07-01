@@ -86,6 +86,19 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     expect(stats.timeSeries[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:00:00$/);
   });
 
+  it('getMessageStats topChats surfaces chatName via the MAX aggregate (ignoring null rows)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ chatId: 'alice@c.us', chatName: 'Alice', direction: MessageDirection.INCOMING });
+    await seedMessage({ chatId: 'alice@c.us', chatName: undefined, direction: MessageDirection.INCOMING });
+
+    const stats = await service.getMessageStats('24h');
+    const chat = stats.topChats.find(c => c.chatId === 'alice@c.us');
+    // MAX(m.chatName) across the group returns the non-null name, so a legacy null row can't blank it.
+    expect(chat?.chatName).toBe('Alice');
+  });
+
   it('time-series query never groups by the bare reserved word `timestamp` (Postgres-safe)', async () => {
     await ds
       .getRepository(Session)

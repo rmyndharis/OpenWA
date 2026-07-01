@@ -52,6 +52,10 @@ export class Message {
   @Column()
   chatId: string;
 
+  /** Human-readable name for the chat (contact pushName, group name, etc). Populated on save when available — null for legacy rows. */
+  @Column({ nullable: true })
+  chatName?: string;
+
   @Column()
   from: string;
 

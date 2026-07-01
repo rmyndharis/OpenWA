@@ -13,6 +13,8 @@ import {
   PluginManifest,
   PluginMessagingCapability,
   PluginNetCapability,
+  PluginConversationsCapability,
+  PluginHandoverCapability,
   PluginInstance,
   PluginStatus,
   PluginContext,
@@ -27,9 +29,15 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
+import { buildConversationSendFacade } from './conversation-send-facade';
+import { shouldDispatchInbound } from './handover-gate';
+import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
+import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
@@ -549,6 +557,35 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Dispatch a queued ingress job into its plugin's live sandbox worker. Called from IngressProcessor,
+   * mirroring checkPluginHealth's sandboxHosts lookup. Throws when the plugin has no live
+   * worker (disabled/crashed since the job was enqueued) or when the worker's handler itself reports
+   * failure (`!result.ok`, e.g. a 502/504/500) — either way BullMQ's retry/DLQ machinery takes over.
+   */
+  async dispatchWebhookForInstance(d: IngressJobData): Promise<void> {
+    const host = this.sandboxHosts.get(d.pluginId);
+    if (!host) {
+      throw new Error('no live sandbox host for plugin ' + d.pluginId);
+    }
+    const result = await host.dispatchWebhook({
+      instanceId: d.instanceId,
+      route: d.route,
+      method: 'POST',
+      headers: d.payload.headers,
+      query: d.payload.query,
+      body: d.payload.body,
+      rawBody: d.payload.rawBody,
+      verified: true,
+      deliveryId: d.deliveryId,
+      sessionId: d.sessionId,
+      timeoutMs: INGRESS_DISPATCH_TIMEOUT_MS,
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? 'ingress dispatch failed with status ' + result.status);
+    }
+  }
+
+  /**
    * Resolve MessageService at call time via a lazy require so plugin-loader creates NO top-level
    * module-load edge to message.service. A static import closes the cycle
    * plugin-loader -> message -> session -> engine.factory -> core/plugins barrel -> plugin-loader,
@@ -566,6 +603,17 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       require('../../modules/session/session.service') as typeof import('../../modules/session/session.service');
     return this.moduleRef.get(mod.SessionService, { strict: false });
+  }
+
+  /**
+   * Same lazy-require pattern as getMessageService/getSessionService: a static import of the
+   * integration module would add a top-level edge back into plugin-loader's own module graph.
+   */
+  private getConversationMappingService(): ConversationMappingService {
+    const mod =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('../../modules/integration/conversation-mapping.service') as typeof import('../../modules/integration/conversation-mapping.service');
+    return this.moduleRef.get(mod.ConversationMappingService, { strict: false });
   }
 
   /**
@@ -625,6 +673,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   protected createSandboxHost(
     capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
+    onWebhookSubscribe?: (route: string) => void,
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
   ): PluginWorkerHost {
@@ -638,6 +687,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       }),
       capDispatcher,
       onHookSubscribe,
+      onWebhookSubscribe,
       onLog,
       runWithHookGuard,
       SANDBOX_MAX_INFLIGHT_CAPS,
@@ -717,6 +767,30 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           // Per-session activation gate: a session-scoped plugin only sees events for the sessions
           // it is activated for. Pass-through (don't dispatch into the worker) otherwise.
           if (!this.isHookActive(plugin, hookCtx.sessionId)) return { continue: true };
+          // Handover gate: once a human has taken over (or closed) a conversation, the bot stops
+          // seeing its inbound messages. Scoped to message:received only — every other hook event is
+          // unaffected. Best-effort + fail-open: a lookup failure (or an event/mapping shape the gate
+          // can't resolve) must never block a normal message from reaching the adapter.
+          if (event === 'message:received') {
+            try {
+              const chatId = (hookCtx.data as { chatId?: string } | undefined)?.chatId;
+              if (chatId && hookCtx.sessionId) {
+                const mapping = await this.getConversationMappingService().findForChat(
+                  hookCtx.sessionId,
+                  chatId,
+                  pluginId,
+                );
+                if (!shouldDispatchInbound(mapping)) return { continue: true };
+              }
+            } catch (error) {
+              this.logger.debug(`Handover gate lookup failed for plugin ${pluginId}; dispatching normally`, {
+                pluginId,
+                event,
+                error: error instanceof Error ? error.message : String(error),
+                action: 'handover_gate_fail_open',
+              });
+            }
+          }
           return liveHost
             .dispatchHook({
               event,
@@ -745,6 +819,22 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       );
     };
 
+    // When the worker claims an ingress route, record it against the manifest-declared routes so the
+    // host knows which routes this worker will handle. Same hardening as onHookSubscribe (the wire
+    // `route` is an arbitrary untrusted string): drop when the manifest lacks 'webhook:ingress', drop
+    // an undeclared route (warn once), dedup, and cap. subscribedRoutes is local to this enable call,
+    // so it is dropped on disable exactly as subscribedEvents is.
+    const subscribedRoutes = new Set<string>();
+    const declaredRoutes = new Set((plugin.manifest.ingress ?? []).map(r => r.route));
+    const onWebhookSubscribe = makeOnWebhookSubscribe({
+      pluginId,
+      declaredRoutes,
+      hasPermission: (plugin.manifest.permissions ?? []).includes(PluginCapabilityPermission.WEBHOOK_INGRESS),
+      subscribed: subscribedRoutes,
+      maxRoutes: declaredRoutes.size,
+      warn: (message, meta) => this.logger.warn(message, meta),
+    });
+
     // Route the worker plugin's ctx.logger.* calls to the same per-plugin logger an in-process plugin
     // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout.
     const onLog = (level: PluginLogLevel, message: string, meta?: Record<string, unknown>): void => {
@@ -755,6 +845,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     const host = this.createSandboxHost(
       (verb, args) => dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
+      onWebhookSubscribe,
       onLog,
       // Re-establish the in-flight hook context for worker-initiated capability calls, so a sandboxed
       // plugin that sends from within a send hook can't loop the event back into itself unboundedly.
@@ -858,6 +949,55 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           return performPluginFetch(url, init);
         },
       } satisfies PluginNetCapability,
+      conversations: buildConversationSendFacade({
+        manifest: plugin.manifest,
+        assertPermission: this.assertPermission.bind(this),
+        assertSessionAllowed: this.assertSessionAllowed.bind(this),
+        resolveChatId: async env => {
+          if (!env.instanceId || !env.source) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: conversation.send requires chatId, or both instanceId and source to resolve one`,
+            );
+          }
+          const mapping = await this.getConversationMappingService().getByProvider(
+            plugin.manifest.id,
+            env.instanceId,
+            env.source.externalConversationId,
+          );
+          if (!mapping) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: no conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId}`,
+            );
+          }
+          return mapping.chatId;
+        },
+        // Re-establish the in-flight hook context around the downstream send so an adapter that calls
+        // conversation.send from within its own ingress handling can't echo-loop back into itself via
+        // its own outbound message:sending hook (mirrors the sandboxed worker-cap wrap below).
+        runGuarded: (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
+        sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
+        reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
+      } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,
+      handover: {
+        set: async (key, state) => {
+          // Same gate as conversation.send: flipping handover is part of owning the conversation, so
+          // it reuses CONVERSATION_SEND rather than adding a new permission.
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
+          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          const mapping = await this.getConversationMappingService().get({
+            sessionId: key.sessionId,
+            chatId: key.chatId,
+            pluginId: plugin.manifest.id,
+            instanceId: key.instanceId,
+          });
+          if (!mapping) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: no conversation mapping for session ${key.sessionId} / chat ${key.chatId} / instance ${key.instanceId}`,
+            );
+          }
+          await this.getConversationMappingService().setHandover(mapping.id, state);
+        },
+      } satisfies PluginHandoverCapability,
     };
   }
 

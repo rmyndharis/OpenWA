@@ -7,6 +7,7 @@ import { HookManager, HookEvent, HookHandler } from '../hooks';
 import type { MessageResponseDto } from '../../modules/message/dto';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { PluginNetRequestInit, PluginNetResponse } from './plugin-net';
+import type { HandoverState } from '../../modules/integration/entities/conversation-mapping.entity';
 
 // ============================================================================
 // Plugin Types
@@ -90,6 +91,14 @@ export interface PluginManifest {
   // Localized dashboard text (name/description/config field titles) per locale code. English is the
   // base manifest + fallback. Dashboard-only; does not affect runtime behavior.
   i18n?: PluginI18n;
+
+  // Integration SDK major.minor the plugin was authored against (e.g. '1' or '1.2'). Only the major
+  // is enforced — see SUPPORTED_SDK_MAJOR / validateIngressManifest. Absent = treated as '1'.
+  sdkVersion?: string;
+
+  // Inbound webhook routes this plugin claims (requires the `webhook:ingress` permission). Validated
+  // by validateIngressManifest; not yet wired into the loader (see that function's doc comment).
+  ingress?: PluginIngressRoute[];
 }
 
 /** Localized overrides for a plugin's dashboard-facing text, per locale (dashboard i18n). */
@@ -150,8 +159,97 @@ export const PluginCapabilityPermission = {
   ENGINE_READ: 'engine:read',
   /** `ctx.net.fetch` — SSRF-guarded outbound HTTP, scoped to the manifest `net.allow` host list. */
   NET_FETCH: 'net:fetch',
+  /** `ctx.registerWebhook` — claim an inbound ingress route. Loader-enforced; cannot be widened by config. */
+  WEBHOOK_INGRESS: 'webhook:ingress',
+  /** `ctx.conversations.send` — normalized outbound send translated to MessageService. */
+  CONVERSATION_SEND: 'conversation:send',
 } as const;
 export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[keyof typeof PluginCapabilityPermission];
+
+// ============================================================================
+// Integration SDK v1 — inbound webhook ingress + normalized outbound send
+// ============================================================================
+
+/** How an inbound webhook's authenticity is established before the plugin sees it. */
+export interface IngressSignatureSpec {
+  scheme: 'hmac-sha256' | 'shared-secret' | 'none';
+  header?: string;
+  // Template over which the HMAC is computed. `{rawBody}` `{timestamp}` `{id}` placeholders.
+  contentTemplate?: string;
+  encoding?: 'hex' | 'base64';
+  prefix?: string;
+  timestampHeader?: string;
+  toleranceSec?: number; // when present, must be > 0 (see validateIngressManifest)
+  dedupHeader?: string;
+}
+
+/** Provider webhook-verification challenge (e.g. a GET handshake on route registration). */
+export interface IngressChallengeSpec {
+  method: 'GET';
+  tokenParam: string;
+  echoParam: string;
+}
+
+/** One inbound webhook route a plugin claims. Requires the `webhook:ingress` permission. */
+export interface PluginIngressRoute {
+  route: string; // host prefixes it; the plugin never binds a port
+  mode: 'async' | 'sync-reply';
+  signature: IngressSignatureSpec;
+  challenge?: IngressChallengeSpec;
+  verify: 'core' | 'self';
+  maxBodyBytes: number;
+  // Optional: where the provider's conversation id lives, so the host can compute a per-conversation
+  // ordering key (P1). Absent => the P1 lock falls back to per-instance serialization. The host never
+  // needs to understand the provider's schema beyond this one pointer.
+  conversationId?: { header?: string; jsonPointer?: string };
+}
+
+// Normalized outbound envelope for ctx.conversations.send (POJO across the wire).
+export interface ConversationSendEnvelope {
+  sessionId?: string;
+  instanceId?: string;
+  chatId?: string;
+  type: 'text' | 'image' | 'file' | 'audio' | 'video' | 'location';
+  text?: string;
+  mediaUrl?: string;
+  replyTo?: string;
+  source?: { provider: string; externalConversationId: string };
+}
+
+/** Integration SDK major version this host supports. A plugin whose `sdkVersion` major differs is refused. */
+export const SUPPORTED_SDK_MAJOR = 1;
+
+/**
+ * Validates a manifest's `ingress` declarations: SDK major compatibility, the `webhook:ingress`
+ * permission, route uniqueness, and that a declared `toleranceSec` is usable (> 0 — a replay window
+ * of zero or less would make the tolerance check a no-op). A manifest with no `ingress` entries is a
+ * no-op. Pure validation — not yet called from the plugin loader (wiring lands in a later task).
+ */
+export function validateIngressManifest(manifest: PluginManifest): void {
+  if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate
+  const declaredMajor = Number.parseInt((manifest.sdkVersion ?? '1').split('.')[0], 10);
+  if (!Number.isFinite(declaredMajor) || declaredMajor !== SUPPORTED_SDK_MAJOR) {
+    throw new Error(
+      `Plugin ${manifest.id}: SDK major ${manifest.sdkVersion} is not supported by this host (supports ${SUPPORTED_SDK_MAJOR})`,
+    );
+  }
+  const perms = manifest.permissions ?? [];
+  if (!perms.includes(PluginCapabilityPermission.WEBHOOK_INGRESS)) {
+    throw new Error(`Plugin ${manifest.id}: declares ingress routes but is missing the 'webhook:ingress' permission`);
+  }
+  const seen = new Set<string>();
+  for (const r of manifest.ingress) {
+    if (!r.route || seen.has(r.route)) {
+      throw new Error(`Plugin ${manifest.id}: duplicate or empty ingress route '${r.route}'`);
+    }
+    seen.add(r.route);
+    if (r.signature.toleranceSec !== undefined && r.signature.toleranceSec <= 0) {
+      throw new Error(
+        `Plugin ${manifest.id}: route '${r.route}' toleranceSec must be > 0 (a replay guard would be a no-op)`,
+      );
+    }
+  }
+}
 
 /**
  * Thrown by a plugin capability when a call is rejected (missing permission, out-of-scope session,
@@ -180,6 +278,19 @@ export interface PluginEngineReadCapability {
 /** Outbound HTTP for a plugin — always through the host SSRF guard, scoped to `manifest.net.allow`. */
 export interface PluginNetCapability {
   fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
+}
+
+/** Normalized outbound send for a plugin — translated host-side to MessageService.sendText/reply. */
+export interface PluginConversationsCapability {
+  send(env: ConversationSendEnvelope): Promise<unknown>;
+}
+
+/**
+ * Flip a mapped conversation's handover state. Reuses the `conversation:send` permission — flipping
+ * handover is part of owning the conversation, not a distinct capability grant.
+ */
+export interface PluginHandoverCapability {
+  set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
 }
 
 // ============================================================================
@@ -214,6 +325,12 @@ export interface PluginContext {
 
   // SSRF-guarded outbound HTTP, scoped to the manifest `net.allow` host list.
   net: PluginNetCapability;
+
+  // Normalized outbound send, translated to MessageService. Requires `conversation:send`.
+  conversations: PluginConversationsCapability;
+
+  // Flip a mapped conversation's bot/human/closed handover state. Requires `conversation:send`.
+  handover: PluginHandoverCapability;
 }
 
 export interface PluginLogger {

@@ -22,6 +22,12 @@ function makeContext() {
     net: {
       fetch: jest.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK', headers: {}, body: 'x' }),
     },
+    conversations: {
+      send: jest.fn().mockResolvedValue({ id: 'm3' }),
+    },
+    handover: {
+      set: jest.fn().mockResolvedValue(undefined),
+    },
   };
 }
 

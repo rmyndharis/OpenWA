@@ -191,7 +191,7 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
 
   it('bridges ctx.logger and ctx.config into a sandboxed plugin', async () => {
     const logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }> = [];
-    const host = new PluginWorkerHost(makeChannel(), undefined, undefined, (level, message, meta) =>
+    const host = new PluginWorkerHost(makeChannel(), undefined, undefined, undefined, (level, message, meta) =>
       logs.push({ level, message, meta }),
     );
 

@@ -1,7 +1,15 @@
-import { PluginContext } from '../plugin.interfaces';
+import { ConversationSendEnvelope, PluginContext } from '../plugin.interfaces';
+import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
 
 /** The subset of the plugin context a sandboxed plugin reaches across the bridge. */
-export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'storage' | 'net'>;
+export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'storage' | 'net'> & {
+  conversations: {
+    send(env: ConversationSendEnvelope): Promise<unknown>;
+  };
+  handover: {
+    set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
+  };
+};
 
 /**
  * Dispatch a worker-initiated capability `verb` to the live, permission-enforcing context the loader
@@ -43,6 +51,13 @@ export async function dispatchCapabilityVerb(
       return context.storage.list(args[0] as string | undefined);
     case 'net.fetch':
       return context.net.fetch(s(0), args[1] as Parameters<typeof context.net.fetch>[1]);
+    case 'conversation.send':
+      return context.conversations.send(args[0] as ConversationSendEnvelope);
+    case 'handover.set':
+      return context.handover.set(
+        args[0] as { sessionId: string; chatId: string; instanceId: string },
+        args[1] as HandoverState,
+      );
     default:
       throw new Error(`Unknown capability verb: ${verb}`);
   }

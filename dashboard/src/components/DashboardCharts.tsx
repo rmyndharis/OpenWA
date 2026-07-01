@@ -73,7 +73,7 @@ export function DashboardCharts() {
   const byType = Object.entries(data?.byType ?? {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
-  const topChats = (data?.topChats ?? []).slice(0, 8).map(c => ({ name: shortChat(c.chatId), count: c.messageCount }));
+  const topChats = (data?.topChats ?? []).slice(0, 8).map(c => ({ name: c.chatName || shortChat(c.chatId), count: c.messageCount }));
   const hasData = timeSeries.length > 0 || byType.length > 0 || topChats.length > 0;
 
   return (
