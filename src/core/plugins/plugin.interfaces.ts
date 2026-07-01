@@ -7,6 +7,7 @@ import { HookManager, HookEvent, HookHandler } from '../hooks';
 import type { MessageResponseDto } from '../../modules/message/dto';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { PluginNetRequestInit, PluginNetResponse } from './plugin-net';
+import type { HandoverState } from '../../modules/integration/entities/conversation-mapping.entity';
 
 // ============================================================================
 // Plugin Types
@@ -284,6 +285,14 @@ export interface PluginConversationsCapability {
   send(env: ConversationSendEnvelope): Promise<unknown>;
 }
 
+/**
+ * Flip a mapped conversation's handover state. Reuses the `conversation:send` permission — flipping
+ * handover is part of owning the conversation, not a distinct capability grant.
+ */
+export interface PluginHandoverCapability {
+  set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
+}
+
 // ============================================================================
 // Plugin Context (passed to plugin on initialization)
 // ============================================================================
@@ -319,6 +328,9 @@ export interface PluginContext {
 
   // Normalized outbound send, translated to MessageService. Requires `conversation:send`.
   conversations: PluginConversationsCapability;
+
+  // Flip a mapped conversation's bot/human/closed handover state. Requires `conversation:send`.
+  handover: PluginHandoverCapability;
 }
 
 export interface PluginLogger {

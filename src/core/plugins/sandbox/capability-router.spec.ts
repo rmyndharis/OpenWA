@@ -25,6 +25,9 @@ function makeContext() {
     conversations: {
       send: jest.fn().mockResolvedValue({ id: 'm3' }),
     },
+    handover: {
+      set: jest.fn().mockResolvedValue(undefined),
+    },
   };
 }
 

@@ -1,4 +1,9 @@
-import { ConversationSendEnvelope, PluginCapabilityPermission, PluginManifest } from './plugin.interfaces';
+import {
+  ConversationSendEnvelope,
+  PluginCapabilityError,
+  PluginCapabilityPermission,
+  PluginManifest,
+} from './plugin.interfaces';
 
 export interface ConversationSendDeps {
   manifest: PluginManifest;
@@ -22,7 +27,7 @@ export function buildConversationSendFacade(deps: ConversationSendDeps) {
     async send(env: ConversationSendEnvelope): Promise<unknown> {
       deps.assertPermission(deps.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
       const sessionId = env.sessionId;
-      if (!sessionId) throw new Error('conversation.send: sessionId is required');
+      if (!sessionId) throw new PluginCapabilityError('conversation.send: sessionId is required');
       deps.assertSessionAllowed(deps.manifest, sessionId);
       const chatId = env.chatId ?? (await deps.resolveChatId(env));
       // Only text/reply are wired in P0; media types are additive in a later minor.

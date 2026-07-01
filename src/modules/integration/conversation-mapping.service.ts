@@ -30,6 +30,13 @@ export class ConversationMappingService {
     return this.repo.findOne({ where: key });
   }
 
+  // Handover-gate lookup: any mapped instance for this plugin's chat, without resolving a specific
+  // instanceId at message time. The gate only needs "is THIS plugin's chat handed over?" — if a plugin
+  // has multiple instances mapped to the same chat, they share handover intent for this purpose.
+  findForChat(sessionId: string, chatId: string, pluginId: string): Promise<ConversationMapping | null> {
+    return this.repo.findOne({ where: { sessionId, chatId, pluginId } });
+  }
+
   getByProvider(
     pluginId: string,
     instanceId: string,

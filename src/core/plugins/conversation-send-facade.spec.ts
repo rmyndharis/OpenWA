@@ -1,7 +1,21 @@
 import { buildConversationSendFacade } from './conversation-send-facade';
+import { PluginCapabilityError } from './plugin.interfaces';
 
 describe('conversation.send facade', () => {
   const manifest = (perms: string[]) => ({ id: 'chatwoot', permissions: perms, sessions: ['*'] });
+
+  it('throws PluginCapabilityError when sessionId is missing', async () => {
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionAllowed: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText: jest.fn(),
+      reply: jest.fn(),
+    } as never);
+    await expect(facade.send({ type: 'text', text: 'x', chatId: 'c' })).rejects.toThrow(PluginCapabilityError);
+  });
 
   it('throws PluginCapabilityError when conversation:send is not granted', async () => {
     const facade = buildConversationSendFacade({
