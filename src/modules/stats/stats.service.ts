@@ -208,10 +208,9 @@ export class StatsService {
       .createQueryBuilder('m')
       .select('m.chatId', 'chatId')
       .addSelect('COUNT(*)', 'messageCount')
-      .addSelect('m.chatName', 'chatName')
+      .addSelect('MAX(m.chatName)', 'chatName')
       .where('m.createdAt >= :since', { since })
       .groupBy('m.chatId')
-      .addGroupBy('m.chatName')
       // Order by the aggregate expression, not the "messageCount" alias: Postgres folds an unquoted
       // ORDER BY messageCount to lowercase and 42703s against the quoted alias (SQLite tolerated it).
       .orderBy('COUNT(*)', 'DESC')
@@ -268,10 +267,9 @@ export class StatsService {
       .select('m.chatId', 'chatId')
       .addSelect('COUNT(*)', 'count')
       .addSelect(maxCreatedAtSql(this.dataDbType), 'lastActive')
-      .addSelect('m.chatName', 'chatName')
+      .addSelect('MAX(m.chatName)', 'chatName')
       .where('m.sessionId = :sessionId', { sessionId })
       .groupBy('m.chatId')
-      .addGroupBy('m.chatName')
       .orderBy('count', 'DESC')
       .limit(10)
       .getRawMany<{ chatId: string; count: string; lastActive: string; chatName: string | null }>();
