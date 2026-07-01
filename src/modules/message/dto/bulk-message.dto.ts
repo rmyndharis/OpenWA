@@ -35,6 +35,11 @@ class BulkMediaDto {
   @IsOptional()
   @IsString()
   filename?: string;
+
+  @ApiPropertyOptional({ description: 'Audio only: send as a WhatsApp voice note (PTT)' })
+  @IsOptional()
+  @IsBoolean()
+  ptt?: boolean;
 }
 
 class BulkMessageContentDto {

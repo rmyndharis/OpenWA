@@ -176,6 +176,30 @@ describe('BulkMessageService.processBatch', () => {
     );
   });
 
+  it('sends a bulk audio item with ptt as a voice note and persists type "voice"', async () => {
+    engine.sendAudioMessage = jest.fn().mockResolvedValue({ id: 'wa2', timestamp: 222 });
+    const batch = {
+      id: 'b1',
+      batchId: 'bx',
+      sessionId: 's1',
+      status: BatchStatus.PENDING,
+      currentIndex: 0,
+      messages: [{ chatId: 'c0@c.us', type: 'audio', content: { audio: { url: 'https://x/v', ptt: true } } }],
+      options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+      progress: { total: 1, sent: 0, failed: 0, pending: 1, cancelled: 0 },
+      results: [],
+    } as unknown as MessageBatch;
+    repo.findOne.mockResolvedValue(batch);
+
+    await runProcessBatch();
+
+    expect(engine.sendAudioMessage).toHaveBeenCalledWith(
+      'c0@c.us',
+      expect.objectContaining({ ptt: true, mimetype: 'audio/ogg; codecs=opus' }),
+    );
+    expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ type: 'voice' }));
+  });
+
   it('strips base64 media payloads from the stored batch once it completes (footprint)', async () => {
     const batch = makeBatch(1);
     batch.messages = [

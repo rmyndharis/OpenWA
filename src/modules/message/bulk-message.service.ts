@@ -24,7 +24,7 @@ interface BulkMessageContent {
   caption?: string;
   image?: { url?: string; base64?: string; mimetype?: string; filename?: string };
   video?: { url?: string; base64?: string; mimetype?: string; filename?: string };
-  audio?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+  audio?: { url?: string; base64?: string; mimetype?: string; filename?: string; ptt?: boolean };
   document?: { url?: string; base64?: string; mimetype?: string; filename?: string };
 }
 
@@ -384,12 +384,14 @@ export class BulkMessageService implements OnApplicationBootstrap {
     result: MessageResult,
   ): Promise<void> {
     const media = content.image ?? content.video ?? content.audio ?? content.document;
+    // A bulk audio item flagged ptt is a voice note; store it in the 'voice' bucket like inbound PTT.
+    const persistType = type === 'audio' && content.audio?.ptt ? 'voice' : type;
     try {
       await this.messageService.saveOutgoingMessage(sessionId, {
         waMessageId: result.id,
         chatId,
         body: content.text ?? content.caption ?? '',
-        type,
+        type: persistType,
         timestamp: result.timestamp,
         status: MessageStatus.SENT,
         metadata: media
@@ -430,8 +432,9 @@ export class BulkMessageService implements OnApplicationBootstrap {
         });
       case 'audio':
         return engine.sendAudioMessage(chatId, {
-          mimetype: content.audio?.mimetype || 'audio/mpeg',
+          mimetype: content.audio?.mimetype || (content.audio?.ptt ? 'audio/ogg; codecs=opus' : 'audio/mpeg'),
           data: content.audio?.url || content.audio?.base64 || '',
+          ptt: content.audio?.ptt,
         });
       case 'document':
         return engine.sendDocumentMessage(chatId, {
