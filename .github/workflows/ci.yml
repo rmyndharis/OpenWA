@@ -60,7 +60,7 @@ jobs:
         run: npm run test:e2e
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         if: always()
         with:
           files: ./coverage/lcov.info
