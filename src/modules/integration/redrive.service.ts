@@ -5,7 +5,7 @@ import { IntegrationDeliveryFailure } from './entities/integration-delivery-fail
 import { IngressEnqueueService } from './ingress-enqueue.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 
-// P0 Task 6 persists the full ingress payload on the DLQ row as
+// The ingress processor persists the full ingress payload on the DLQ row as
 // { route, providerConversationId?, ingress: <headers/query/body/rawBody> }, so redrive is
 // self-contained: it reads stored.ingress back out and re-enqueues without re-reading ingress_events.
 interface StoredDlqPayload {
