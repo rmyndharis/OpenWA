@@ -35,6 +35,8 @@ export interface MediaInput {
   caption?: string;
   /** Neutral WIDs (`<phone>@c.us`) to @mention in the caption. The adapter de-normalizes per engine. */
   mentions?: string[];
+  /** When true, send as a WhatsApp voice note (PTT). audio-only; ignored by other media types. */
+  ptt?: boolean;
 }
 
 /**

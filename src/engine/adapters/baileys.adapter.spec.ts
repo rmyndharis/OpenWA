@@ -1409,6 +1409,20 @@ describe('BaileysAdapter media sends', () => {
     });
   });
 
+  it('sendAudioMessage with ptt sends a voice note (ptt:true)', async () => {
+    const adapter = await ready();
+    await adapter.sendAudioMessage('628111@s.whatsapp.net', {
+      mimetype: 'audio/ogg; codecs=opus',
+      data: Buffer.from([1]),
+      ptt: true,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      audio: Buffer.from([1]),
+      mimetype: 'audio/ogg; codecs=opus',
+      ptt: true,
+    });
+  });
+
   it('sendStickerMessage sends the sticker buffer', async () => {
     const adapter = await ready();
     await adapter.sendStickerMessage('628111@s.whatsapp.net', { mimetype: 'image/webp', data: Buffer.from([7]) });

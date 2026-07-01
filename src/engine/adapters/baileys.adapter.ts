@@ -534,7 +534,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { audio: data, mimetype, ptt: false });
+    return this.sendContent(chatId, { audio: data, mimetype, ptt: media.ptt ?? false });
   }
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
