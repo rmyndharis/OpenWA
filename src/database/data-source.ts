@@ -23,6 +23,7 @@ const sqliteDataSource = new DataSource({
     sourceGlob('..', 'modules', 'message', '**', '*.entity{.ts,.js}'),
     sourceGlob('..', 'modules', 'template', '**', '*.entity{.ts,.js}'),
     sourceGlob('..', 'engine', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'integration', '**', '*.entity{.ts,.js}'),
   ],
   migrations: [sourceGlob('migrations', '*{.ts,.js}')],
   synchronize: false,
@@ -46,6 +47,7 @@ export const postgresDataSource = new DataSource({
     sourceGlob('..', 'modules', 'message', '**', '*.entity{.ts,.js}'),
     sourceGlob('..', 'modules', 'template', '**', '*.entity{.ts,.js}'),
     sourceGlob('..', 'engine', '**', '*.entity{.ts,.js}'),
+    sourceGlob('..', 'modules', 'integration', '**', '*.entity{.ts,.js}'),
   ],
   migrations: [sourceGlob('migrations', '*{.ts,.js}')],
   synchronize: false, // Never auto-sync in production
