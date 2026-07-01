@@ -15,13 +15,13 @@ export class PluginInstance {
   @Column()
   instanceId: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   sessionScope: string | null; // resolved session id this instance acts on; null = inherit manifest.sessions
 
   @Column()
   secret: string; // host-minted ingress HMAC secret (masked on read via redactSecretConfig)
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   verifyToken: string | null; // optional provider challenge token
 
   @Column({ type: jsonColumnType(), nullable: true })

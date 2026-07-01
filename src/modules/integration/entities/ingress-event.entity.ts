@@ -26,7 +26,7 @@ export class IngressEvent {
   @Column({ type: jsonColumnType() })
   payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   sessionId: string | null;
 
   @CreateDateColumn()

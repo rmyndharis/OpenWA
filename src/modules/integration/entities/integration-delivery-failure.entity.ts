@@ -18,10 +18,10 @@ export class IntegrationDeliveryFailure {
   @Column()
   instanceId: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   sessionId: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', nullable: true })
   deliveryId: string | null;
 
   @Column({ type: 'int' })
