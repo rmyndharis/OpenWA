@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { AddIntegrationFabric1781900000000 } from './1781900000000-AddIntegrationFabric';
+import { AddIntegrationFabric1781900000000 } from './migrations/1781900000000-AddIntegrationFabric';
 
 describe('AddIntegrationFabric migration (sqlite)', () => {
   let ds: DataSource;
