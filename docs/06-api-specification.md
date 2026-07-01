@@ -4519,7 +4519,7 @@ These are the events OpenWA actually emits. A webhook is registered with an `eve
 | `message.sent` | An outbound message is created/sent from this session | Same message object shape as `message.received` |
 | `message.ack` | A delivery/read receipt updates an outbound message | `{ id, messageId, status, ack }` — `status` is the canonical state (`pending`/`sent`/`delivered`/`read`/`failed`); `ack` is the deprecated legacy integer derived from it |
 | `message.failed` | A receipt resolves to `failed` (dispatched in addition to `message.ack`) | `{ id, messageId, status: "failed", ack: -1 }` |
-| `message.revoked` | A message is deleted/recalled | The engine's revoked-message object (e.g. `{ id, … }`) |
+| `message.revoked` | A message is deleted/recalled | `{ id, revokedId?, chatId, from, to, type: "revoked", body: "", timestamp }` — **reconcile on `revokedId`** (the original deleted message's id), falling back to `id`. On whatsapp-web.js `id` is the *revocation notification* (a distinct message that won't match a stored id) and `revokedId` may be absent when the original isn't cached locally; on Baileys the two coincide |
 | `message.reaction` | A reaction is added, changed, or removed | `{ messageId, chatId, reaction, senderId, reactions }` — `reactions` is the post-apply `{ senderId: emoji }` snapshot; `reaction` is empty when removed |
 | `session.qr` | A new pairing QR is generated | `{ sessionId, qr }` (raw QR string) |
 | `session.authenticated` | The session pairs and becomes ready | `{ sessionId, phone, pushName }` |

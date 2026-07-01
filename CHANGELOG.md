@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deleting a message "for everyone" now reliably flags it as revoked, and `message.revoked` carries the original message id.** On the whatsapp-web.js engine the revoke event's `id` is the _revocation notification_ — a distinct message whose id never matched the stored row — so the stored message was silently never marked revoked, and webhook/WebSocket consumers had no id to reconcile against. The `message.revoked` payload now includes an optional `revokedId` (the original deleted message's id) that both engines populate; OpenWA flags the stored message on `revokedId` (falling back to `id`), and consumers should match the same way. Purely additive and backward-compatible — on Baileys `id` and `revokedId` coincide. (#567) Thanks @JibayMcs.
+
 ## [0.7.17] - 2026-07-01
 
 ### Added
