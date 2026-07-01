@@ -17,14 +17,14 @@ export interface IngressJobData {
   deliveryId: string;
   sessionId?: string;
   // Best-effort provider conversation id, extracted host-side from the manifest's conversationId
-  // pointer (see Task 7). Undefined when the route declares no pointer — P1's ordering lock then
-  // serializes per instance. Carried through P0 unused (concurrency=1) so P1 needs no re-plumb.
+  // pointer. Undefined when the route declares no pointer — the per-conversation ordering lock then
+  // serializes per instance. Carried unused today (concurrency=1) so the scale phase needs no re-plumb.
   providerConversationId?: string;
   payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
 }
 
-// concurrency 1: per-conversation FIFO ordering is refined to a keyed advisory lock in P1; single
-// worker keeps P0 correct-by-default. ponytail: raise + add the advisory lock in P1, not before.
+// concurrency 1 by design: per-conversation FIFO ordering is refined to a keyed advisory lock in a
+// later phase; a single worker keeps ordering correct-by-default until that lock exists.
 @Processor(QUEUE_NAMES.INGRESS, { connection: workerConnectionOptions(), concurrency: 1 })
 export class IngressProcessor extends WorkerHost {
   private readonly logger = createLogger('IngressProcessor');

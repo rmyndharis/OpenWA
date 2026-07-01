@@ -555,8 +555,8 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Dispatch a queued ingress job into its plugin's live sandbox worker. Called from IngressProcessor
-   * (Task 6), mirroring checkPluginHealth's sandboxHosts lookup. Throws when the plugin has no live
+   * Dispatch a queued ingress job into its plugin's live sandbox worker. Called from IngressProcessor,
+   * mirroring checkPluginHealth's sandboxHosts lookup. Throws when the plugin has no live
    * worker (disabled/crashed since the job was enqueued) or when the worker's handler itself reports
    * failure (`!result.ok`, e.g. a 502/504/500) — either way BullMQ's retry/DLQ machinery takes over.
    */
