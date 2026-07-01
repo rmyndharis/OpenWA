@@ -43,3 +43,18 @@ export function webhookWorkerConcurrency(): number {
   const parsed = parseInt(process.env.WEBHOOK_WORKER_CONCURRENCY || '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_WEBHOOK_WORKER_CONCURRENCY;
 }
+
+/** Default number of ingress events the Worker processes in parallel. */
+const DEFAULT_INGRESS_WORKER_CONCURRENCY = 10;
+
+/**
+ * Ingress Worker concurrency. Ordering within a conversation is now guaranteed by the
+ * per-conversation KeyedAsyncLock in the processor, not by a single-worker queue, so raising
+ * concurrency here parallelizes unrelated conversations instead of head-of-line-blocking every
+ * inbound event behind the slowest one. Override via INGRESS_WORKER_CONCURRENCY; a
+ * non-positive/garbage value falls back to the default.
+ */
+export function ingressWorkerConcurrency(): number {
+  const parsed = parseInt(process.env.INGRESS_WORKER_CONCURRENCY || '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_INGRESS_WORKER_CONCURRENCY;
+}

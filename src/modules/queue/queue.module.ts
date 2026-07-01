@@ -64,6 +64,10 @@ export { QUEUE_NAMES } from './queue-names';
       name: QUEUE_NAMES.WEBHOOK,
       adapter: BullMQAdapter,
     }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.INGRESS,
+      adapter: BullMQAdapter,
+    }),
   ],
   providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],

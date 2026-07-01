@@ -3,11 +3,12 @@ import { Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
-import { workerConnectionOptions } from '../redis-connection';
+import { workerConnectionOptions, ingressWorkerConcurrency } from '../redis-connection';
 import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
 import { PluginLoaderService } from '../../../core/plugins/plugin-loader.service';
 import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
+import { KeyedAsyncLock, orderingKeyFor } from '../../integration/ordering-lock';
 
 export interface IngressJobData {
   pluginId: string;
@@ -17,16 +18,18 @@ export interface IngressJobData {
   sessionId?: string;
   // Best-effort provider conversation id, extracted host-side from the manifest's conversationId
   // pointer. Undefined when the route declares no pointer — the per-conversation ordering lock then
-  // serializes per instance. Carried unused today (concurrency=1) so the scale phase needs no re-plumb.
+  // serializes per instance instead (see orderingKeyFor in ../../integration/ordering-lock).
   providerConversationId?: string;
   payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
 }
 
-// concurrency 1 by design: per-conversation FIFO ordering is refined to a keyed advisory lock in a
-// later phase; a single worker keeps ordering correct-by-default until that lock exists.
-@Processor(QUEUE_NAMES.INGRESS, { connection: workerConnectionOptions(), concurrency: 1 })
+// Ordering within a conversation is guaranteed by the KeyedAsyncLock wrapping dispatch below, so the
+// worker no longer needs concurrency 1 to stay correct-by-default; raising it parallelizes unrelated
+// conversations instead of head-of-line-blocking every inbound event behind the slowest one.
+@Processor(QUEUE_NAMES.INGRESS, { connection: workerConnectionOptions(), concurrency: ingressWorkerConcurrency() })
 export class IngressProcessor extends WorkerHost {
   private readonly logger = createLogger('IngressProcessor');
+  private readonly lock = new KeyedAsyncLock();
 
   constructor(
     private readonly loader: PluginLoaderService,
@@ -40,7 +43,7 @@ export class IngressProcessor extends WorkerHost {
   async process(job: Job<IngressJobData>): Promise<void> {
     const d = job.data;
     try {
-      await this.loader.dispatchWebhookForInstance(d);
+      await this.lock.run(orderingKeyFor(d), () => this.loader.dispatchWebhookForInstance(d));
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const isFinalAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
