@@ -5,6 +5,7 @@ import { IngressUrl } from '../ingress-url';
 const INSTANCE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export class CreateInstanceDto {
+  @IsString()
   @Matches(INSTANCE_ID_PATTERN, { message: 'instanceId must match ^[a-zA-Z0-9_-]{1,64}$' })
   instanceId: string;
 

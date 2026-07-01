@@ -10,6 +10,7 @@ import { IngressController } from './ingress.controller';
 import { IngressEnqueueService } from './ingress-enqueue.service';
 import { RedriveService } from './redrive.service';
 import { RedriveController } from './redrive.controller';
+import { IntegrationInstanceController } from './integration-instance.controller';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 
 /**
@@ -21,7 +22,7 @@ import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
  */
 @Module({
   imports: [TypeOrmModule.forFeature([PluginInstance, IngressEvent, IntegrationDeliveryFailure], 'data')],
-  controllers: [IngressController, RedriveController],
+  controllers: [IngressController, RedriveController, IntegrationInstanceController],
   providers: [
     PluginInstanceService,
     IngressEventService,
