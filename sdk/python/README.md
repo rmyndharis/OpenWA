@@ -45,6 +45,10 @@ import httpx
 client = OpenWAClient(base_url="…", api_key="…", transport=httpx.MockTransport(handler))
 ```
 
+## Messaging
+
+> Voice notes: pass `ptt=True` inside the body dict to `send_audio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.
+
 ## Errors
 
 A non-2xx response raises a typed `OpenWAApiError` subclass — `OpenWAAuthError` (401),

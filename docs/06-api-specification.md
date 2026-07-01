@@ -996,7 +996,7 @@ Send a video (by URL or base64) with an optional caption. Uses the same `SendMed
 
 #### POST /api/sessions/:sessionId/messages/send-audio
 
-Send an audio/voice message (by URL or base64). Uses `SendMediaMessageDto`. A `caption` is accepted by the DTO but not persisted for audio.
+Send an audio message (by URL or base64). Uses `SendAudioMessageDto`. A `caption` is accepted by the DTO but not persisted for audio. Set `ptt: true` to send a real WhatsApp **voice note** (microphone bubble + waveform) instead of a plain audio file. `ptt` is a JSON boolean, exclusive to this endpoint, and — because voice notes require `audio/ogg; codecs=opus` — the server defaults the mimetype to that when you set `ptt` without one; for reliable playback (especially on the Baileys engine, which does not transcode) supply OGG/Opus bytes. A `ptt` voice note is stored as message `type: "voice"`.
 
 **Auth:** API key (OPERATOR)
 
@@ -1006,10 +1006,10 @@ Send an audio/voice message (by URL or base64). Uses `SendMediaMessageDto`. A `c
 | --- | --- | --- |
 | sessionId | string | Session ID |
 
-**Request body** — `SendMediaMessageDto` (fields `chatId`, `url`, `base64`, `mimetype`, `filename`, `caption` — see `send-image`)
+**Request body** — `SendAudioMessageDto` (all `SendMediaMessageDto` fields — `chatId`, `url`, `base64`, `mimetype`, `filename`, `caption` — plus optional `ptt` boolean)
 
 ```json
-{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg" }
+{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg", "ptt": true }
 ```
 
 **Response** `201`

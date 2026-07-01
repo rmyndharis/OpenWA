@@ -278,13 +278,13 @@ curl -X POST "$BASE/api/sessions/my-session/messages/send-video" \
 
 #### POST /api/sessions/:sessionId/messages/send-audio
 
-Send an audio/voice message by URL or base64.
+Send an audio message by URL or base64. Add `"ptt": true` to send a real WhatsApp voice note (mic bubble + waveform); the server defaults the mimetype to `audio/ogg; codecs=opus` when `ptt` is set without one.
 
 ```bash
 curl -X POST "$BASE/api/sessions/my-session/messages/send-audio" \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg" }'
+  -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg", "ptt": true }'
 ```
 
 #### POST /api/sessions/:sessionId/messages/send-document

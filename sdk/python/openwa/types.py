@@ -107,6 +107,7 @@ class SendMediaRequest(TypedDict, total=False):
     mimetype: str
     filename: str
     caption: str
+    ptt: bool  # audio only: send as a WhatsApp voice note (PTT)
 
 
 class SendLocationRequest(TypedDict, total=False):

@@ -108,6 +108,8 @@ export interface SendMediaRequest {
   filename?: string;
   /** Max 1024 chars. */
   caption?: string;
+  /** Audio only: send as a WhatsApp voice note (PTT). Server defaults mimetype to audio/ogg; codecs=opus. */
+  ptt?: boolean;
 }
 
 export interface SendLocationRequest {
