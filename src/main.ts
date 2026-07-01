@@ -71,7 +71,17 @@ async function bootstrap() {
   // Cap request body size (DoS hardening). Media sends carry base64 in the JSON body,
   // so the default is generous; tune with BODY_SIZE_LIMIT.
   const bodyLimit = resolveBodyLimit(process.env.BODY_SIZE_LIMIT);
-  app.use(json({ limit: bodyLimit }));
+  // The `verify` callback stashes the EXACT bytes json() received on req.rawBody, byte-identical to
+  // what a provider signed, so the @Public ingress controller can HMAC-verify over the raw body
+  // (JSON.stringify(req.body) is NOT byte-identical). Cheap for every route; non-ingress routes ignore it.
+  app.use(
+    json({
+      limit: bodyLimit,
+      verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 
   // Enable shutdown hooks for graceful shutdown

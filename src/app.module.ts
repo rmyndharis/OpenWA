@@ -33,6 +33,7 @@ import { HooksModule } from './core/hooks';
 import { PluginsModule } from './core/plugins';
 import { PluginsApiModule } from './modules/plugins/plugins.module';
 import { AgentToolsModule } from './core/agent-tools/agent-tools.module';
+import { IntegrationModule } from './modules/integration/integration.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors
 const queueModules: Array<Type | DynamicModule> = [];
@@ -242,6 +243,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     CatalogModule, // Phase 3: Catalog API (WhatsApp Business)
     PluginsApiModule, // Phase 5: Plugins API
     AgentToolsModule, // Agent-invocable tool registry (protocol-neutral)
+    IntegrationModule, // Integration Fabric: @Public provider-webhook ingress + fast-ack pipeline
     ...mcpModules, // MCP Streamable-HTTP server (opt-in via MCP_ENABLED=true)
     ...serveStaticModules, // Bundled dashboard SPA (production single-port setup)
   ],
