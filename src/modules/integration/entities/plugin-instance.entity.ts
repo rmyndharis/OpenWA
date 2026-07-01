@@ -19,7 +19,9 @@ export class PluginInstance {
   sessionScope: string | null; // resolved session id this instance acts on; null = inherit manifest.sessions
 
   @Column()
-  secret: string; // host-minted ingress HMAC secret (masked on read via redactSecretConfig)
+  secret: string; // host-minted ingress HMAC secret; stored plaintext, masked to '***' on API reads
+  // (via PluginInstanceService.maskedView + the provisioning controller's reveal flag), exposed
+  // in full only on mint and regenerate-secret. Note: instance `config` is NOT secret-redacted.
 
   @Column({ type: 'varchar', nullable: true })
   verifyToken: string | null; // optional provider challenge token
