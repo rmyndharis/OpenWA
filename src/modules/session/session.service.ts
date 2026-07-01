@@ -891,10 +891,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Flag the stored message as revoked (best-effort; the message may not be in the
         // DB). The dashboard renders the localized "message deleted" text, so no display
         // string is persisted here.
+        //
+        // Match on `revokedId` (the ORIGINAL deleted message's id) when present: on wwebjs
+        // `message.id` is the revocation notification, which never matches a stored row.
+        // `revokedId` falls back to `id` (Baileys, where the two are the same).
+        const revokedWaMessageId = message.revokedId ?? message.id;
         void this.messageRepository
-          .update({ sessionId: id, waMessageId: message.id }, { body: '', type: 'revoked' })
+          .update({ sessionId: id, waMessageId: revokedWaMessageId }, { body: '', type: 'revoked' })
           .catch(err => {
-            this.logger.error(`Failed to update revoked message: ${message.id}`, String(err));
+            this.logger.error(`Failed to update revoked message: ${revokedWaMessageId}`, String(err));
           });
 
         // Notify consumers regardless of whether the row existed: webhook (message.revoked

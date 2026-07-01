@@ -1238,11 +1238,14 @@ describe('BaileysAdapter inbound fan-out', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const revoked = onMessageRevoked.mock.calls[0][0] as {
       id: string;
+      revokedId?: string;
       chatId: string;
       type: string;
       body: string;
     };
     expect(revoked.id).toBe('ORIGINAL_ID');
+    // The REVOKE protocolMessage key IS the original, so revokedId mirrors id here.
+    expect(revoked.revokedId).toBe('ORIGINAL_ID');
     expect(revoked.chatId).toBe('628111@c.us'); // canonicalized to the neutral dialect
     expect(revoked.type).toBe('revoked');
     expect(revoked.body).toBe('');

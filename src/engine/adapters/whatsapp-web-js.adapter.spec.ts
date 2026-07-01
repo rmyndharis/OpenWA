@@ -1122,6 +1122,67 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
   });
 });
 
+describe('WhatsAppWebJsAdapter message_revoke_everyone (forwards the original deleted id as revokedId)', () => {
+  const wireRevokeHandler = (): { onMessageRevoked: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-revoke-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageRevoked = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageRevoked };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    return { onMessageRevoked, client };
+  };
+
+  it('emits revokedId from `before` (the original) distinct from `id` (the revocation notification)', () => {
+    const { onMessageRevoked, client } = wireRevokeHandler();
+
+    client.emit(
+      'message_revoke_everyone',
+      { id: { _serialized: 'REVOKE_NOTIF' }, from: 'peer@c.us', to: 'me@c.us', timestamp: 1700000070 },
+      { id: { _serialized: 'ORIGINAL_MSG' } },
+    );
+
+    expect(onMessageRevoked).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const revoked = onMessageRevoked.mock.calls[0][0] as {
+      id: string;
+      revokedId?: string;
+      chatId: string;
+      type: string;
+      body: string;
+    };
+    expect(revoked.id).toBe('REVOKE_NOTIF');
+    expect(revoked.revokedId).toBe('ORIGINAL_MSG');
+    expect(revoked.chatId).toBe('peer@c.us'); // incoming: chatId is the peer, not self
+    expect(revoked.type).toBe('revoked');
+    expect(revoked.body).toBe('');
+  });
+
+  it('leaves revokedId undefined when whatsapp-web.js has no `before` (original not in local store)', () => {
+    const { onMessageRevoked, client } = wireRevokeHandler();
+
+    client.emit(
+      'message_revoke_everyone',
+      { id: { _serialized: 'REVOKE_NOTIF_2' }, from: 'peer@c.us', to: 'me@c.us', timestamp: 1700000071 },
+      undefined,
+    );
+
+    expect(onMessageRevoked).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const revoked = onMessageRevoked.mock.calls[0][0] as { id: string; revokedId?: string };
+    expect(revoked.id).toBe('REVOKE_NOTIF_2');
+    expect(revoked.revokedId).toBeUndefined();
+  });
+});
+
 describe('outbound mentions (#530)', () => {
   const ready = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });

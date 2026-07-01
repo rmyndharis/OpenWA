@@ -347,10 +347,17 @@ export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed
 export interface RevokedMessage {
   id: string;
   /**
-   * Serialized id of the ORIGINAL message that was deleted (when available in the
-   * local store). `id` above is the id of the revocation notification, which is a
-   * different message; consumers that want to reconcile the deleted message in
-   * their own storage should match on `revokedId`.
+   * Serialized id of the ORIGINAL message that was deleted (when available).
+   *
+   * This is the reliable cross-engine field for reconciling the deleted message in
+   * your own storage — both adapters populate it with the original message id:
+   *  - whatsapp-web.js: `id` is the revocation NOTIFICATION (a distinct message), so
+   *    `id !== revokedId`. `revokedId` may be undefined when the original is not in
+   *    the local store.
+   *  - Baileys: the revoke arrives as a protocolMessage whose key already points at
+   *    the original, so `id === revokedId`.
+   *
+   * Consumers should match on `revokedId` (falling back to `id`) rather than `id`.
    */
   revokedId?: string;
   chatId: string;

@@ -947,6 +947,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
           const to = msg.key.fromMe === true ? remoteJid : this.normalizedSelfJid();
           const revoked: RevokedMessage = {
             id: pm.key?.id ?? '',
+            // The REVOKE protocolMessage's key points at the ORIGINAL deleted message,
+            // so `id` already IS the original here. Mirror it into `revokedId` so that
+            // field is the reliable cross-engine handle (wwebjs sets it separately).
+            revokedId: pm.key?.id ?? undefined,
             chatId: this.sessionStore.toNeutralJid(remoteJid),
             from: this.sessionStore.toNeutralJid(from),
             to: this.sessionStore.toNeutralJid(to),

@@ -1390,6 +1390,48 @@ describe('SessionService', () => {
       expect(eventsGateway.emitMessageRevoked as jest.Mock).toHaveBeenCalledWith('sess-uuid-1', expect.anything());
     });
 
+    it('flags the DB row by revokedId (the original), not the revocation notification id', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      // wwebjs shape: `id` is the revocation notification, `revokedId` the original message.
+      callbacks.onMessageRevoked!({
+        id: 'REVOKE_NOTIF',
+        revokedId: 'ORIGINAL_MSG',
+        chatId: 'peer@c.us',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        type: 'revoked',
+        body: '',
+        timestamp: 1706868000,
+      });
+      await flush();
+
+      expect(messageRepository.update as jest.Mock).toHaveBeenCalledWith(
+        { sessionId: 'sess-uuid-1', waMessageId: 'ORIGINAL_MSG' },
+        { body: '', type: 'revoked' },
+      );
+    });
+
+    it('falls back to `id` for the DB flag when revokedId is absent (Baileys shape)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageRevoked!({
+        id: 'ORIGINAL_MSG',
+        chatId: 'peer@c.us',
+        from: 'peer@c.us',
+        to: 'me@c.us',
+        type: 'revoked',
+        body: '',
+        timestamp: 1706868000,
+      });
+      await flush();
+
+      expect(messageRepository.update as jest.Mock).toHaveBeenCalledWith(
+        { sessionId: 'sess-uuid-1', waMessageId: 'ORIGINAL_MSG' },
+        { body: '', type: 'revoked' },
+      );
+    });
+
     // ── session lifecycle events ──────────────────────────────────────
 
     it('dispatches session.qr with the QR payload when the engine emits a QR code', async () => {
