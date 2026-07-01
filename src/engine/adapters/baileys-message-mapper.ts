@@ -32,9 +32,60 @@ export function mapBaileysMessageType(contentType: string | undefined, isPtt = f
     case 'contactMessage':
     case 'contactsArrayMessage':
       return 'contact';
+    case 'interactiveMessage':
+    case 'buttonsMessage':
+    case 'templateMessage':
+    case 'interactiveResponseMessage':
+      // WhatsApp Business interactive shapes (OTP/verification codes, button/template prompts). They
+      // carry display text that {@link extractBaileysBody} flattens into `body`, so they surface as
+      // `text` instead of being dropped as `unknown` with an empty body (#562).
+      return 'text';
     default:
       return 'unknown';
   }
+}
+
+/**
+ * The inbound message-content subset the body extractor reads. Declared structurally (not
+ * `proto.IMessage`) so body extraction is unit-testable with plain objects and stays decoupled from
+ * the Baileys proto shape — mirroring the rationale for {@link BaileysIncomingFields}.
+ */
+export interface BaileysBodyContent {
+  conversation?: string | null;
+  extendedTextMessage?: { text?: string | null } | null;
+  imageMessage?: { caption?: string | null } | null;
+  videoMessage?: { caption?: string | null } | null;
+  documentMessage?: { caption?: string | null } | null;
+  interactiveMessage?: { body?: { text?: string | null } | null } | null;
+  buttonsMessage?: { contentText?: string | null } | null;
+  templateMessage?: {
+    hydratedTemplate?: { hydratedContentText?: string | null } | null;
+    hydratedFourRowTemplate?: { hydratedContentText?: string | null } | null;
+  } | null;
+  interactiveResponseMessage?: { body?: { text?: string | null } | null } | null;
+}
+
+/**
+ * Extract the display text of an inbound Baileys message: plain text first, then a media caption,
+ * then the WhatsApp Business interactive shapes (interactive / buttons / template / interactive-
+ * response) whose text was previously dropped — the OTP/verification text businesses send via these
+ * shapes (#562). Returns `''` when the message carries no extractable text. Pass the NORMALIZED
+ * content (ephemeral/viewOnce/documentWithCaption wrappers already unwrapped), as the adapter does.
+ */
+export function extractBaileysBody(content: BaileysBodyContent): string {
+  return (
+    content.conversation ??
+    content.extendedTextMessage?.text ??
+    content.imageMessage?.caption ??
+    content.videoMessage?.caption ??
+    content.documentMessage?.caption ??
+    content.interactiveMessage?.body?.text ??
+    content.buttonsMessage?.contentText ??
+    content.templateMessage?.hydratedTemplate?.hydratedContentText ??
+    content.templateMessage?.hydratedFourRowTemplate?.hydratedContentText ??
+    content.interactiveResponseMessage?.body?.text ??
+    ''
+  );
 }
 
 /**
