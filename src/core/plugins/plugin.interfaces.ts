@@ -279,6 +279,11 @@ export interface PluginNetCapability {
   fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
 }
 
+/** Normalized outbound send for a plugin — translated host-side to MessageService.sendText/reply. */
+export interface PluginConversationsCapability {
+  send(env: ConversationSendEnvelope): Promise<unknown>;
+}
+
 // ============================================================================
 // Plugin Context (passed to plugin on initialization)
 // ============================================================================
@@ -311,6 +316,9 @@ export interface PluginContext {
 
   // SSRF-guarded outbound HTTP, scoped to the manifest `net.allow` host list.
   net: PluginNetCapability;
+
+  // Normalized outbound send, translated to MessageService. Requires `conversation:send`.
+  conversations: PluginConversationsCapability;
 }
 
 export interface PluginLogger {

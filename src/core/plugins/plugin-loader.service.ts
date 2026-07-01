@@ -13,6 +13,7 @@ import {
   PluginManifest,
   PluginMessagingCapability,
   PluginNetCapability,
+  PluginConversationsCapability,
   PluginInstance,
   PluginStatus,
   PluginContext,
@@ -27,9 +28,11 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
+import { buildConversationSendFacade } from './conversation-send-facade';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
@@ -569,6 +572,17 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Same lazy-require pattern as getMessageService/getSessionService: a static import of the
+   * integration module would add a top-level edge back into plugin-loader's own module graph.
+   */
+  private getConversationMappingService(): ConversationMappingService {
+    const mod =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('../../modules/integration/conversation-mapping.service') as typeof import('../../modules/integration/conversation-mapping.service');
+    return this.moduleRef.get(mod.ConversationMappingService, { strict: false });
+  }
+
+  /**
    * Enforce a plugin's declared manifest permissions at the capability boundary. A plugin may only
    * use a capability whose permission string it declares in `manifest.permissions`; anything else
    * (including a manifest with no permissions) is denied. Runs first in each capability verb so a
@@ -858,6 +872,35 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           return performPluginFetch(url, init);
         },
       } satisfies PluginNetCapability,
+      conversations: buildConversationSendFacade({
+        manifest: plugin.manifest,
+        assertPermission: this.assertPermission.bind(this),
+        assertSessionAllowed: this.assertSessionAllowed.bind(this),
+        resolveChatId: async env => {
+          if (!env.instanceId || !env.source) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: conversation.send requires chatId, or both instanceId and source to resolve one`,
+            );
+          }
+          const mapping = await this.getConversationMappingService().getByProvider(
+            plugin.manifest.id,
+            env.instanceId,
+            env.source.externalConversationId,
+          );
+          if (!mapping) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: no conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId}`,
+            );
+          }
+          return mapping.chatId;
+        },
+        // Re-establish the in-flight hook context around the downstream send so an adapter that calls
+        // conversation.send from within its own ingress handling can't echo-loop back into itself via
+        // its own outbound message:sending hook (mirrors the sandboxed worker-cap wrap below).
+        runGuarded: (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
+        sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
+        reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
+      } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,
     };
   }
 
