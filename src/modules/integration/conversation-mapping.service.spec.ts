@@ -1,4 +1,4 @@
-import { DataSource, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { ConversationMapping } from './entities/conversation-mapping.entity';
 import { ConversationMappingService, MappingKey } from './conversation-mapping.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
@@ -12,7 +12,7 @@ describe('ConversationMappingService', () => {
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);
     await runner.release();
-    service = new ConversationMappingService(ds.getRepository(ConversationMapping) as Repository<ConversationMapping>);
+    service = new ConversationMappingService(ds.getRepository(ConversationMapping));
   });
   afterEach(async () => {
     if (ds.isInitialized) await ds.destroy();

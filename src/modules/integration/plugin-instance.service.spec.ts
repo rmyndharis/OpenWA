@@ -1,4 +1,4 @@
-import { DataSource, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { PluginInstanceService } from './plugin-instance.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
@@ -12,7 +12,7 @@ describe('PluginInstanceService', () => {
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);
     await runner.release();
-    service = new PluginInstanceService(ds.getRepository(PluginInstance) as Repository<PluginInstance>);
+    service = new PluginInstanceService(ds.getRepository(PluginInstance));
   });
   afterEach(async () => {
     if (ds.isInitialized) await ds.destroy();

@@ -23,10 +23,14 @@ export class IngressController {
     @Req() req: Request & { rawBody?: Buffer },
     @Res() res: Response,
   ): Promise<void> {
-    const wildcard = (req.params as Record<string, unknown>).path;
-    const segments = Array.isArray(wildcard) ? wildcard : String(wildcard ?? '').split('/').filter(Boolean);
+    const wildcard = (req.params as Record<string, string | string[] | undefined>).path;
+    const segments = Array.isArray(wildcard)
+      ? wildcard
+      : typeof wildcard === 'string'
+        ? wildcard.split('/').filter(Boolean)
+        : [];
     const route = segments[0] ?? '';
-    const headers = Object.fromEntries(
+    const headers: Record<string, string> = Object.fromEntries(
       Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v.join(',') : String(v ?? '')]),
     );
     const rawBody = req.rawBody?.toString('utf8') ?? '';

@@ -1,4 +1,4 @@
-import { DataSource, Repository } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IngressEventService } from './ingress-event.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
@@ -12,7 +12,7 @@ describe('IngressEventService.recordOrSkip', () => {
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);
     await runner.release();
-    service = new IngressEventService(ds.getRepository(IngressEvent) as Repository<IngressEvent>);
+    service = new IngressEventService(ds.getRepository(IngressEvent));
   });
   afterEach(async () => {
     if (ds.isInitialized) await ds.destroy();
