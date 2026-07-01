@@ -26,21 +26,10 @@ import { PluginInstance } from './../src/modules/integration/entities/plugin-ins
  * (getPlugin, dispatchWebhookForInstance) are spied so no live sandbox worker is required — the
  * contract under test is the wire path (verify -> dedup -> dispatch), not a real WhatsApp send.
  *
- * KNOWN BREAK (found while writing this test, reproduced independently of it — see task-8-report.md):
- * under the app's real dependency stack (express@5.2.1 / @nestjs/platform-express@11, confirmed via
- * @types/express ^5.0.0), IngressController's `@All(':pluginId/:instanceId/*')` (ingress.controller.ts:16)
- * is silently legacy-converted by Nest's LegacyRouteConverter to `{*path}` (path-to-regexp v8 dropped
- * bare `*`). That lands the wildcard capture in `req.params.path` (an array), but the handler reads
- * `req.params[0]` (ingress.controller.ts:24) — always undefined on this stack — so `route` resolves to
- * `''` and IngressService 404s "unknown route" for every real inbound delivery. Separately,
- * `@Controller('api/ingress')` plus `app.setGlobalPrefix('api')` in main.ts double up to
- * `/api/api/ingress/...` rather than the single `/api/ingress/...` the design doc and the
- * ingress.controller.spec.ts unit test (which hand-builds `req.params = { 0: 'chatwoot' }` and so never
- * exercises real Express routing) assume. Both are pre-existing bugs in the merged Task 1-7 controller
- * code; this is a test-only task and does not fix them. The two tests below assert the CURRENT,
- * observed behavior (404 for a well-formed, correctly signed delivery) rather than a hoped-for 202, so
- * this file documents the break instead of hiding it. The service-level golden test is unaffected
- * because it drives IngressService directly and never goes through the controller/router.
+ * This is the production address, `app.setGlobalPrefix('api')` + `@Controller('ingress')` composing to
+ * a single `/api/ingress/...` (matching the metrics.controller.ts @Public precedent), and the
+ * `:pluginId/:instanceId/*path` wildcard reading `req.params.path` — the named-wildcard form Express 5
+ * / path-to-regexp v8 requires (see ingress.controller.ts for the routing fix itself).
  */
 describe('Integration Fabric ingress (e2e)', () => {
   let app: INestApplication<App>;
@@ -54,9 +43,9 @@ describe('Integration Fabric ingress (e2e)', () => {
   );
   const sig = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
 
-  // The design-intended single-prefix path. Confirmed against a live boot to hit the real router:
-  // this address 404s with Nest's own "Cannot GET" body, i.e. no route is registered here at all.
-  const DESIGN_PATH = '/api/ingress/chatwoot/acct1/chatwoot';
+  // The real production address: main.ts's setGlobalPrefix('api') + the controller's bare
+  // @Controller('ingress') compose to a single /api/ingress/... path.
+  const INGRESS_PATH = '/api/ingress/chatwoot/acct1/chatwoot';
 
   const ingressManifestRoute = {
     route: 'chatwoot',
@@ -134,34 +123,30 @@ describe('Integration Fabric ingress (e2e)', () => {
     );
   });
 
-  it('DESIGN GAP: a correctly signed Chatwoot delivery to the documented path 404s instead of 202', async () => {
-    // This is the request shape the SDK v1 design doc and the golden fixture describe. It currently
-    // 404s at the router (no controller matches `/api/ingress/...`) — see the KNOWN BREAK note above.
+  it('accepts a correctly signed Chatwoot delivery over the real /api/ingress path', async () => {
+    // This is the request shape the SDK v1 design doc and the golden fixture describe, sent to the
+    // real production address. QUEUE_ENABLED is unset in this test env, so IngressService's factory
+    // wires the inline-dispatch fallback — dispatchWebhookForInstance runs synchronously before the 202.
     const res = await request(app.getHttpServer())
-      .post(DESIGN_PATH)
+      .post(INGRESS_PATH)
       .set('X-Chatwoot-Signature', sig)
       .set('X-Chatwoot-Delivery', 'delivery-http-1')
       .set('Content-Type', 'application/json')
       .send(raw);
 
-    expect(res.status).toBe(404);
-    expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+    expect(res.status).toBe(202);
+    expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
   });
 
-  it('DESIGN GAP: the double-prefixed live route also 404s, because the wildcard param never resolves', async () => {
-    // Routing to the ACTUAL registered address (/api/api/ingress/...) clears the prefix bug but still
-    // 404s "unknown route": the controller reads req.params[0], which Express 5 + Nest's legacy-route
-    // conversion never populates (the capture lands in req.params.path instead). No delivery can ever
-    // reach IngressService.handle's signature check through the real HTTP surface on this stack.
+  it('rejects a tampered signature with 401 and never dispatches', async () => {
     const res = await request(app.getHttpServer())
-      .post('/api/api/ingress/chatwoot/acct1/chatwoot')
-      .set('X-Chatwoot-Signature', sig)
+      .post(INGRESS_PATH)
+      .set('X-Chatwoot-Signature', 'sha256=' + '0'.repeat(64))
       .set('X-Chatwoot-Delivery', 'delivery-http-2')
       .set('Content-Type', 'application/json')
       .send(raw);
 
-    expect(res.status).toBe(404);
-    expect(res.text).toBe('unknown route');
+    expect(res.status).toBe(401);
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
   });
 });

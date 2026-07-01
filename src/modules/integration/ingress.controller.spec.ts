@@ -29,7 +29,7 @@ describe('IngressController', () => {
     const { res, captured } = fakeRes();
     const req = {
       method: 'POST',
-      params: { 0: 'chatwoot' },
+      params: { path: ['chatwoot'] },
       headers: { 'x-delivery': 'd1', 'content-type': 'application/json' },
       rawBody: Buffer.from(RAW, 'utf8'),
     } as unknown as Request & { rawBody?: Buffer };
@@ -53,7 +53,7 @@ describe('IngressController', () => {
     const { res } = fakeRes();
     const req = {
       method: 'GET',
-      params: { 0: 'meta/webhook' },
+      params: { path: ['meta', 'webhook'] },
       headers: { 'X-Verify-Token': 'vtok' },
     } as unknown as Request & { rawBody?: Buffer };
 

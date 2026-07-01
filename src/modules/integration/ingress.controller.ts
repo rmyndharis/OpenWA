@@ -9,11 +9,13 @@ import { IngressService } from './ingress.service';
 // main.ts) — it is intentionally NOT DTO-bound, so the global ValidationPipe never 400s on the
 // provider's unknown keys, and the exact signed bytes reach the HMAC verifier.
 @Public()
-@Controller('api/ingress')
+@Controller('ingress')
 export class IngressController {
   constructor(private readonly ingress: IngressService) {}
 
-  @All(':pluginId/:instanceId/*')
+  // Express 5 (path-to-regexp v8) has no bare `*` — Nest's route converter rewrites it to the named
+  // wildcard `*path`, so the trailing segments land in req.params.path (an array), not req.params[0].
+  @All(':pluginId/:instanceId/*path')
   async receive(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
@@ -21,7 +23,9 @@ export class IngressController {
     @Req() req: Request & { rawBody?: Buffer },
     @Res() res: Response,
   ): Promise<void> {
-    const route = (req.params[0] ?? '').split('/')[0] || '';
+    const wildcard = (req.params as Record<string, unknown>).path;
+    const segments = Array.isArray(wildcard) ? wildcard : String(wildcard ?? '').split('/').filter(Boolean);
+    const route = segments[0] ?? '';
     const headers = Object.fromEntries(
       Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v.join(',') : String(v ?? '')]),
     );
