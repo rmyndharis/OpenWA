@@ -819,14 +819,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.sendMediaMessage(chatId, media, media.ptt ? { sendAudioAsVoice: true } : undefined);
   }
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     return this.sendMediaMessage(chatId, media);
   }
 
-  private async sendMediaMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
+  private async sendMediaMessage(
+    chatId: string,
+    media: MediaInput,
+    extraOptions?: { sendAudioAsVoice?: boolean },
+  ): Promise<MessageResult> {
     this.ensureReady();
 
     let messageMedia: MessageMedia;
@@ -847,6 +851,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.client!.sendMessage(chatId, messageMedia, {
       caption: media.caption,
       ...(media.mentions?.length ? { mentions: media.mentions } : {}),
+      // sendAudioAsVoice only for audio; {...undefined} contributes no keys.
+      ...extraOptions,
     });
 
     return {

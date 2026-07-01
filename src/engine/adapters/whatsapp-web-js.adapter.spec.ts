@@ -1159,6 +1159,40 @@ describe('outbound mentions (#530)', () => {
   });
 });
 
+describe('outbound voice note (PTT)', () => {
+  const ready = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+
+  it('sendAudioMessage with ptt passes sendAudioAsVoice:true', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendAudioMessage('628@c.us', {
+      mimetype: 'audio/ogg; codecs=opus',
+      data: Buffer.from([1]).toString('base64'),
+      ptt: true,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      '628@c.us',
+      expect.anything(),
+      expect.objectContaining({ sendAudioAsVoice: true }),
+    );
+  });
+
+  it('sendAudioMessage without ptt passes no sendAudioAsVoice option', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendAudioMessage('628@c.us', {
+      mimetype: 'audio/mpeg',
+      data: Buffer.from([1]).toString('base64'),
+    });
+    const opts = sendMessage.mock.calls[0][2] as { sendAudioAsVoice?: boolean };
+    expect(opts.sendAudioAsVoice).toBeUndefined();
+  });
+});
+
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {
   const m = (over: Record<string, unknown>) => over as unknown as Parameters<typeof extractWwebjsCall>[0];
 
