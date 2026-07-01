@@ -6,20 +6,27 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
+import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
+import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
+import { PluginsModule } from '../../core/plugins/plugins.module';
 
 // Re-export for backward compatibility
 export { QUEUE_NAMES } from './queue-names';
 
 @Module({
   imports: [
-    // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>
-    TypeOrmModule.forFeature([Webhook, WebhookDeliveryFailure], 'data'),
-    // Required for WebhookProcessor to inject HookManager
+    // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>;
+    // IngressProcessor to inject Repository<IntegrationDeliveryFailure> (both on the 'data' connection).
+    TypeOrmModule.forFeature([Webhook, WebhookDeliveryFailure, IntegrationDeliveryFailure], 'data'),
+    // Required for WebhookProcessor/IngressProcessor to inject HookManager
     HooksModule,
+    // Required for IngressProcessor to inject PluginLoaderService (already @Global(), imported
+    // explicitly for clarity, matching HooksModule above).
+    PluginsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -42,6 +49,13 @@ export { QUEUE_NAMES } from './queue-names';
         removeOnFail: { age: 86400, count: 5000 },
       },
     }),
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.INGRESS,
+      defaultJobOptions: {
+        removeOnComplete: { age: 3600, count: 1000 },
+        removeOnFail: { age: 86400, count: 5000 },
+      },
+    }),
     BullBoardModule.forRoot({
       route: '/admin/queues',
       adapter: ExpressAdapter,
@@ -51,7 +65,7 @@ export { QUEUE_NAMES } from './queue-names';
       adapter: BullMQAdapter,
     }),
   ],
-  providers: [WebhookProcessor],
+  providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}

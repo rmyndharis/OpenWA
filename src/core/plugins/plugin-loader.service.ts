@@ -30,10 +30,12 @@ import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { buildConversationSendFacade } from './conversation-send-facade';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
+import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
@@ -550,6 +552,35 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       return plugin.instance.healthCheck();
     }
     return { healthy: true, message: 'Plugin does not implement health check' };
+  }
+
+  /**
+   * Dispatch a queued ingress job into its plugin's live sandbox worker. Called from IngressProcessor
+   * (Task 6), mirroring checkPluginHealth's sandboxHosts lookup. Throws when the plugin has no live
+   * worker (disabled/crashed since the job was enqueued) or when the worker's handler itself reports
+   * failure (`!result.ok`, e.g. a 502/504/500) — either way BullMQ's retry/DLQ machinery takes over.
+   */
+  async dispatchWebhookForInstance(d: IngressJobData): Promise<void> {
+    const host = this.sandboxHosts.get(d.pluginId);
+    if (!host) {
+      throw new Error('no live sandbox host for plugin ' + d.pluginId);
+    }
+    const result = await host.dispatchWebhook({
+      instanceId: d.instanceId,
+      route: d.route,
+      method: 'POST',
+      headers: d.payload.headers,
+      query: d.payload.query,
+      body: d.payload.body,
+      rawBody: d.payload.rawBody,
+      verified: true,
+      deliveryId: d.deliveryId,
+      sessionId: d.sessionId,
+      timeoutMs: INGRESS_DISPATCH_TIMEOUT_MS,
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? 'ingress dispatch failed with status ' + result.status);
+    }
   }
 
   /**
