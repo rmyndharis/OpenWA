@@ -96,7 +96,6 @@ export class IngressService {
 
     await this.deps.enqueue(
       {
-        ingressEventId: deliveryId,
         pluginId: req.pluginId,
         instanceId: req.instanceId,
         route: req.route,

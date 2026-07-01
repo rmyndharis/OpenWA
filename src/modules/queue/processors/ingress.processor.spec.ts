@@ -3,7 +3,6 @@ import { IngressProcessor } from './ingress.processor';
 function job(overrides = {}) {
   return {
     data: {
-      ingressEventId: 'e1',
       pluginId: 'chatwoot',
       instanceId: 'acct1',
       route: 'chatwoot',

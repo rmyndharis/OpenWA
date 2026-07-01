@@ -10,7 +10,6 @@ import { HookManager } from '../../../core/hooks';
 import { createLogger } from '../../../common/services/logger.service';
 
 export interface IngressJobData {
-  ingressEventId: string;
   pluginId: string;
   instanceId: string;
   route: string;
