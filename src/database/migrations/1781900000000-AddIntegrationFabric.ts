@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddIntegrationFabric1781300000000 implements MigrationInterface {
-  name = 'AddIntegrationFabric1781300000000';
+export class AddIntegrationFabric1781900000000 implements MigrationInterface {
+  name = 'AddIntegrationFabric1781900000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const isPostgres = queryRunner.connection.options.type === 'postgres';
@@ -67,6 +67,12 @@ export class AddIntegrationFabric1781300000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_integration_delivery_failures_instance"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_ingress_events_createdAt"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_ingress_events_instance_delivery"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_conversation_mappings_reverse"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_conversation_mappings_forward"`);
+    await queryRunner.query(`DROP INDEX IF EXISTS "UQ_plugin_instances_plugin_instance"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "integration_delivery_failures"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "ingress_events"`);
     await queryRunner.query(`DROP TABLE IF EXISTS "conversation_mappings"`);
