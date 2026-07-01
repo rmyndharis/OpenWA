@@ -169,12 +169,13 @@ actually be exercised end to end. Until then this document and the manifest type
 ## 25.9 Phasing and status
 
 See [15 - Project Roadmap](./15-project-roadmap.md) for the full phase table. In brief: **P0** (this
-substrate) is merged as an internal foundation; **P1** adds scale-correctness and operator provisioning;
-**P2–P3** ship the first adapters as marketplace plugins; **P4** covers developer experience (SDK
+substrate) is merged as an internal foundation; **P1** adds scale-correctness (per-conversation ordering,
+per-instance fairness, DLQ redrive, handover); **P2** adds operator provisioning and ships the first
+adapter as a marketplace plugin; **P3** ships a second adapter; **P4** covers developer experience (SDK
 reference, compatibility suite, secret rotation, multi-node routing).
 
-> **P0 is not a user-facing feature yet.** The ingress flow requires an operator provisioning step
-> (minting a plugin instance and its secret) that lands in P1; until then it is reachable only by direct
+> **P0 and P1 are not a user-facing feature yet.** The ingress flow requires an operator provisioning step
+> (minting a plugin instance and its secret) that lands in P2; until then it is reachable only by direct
 > configuration.
 
 ---

@@ -591,13 +591,13 @@ architecture and design rationale):
 | Phase | Scope                                                                                                                                                                          | Status                         |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
 | P0    | Core substrate: inbound webhook RPC, `@Public` ingress endpoint with HMAC-over-raw-body verification, plugin-instance primitive, normalized send capability, identity/dedup/DLQ tables, ingress queue. SDK v1 frozen. | ✅ Merged (internal substrate) |
-| P1    | Scale-correctness: per-conversation FIFO ordering, per-instance fairness, DLQ redrive, bot/human handover, operator provisioning.                                             | 📋 Planned                     |
-| P2    | First adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.                                                                                      | 📋 Planned                     |
+| P1    | Scale-correctness: per-conversation FIFO ordering, per-instance fairness, DLQ redrive, bot/human handover.                                                                    | ✅ Merged (internal substrate) |
+| P2    | Operator provisioning (mint plugin instances and secrets, dashboard) + the first adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.           | 📋 Planned                     |
 | P3    | Second adapter (chatbot flow builder) — validates the substrate generalizes.                                                                                                 | 📋 Planned                     |
 | P4    | Developer experience: SDK reference docs, compatibility test suite, secret rotation, multi-node routing.                                                                      | 📋 Planned                     |
 
-> **P0 is an internal foundation, not a user-facing feature yet.** The ingress flow requires an operator
-> provisioning step (minting a plugin instance and its secret) that lands in P1; until then it is
+> **P0 and P1 are an internal foundation, not a user-facing feature yet.** The ingress flow requires an
+> operator provisioning step (minting a plugin instance and its secret) that lands in P2; until then it is
 > reachable only by direct configuration. The public SDK reference and the first ready-to-use adapter
 > arrive in P2–P4.
 
