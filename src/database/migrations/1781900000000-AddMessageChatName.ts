@@ -16,9 +16,7 @@ export class AddMessageChatName1781900000000 implements MigrationInterface {
     const col = table?.findColumnByName('chatName');
     if (col) return; // already added by synchronize or a previous run
 
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
-    const colType = isPostgres ? 'varchar' : 'varchar';
-    await queryRunner.query(`ALTER TABLE "messages" ADD COLUMN "chatName" ${colType} NULL`);
+    await queryRunner.query(`ALTER TABLE "messages" ADD COLUMN "chatName" varchar NULL`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
