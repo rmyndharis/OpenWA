@@ -31,6 +31,19 @@ export class PluginWorkerHost {
     number,
     { resolve: (result: { continue: boolean; data?: unknown }) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  private readonly webhookPending = new Map<
+    number,
+    {
+      resolve: (result: {
+        status: number;
+        headers?: Record<string, string>;
+        body?: string;
+        ok: boolean;
+        error?: string;
+      }) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly healthPending = new Map<
     number,
     { resolve: (result: { healthy: boolean; message?: string }) => void; timer: ReturnType<typeof setTimeout> }
@@ -52,6 +65,9 @@ export class PluginWorkerHost {
     // Called when the worker subscribes a handler to an event, so the host can register a shim with
     // the hook manager that dispatches into the worker.
     private readonly onHookSubscribe?: (event: string, priority?: number) => void,
+    // Called when the worker claims an ingress route (registered a webhook handler for it), so the
+    // host can record it against the manifest-declared routes (mirrors onHookSubscribe for ingress).
+    private readonly onWebhookSubscribe?: (route: string) => void,
     // Routes a worker plugin's ctx.logger.* call to the host's per-plugin logger.
     private readonly onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     // Runs a worker-initiated capability call inside the in-flight hook context, so a capability that
@@ -116,6 +132,51 @@ export class PluginWorkerHost {
         sessionId: options.sessionId,
         source: options.source,
         config: options.config,
+      });
+    });
+  }
+
+  /**
+   * Dispatch a verified inbound webhook to the worker and await its handler result. Cloned from
+   * dispatchHook: bounded by `timeoutMs`, and fail-open — a slow or wedged worker resolves a default
+   * 504 (the provider was already ack'd in async mode) rather than hanging the HTTP request. A
+   * mid-request worker crash is drained to 502 in handleExit, so the request never hangs forever.
+   */
+  dispatchWebhook(options: {
+    instanceId: string;
+    route: string;
+    method: string;
+    headers: Record<string, string>;
+    query: Record<string, string>;
+    body: string;
+    rawBody: string;
+    verified: boolean;
+    deliveryId: string;
+    sessionId?: string;
+    timeoutMs: number;
+    onTimeout?: () => void;
+  }): Promise<{ status: number; headers?: Record<string, string>; body?: string; ok: boolean; error?: string }> {
+    const id = this.nextId++;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        this.webhookPending.delete(id);
+        options.onTimeout?.();
+        resolve({ ok: false, status: 504 }); // fail-open: provider already ack'd in async mode
+      }, options.timeoutMs);
+      this.webhookPending.set(id, { resolve, timer });
+      this.channel.postMessage({
+        kind: 'webhook',
+        id,
+        instanceId: options.instanceId,
+        route: options.route,
+        method: options.method,
+        headers: options.headers,
+        query: options.query,
+        body: options.body,
+        rawBody: options.rawBody,
+        verified: options.verified,
+        deliveryId: options.deliveryId,
+        sessionId: options.sessionId,
       });
     });
   }
@@ -229,6 +290,9 @@ export class PluginWorkerHost {
       case 'hook-subscribe':
         this.onHookSubscribe?.(message.event, message.priority);
         break;
+      case 'webhook-subscribe':
+        this.onWebhookSubscribe?.(message.route);
+        break;
       case 'log':
         this.onLog?.(message.level, message.message, message.meta);
         break;
@@ -240,6 +304,20 @@ export class PluginWorkerHost {
         const result: { continue: boolean; data?: unknown } = { continue: message.continue };
         if (message.data !== undefined) result.data = message.data;
         waiter.resolve(result);
+        break;
+      }
+      case 'webhook-result': {
+        const waiter = this.webhookPending.get(message.id);
+        if (!waiter) return;
+        this.webhookPending.delete(message.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve({
+          ok: message.error == null,
+          status: message.status,
+          headers: message.headers,
+          body: message.body,
+          error: message.error,
+        });
         break;
       }
       case 'health-result': {
@@ -315,6 +393,14 @@ export class PluginWorkerHost {
       resolve({ continue: true });
     });
     this.hookPending.clear();
+    // Drain in-flight webhooks: a mid-request worker crash must return 502, never hang the HTTP
+    // request. (The per-request timeout would eventually fail-open to 504, but the request should not
+    // wait the full window when the worker is already known dead.)
+    this.webhookPending.forEach(({ resolve, timer }) => {
+      clearTimeout(timer);
+      resolve({ ok: false, status: 502 });
+    });
+    this.webhookPending.clear();
   }
 
   private drain<T>(waiters: T[], fn: (w: T) => void): void {

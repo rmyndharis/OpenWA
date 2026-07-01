@@ -29,6 +29,7 @@ import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { buildConversationSendFacade } from './conversation-send-facade';
+import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -639,6 +640,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   protected createSandboxHost(
     capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
+    onWebhookSubscribe?: (route: string) => void,
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
   ): PluginWorkerHost {
@@ -652,6 +654,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       }),
       capDispatcher,
       onHookSubscribe,
+      onWebhookSubscribe,
       onLog,
       runWithHookGuard,
       SANDBOX_MAX_INFLIGHT_CAPS,
@@ -759,6 +762,22 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       );
     };
 
+    // When the worker claims an ingress route, record it against the manifest-declared routes so the
+    // host knows which routes this worker will handle. Same hardening as onHookSubscribe (the wire
+    // `route` is an arbitrary untrusted string): drop when the manifest lacks 'webhook:ingress', drop
+    // an undeclared route (warn once), dedup, and cap. subscribedRoutes is local to this enable call,
+    // so it is dropped on disable exactly as subscribedEvents is.
+    const subscribedRoutes = new Set<string>();
+    const declaredRoutes = new Set((plugin.manifest.ingress ?? []).map(r => r.route));
+    const onWebhookSubscribe = makeOnWebhookSubscribe({
+      pluginId,
+      declaredRoutes,
+      hasPermission: (plugin.manifest.permissions ?? []).includes(PluginCapabilityPermission.WEBHOOK_INGRESS),
+      subscribed: subscribedRoutes,
+      maxRoutes: declaredRoutes.size,
+      warn: (message, meta) => this.logger.warn(message, meta),
+    });
+
     // Route the worker plugin's ctx.logger.* calls to the same per-plugin logger an in-process plugin
     // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout.
     const onLog = (level: PluginLogLevel, message: string, meta?: Record<string, unknown>): void => {
@@ -769,6 +788,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     const host = this.createSandboxHost(
       (verb, args) => dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
+      onWebhookSubscribe,
       onLog,
       // Re-establish the in-flight hook context for worker-initiated capability calls, so a sandboxed
       // plugin that sends from within a send hook can't loop the event back into itself unboundedly.
