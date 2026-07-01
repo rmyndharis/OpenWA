@@ -8,8 +8,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Hand-authored because `synchronize` is off for the `data` connection on PostgreSQL (and optional
  * on SQLite via DATABASE_SYNCHRONIZE=false). Idempotent: checks for column existence first.
  */
-export class AddMessageChatName1781900000000 implements MigrationInterface {
-  name = 'AddMessageChatName1781900000000';
+export class AddMessageChatName1782000000000 implements MigrationInterface {
+  name = 'AddMessageChatName1782000000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const table = await queryRunner.getTable('messages');
