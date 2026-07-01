@@ -493,13 +493,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.callbacks.onMessageAck?.(msg.id._serialized, wwebjsAckToDeliveryStatus(ack));
     });
 
-    this.client.on('message_revoke_everyone', after => {
+    this.client.on('message_revoke_everyone', (after, before) => {
       try {
         const selfWid = this.client?.info?.wid?._serialized;
         // Emit structured data only; the engine layer never produces a localized
         // display string. The dashboard renders the localized "message deleted" text.
+        //
+        // `after` is the revocation notification (its own id); `before` is the
+        // ORIGINAL deleted message (when whatsapp-web.js has it in the local store).
+        // We forward `before.id` as `revokedId` so consumers can reconcile the
+        // deleted message in their own storage.
         const payload: RevokedMessage = {
           id: after.id._serialized,
+          revokedId: before?.id?._serialized,
           chatId: after.from === selfWid ? after.to : after.from,
           from: after.from,
           to: after.to,

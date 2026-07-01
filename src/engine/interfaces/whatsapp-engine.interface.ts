@@ -346,6 +346,13 @@ export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed
  */
 export interface RevokedMessage {
   id: string;
+  /**
+   * Serialized id of the ORIGINAL message that was deleted (when available in the
+   * local store). `id` above is the id of the revocation notification, which is a
+   * different message; consumers that want to reconcile the deleted message in
+   * their own storage should match on `revokedId`.
+   */
+  revokedId?: string;
   chatId: string;
   from: string;
   to: string;
