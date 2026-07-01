@@ -531,6 +531,41 @@ describe('MessageService', () => {
       });
       expect(mockEngine.sendAudioMessage).toHaveBeenCalled();
     });
+
+    it('sends a voice note (ptt) and defaults the mimetype to ogg/opus when omitted', async () => {
+      await service.sendAudio('sess-1', {
+        chatId: 'test@c.us',
+        url: 'https://example.com/voice',
+        ptt: true,
+      });
+      expect(mockEngine.sendAudioMessage).toHaveBeenCalledWith(
+        'test@c.us',
+        expect.objectContaining({ ptt: true, mimetype: 'audio/ogg; codecs=opus' }),
+      );
+    });
+
+    it('respects a caller-supplied mimetype for a voice note', async () => {
+      await service.sendAudio('sess-1', {
+        chatId: 'test@c.us',
+        url: 'https://example.com/voice.ogg',
+        mimetype: 'audio/ogg',
+        ptt: true,
+      });
+      expect(mockEngine.sendAudioMessage).toHaveBeenCalledWith(
+        'test@c.us',
+        expect.objectContaining({ ptt: true, mimetype: 'audio/ogg' }),
+      );
+    });
+
+    it('persists a voice note as type "voice"', async () => {
+      await service.sendAudio('sess-1', { chatId: 'test@c.us', url: 'https://example.com/voice', ptt: true });
+      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'voice' }));
+    });
+
+    it('persists a plain audio send (no ptt) as type "audio"', async () => {
+      await service.sendAudio('sess-1', { chatId: 'test@c.us', url: 'https://example.com/audio.ogg' });
+      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'audio' }));
+    });
   });
 
   describe('sendDocument', () => {

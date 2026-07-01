@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
-import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
+import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { assertBase64WithinMediaCap } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -158,16 +158,22 @@ export class MessageService {
     return this.persistSentState(message, result);
   }
 
-  async sendAudio(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
+  async sendAudio(sessionId: string, dto: SendAudioMessageDto): Promise<MessageResponseDto> {
     const engine = this.getEngine(sessionId);
-    const media = this.buildMediaInput(dto);
+    // Voice notes need a real audio codec; default to ogg/opus when the caller omits a mimetype so the
+    // wire message and the persisted record agree. Resolved BEFORE buildMediaInput so its base64
+    // mimetype guard sees the effective type. buildMediaInput itself stays generic (shared by all media).
+    const audioDto = dto.ptt && !dto.mimetype ? { ...dto, mimetype: 'audio/ogg; codecs=opus' } : dto;
+    const media = this.buildMediaInput(audioDto);
+    media.ptt = dto.ptt;
 
-    // Save message as pending BEFORE sending
+    // Save message as pending BEFORE sending. A PTT send is a 'voice' note (matches inbound
+    // classification, the outbound webhook echo, stats, and the dashboard), not a plain 'audio' file.
     const message = await this.saveOutgoingMessage(sessionId, {
       chatId: dto.chatId,
-      type: 'audio',
+      type: dto.ptt ? 'voice' : 'audio',
       metadata: {
-        media: { mimetype: dto.mimetype, filename: dto.filename, data: dto.base64 || dto.url },
+        media: { mimetype: audioDto.mimetype, filename: dto.filename, data: dto.base64 || dto.url },
       },
     });
 

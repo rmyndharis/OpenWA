@@ -2,7 +2,7 @@ import { Controller, Post, Get, Param, Body, Query, HttpCode, HttpStatus } from 
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
-import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './dto';
+import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { SendBulkMessageDto, BulkMessageResponseDto } from './dto/bulk-message.dto';
 import {
@@ -148,7 +148,7 @@ export class MessageController {
   })
   async sendAudio(
     @Param('sessionId') sessionId: string,
-    @Body() dto: SendMediaMessageDto,
+    @Body() dto: SendAudioMessageDto,
   ): Promise<MessageResponseDto> {
     return this.messageService.sendAudio(sessionId, dto);
   }
