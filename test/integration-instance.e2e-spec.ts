@@ -121,7 +121,7 @@ describe('IntegrationInstanceController (e2e)', () => {
     const regen = await request(app.getHttpServer())
       .post(`${base}/chatwoot/instances/acct1/regenerate-secret`)
       .set('X-API-Key', key)
-      .expect(201);
+      .expect(200);
     expect((regen.body as InstanceViewBody).secret).toMatch(/^[0-9a-f]{64}$/);
 
     const one = await request(app.getHttpServer())

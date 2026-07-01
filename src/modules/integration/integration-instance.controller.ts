@@ -68,6 +68,7 @@ export class IntegrationInstanceController {
   }
 
   @Post(':instanceId/regenerate-secret')
+  @HttpCode(200)
   async regenerate(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
