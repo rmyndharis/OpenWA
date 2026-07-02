@@ -1,0 +1,116 @@
+.plugin-instances {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.plugin-instances .pi-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.plugin-instances .pi-desc {
+  color: var(--text-muted);
+  margin: 0;
+  flex: 1;
+}
+.plugin-instances .pi-loading {
+  display: flex;
+  justify-content: center;
+  padding: 2rem;
+}
+.plugin-instances .pi-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 2rem 1rem;
+}
+.plugin-instances .pi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.plugin-instances .pi-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.plugin-instances .pi-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.plugin-instances .pi-id {
+  font-weight: 600;
+}
+.plugin-instances .pi-scope {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.plugin-instances .pi-url {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.plugin-instances .pi-url code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-instances .pi-badge {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.plugin-instances .pi-badge.on {
+  background: var(--success-bg, #dcfce7);
+  color: var(--success, #16a34a);
+}
+.plugin-instances .pi-badge.off {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+.plugin-instances .pi-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+.plugin-instances .pi-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0.75rem;
+}
+.plugin-instances .pi-secret {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.plugin-instances .pi-secret code {
+  flex: 1;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  word-break: break-all;
+}
+.plugin-instances .pi-error {
+  color: var(--danger, #e5484d);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+.plugin-instances .pi-confirm-icon {
+  display: flex;
+  justify-content: center;
+  color: var(--danger, #e5484d);
+  margin-bottom: 0.75rem;
+}
+.plugin-instances textarea {
+  width: 100%;
+  min-height: 96px;
+  font-family: monospace;
+}
