@@ -47,6 +47,7 @@ export const MESSAGE_TYPES = [
   'contact',
   'call',
   'revoked',
+  'masked',
   'unknown',
 ] as const;
 

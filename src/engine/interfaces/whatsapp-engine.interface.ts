@@ -57,6 +57,9 @@ export type MessageType =
   | 'contact'
   | 'call'
   | 'revoked'
+  // A message WhatsApp deliberately withheld from linked/companion devices (e.g. high-security
+  // business OTPs): the payload is absent by design, not unparseable. See `mapBaileysMessageType`.
+  | 'masked'
   | 'unknown';
 
 export interface IncomingMessage {

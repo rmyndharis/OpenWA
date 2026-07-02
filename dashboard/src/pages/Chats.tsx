@@ -897,6 +897,7 @@ export function Chats() {
                       const reactions = msg.metadata?.reactions || {};
                       const hasReactions = Object.keys(reactions).length > 0;
                       const isRevoked = msg.type === 'revoked';
+                      const isMasked = msg.type === 'masked';
 
                       return (
                         <div
@@ -923,6 +924,8 @@ export function Chats() {
 
                               {isRevoked ? (
                                 <div className="message-text">{t('chats.messageDeleted')}</div>
+                              ) : isMasked ? (
+                                <div className="message-text message-masked">{t('chats.messageMasked')}</div>
                               ) : (
                                 msg.body &&
                                 (!mediaInfo || msg.body !== mediaInfo.filename) &&

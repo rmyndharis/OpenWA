@@ -118,6 +118,7 @@
     "placeholderDesc": "從左側邊欄選擇一個活躍聊天，即可開始閱讀和傳送 WhatsApp 訊息。",
     "deleteConfirm": "為所有人刪除此訊息？",
     "messageDeleted": "🚫 此訊息已被刪除",
+    "messageMasked": "🔒 WhatsApp 已對已連結裝置隱藏此訊息 — 請在主手機上查看",
     "errors": {
       "loadSessions": "載入工作階段失敗",
       "loadChats": "載入聊天失敗",

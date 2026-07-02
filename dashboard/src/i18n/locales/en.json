@@ -118,6 +118,7 @@
     "placeholderDesc": "Choose a conversation to read and reply.",
     "deleteConfirm": "Delete this message for everyone?",
     "messageDeleted": "🚫 This message was deleted",
+    "messageMasked": "🔒 Masked by WhatsApp for linked devices — check your primary phone",
     "errors": {
       "loadSessions": "Failed to load sessions",
       "loadChats": "Failed to load chats",

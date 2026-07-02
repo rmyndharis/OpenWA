@@ -118,6 +118,7 @@
     "placeholderDesc": "Selecciona un chat activo de la barra lateral izquierda para leer y enviar mensajes de WhatsApp.",
     "deleteConfirm": "¿Eliminar este mensaje para todos?",
     "messageDeleted": "🚫 Este mensaje fue eliminado",
+    "messageMasked": "🔒 Ocultado por WhatsApp en dispositivos vinculados — revísalo en tu teléfono principal",
     "errors": {
       "loadSessions": "Error al cargar las sesiones",
       "loadChats": "Error al cargar los chats",

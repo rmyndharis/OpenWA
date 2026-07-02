@@ -142,6 +142,7 @@ export const MESSAGE_TYPES = [
   'contact',
   'call',
   'revoked',
+  'masked',
   'unknown',
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];

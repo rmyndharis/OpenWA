@@ -118,6 +118,7 @@
     "placeholderDesc": "Sélectionnez une discussion active dans la barre latérale gauche pour commencer à lire et envoyer des messages WhatsApp.",
     "deleteConfirm": "Supprimer ce message pour tout le monde ?",
     "messageDeleted": "🚫 Ce message a été supprimé",
+    "messageMasked": "🔒 Masqué par WhatsApp sur les appareils liés — consultez votre téléphone principal",
     "errors": {
       "loadSessions": "Échec du chargement des sessions",
       "loadChats": "Échec du chargement des discussions",
