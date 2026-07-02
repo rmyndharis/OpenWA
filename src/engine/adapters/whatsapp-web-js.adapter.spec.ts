@@ -1257,6 +1257,65 @@ describe('outbound voice note (PTT)', () => {
   });
 });
 
+describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid migration)', () => {
+  const ready = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+
+  it('sendTextMessage resolves a migrated @c.us recipient to its @lid before sending', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ getNumberId, sendMessage }).sendTextMessage('529934031058@c.us', 'hi');
+    expect(getNumberId).toHaveBeenCalledWith('529934031058@c.us');
+    expect(sendMessage).toHaveBeenCalledWith('159442138038327@lid', 'hi');
+  });
+
+  it('leaves a @g.us group id untouched (no LID lookup)', async () => {
+    const getNumberId = jest.fn();
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ getNumberId, sendMessage }).sendTextMessage('120@g.us', 'hi');
+    expect(getNumberId).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith('120@g.us', 'hi');
+  });
+
+  it('falls back to the original id when getNumberId returns null (unregistered/unmigrated)', async () => {
+    const getNumberId = jest.fn().mockResolvedValue(null);
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ getNumberId, sendMessage }).sendTextMessage('628@c.us', 'hi');
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', 'hi');
+  });
+
+  it('never blocks the send when resolution throws (best-effort)', async () => {
+    const getNumberId = jest.fn().mockRejectedValue(new Error('network'));
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ getNumberId, sendMessage }).sendTextMessage('628@c.us', 'hi');
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', 'hi');
+  });
+
+  it('resolves the recipient on media sends too (sendImageMessage)', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ getNumberId, sendMessage }).sendImageMessage('529934031058@c.us', {
+      mimetype: 'image/png',
+      data: Buffer.from([1]).toString('base64'),
+    });
+    expect(sendMessage).toHaveBeenCalledWith('159442138038327@lid', expect.anything(), expect.anything());
+  });
+
+  it('resolves the recipient on the typing path (sendChatState) so it no longer errors', async () => {
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const sendStateTyping = jest.fn().mockResolvedValue(undefined);
+    const getChatById = jest.fn().mockResolvedValue({ sendStateTyping });
+    await ready({ getNumberId, getChatById }).sendChatState('529934031058@c.us', 'typing');
+    expect(getChatById).toHaveBeenCalledWith('159442138038327@lid');
+    expect(sendStateTyping).toHaveBeenCalled();
+  });
+});
+
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {
   const m = (over: Record<string, unknown>) => over as unknown as Parameters<typeof extractWwebjsCall>[0];
 

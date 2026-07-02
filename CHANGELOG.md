@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sending to a contact WhatsApp has migrated to LID addressing no longer fails with HTTP 500 on the whatsapp-web.js engine.** WhatsApp has begun addressing some individual chats by privacy id (`@lid`) instead of the phone-number WID (`@c.us`); for those contacts whatsapp-web.js rejected the send with `No LID for user`, which surfaced as a 500 (and as a passed-through 500 in integrations such as n8n). Pinning the WhatsApp Web version did not help because this is an addressing change, not version drift. The engine now resolves an individual recipient to its current WhatsApp id before sending — across text, media (image/video/audio/document), location, contact, and sticker messages, plus the typing indicator — and falls back to the original id if resolution is unavailable, so a send is never blocked on it. Group and channel sends are unaffected; the Baileys engine already handled this. (#573) Thanks @lexcorp.
+
 ## [0.7.18] - 2026-07-02
 
 ### Added

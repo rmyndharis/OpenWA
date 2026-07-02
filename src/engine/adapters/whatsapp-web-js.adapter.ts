@@ -803,13 +803,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
+  /**
+   * Resolve an individual (`@c.us`) recipient to its LID (`@lid`) when WhatsApp has migrated that
+   * contact to privacy-id addressing. On a migrated chat whatsapp-web.js throws `No LID for user`
+   * for the phone WID, but the id `getNumberId` returns (which may be a `@lid`) is accepted (#573).
+   * Groups/channels and already-`@lid` targets are returned unchanged, and any resolution failure
+   * falls back to the original id so a send is never blocked on it.
+   */
+  private async resolveSendId(chatId: string): Promise<string> {
+    if (!chatId.endsWith('@c.us')) {
+      return chatId;
+    }
+    try {
+      return (await this.getNumberId(chatId)) ?? chatId;
+    } catch {
+      return chatId;
+    }
+  }
+
   async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
+    const to = await this.resolveSendId(chatId);
     // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
     // is needed. Omit the options object entirely when none are given to keep today's send behavior.
     const msg = mentions?.length
-      ? await this.client!.sendMessage(chatId, text, { mentions })
-      : await this.client!.sendMessage(chatId, text);
+      ? await this.client!.sendMessage(to, text, { mentions })
+      : await this.client!.sendMessage(to, text);
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -838,6 +857,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     extraOptions?: { sendAudioAsVoice?: boolean },
   ): Promise<MessageResult> {
     this.ensureReady();
+    const to = await this.resolveSendId(chatId);
 
     let messageMedia: MessageMedia;
 
@@ -854,7 +874,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
     }
 
-    const msg = await this.client!.sendMessage(chatId, messageMedia, {
+    const msg = await this.client!.sendMessage(to, messageMedia, {
       caption: media.caption,
       ...(media.mentions?.length ? { mentions: media.mentions } : {}),
       // sendAudioAsVoice only for audio; {...undefined} contributes no keys.
@@ -964,7 +984,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       name: location.description || '',
       address: location.address || '',
     });
-    const msg = await this.client!.sendMessage(chatId, loc);
+    const to = await this.resolveSendId(chatId);
+    const msg = await this.client!.sendMessage(to, loc);
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -977,7 +998,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
-    const msg = await this.client!.sendMessage(chatId, vcard, {
+    const to = await this.resolveSendId(chatId);
+    const msg = await this.client!.sendMessage(to, vcard, {
       parseVCards: true,
     });
     return {
@@ -1000,7 +1022,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
     }
 
-    const msg = await this.client!.sendMessage(chatId, messageMedia, {
+    const to = await this.resolveSendId(chatId);
+    const msg = await this.client!.sendMessage(to, messageMedia, {
       sendMediaAsSticker: true,
     });
     return {
@@ -1658,7 +1681,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       return;
     }
     try {
-      const chat = await this.client!.getChatById(chatId);
+      const to = await this.resolveSendId(chatId);
+      const chat = await this.client!.getChatById(to);
       if (state === 'typing') {
         await chat.sendStateTyping();
       } else if (state === 'recording') {
