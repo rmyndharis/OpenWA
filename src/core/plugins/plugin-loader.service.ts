@@ -675,12 +675,27 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * The capability session gate. A plugin may act on `sessionId` only if BOTH hold: its manifest scope
+   * allows the session (the static author boundary, assertSessionAllowed) AND the operator has activated
+   * the plugin for that session (the dynamic boundary, the same gate hook dispatch uses). manifest.sessions
+   * alone is not enough — a general adapter ships `['*']` and is scoped by operator activation, so without
+   * the activeSessions check a plugin activated for one session could reach another's engine/mappings/
+   * handover. Defaults (`activeSessions ?? ['*']`, `sessionScoped:false`) preserve every unrestricted flow.
+   */
+  private assertSessionActive(plugin: PluginInstance, sessionId: string): void {
+    this.assertSessionAllowed(plugin.manifest, sessionId);
+    if (!this.isHookActive(plugin, sessionId)) {
+      throw new PluginCapabilityError(`Plugin ${plugin.manifest.id} is not activated for session ${sessionId}`);
+    }
+  }
+
+  /**
    * Scope-check, then resolve the live engine for a session. getEngine returns undefined for an
    * unknown OR unstarted session (no throw), so guard it into a defined PluginCapabilityError.
    * A present-but-not-READY engine throws EngineNotReadyError from the adapter on use (→ 409).
    */
-  private resolveEngine(manifest: PluginManifest, sessionId: string): IWhatsAppEngine {
-    this.assertSessionAllowed(manifest, sessionId);
+  private resolveEngine(plugin: PluginInstance, sessionId: string): IWhatsAppEngine {
+    this.assertSessionActive(plugin, sessionId);
     const engine = this.getSessionService().getEngine(sessionId);
     if (!engine) {
       throw new PluginCapabilityError(`Session ${sessionId} has no active engine (unknown or not started)`);
@@ -689,9 +704,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Engine read capabilities: require the `engine:read` permission, then resolve the live engine. */
-  private resolveEngineRead(manifest: PluginManifest, sessionId: string): IWhatsAppEngine {
-    this.assertPermission(manifest, PluginCapabilityPermission.ENGINE_READ);
-    return this.resolveEngine(manifest, sessionId);
+  private resolveEngineRead(plugin: PluginInstance, sessionId: string): IWhatsAppEngine {
+    this.assertPermission(plugin.manifest, PluginCapabilityPermission.ENGINE_READ);
+    return this.resolveEngine(plugin, sessionId);
   }
 
   /**
@@ -755,7 +770,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // Containment guard: reject a manifest.main that escapes the plugin dir.
     const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
     // The capability dispatcher runs a worker request through the SAME context an in-process plugin
-    // gets, so permission + session-scope checks (assertPermission / assertSessionAllowed) apply
+    // gets, so permission + session-scope checks (assertPermission / assertSessionActive) apply
     // identically. The worker can only ask; the host is the gatekeeper.
     const context = this.createPluginContext(plugin);
 
@@ -950,26 +965,25 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           // Validate permission + scope + that the session has a live engine BEFORE MessageService
           // persists a pending row: a missing grant / dead session must fail with
           // PluginCapabilityError, not a raw TypeError + orphaned row. resolveEngine also runs
-          // assertSessionAllowed.
+          // assertSessionActive.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
-          this.resolveEngine(plugin.manifest, sessionId);
+          this.resolveEngine(plugin, sessionId);
           return this.getMessageService().sendText(sessionId, { chatId, text });
         },
         reply: async (sessionId, chatId, quotedMessageId, text) => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
-          this.resolveEngine(plugin.manifest, sessionId);
+          this.resolveEngine(plugin, sessionId);
           return this.getMessageService().reply(sessionId, { chatId, quotedMessageId, text });
         },
       } satisfies PluginMessagingCapability,
       engine: {
-        getGroupInfo: async (sessionId, groupId) =>
-          this.resolveEngineRead(plugin.manifest, sessionId).getGroupInfo(groupId),
-        getContacts: async sessionId => this.resolveEngineRead(plugin.manifest, sessionId).getContacts(),
+        getGroupInfo: async (sessionId, groupId) => this.resolveEngineRead(plugin, sessionId).getGroupInfo(groupId),
+        getContacts: async sessionId => this.resolveEngineRead(plugin, sessionId).getContacts(),
         getContactById: async (sessionId, contactId) =>
-          this.resolveEngineRead(plugin.manifest, sessionId).getContactById(contactId),
+          this.resolveEngineRead(plugin, sessionId).getContactById(contactId),
         checkNumberExists: async (sessionId, phone) =>
-          this.resolveEngineRead(plugin.manifest, sessionId).checkNumberExists(phone),
-        getChats: async sessionId => this.resolveEngineRead(plugin.manifest, sessionId).getChats(),
+          this.resolveEngineRead(plugin, sessionId).checkNumberExists(phone),
+        getChats: async sessionId => this.resolveEngineRead(plugin, sessionId).getChats(),
       } satisfies PluginEngineReadCapability,
       net: {
         fetch: async (url, init) => {
@@ -999,7 +1013,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       conversations: buildConversationSendFacade({
         manifest: plugin.manifest,
         assertPermission: this.assertPermission.bind(this),
-        assertSessionAllowed: this.assertSessionAllowed.bind(this),
+        assertSessionActive: (sessionId: string) => this.assertSessionActive(plugin, sessionId),
         resolveChatId: async env => {
           if (!env.instanceId || !env.source) {
             throw new PluginCapabilityError(
@@ -1035,7 +1049,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           // Same gate as conversation.send: flipping handover is part of owning the conversation, so
           // it reuses CONVERSATION_SEND rather than adding a new permission.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
-          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          this.assertSessionActive(plugin, key.sessionId);
           const mapping = await this.getConversationMappingService().get({
             sessionId: key.sessionId,
             chatId: key.chatId,
@@ -1053,7 +1067,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       mappings: {
         upsert: async (key, providerConversationId) => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
-          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          this.assertSessionActive(plugin, key.sessionId);
           await this.getConversationMappingService().upsert(
             { sessionId: key.sessionId, chatId: key.chatId, pluginId: plugin.manifest.id, instanceId: key.instanceId },
             providerConversationId,
@@ -1061,7 +1075,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
         },
         get: async key => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
-          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          this.assertSessionActive(plugin, key.sessionId);
           const m = await this.getConversationMappingService().get({
             sessionId: key.sessionId,
             chatId: key.chatId,
@@ -1077,8 +1091,8 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
             instanceId,
             providerConversationId,
           );
-          // Parity with get/upsert: a plugin may only read a mapping for a session it is scoped to.
-          if (m) this.assertSessionAllowed(plugin.manifest, m.sessionId);
+          // Parity with get/upsert: a plugin may only read a mapping for a session it is activated for.
+          if (m) this.assertSessionActive(plugin, m.sessionId);
           return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
         },
       } satisfies PluginMappingsCapability,

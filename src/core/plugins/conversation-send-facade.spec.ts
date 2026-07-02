@@ -8,7 +8,7 @@ describe('conversation.send facade', () => {
     const facade = buildConversationSendFacade({
       manifest: manifest(['conversation:send']) as never,
       assertPermission: () => undefined,
-      assertSessionAllowed: jest.fn(),
+      assertSessionActive: jest.fn(),
       resolveChatId: () => Promise.resolve('chat@c.us'),
       runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
       sendText: jest.fn(),
@@ -23,7 +23,7 @@ describe('conversation.send facade', () => {
       assertPermission: (m: { permissions: string[] }, p: string) => {
         if (!m.permissions.includes(p)) throw new Error(`missing ${p}`);
       },
-      assertSessionAllowed: () => undefined,
+      assertSessionActive: () => undefined,
       resolveChatId: () => Promise.resolve('chat@c.us'),
       runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
       sendText: jest.fn(),
@@ -41,7 +41,7 @@ describe('conversation.send facade', () => {
     const facade = buildConversationSendFacade({
       manifest: manifest(['conversation:send']) as never,
       assertPermission: () => undefined,
-      assertSessionAllowed: jest.fn(),
+      assertSessionActive: jest.fn(),
       resolveChatId,
       runGuarded,
       sendText,

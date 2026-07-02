@@ -25,7 +25,7 @@ export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'sto
  * worker cannot invoke an arbitrary method on the context. Args are positional, one per signature.
  *
  * Permission + session-scope checks are NOT here — they live inside the context's own verbs
- * (assertPermission / assertSessionAllowed), so a sandboxed call is gated exactly like an in-process
+ * (assertPermission / assertSessionActive), so a sandboxed call is gated exactly like an in-process
  * one. This router is purely the wire-to-method mapping.
  */
 export async function dispatchCapabilityVerb(

@@ -8,7 +8,9 @@ import {
 export interface ConversationSendDeps {
   manifest: PluginManifest;
   assertPermission: (manifest: PluginManifest, permission: string) => void;
-  assertSessionAllowed: (manifest: PluginManifest, sessionId: string) => void;
+  // Full session gate for THIS plugin (manifest scope AND operator activation), bound to the plugin by
+  // the loader — so conversation.send is confined to activated sessions like every other capability.
+  assertSessionActive: (sessionId: string) => void;
   // Resolve the WA chat id from conversation_mappings when the envelope omits chatId.
   resolveChatId: (env: ConversationSendEnvelope) => Promise<string>;
   // Seed the hook in-flight set so an adapter's own outbound message:sending hook cannot echo-loop
@@ -28,7 +30,7 @@ export function buildConversationSendFacade(deps: ConversationSendDeps) {
       deps.assertPermission(deps.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
       const sessionId = env.sessionId;
       if (!sessionId) throw new PluginCapabilityError('conversation.send: sessionId is required');
-      deps.assertSessionAllowed(deps.manifest, sessionId);
+      deps.assertSessionActive(sessionId);
       const chatId = env.chatId ?? (await deps.resolveChatId(env));
       // Only text/reply are wired in P0; media types are additive in a later minor.
       return deps.runGuarded(MESSAGE_HOOK_EVENTS, async () => {
