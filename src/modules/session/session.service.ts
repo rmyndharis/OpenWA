@@ -284,9 +284,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       status: SessionStatus.CREATED,
     });
 
-    const saved = await this.dataSource.transaction(async manager => {
-      return await manager.save(session);
-    });
+    // The findOne pre-check above is a fast path for the common case, but it's a check-then-insert
+    // TOCTOU: two concurrent same-name creates both pass it, then one hits the name UNIQUE constraint.
+    // Translate that violation to a 409 (matching the pre-check) instead of leaking a raw 500.
+    let saved: Session;
+    try {
+      saved = await this.dataSource.transaction(async manager => {
+        return await manager.save(session);
+      });
+    } catch (err) {
+      if (isUniqueConstraintError(err)) {
+        throw new ConflictException(`Session with name '${dto.name}' already exists`);
+      }
+      throw err;
+    }
     this.logger.log(`Session created: ${saved.name}`, {
       sessionId: saved.id,
       action: 'create',
@@ -439,7 +450,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
-      await this.initializeEngine(id, session);
+      try {
+        await this.initializeEngine(id, session);
+      } catch (err) {
+        // engine.initialize() failed AFTER the engine was registered (initializeEngine sets it before
+        // initializing). Evict + tear it down so the session doesn't wedge at "already started" with a
+        // leaked Chromium/socket permanently holding a concurrency slot. initializingSessions serializes
+        // start(), so the engine in the map here is the one this start just created.
+        const orphan = this.engines.get(id);
+        if (orphan) {
+          this.engines.delete(id);
+          this.sessionErrors.set(id, err instanceof Error ? err.message : String(err));
+          await this.destroyEngineSafely(id, orphan);
+          await this.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
+        }
+        throw err;
+      }
 
       // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
       // engine we just registered so the session isn't resurrected to READY (mirrors the post-init

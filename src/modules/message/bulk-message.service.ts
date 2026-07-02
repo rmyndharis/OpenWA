@@ -57,10 +57,24 @@ export function sanitizeBatchError(error: unknown): { code: string; message: str
   return { code: 'SEND_FAILED', message: error instanceof Error ? error.message : String(error) };
 }
 
+/**
+ * Per-process cap on concurrently-processing bulk batches. Each in-flight batch holds its full message
+ * set (with base64 media) in memory and is dispatched fire-and-forget, so without a ceiling a burst of
+ * batches can exhaust host memory. Env-overridable; 0 disables the cap. Default is generous — it only
+ * trips a genuine runaway, not normal use. Per-process (not cluster-wide).
+ */
+const DEFAULT_MAX_CONCURRENT_BATCHES = 50;
+export function resolveMaxConcurrentBatches(): number {
+  const raw = Number(process.env.BULK_MAX_CONCURRENT_BATCHES);
+  if (!Number.isFinite(raw) || raw < 0) return DEFAULT_MAX_CONCURRENT_BATCHES;
+  return Math.floor(raw); // 0 = unlimited
+}
+
 @Injectable()
 export class BulkMessageService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BulkMessageService.name);
   private readonly processingBatches = new Map<string, boolean>(); // Track active batches for cancellation
+  private inFlightBatches = 0; // count of batches currently in processBatch (memory bound, see cap above)
 
   constructor(
     @InjectRepository(MessageBatch, 'data')
@@ -113,6 +127,13 @@ export class BulkMessageService implements OnApplicationBootstrap {
     const existing = await this.batchRepository.findOne({ where: { batchId, sessionId } });
     if (existing) {
       throw new BadRequestException(`Batch ID '${batchId}' already exists`);
+    }
+
+    // Reject before persisting a row when too many batches are already processing, so a burst can't
+    // hold an unbounded number of full message sets (base64 media included) in memory at once.
+    const maxConcurrentBatches = resolveMaxConcurrentBatches();
+    if (maxConcurrentBatches > 0 && this.inFlightBatches >= maxConcurrentBatches) {
+      throw new BadRequestException(`Too many bulk batches in progress (max ${maxConcurrentBatches}); retry shortly`);
     }
 
     const options = {
@@ -199,8 +220,10 @@ export class BulkMessageService implements OnApplicationBootstrap {
     // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
     // save/send, or normal completion) — otherwise the map leaks an entry per such batch.
     try {
+      this.inFlightBatches++;
       await this.executeBatch(batch);
     } finally {
+      this.inFlightBatches--;
       this.processingBatches.delete(batch.id);
     }
   }

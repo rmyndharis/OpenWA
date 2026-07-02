@@ -142,6 +142,21 @@ describe('BulkMessageService.processBatch', () => {
   const inFlightMarkers = (): Map<string, boolean> =>
     (service as unknown as { processingBatches: Map<string, boolean> }).processingBatches;
 
+  it('rejects a new batch (before persisting) when the concurrent in-flight cap is reached', async () => {
+    const prev = process.env.BULK_MAX_CONCURRENT_BATCHES;
+    process.env.BULK_MAX_CONCURRENT_BATCHES = '2';
+    try {
+      repo.findOne.mockResolvedValue(null); // batchId not taken
+      (service as unknown as { inFlightBatches: number }).inFlightBatches = 2; // at cap
+      const dto = { messages: [{ chatId: 'c@c.us', type: 'text', content: { text: 'hi' } }] };
+      await expect(service.createBatch('s1', dto as never)).rejects.toThrow(/too many bulk batches/i);
+      expect(repo.save).not.toHaveBeenCalled(); // rejected before a PENDING row is written
+    } finally {
+      if (prev === undefined) delete process.env.BULK_MAX_CONCURRENT_BATCHES;
+      else process.env.BULK_MAX_CONCURRENT_BATCHES = prev;
+    }
+  });
+
   it('releases the in-flight marker when the engine is missing (no processingBatches leak)', async () => {
     repo.findOne.mockResolvedValue(makeBatch(1));
     sessionService.getEngine.mockReturnValue(undefined); // engine-not-found → early-return path

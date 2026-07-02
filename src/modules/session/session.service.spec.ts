@@ -267,6 +267,15 @@ describe('SessionService', () => {
 
       await expect(service.create({ name: 'test-session' })).rejects.toThrow(ConflictException);
     });
+
+    it('maps a name UNIQUE-violation on insert to 409 when two concurrent creates race past the pre-check', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(null); // pre-check passes (TOCTOU window)
+      (repository.create as jest.Mock).mockReturnValue(createMockSession());
+      const uniqueErr = Object.assign(new Error('duplicate key value'), { driverError: { code: '23505' } });
+      (dataSource.transaction as jest.Mock).mockRejectedValueOnce(uniqueErr);
+
+      await expect(service.create({ name: 'test-session' })).rejects.toThrow(ConflictException);
+    });
   });
 
   // ── findAll / findOne / findByName ────────────────────────────────
@@ -354,6 +363,19 @@ describe('SessionService', () => {
       expect(rejected[0].reason).toBeInstanceOf(BadRequestException);
       // The decisive assertion: exactly ONE engine was ever created — no orphaned second engine.
       expect(engineFactory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('evicts and tears down the engine when engine.initialize() fails (no orphan wedging the session)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+      mockEngine.initialize.mockRejectedValueOnce(new Error('chromium launch failed'));
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow('chromium launch failed');
+
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      expect(engines.has('sess-uuid-1')).toBe(false); // not left orphaned → session can be started again
+      expect(mockEngine.destroy).toHaveBeenCalled(); // half-built engine torn down
     });
 
     it('allows a fresh start after the previous one completed (reservation is cleared)', async () => {
