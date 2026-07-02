@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
+import type { PluginConfigField, PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 
 const SECRET_MASK = '***';
 
@@ -13,6 +14,21 @@ function normalizeSecret(supplied?: string): string {
   const s = supplied.trim();
   if (s.length < 16) throw new Error('instance secret must be a non-empty string of at least 16 characters');
   return s;
+}
+
+// Mask every config value the plugin's schema marks `secret:true` (e.g. a Chatwoot apiToken) on operator
+// reads — core does not otherwise redact instance `config`. Top-level fields only (the declarative
+// configSchema is flat for secret credentials).
+function redactSecrets(
+  config: Record<string, unknown> | null,
+  schema?: PluginConfigSchema,
+): Record<string, unknown> | null {
+  if (!config || !schema?.properties) return config;
+  const out: Record<string, unknown> = { ...config };
+  for (const [key, field] of Object.entries(schema.properties)) {
+    if (key in out && (field as PluginConfigField).secret) out[key] = SECRET_MASK;
+  }
+  return out;
 }
 
 export class InstanceExistsError extends Error {
@@ -51,9 +67,10 @@ export class PluginInstanceService {
     return this.repo.findOne({ where: { id: `${pluginId}:${instanceId}` } });
   }
 
-  // Operator-facing view: never leak the raw secret. Reuses the redact-config sentinel convention.
-  maskedView(instance: PluginInstance): PluginInstance {
-    return { ...instance, secret: SECRET_MASK };
+  // Operator-facing view: never leak the raw secret, and mask any `secret:true` config field (e.g. a
+  // provider apiToken) per the plugin's configSchema. Reuses the redact-config sentinel convention.
+  maskedView(instance: PluginInstance, schema?: PluginConfigSchema): PluginInstance {
+    return { ...instance, secret: SECRET_MASK, config: redactSecrets(instance.config, schema) };
   }
 
   async create(

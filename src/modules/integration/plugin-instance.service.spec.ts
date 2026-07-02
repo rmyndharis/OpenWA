@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { PluginInstanceService, InstanceExistsError } from './plugin-instance.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
+import type { PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 
 describe('PluginInstanceService', () => {
   let ds: DataSource;
@@ -27,6 +28,23 @@ describe('PluginInstanceService', () => {
   it('masks the secret on the operator-facing view', async () => {
     const inst = await service.mint('chatwoot', 'acct1', {});
     expect(service.maskedView(inst).secret).toBe('***');
+  });
+
+  it('masks secret:true config fields (apiToken) on masked reads', () => {
+    const schema = {
+      type: 'object',
+      properties: { apiToken: { type: 'string', secret: true }, accountId: { type: 'number' } },
+    } as PluginConfigSchema;
+    const inst = {
+      id: 'p:i',
+      secret: 'x',
+      config: { apiToken: 'live-token', accountId: 3 },
+    } as unknown as PluginInstance;
+    const masked = service.maskedView(inst, schema);
+    const config = masked.config as Record<string, unknown>;
+    expect(masked.secret).toBe('***');
+    expect(config.apiToken).toBe('***');
+    expect(config.accountId).toBe(3);
   });
 
   it('resolves an existing instance and returns null for an unknown one', async () => {

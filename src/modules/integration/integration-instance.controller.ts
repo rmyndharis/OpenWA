@@ -123,7 +123,8 @@ export class IntegrationInstanceController {
   }
 
   private view(inst: PluginInstance, routes: string[], reveal: boolean): InstanceView {
-    const masked = reveal ? inst : this.instances.maskedView(inst);
+    const schema = this.loader.getPlugin(inst.pluginId)?.manifest.configSchema;
+    const masked = reveal ? inst : this.instances.maskedView(inst, schema);
     return {
       id: masked.id,
       pluginId: masked.pluginId,
