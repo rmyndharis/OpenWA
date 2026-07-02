@@ -186,6 +186,15 @@ export function extractLinkedParentJID(groupMetadata?: GroupMetadataRaw): string
   return candidate._serialized ?? null;
 }
 
+/**
+ * True when a send error is whatsapp-web.js's "recipient needs a LID we don't have" failure, raised
+ * when sending to a `@c.us` for a contact WhatsApp has migrated to `@lid`.
+ * ponytail: matched on the wwjs error text — there is no structured code; revisit if wwjs changes it.
+ */
+export function isNoLidForUserError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('No LID for user');
+}
+
 export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngine {
   private client: Client | null = null;
   private status: EngineStatus = EngineStatus.DISCONNECTED;
@@ -803,22 +812,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
-  // Cache of resolved `<phone>@c.us` -> `<lid>@lid` sends. A contact's lid is stable, and
-  // `getNumberId` (a WhatsApp Web round-trip) fails intermittently with an internal `t: t` error;
-  // caching the first good resolution means a later flaky call no longer dead-ends the send back on
-  // the `@c.us` id that `sendMessage` rejects with `No LID for user` (#580).
+  // Cache of resolved individual recipients: `<phone>@c.us` -> the id `sendMessage` accepts (a
+  // `<lid>@lid` for a migrated contact, or the confirmed `@c.us` for a non-migrated one). `getNumberId`
+  // is a rate-limited WhatsApp Web existence probe that also throws intermittently, so caching every
+  // confirmed resolution keeps ordinary sends from re-probing on each message (#580). A `@lid` is
+  // stable; a stale entry (a contact that migrates mid-session) self-heals via the retry in
+  // `sendResolved`.
   // ponytail: unbounded Map, bounded in practice by distinct recipients per session; add an LRU only
   // if a session ever addresses a truly unbounded set of fresh numbers.
   private readonly resolvedSendIds = new Map<string, string>();
 
   /**
-   * Resolve an individual (`@c.us`) recipient to its LID (`@lid`) when WhatsApp has migrated that
-   * contact to privacy-id addressing. On a migrated chat whatsapp-web.js throws `No LID for user`
-   * for the phone WID, but the id `getNumberId` returns (which may be a `@lid`) is accepted (#573).
-   * A successful resolution is cached so a later intermittent `getNumberId` failure reuses it instead
-   * of falling back to the unreachable `@c.us` id and 500-ing (#580). Groups/channels and already-
-   * `@lid` targets are returned unchanged, and any resolution failure falls back to the original id
-   * so a send is never blocked on it.
+   * Resolve an individual (`@c.us`) recipient to the id whatsapp-web.js will accept. WhatsApp has
+   * migrated some contacts to privacy-id addressing, for which `sendMessage` throws `No LID for user`
+   * on the phone WID but accepts the `@lid` that `getNumberId` returns (#573). Any server-confirmed
+   * resolution (a distinct `@lid` OR a confirmed non-migrated `@c.us`) is cached, since it is stable
+   * and re-probing costs a rate-limited round-trip (#580); a `null`/thrown lookup is NOT cached so an
+   * unregistered or transiently-flaky contact keeps being retried. Groups/channels and already-`@lid`
+   * targets are returned unchanged, and any resolution failure falls back to the original id so a send
+   * is never blocked on it.
    */
   private async resolveSendId(chatId: string): Promise<string> {
     if (!chatId.endsWith('@c.us')) {
@@ -829,26 +841,47 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       return cached;
     }
     try {
-      const resolved = (await this.getNumberId(chatId)) ?? chatId;
-      // Only cache a real resolution (a distinct `@lid`); never cache the `@c.us` fallback, so a
-      // contact that was flaky/unregistered now keeps being retried rather than pinned to a dead id.
-      if (resolved !== chatId) {
-        this.resolvedSendIds.set(chatId, resolved);
+      const wid = await this.getNumberId(chatId);
+      if (wid) {
+        this.resolvedSendIds.set(chatId, wid);
+        return wid;
       }
-      return resolved;
+      return chatId;
     } catch {
       return chatId;
     }
   }
 
+  /**
+   * Resolve `chatId` and run `send` against the resolved id. If the send fails with `No LID for user`
+   * — the signature of a contact whose cached/resolved id is stale (typically a `@c.us` for a contact
+   * that has since migrated to `@lid`) — drop the mapping, re-resolve once, and retry only if the
+   * fresh id differs, so a genuinely unreachable recipient surfaces its error instead of looping.
+   */
+  private async sendResolved<T>(chatId: string, send: (to: string) => Promise<T>): Promise<T> {
+    const to = await this.resolveSendId(chatId);
+    try {
+      return await send(to);
+    } catch (err) {
+      if (!chatId.endsWith('@c.us') || !isNoLidForUserError(err)) {
+        throw err;
+      }
+      this.resolvedSendIds.delete(chatId);
+      const fresh = await this.resolveSendId(chatId);
+      if (fresh === to) {
+        throw err;
+      }
+      return send(fresh);
+    }
+  }
+
   async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
-    const to = await this.resolveSendId(chatId);
     // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
     // is needed. Omit the options object entirely when none are given to keep today's send behavior.
-    const msg = mentions?.length
-      ? await this.client!.sendMessage(to, text, { mentions })
-      : await this.client!.sendMessage(to, text);
+    const msg = await this.sendResolved(chatId, to =>
+      mentions?.length ? this.client!.sendMessage(to, text, { mentions }) : this.client!.sendMessage(to, text),
+    );
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -877,7 +910,6 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     extraOptions?: { sendAudioAsVoice?: boolean },
   ): Promise<MessageResult> {
     this.ensureReady();
-    const to = await this.resolveSendId(chatId);
 
     let messageMedia: MessageMedia;
 
@@ -894,12 +926,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
     }
 
-    const msg = await this.client!.sendMessage(to, messageMedia, {
-      caption: media.caption,
-      ...(media.mentions?.length ? { mentions: media.mentions } : {}),
-      // sendAudioAsVoice only for audio; {...undefined} contributes no keys.
-      ...extraOptions,
-    });
+    // Build the media once (a remote URL is fetched here); sendResolved may retry the send itself.
+    const msg = await this.sendResolved(chatId, to =>
+      this.client!.sendMessage(to, messageMedia, {
+        caption: media.caption,
+        ...(media.mentions?.length ? { mentions: media.mentions } : {}),
+        // sendAudioAsVoice only for audio; {...undefined} contributes no keys.
+        ...extraOptions,
+      }),
+    );
 
     return {
       id: msg.id._serialized,
@@ -1004,8 +1039,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       name: location.description || '',
       address: location.address || '',
     });
-    const to = await this.resolveSendId(chatId);
-    const msg = await this.client!.sendMessage(to, loc);
+    const msg = await this.sendResolved(chatId, to => this.client!.sendMessage(to, loc));
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -1018,10 +1052,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // can't inject extra vCard fields — the previous inline build interpolated raw values.
     const vcard = buildVCard(contact);
 
-    const to = await this.resolveSendId(chatId);
-    const msg = await this.client!.sendMessage(to, vcard, {
-      parseVCards: true,
-    });
+    const msg = await this.sendResolved(chatId, to =>
+      this.client!.sendMessage(to, vcard, {
+        parseVCards: true,
+      }),
+    );
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -1042,10 +1077,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
     }
 
-    const to = await this.resolveSendId(chatId);
-    const msg = await this.client!.sendMessage(to, messageMedia, {
-      sendMediaAsSticker: true,
-    });
+    const msg = await this.sendResolved(chatId, to =>
+      this.client!.sendMessage(to, messageMedia, {
+        sendMediaAsSticker: true,
+      }),
+    );
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -1711,8 +1747,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         await chat.clearState();
       }
     } catch (error) {
-      // Presence is best-effort — a failure here must never break the surrounding send.
-      this.logger.error(`Error setting chat state '${state}' for ${chatId}`, String(error));
+      // Presence is best-effort and already swallowed here — it never breaks the surrounding send —
+      // so log at WARN, not ERROR: a migrated contact routinely yields `No LID for user` on the
+      // presence path and an ERROR line reads as a fault when nothing actually failed (#582).
+      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, String(error));
     }
   }
 
