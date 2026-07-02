@@ -31,6 +31,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { useToast } from '../components/Toast';
+import { PluginInstances } from '../components/PluginInstances';
 import './Plugins.css';
 
 type PluginType = 'engine' | 'storage' | 'queue' | 'auth' | 'extension';
@@ -530,7 +531,7 @@ export default function Plugins() {
   // Derive the open plugin from the LIVE query so the modal (esp. the Sessions tab) reflects the
   // latest activeSessions/sessionConfig after a save + invalidate — not a stale open-time snapshot.
   const configPlugin = configPluginId ? (plugins.find(p => p.id === configPluginId) ?? null) : null;
-  const [configTab, setConfigTab] = useState<'config' | 'sessions'>('config');
+  const [configTab, setConfigTab] = useState<'config' | 'sessions' | 'instances'>('config');
   const [savingConfig, setSavingConfig] = useState(false);
   // Values for a schema-driven (non-engine) plugin's config form, keyed by configSchema property.
   const [schemaConfig, setSchemaConfig] = useState<Record<string, unknown>>({});
@@ -1087,8 +1088,9 @@ export default function Plugins() {
         configPlugin &&
         (() => {
           const lz = localizePlugin(configPlugin, i18n.language);
-          // Session-scoped plugins get a Configuration/Sessions tab split; others keep one body.
-          const showTabs = configPlugin.sessionScoped !== false;
+          // Session-scoped plugins get a Configuration/Sessions split; ingress-capable plugins add an
+          // Instances tab. Either (or both) turns the modal into a tabbed view.
+          const showTabs = configPlugin.sessionScoped !== false || configPlugin.ingressCapable;
           return (
             <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
               <div className="modal config-modal" onClick={e => e.stopPropagation()}>
@@ -1107,17 +1109,29 @@ export default function Plugins() {
                     >
                       {t('plugins.config.tabConfig')}
                     </button>
-                    <button
-                      className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
-                      onClick={() => setConfigTab('sessions')}
-                    >
-                      {t('plugins.config.tabSessions')}
-                    </button>
+                    {configPlugin.sessionScoped !== false && (
+                      <button
+                        className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
+                        onClick={() => setConfigTab('sessions')}
+                      >
+                        {t('plugins.config.tabSessions')}
+                      </button>
+                    )}
+                    {configPlugin.ingressCapable && (
+                      <button
+                        className={`modal-tab ${configTab === 'instances' ? 'active' : ''}`}
+                        onClick={() => setConfigTab('instances')}
+                      >
+                        {t('plugins.instances.title')}
+                      </button>
+                    )}
                   </div>
                 )}
 
                 <div className="modal-body">
-                  {showTabs && configTab === 'sessions' ? (
+                  {showTabs && configTab === 'instances' && configPlugin.ingressCapable ? (
+                    <PluginInstances pluginId={configPlugin.id} />
+                  ) : showTabs && configTab === 'sessions' && configPlugin.sessionScoped !== false ? (
                     <SessionsTab plugin={configPlugin} />
                   ) : configPlugin.configUi ? (
                     <PluginConfigUi plugin={configPlugin} />
@@ -1145,8 +1159,10 @@ export default function Plugins() {
                   <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
                     {t('common.close')}
                   </button>
-                  {/* The Sessions tab has its own Save/Clear actions; the footer Save is config-tab only. */}
-                  {showTabs && configTab === 'sessions' ? null : configPlugin.configUi ? null : lz.configSchema &&
+                  {/* The Sessions and Instances tabs have their own actions; the footer Save is config-tab only. */}
+                  {showTabs && (configTab === 'sessions' || configTab === 'instances')
+                    ? null
+                    : configPlugin.configUi ? null : lz.configSchema &&
                     Object.keys(lz.configSchema.properties).length > 0 ? (
                     <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
                       {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
