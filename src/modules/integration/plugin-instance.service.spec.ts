@@ -101,12 +101,7 @@ describe('PluginInstanceService', () => {
     await service.create('chatwoot', 'acct1', { config: { apiToken: 'real-token', accountId: 1 } });
 
     // Dashboard round-trips the masked config back with an edited non-secret field.
-    const updated = await service.update(
-      'chatwoot',
-      'acct1',
-      { config: { apiToken: '***', accountId: 2 } },
-      schema,
-    );
+    const updated = await service.update('chatwoot', 'acct1', { config: { apiToken: '***', accountId: 2 } }, schema);
 
     expect(updated?.config).toEqual({ apiToken: 'real-token', accountId: 2 });
   });
