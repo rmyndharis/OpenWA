@@ -1314,6 +1314,34 @@ describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid 
     expect(getChatById).toHaveBeenCalledWith('159442138038327@lid');
     expect(sendStateTyping).toHaveBeenCalled();
   });
+
+  it('caches a resolved @lid so a later getNumberId failure still sends to the @lid, not @c.us (#580)', async () => {
+    // getNumberId is flaky: it resolves the first time, then throws `t: t` (a WhatsApp Web internal
+    // error). Without a cache the second send falls back to @c.us and 500s with `No LID for user`.
+    const getNumberId = jest
+      .fn()
+      .mockResolvedValueOnce({ _serialized: '159442138038327@lid' })
+      .mockRejectedValueOnce(new Error('t: t'));
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    const adapter = ready({ getNumberId, sendMessage });
+    await adapter.sendTextMessage('529934031058@c.us', 'first');
+    await adapter.sendTextMessage('529934031058@c.us', 'second');
+    // Second send reused the cached lid instead of re-querying the flaky resolver.
+    expect(getNumberId).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, '159442138038327@lid', 'first');
+    expect(sendMessage).toHaveBeenNthCalledWith(2, '159442138038327@lid', 'second');
+  });
+
+  it('does not cache a non-resolution (getNumberId null) — keeps retrying for that contact', async () => {
+    const getNumberId = jest.fn().mockResolvedValue(null);
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    const adapter = ready({ getNumberId, sendMessage });
+    await adapter.sendTextMessage('628@c.us', 'a');
+    await adapter.sendTextMessage('628@c.us', 'b');
+    expect(getNumberId).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, '628@c.us', 'a');
+    expect(sendMessage).toHaveBeenNthCalledWith(2, '628@c.us', 'b');
+  });
 });
 
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {

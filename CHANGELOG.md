@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sends to a LID-migrated contact no longer intermittently fail with HTTP 500 on the whatsapp-web.js engine.** The v0.7.19 fix resolves such a contact's phone id to its `@lid` before sending, but that resolution is a WhatsApp Web round-trip that occasionally throws an internal error — in which case the send fell back to the phone id and hit `No LID for user` again, so the message tester (and the API) still returned a 500 now and then. The engine now caches a contact's resolved `@lid` for the session, so a later flaky resolution reuses the known-good id instead of dead-ending on the unreachable phone id. (#580) Thanks @lexcorp.
+
 ## [0.7.19] - 2026-07-02
 
 ### Added

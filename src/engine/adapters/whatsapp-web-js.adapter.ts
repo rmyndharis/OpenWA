@@ -803,19 +803,39 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
+  // Cache of resolved `<phone>@c.us` -> `<lid>@lid` sends. A contact's lid is stable, and
+  // `getNumberId` (a WhatsApp Web round-trip) fails intermittently with an internal `t: t` error;
+  // caching the first good resolution means a later flaky call no longer dead-ends the send back on
+  // the `@c.us` id that `sendMessage` rejects with `No LID for user` (#580).
+  // ponytail: unbounded Map, bounded in practice by distinct recipients per session; add an LRU only
+  // if a session ever addresses a truly unbounded set of fresh numbers.
+  private readonly resolvedSendIds = new Map<string, string>();
+
   /**
    * Resolve an individual (`@c.us`) recipient to its LID (`@lid`) when WhatsApp has migrated that
    * contact to privacy-id addressing. On a migrated chat whatsapp-web.js throws `No LID for user`
    * for the phone WID, but the id `getNumberId` returns (which may be a `@lid`) is accepted (#573).
-   * Groups/channels and already-`@lid` targets are returned unchanged, and any resolution failure
-   * falls back to the original id so a send is never blocked on it.
+   * A successful resolution is cached so a later intermittent `getNumberId` failure reuses it instead
+   * of falling back to the unreachable `@c.us` id and 500-ing (#580). Groups/channels and already-
+   * `@lid` targets are returned unchanged, and any resolution failure falls back to the original id
+   * so a send is never blocked on it.
    */
   private async resolveSendId(chatId: string): Promise<string> {
     if (!chatId.endsWith('@c.us')) {
       return chatId;
     }
+    const cached = this.resolvedSendIds.get(chatId);
+    if (cached) {
+      return cached;
+    }
     try {
-      return (await this.getNumberId(chatId)) ?? chatId;
+      const resolved = (await this.getNumberId(chatId)) ?? chatId;
+      // Only cache a real resolution (a distinct `@lid`); never cache the `@c.us` fallback, so a
+      // contact that was flaky/unregistered now keeps being retried rather than pinned to a dead id.
+      if (resolved !== chatId) {
+        this.resolvedSendIds.set(chatId, resolved);
+      }
+      return resolved;
     } catch {
       return chatId;
     }
