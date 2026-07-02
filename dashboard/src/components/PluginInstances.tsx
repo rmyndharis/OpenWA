@@ -29,6 +29,7 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [minted, setMinted] = useState<MintedInstance | null>(null); // secret-shown-once view
+  const [mintedKind, setMintedKind] = useState<'created' | 'regenerated'>('created');
   const [editing, setEditing] = useState<InstanceView | null>(null);
   const [editForm, setEditForm] = useState({ sessionScope: '', config: '' });
   const [editError, setEditError] = useState<string | null>(null);
@@ -67,6 +68,7 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
       });
       setShowForm(false);
       setForm(emptyForm);
+      setMintedKind('created');
       setMinted(created);
       toast.success(t('plugins.instances.toasts.created'), created.instanceId);
     } catch (err) {
@@ -103,7 +105,9 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
     try {
       await updateM.mutateAsync({
         instanceId: editing.instanceId,
-        body: { sessionScope: editForm.sessionScope.trim(), config: parsed.value ?? {} },
+        // Blank → omit (leave scope unchanged); mirrors create. Sending '' would corrupt an
+        // all-sessions (null) instance into a literal empty scope the backend never clears.
+        body: { sessionScope: editForm.sessionScope.trim() || undefined, config: parsed.value ?? {} },
       });
       setEditing(null);
       toast.success(t('plugins.instances.toasts.updated'), editing.instanceId);
@@ -122,6 +126,7 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
         toast.success(t('plugins.instances.toasts.deleted'), inst.instanceId);
       } else {
         const res = await regenM.mutateAsync(inst.instanceId);
+        setMintedKind('regenerated');
         setMinted(res);
         toast.success(t('plugins.instances.toasts.secretRegenerated'), inst.instanceId);
       }
@@ -248,7 +253,11 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
         <div className="modal-overlay" onClick={() => setMinted(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{t('plugins.instances.created.title')}</h2>
+              <h2>
+                {mintedKind === 'regenerated'
+                  ? t('plugins.instances.regenerate.title')
+                  : t('plugins.instances.created.title')}
+              </h2>
               <button className="btn-icon" onClick={() => setMinted(null)}>
                 <X size={20} />
               </button>
