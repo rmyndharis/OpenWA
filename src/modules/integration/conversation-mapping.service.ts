@@ -30,11 +30,27 @@ export class ConversationMappingService {
     return this.repo.findOne({ where: key });
   }
 
-  // Handover-gate lookup: any mapped instance for this plugin's chat, without resolving a specific
-  // instanceId at message time. The gate only needs "is THIS plugin's chat handed over?" — if a plugin
-  // has multiple instances mapped to the same chat, they share handover intent for this purpose.
+  // Per-plugin mapping lookup for a chat (any instance). No longer used by the core handover gate — that
+  // is now session+chat-scoped via findHandoverForChat — but kept as a generic per-plugin accessor.
   findForChat(sessionId: string, chatId: string, pluginId: string): Promise<ConversationMapping | null> {
     return this.repo.findOne({ where: { sessionId, chatId, pluginId } });
+  }
+
+  // Session+chat-scoped handover lookup for the core gate: the most-recently-updated human/closed row for
+  // this chat, IGNORING pluginId. A handover taken by one plugin (e.g. the Chatwoot relay) then governs
+  // every plugin on that chat — the gate exempts the owner and silences the rest.
+  async findHandoverForChat(
+    sessionId: string,
+    chatId: string,
+  ): Promise<{ pluginId: string; handoverState: HandoverState } | null> {
+    const row = await this.repo.findOne({
+      where: [
+        { sessionId, chatId, handoverState: 'human' as HandoverState },
+        { sessionId, chatId, handoverState: 'closed' as HandoverState },
+      ],
+      order: { updatedAt: 'DESC' },
+    });
+    return row ? { pluginId: row.pluginId, handoverState: row.handoverState } : null;
   }
 
   getByProvider(

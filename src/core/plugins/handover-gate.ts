@@ -1,7 +1,11 @@
-import { ConversationMapping } from '../../modules/integration/entities/conversation-mapping.entity';
-
-// The core deterministically stops the bot when a human has taken over (or the conversation is
-// closed). Default (no mapping yet) = bot, so a brand-new conversation still reaches the adapter.
-export function shouldDispatchInbound(mapping: Pick<ConversationMapping, 'handoverState'> | null): boolean {
-  return !mapping || mapping.handoverState === 'bot';
+// The core deterministically silences OTHER bots once a plugin has taken a conversation over (human) or
+// closed it, while exempting the owning plugin so it (e.g. the Chatwoot relay) keeps mirroring. Scoped by
+// session+chat, NOT by pluginId: a handover set by one plugin governs every plugin on that chat.
+export function shouldDispatchToPlugin(
+  handover: { pluginId: string; handoverState: 'bot' | 'human' | 'closed' } | null,
+  callerPluginId: string,
+): boolean {
+  if (!handover) return true; // no handover row => bot default => dispatch
+  if (handover.handoverState === 'bot') return true;
+  return handover.pluginId === callerPluginId; // owner exempt; every other plugin silenced
 }

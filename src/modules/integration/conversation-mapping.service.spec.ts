@@ -50,4 +50,19 @@ describe('ConversationMappingService', () => {
     const stale = await service.getByProvider(key.pluginId, key.instanceId, 'conv-1');
     expect(stale).toBeNull();
   });
+
+  it('findHandoverForChat returns any human/closed row for the chat, ignoring pluginId', async () => {
+    // faq-bot keeps a bot mapping; chatwoot-adapter takes the same chat over (human).
+    await service.upsert({ sessionId: 'sess-1', chatId: 'chat-1', pluginId: 'faq-bot', instanceId: 'i1' }, 'convA');
+    await service.upsert(
+      { sessionId: 'sess-1', chatId: 'chat-1', pluginId: 'chatwoot-adapter', instanceId: 'i2' },
+      'convB',
+      { handoverState: 'human' },
+    );
+    expect(await service.findHandoverForChat('sess-1', 'chat-1')).toEqual({
+      pluginId: 'chatwoot-adapter',
+      handoverState: 'human',
+    });
+    expect(await service.findHandoverForChat('sess-1', 'other-chat')).toBeNull();
+  });
 });

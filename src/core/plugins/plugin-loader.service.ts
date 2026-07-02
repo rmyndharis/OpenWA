@@ -32,7 +32,7 @@ import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { buildConversationSendFacade } from './conversation-send-facade';
-import { shouldDispatchInbound } from './handover-gate';
+import { shouldDispatchToPlugin } from './handover-gate';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import type { MessageService } from '../../modules/message/message.service';
@@ -803,12 +803,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
             try {
               const chatId = (hookCtx.data as { chatId?: string } | undefined)?.chatId;
               if (chatId && hookCtx.sessionId) {
-                const mapping = await this.getConversationMappingService().findForChat(
+                const handover = await this.getConversationMappingService().findHandoverForChat(
                   hookCtx.sessionId,
                   chatId,
-                  pluginId,
                 );
-                if (!shouldDispatchInbound(mapping)) return { continue: true };
+                if (!shouldDispatchToPlugin(handover, pluginId)) return { continue: true };
               }
             } catch (error) {
               this.logger.debug(`Handover gate lookup failed for plugin ${pluginId}; dispatching normally`, {

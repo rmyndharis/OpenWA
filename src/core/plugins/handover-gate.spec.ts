@@ -1,16 +1,21 @@
-import { shouldDispatchInbound } from './handover-gate';
+import { shouldDispatchToPlugin } from './handover-gate';
 
-describe('shouldDispatchInbound', () => {
-  it('dispatches when there is no mapping (bot is default)', () => {
-    expect(shouldDispatchInbound(null)).toBe(true);
+describe('shouldDispatchToPlugin', () => {
+  it('dispatches when there is no handover row (bot is default)', () => {
+    expect(shouldDispatchToPlugin(null, 'faq-bot')).toBe(true);
   });
-  it('dispatches for a bot conversation', () => {
-    expect(shouldDispatchInbound({ handoverState: 'bot' } as never)).toBe(true);
+  it('dispatches while the conversation is bot-handled', () => {
+    expect(shouldDispatchToPlugin({ pluginId: 'chatwoot-adapter', handoverState: 'bot' }, 'faq-bot')).toBe(true);
   });
-  it('does NOT dispatch to the bot for a human-handled conversation', () => {
-    expect(shouldDispatchInbound({ handoverState: 'human' } as never)).toBe(false);
+  it('silences OTHER bots when the owner has taken over (human)', () => {
+    expect(shouldDispatchToPlugin({ pluginId: 'chatwoot-adapter', handoverState: 'human' }, 'faq-bot')).toBe(false);
   });
-  it('does NOT dispatch for a closed conversation', () => {
-    expect(shouldDispatchInbound({ handoverState: 'closed' } as never)).toBe(false);
+  it('silences OTHER bots when the conversation is closed', () => {
+    expect(shouldDispatchToPlugin({ pluginId: 'chatwoot-adapter', handoverState: 'closed' }, 'faq-bot')).toBe(false);
+  });
+  it('exempts the owning plugin so the relay keeps mirroring', () => {
+    expect(shouldDispatchToPlugin({ pluginId: 'chatwoot-adapter', handoverState: 'human' }, 'chatwoot-adapter')).toBe(
+      true,
+    );
   });
 });
