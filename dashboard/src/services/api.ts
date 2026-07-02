@@ -703,6 +703,8 @@ export interface Plugin {
   config: Record<string, unknown>;
   builtIn: boolean;
   provides: string[];
+  /** Whether this plugin can host provisioned ingress instances (drives the Instances tab). */
+  ingressCapable: boolean;
   /** Declared config fields, when the plugin exposes a schema (drives the dashboard config form). */
   configSchema?: PluginConfigSchema;
   /** When set, the plugin ships a sandboxed-iframe config editor (preferred over configSchema). */
@@ -794,6 +796,64 @@ export const pluginsApi = {
   uninstall: (id: string) => request<{ success: boolean; message: string }>(`/plugins/${id}`, { method: 'DELETE' }),
   getEngines: () => request<Engine[]>('/infra/engines'),
   getCurrentEngine: () => request<{ engineType: string }>('/infra/engines/current'),
+};
+
+// =============================================================================
+// Plugin instances API (Integration Fabric provisioning; mirrors src/modules/integration)
+// =============================================================================
+
+export interface IngressUrl {
+  route: string;
+  url: string;
+}
+
+export interface InstanceView {
+  id: string;
+  pluginId: string;
+  instanceId: string;
+  sessionScope: string | null;
+  secret: string; // '***' on reads; plaintext once on create/regenerate
+  verifyToken: string | null;
+  config: Record<string, unknown> | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  ingressUrls: IngressUrl[];
+}
+
+export type MintedInstance = InstanceView; // same shape; `secret` carries the plaintext once
+
+export interface CreateInstanceInput {
+  instanceId: string;
+  sessionScope?: string;
+  verifyToken?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface UpdateInstanceInput {
+  enabled?: boolean;
+  sessionScope?: string;
+  config?: Record<string, unknown>;
+}
+
+export const pluginInstancesApi = {
+  list: (pluginId: string) => request<InstanceView[]>(`/integration/plugins/${pluginId}/instances`),
+  create: (pluginId: string, body: CreateInstanceInput) =>
+    request<MintedInstance>(`/integration/plugins/${pluginId}/instances`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  regenerateSecret: (pluginId: string, instanceId: string) =>
+    request<MintedInstance>(`/integration/plugins/${pluginId}/instances/${instanceId}/regenerate-secret`, {
+      method: 'POST',
+    }),
+  update: (pluginId: string, instanceId: string, body: UpdateInstanceInput) =>
+    request<InstanceView>(`/integration/plugins/${pluginId}/instances/${instanceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  remove: (pluginId: string, instanceId: string) =>
+    request<void>(`/integration/plugins/${pluginId}/instances/${instanceId}`, { method: 'DELETE' }),
 };
 
 // =============================================================================
