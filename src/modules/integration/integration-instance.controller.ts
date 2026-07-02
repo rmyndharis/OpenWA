@@ -47,6 +47,7 @@ export class IntegrationInstanceController {
       void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_CREATED, {
         metadata: { pluginId, instanceId: dto.instanceId },
       });
+      this.bridgeConfig(pluginId, inst);
       return this.view(inst, routes, /* reveal */ true);
     } catch (err) {
       if (err instanceof InstanceExistsError) throw new ConflictException(err.message);
@@ -94,14 +95,18 @@ export class IntegrationInstanceController {
     if (dto.sessionScope !== undefined || dto.config !== undefined) {
       inst = await this.instances.update(pluginId, instanceId, { sessionScope: dto.sessionScope, config: dto.config });
     }
+    this.bridgeConfig(pluginId, inst as PluginInstance);
     return this.view(inst as PluginInstance, this.pluginRoutes(pluginId), false);
   }
 
   @Delete(':instanceId')
   @HttpCode(204)
   async remove(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<void> {
-    const removed = await this.instances.remove(pluginId, instanceId);
-    if (!removed) throw new NotFoundException('instance not found');
+    const inst = await this.instances.resolve(pluginId, instanceId);
+    if (!inst) throw new NotFoundException('instance not found');
+    // Clear the session config + deactivate the session BEFORE deletion (needs the instance's scope).
+    this.bridgeConfig(pluginId, inst, true);
+    await this.instances.remove(pluginId, instanceId);
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_DELETED, { metadata: { pluginId, instanceId } });
   }
 
@@ -138,5 +143,30 @@ export class IntegrationInstanceController {
       updatedAt: masked.updatedAt,
       ingressUrls: buildIngressUrls(process.env.BASE_URL, inst.pluginId, inst.instanceId, routes),
     };
+  }
+
+  // Mirror an instance's config into the plugin's per-session runtime config so the ingress worker
+  // resolves it as ctx.config (see PluginLoaderService.dispatchWebhookForInstance) and activate the
+  // bound session. A null/'*' scope writes the base config instead. Best-effort — provisioning must
+  // not fail because the plugin is momentarily unloaded.
+  private bridgeConfig(pluginId: string, inst: PluginInstance, removing = false): void {
+    const scope = inst.sessionScope;
+    try {
+      if (!scope || scope === '*') {
+        if (!removing) this.loader.updatePluginConfig(pluginId, inst.config ?? {});
+        return;
+      }
+      this.loader.setPluginSessionConfig(pluginId, scope, removing ? {} : (inst.config ?? {}));
+      const current = this.loader.getPlugin(pluginId)?.activeSessions ?? [];
+      const set = new Set(current.filter(s => s !== '*'));
+      if (removing) set.delete(scope);
+      else set.add(scope);
+      this.loader.setPluginSessions(pluginId, [...set]);
+    } catch (err) {
+      // Best-effort: don't fail provisioning if the plugin is momentarily unloaded.
+      void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_CREATED, {
+        metadata: { pluginId, bridgeError: String(err) },
+      });
+    }
   }
 }
