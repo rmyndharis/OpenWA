@@ -28,6 +28,32 @@ export interface PluginNetResponse {
 }
 
 /**
+ * The effective outbound-host allowlist for a plugin: its static manifest `net.allow` plus the host of
+ * every `net.allowConfigHosts` config key that resolves to an https URL. Lets a marketplace adapter reach
+ * an operator-configured host (e.g. a Chatwoot base URL) without `net.allow:['*']`. Credentialed or
+ * non-https values are ignored; the SSRF guard still blocks private IPs at connect regardless.
+ */
+export function effectiveNetAllow(
+  allow: string[] | undefined,
+  allowConfigHosts: string[] | undefined,
+  config: Record<string, unknown>,
+): string[] {
+  const out = [...(allow ?? [])];
+  for (const key of allowConfigHosts ?? []) {
+    const raw = config[key];
+    if (typeof raw !== 'string') continue;
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== 'https:' || u.username || u.password) continue;
+      out.push(u.hostname);
+    } catch {
+      // Not a URL — skip.
+    }
+  }
+  return out;
+}
+
+/**
  * Is `url` allowed by a plugin's manifest `net.allow` list? Deny-by-default. `'*'` allows any host
  * (the SSRF guard still blocks internal IPs at connect time); an entry may be `host:port` (exact) or
  * a bare `host` (any port). Only http(s) is ever allowed.

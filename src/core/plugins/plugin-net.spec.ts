@@ -1,4 +1,4 @@
-import { isNetHostAllowed, performPluginFetch } from './plugin-net';
+import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import type { withSafeFetch } from '../../common/security/ssrf-guard';
 
 /** A stand-in for withSafeFetch that hands `use` a canned Response and records the init it was given. */
@@ -94,5 +94,21 @@ describe('performPluginFetch', () => {
     const fetcher = fakeSafeFetch(cannedResponse('x', { 'content-length': big }), sink);
 
     await expect(performPluginFetch('https://api.example.com/t', {}, { fetch: fetcher })).rejects.toThrow(/cap/i);
+  });
+});
+
+describe('effectiveNetAllow', () => {
+  it('adds the host of each named config URL to the static allowlist', () => {
+    expect(effectiveNetAllow(['api.static.com'], ['baseUrl'], { baseUrl: 'https://chat.acme.com' })).toEqual([
+      'api.static.com',
+      'chat.acme.com',
+    ]);
+  });
+  it('ignores missing / non-string / non-https / credentialed config values', () => {
+    expect(effectiveNetAllow([], ['baseUrl'], {})).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 42 })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'not a url' })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'http://x' })).toEqual([]); // https-only
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://u:p@x' })).toEqual([]); // no credentials
   });
 });

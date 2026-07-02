@@ -24,7 +24,7 @@ import {
   PluginLogger,
   validateIngressManifest,
 } from './plugin.interfaces';
-import { isNetHostAllowed, performPluginFetch } from './plugin-net';
+import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
 import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
@@ -973,12 +973,20 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       } satisfies PluginEngineReadCapability,
       net: {
         fetch: async (url, init) => {
-          // Two gates: the declared permission, then the manifest host allowlist. The SSRF guard
-          // inside performPluginFetch still blocks internal IPs even when the host is allowlisted.
+          // Two gates: the declared permission, then the effective host allowlist (manifest net.allow
+          // plus the hosts of any net.allowConfigHosts config keys, resolved for the firing session). The
+          // SSRF guard inside performPluginFetch still blocks internal IPs even when the host is allowed.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
-          if (!isNetHostAllowed(plugin.manifest.net?.allow, url)) {
+          const cfg = resolvePluginConfig(
+            plugin.config,
+            plugin.sessionConfig,
+            this.hookSession.getStore()?.sessionId,
+            plugin.manifest.sessionScoped !== false,
+          );
+          const allow = effectiveNetAllow(plugin.manifest.net?.allow, plugin.manifest.net?.allowConfigHosts, cfg);
+          if (!isNetHostAllowed(allow, url)) {
             throw new PluginCapabilityError(
-              `Plugin ${plugin.manifest.id} may not fetch ${url} — add its host to the manifest net.allow list`,
+              `Plugin ${plugin.manifest.id} may not fetch ${url} — add its host to net.allow or net.allowConfigHosts`,
             );
           }
           return performPluginFetch(url, init);

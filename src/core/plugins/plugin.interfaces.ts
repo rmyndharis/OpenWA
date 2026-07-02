@@ -90,8 +90,9 @@ export interface PluginManifest {
 
   // Outbound-HTTP host allowlist for `ctx.net.fetch` (requires the `net:fetch` permission). Each
   // entry is `host:port` (exact) or a bare `host` (any port); `'*'` allows any public host. Absent /
-  // empty = deny all. The SSRF guard still blocks internal IPs regardless of this list.
-  net?: { allow?: string[] };
+  // empty = deny all. `allowConfigHosts` additionally admits the host of each named config key (e.g. an
+  // operator-set base URL), resolved at fetch time. The SSRF guard still blocks internal IPs regardless.
+  net?: { allow?: string[]; allowConfigHosts?: string[] };
 
   // Localized dashboard text (name/description/config field titles) per locale code. English is the
   // base manifest + fallback. Dashboard-only; does not affect runtime behavior.
