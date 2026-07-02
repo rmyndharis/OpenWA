@@ -774,6 +774,65 @@
       "selectSession": "Seleziona una sessione…",
       "saveOverride": "Salva override",
       "clearOverride": "Rimuovi override"
+    },
+    "instances": {
+      "title": "Istanze",
+      "description": "Effettua il provisioning di istanze per account per questa integrazione. Ogni istanza ha il proprio segreto di firma e URL di ingresso.",
+      "create": "Crea istanza",
+      "empty": "Nessuna istanza ancora. Creane una per ottenere un URL di ingresso e un segreto.",
+      "loadError": "Impossibile caricare le istanze.",
+      "allSessions": "Tutte le sessioni",
+      "enabled": "Abilitata",
+      "disabled": "Disabilitata",
+      "form": {
+        "instanceId": "ID istanza",
+        "instanceIdPlaceholder": "es. acme-support",
+        "instanceIdHint": "Lettere, numeri, trattini e underscore (max 64).",
+        "sessionScope": "Ambito sessione (opzionale)",
+        "sessionScopePlaceholder": "Lascia vuoto per tutte le sessioni",
+        "verifyToken": "Token di verifica (opzionale)",
+        "verifyTokenPlaceholder": "Token che il provider restituisce durante la verifica",
+        "config": "Configurazione (JSON opzionale)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Istanza creata",
+        "hint": "Copia subito il segreto — viene mostrato solo una volta.",
+        "secret": "Segreto di firma",
+        "ingressUrls": "URL di ingresso"
+      },
+      "regenerate": {
+        "title": "Rigenera segreto",
+        "confirm": "Rigenerare il segreto di firma per {{id}}? Il segreto attuale smetterà di funzionare immediatamente.",
+        "action": "Rigenera"
+      },
+      "edit": { "title": "Modifica {{id}}" },
+      "delete": {
+        "title": "Elimina istanza",
+        "confirm": "Eliminare l'istanza {{id}}? Il relativo URL di ingresso e segreto smetteranno di funzionare immediatamente.",
+        "action": "Elimina"
+      },
+      "actions": {
+        "regenerate": "Rigenera segreto",
+        "edit": "Modifica",
+        "delete": "Elimina",
+        "copy": "Copia",
+        "save": "Salva",
+        "enable": "Abilita",
+        "disable": "Disabilita"
+      },
+      "errors": {
+        "invalidId": "L'ID istanza deve contenere lettere, numeri, trattini o underscore (max 64).",
+        "invalidJson": "La configurazione deve essere un JSON valido.",
+        "duplicateId": "Esiste già un'istanza con questo ID."
+      },
+      "toasts": {
+        "created": "Istanza creata",
+        "updated": "Istanza aggiornata",
+        "deleted": "Istanza eliminata",
+        "secretRegenerated": "Segreto rigenerato",
+        "actionFailed": "Azione non riuscita"
+      }
     }
   }
 }

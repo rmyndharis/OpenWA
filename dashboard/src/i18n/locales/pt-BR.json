@@ -774,6 +774,65 @@
       "selectSession": "Selecione uma sessão…",
       "saveOverride": "Salvar substituição",
       "clearOverride": "Limpar substituição"
+    },
+    "instances": {
+      "title": "Instâncias",
+      "description": "Provisione instâncias por conta para esta integração. Cada instância tem seu próprio segredo de assinatura e URL de entrada.",
+      "create": "Criar instância",
+      "empty": "Ainda não há instâncias. Crie uma para obter uma URL de entrada e um segredo.",
+      "loadError": "Falha ao carregar as instâncias.",
+      "allSessions": "Todas as sessões",
+      "enabled": "Habilitada",
+      "disabled": "Desabilitada",
+      "form": {
+        "instanceId": "ID da instância",
+        "instanceIdPlaceholder": "ex.: acme-support",
+        "instanceIdHint": "Letras, números, hífens e sublinhados (máx. 64).",
+        "sessionScope": "Escopo da sessão (opcional)",
+        "sessionScopePlaceholder": "Deixe em branco para todas as sessões",
+        "verifyToken": "Token de verificação (opcional)",
+        "verifyTokenPlaceholder": "Token que o provedor retorna na verificação",
+        "config": "Configuração (JSON opcional)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Instância criada",
+        "hint": "Copie o segredo agora — ele é exibido apenas uma vez.",
+        "secret": "Segredo de assinatura",
+        "ingressUrls": "URL(s) de entrada"
+      },
+      "regenerate": {
+        "title": "Regenerar segredo",
+        "confirm": "Regenerar o segredo de assinatura de {{id}}? O segredo atual deixará de funcionar imediatamente.",
+        "action": "Regenerar"
+      },
+      "edit": { "title": "Editar {{id}}" },
+      "delete": {
+        "title": "Excluir instância",
+        "confirm": "Excluir a instância {{id}}? A URL de entrada e o segredo dela deixarão de funcionar imediatamente.",
+        "action": "Excluir"
+      },
+      "actions": {
+        "regenerate": "Regenerar segredo",
+        "edit": "Editar",
+        "delete": "Excluir",
+        "copy": "Copiar",
+        "save": "Salvar",
+        "enable": "Habilitar",
+        "disable": "Desabilitar"
+      },
+      "errors": {
+        "invalidId": "O ID da instância deve conter letras, números, hífens ou sublinhados (máx. 64).",
+        "invalidJson": "A configuração deve ser um JSON válido.",
+        "duplicateId": "Já existe uma instância com esse ID."
+      },
+      "toasts": {
+        "created": "Instância criada",
+        "updated": "Instância atualizada",
+        "deleted": "Instância excluída",
+        "secretRegenerated": "Segredo regenerado",
+        "actionFailed": "Falha na ação"
+      }
     }
   }
 }

@@ -775,6 +775,65 @@
       "selectSession": "בחירת session…",
       "saveOverride": "שמירת דריסה",
       "clearOverride": "ניקוי דריסה"
+    },
+    "instances": {
+      "title": "מופעים",
+      "description": "הקצו מופעים לכל חשבון עבור אינטגרציה זו. לכל מופע יש מפתח חתימה סודי וכתובת URL לקליטה משלו.",
+      "create": "יצירת מופע",
+      "empty": "אין עדיין מופעים. צרו מופע כדי לקבל כתובת URL וסוד.",
+      "loadError": "טעינת המופעים נכשלה.",
+      "allSessions": "כל ה-Sessions",
+      "enabled": "מופעל",
+      "disabled": "מושבת",
+      "form": {
+        "instanceId": "מזהה מופע",
+        "instanceIdPlaceholder": "לדוגמה: acme-support",
+        "instanceIdHint": "אותיות, מספרים, מקפים וקווים תחתונים (עד 64 תווים).",
+        "sessionScope": "טווח session (אופציונלי)",
+        "sessionScopePlaceholder": "השאירו ריק לכל ה-Sessions",
+        "verifyToken": "טוקן אימות (אופציונלי)",
+        "verifyTokenPlaceholder": "הטוקן שהספק מחזיר בעת האימות",
+        "config": "תצורה (JSON אופציונלי)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "המופע נוצר",
+        "hint": "העתיקו את הסוד כעת — הוא מוצג רק פעם אחת.",
+        "secret": "מפתח חתימה סודי",
+        "ingressUrls": "כתובת/כתובות URL לקליטה"
+      },
+      "regenerate": {
+        "title": "יצירת סוד מחדש",
+        "confirm": "ליצור מחדש את מפתח החתימה הסודי של {{id}}? הסוד הנוכחי יפסיק לעבוד באופן מיידי.",
+        "action": "יצירה מחדש"
+      },
+      "edit": { "title": "עריכת {{id}}" },
+      "delete": {
+        "title": "מחיקת מופע",
+        "confirm": "למחוק את המופע {{id}}? כתובת ה-URL והסוד שלו יפסיקו לעבוד באופן מיידי.",
+        "action": "מחיקה"
+      },
+      "actions": {
+        "regenerate": "יצירת סוד מחדש",
+        "edit": "עריכה",
+        "delete": "מחיקה",
+        "copy": "העתקה",
+        "save": "שמירה",
+        "enable": "הפעלה",
+        "disable": "השבתה"
+      },
+      "errors": {
+        "invalidId": "מזהה המופע חייב לכלול אותיות, מספרים, מקפים או קווים תחתונים (עד 64 תווים).",
+        "invalidJson": "התצורה חייבת להיות JSON תקין.",
+        "duplicateId": "כבר קיים מופע עם מזהה זה."
+      },
+      "toasts": {
+        "created": "המופע נוצר",
+        "updated": "המופע עודכן",
+        "deleted": "המופע נמחק",
+        "secretRegenerated": "הסוד נוצר מחדש",
+        "actionFailed": "הפעולה נכשלה"
+      }
     }
   }
 }

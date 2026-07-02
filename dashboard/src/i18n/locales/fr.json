@@ -774,6 +774,65 @@
       "selectSession": "Sélectionnez une session…",
       "saveOverride": "Enregistrer le remplacement",
       "clearOverride": "Effacer le remplacement"
+    },
+    "instances": {
+      "title": "Instances",
+      "description": "Provisionnez des instances par compte pour cette intégration. Chaque instance dispose de son propre secret de signature et de sa propre URL d'entrée.",
+      "create": "Créer une instance",
+      "empty": "Aucune instance pour le moment. Créez-en une pour obtenir une URL d'entrée et un secret.",
+      "loadError": "Échec du chargement des instances.",
+      "allSessions": "Toutes les sessions",
+      "enabled": "Activée",
+      "disabled": "Désactivée",
+      "form": {
+        "instanceId": "ID de l'instance",
+        "instanceIdPlaceholder": "p. ex. acme-support",
+        "instanceIdHint": "Lettres, chiffres, tirets, underscores (64 max).",
+        "sessionScope": "Portée de session (facultatif)",
+        "sessionScopePlaceholder": "Laissez vide pour toutes les sessions",
+        "verifyToken": "Jeton de vérification (facultatif)",
+        "verifyTokenPlaceholder": "Jeton renvoyé par le fournisseur lors de la vérification",
+        "config": "Configuration (JSON facultatif)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Instance créée",
+        "hint": "Copiez le secret maintenant — il ne sera affiché qu'une seule fois.",
+        "secret": "Secret de signature",
+        "ingressUrls": "URL(s) d'entrée"
+      },
+      "regenerate": {
+        "title": "Régénérer le secret",
+        "confirm": "Régénérer le secret de signature pour {{id}} ? Le secret actuel arrêtera de fonctionner immédiatement.",
+        "action": "Régénérer"
+      },
+      "edit": { "title": "Modifier {{id}}" },
+      "delete": {
+        "title": "Supprimer l'instance",
+        "confirm": "Supprimer l'instance {{id}} ? Son URL d'entrée et son secret arrêteront de fonctionner immédiatement.",
+        "action": "Supprimer"
+      },
+      "actions": {
+        "regenerate": "Régénérer le secret",
+        "edit": "Modifier",
+        "delete": "Supprimer",
+        "copy": "Copier",
+        "save": "Enregistrer",
+        "enable": "Activer",
+        "disable": "Désactiver"
+      },
+      "errors": {
+        "invalidId": "L'ID de l'instance doit contenir des lettres, des chiffres, des tirets ou des underscores (64 max).",
+        "invalidJson": "La configuration doit être un JSON valide.",
+        "duplicateId": "Une instance avec cet ID existe déjà."
+      },
+      "toasts": {
+        "created": "Instance créée",
+        "updated": "Instance mise à jour",
+        "deleted": "Instance supprimée",
+        "secretRegenerated": "Secret régénéré",
+        "actionFailed": "L'action a échoué"
+      }
     }
   }
 }

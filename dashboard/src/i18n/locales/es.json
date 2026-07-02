@@ -774,6 +774,65 @@
       "selectSession": "Selecciona una sesión…",
       "saveOverride": "Guardar anulación",
       "clearOverride": "Borrar anulación"
+    },
+    "instances": {
+      "title": "Instancias",
+      "description": "Aprovisiona instancias por cuenta para esta integración. Cada instancia tiene su propio secreto de firma y URL de entrada.",
+      "create": "Crear instancia",
+      "empty": "Aún no hay instancias. Crea una para obtener una URL de entrada y un secreto.",
+      "loadError": "Error al cargar las instancias.",
+      "allSessions": "Todas las sesiones",
+      "enabled": "Habilitada",
+      "disabled": "Deshabilitada",
+      "form": {
+        "instanceId": "ID de instancia",
+        "instanceIdPlaceholder": "p. ej. acme-support",
+        "instanceIdHint": "Letras, números, guiones y guiones bajos (máx. 64).",
+        "sessionScope": "Ámbito de sesión (opcional)",
+        "sessionScopePlaceholder": "Déjalo en blanco para todas las sesiones",
+        "verifyToken": "Token de verificación (opcional)",
+        "verifyTokenPlaceholder": "Token que el proveedor devuelve al verificar",
+        "config": "Configuración (JSON opcional)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Instancia creada",
+        "hint": "Copia el secreto ahora — solo se muestra una vez.",
+        "secret": "Secreto de firma",
+        "ingressUrls": "URL(s) de entrada"
+      },
+      "regenerate": {
+        "title": "Regenerar secreto",
+        "confirm": "¿Regenerar el secreto de firma de {{id}}? El secreto actual dejará de funcionar de inmediato.",
+        "action": "Regenerar"
+      },
+      "edit": { "title": "Editar {{id}}" },
+      "delete": {
+        "title": "Eliminar instancia",
+        "confirm": "¿Eliminar la instancia {{id}}? Su URL de entrada y secreto dejarán de funcionar de inmediato.",
+        "action": "Eliminar"
+      },
+      "actions": {
+        "regenerate": "Regenerar secreto",
+        "edit": "Editar",
+        "delete": "Eliminar",
+        "copy": "Copiar",
+        "save": "Guardar",
+        "enable": "Habilitar",
+        "disable": "Deshabilitar"
+      },
+      "errors": {
+        "invalidId": "El ID de instancia debe contener letras, números, guiones o guiones bajos (máx. 64).",
+        "invalidJson": "La configuración debe ser JSON válido.",
+        "duplicateId": "Ya existe una instancia con ese ID."
+      },
+      "toasts": {
+        "created": "Instancia creada",
+        "updated": "Instancia actualizada",
+        "deleted": "Instancia eliminada",
+        "secretRegenerated": "Secreto regenerado",
+        "actionFailed": "La acción falló"
+      }
     }
   }
 }

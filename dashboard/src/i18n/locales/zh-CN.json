@@ -774,6 +774,65 @@
       "selectSession": "选择一个会话…",
       "saveOverride": "保存覆盖配置",
       "clearOverride": "清除覆盖配置"
+    },
+    "instances": {
+      "title": "实例",
+      "description": "为此集成按账户配置实例。每个实例都有自己的签名密钥和接入 URL。",
+      "create": "创建实例",
+      "empty": "暂无实例。创建一个以获取接入 URL 和密钥。",
+      "loadError": "加载实例失败。",
+      "allSessions": "所有会话",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "form": {
+        "instanceId": "实例 ID",
+        "instanceIdPlaceholder": "例如 acme-support",
+        "instanceIdHint": "字母、数字、连字符、下划线（最多 64 个字符）。",
+        "sessionScope": "会话范围（可选）",
+        "sessionScopePlaceholder": "留空表示所有会话",
+        "verifyToken": "验证令牌（可选）",
+        "verifyTokenPlaceholder": "服务商在验证时回传的令牌",
+        "config": "配置（可选 JSON）",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "实例已创建",
+        "hint": "请立即复制密钥——它只会显示一次。",
+        "secret": "签名密钥",
+        "ingressUrls": "接入 URL"
+      },
+      "regenerate": {
+        "title": "重新生成密钥",
+        "confirm": "要重新生成 {{id}} 的签名密钥吗？当前密钥将立即失效。",
+        "action": "重新生成"
+      },
+      "edit": { "title": "编辑 {{id}}" },
+      "delete": {
+        "title": "删除实例",
+        "confirm": "要删除实例 {{id}} 吗？其接入 URL 和密钥将立即失效。",
+        "action": "删除"
+      },
+      "actions": {
+        "regenerate": "重新生成密钥",
+        "edit": "编辑",
+        "delete": "删除",
+        "copy": "复制",
+        "save": "保存",
+        "enable": "启用",
+        "disable": "禁用"
+      },
+      "errors": {
+        "invalidId": "实例 ID 只能包含字母、数字、连字符或下划线（最多 64 个字符）。",
+        "invalidJson": "配置必须是有效的 JSON。",
+        "duplicateId": "已存在具有该 ID 的实例。"
+      },
+      "toasts": {
+        "created": "实例已创建",
+        "updated": "实例已更新",
+        "deleted": "实例已删除",
+        "secretRegenerated": "密钥已重新生成",
+        "actionFailed": "操作失败"
+      }
     }
   }
 }

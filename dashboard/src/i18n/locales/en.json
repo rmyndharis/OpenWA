@@ -774,6 +774,65 @@
       "selectSession": "Select a session…",
       "saveOverride": "Save override",
       "clearOverride": "Clear override"
+    },
+    "instances": {
+      "title": "Instances",
+      "description": "Provision per-account instances for this integration. Each instance has its own signing secret and ingress URL.",
+      "create": "Create instance",
+      "empty": "No instances yet. Create one to get an ingress URL and secret.",
+      "loadError": "Failed to load instances.",
+      "allSessions": "All sessions",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "form": {
+        "instanceId": "Instance ID",
+        "instanceIdPlaceholder": "e.g. acme-support",
+        "instanceIdHint": "Letters, numbers, hyphens, underscores (max 64).",
+        "sessionScope": "Session scope (optional)",
+        "sessionScopePlaceholder": "Leave blank for all sessions",
+        "verifyToken": "Verify token (optional)",
+        "verifyTokenPlaceholder": "Token the provider echoes on verification",
+        "config": "Config (optional JSON)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Instance created",
+        "hint": "Copy the secret now — it is shown only once.",
+        "secret": "Signing secret",
+        "ingressUrls": "Ingress URL(s)"
+      },
+      "regenerate": {
+        "title": "Regenerate secret",
+        "confirm": "Regenerate the signing secret for {{id}}? The current secret stops working immediately.",
+        "action": "Regenerate"
+      },
+      "edit": { "title": "Edit {{id}}" },
+      "delete": {
+        "title": "Delete instance",
+        "confirm": "Delete instance {{id}}? Its ingress URL and secret stop working immediately.",
+        "action": "Delete"
+      },
+      "actions": {
+        "regenerate": "Regenerate secret",
+        "edit": "Edit",
+        "delete": "Delete",
+        "copy": "Copy",
+        "save": "Save",
+        "enable": "Enable",
+        "disable": "Disable"
+      },
+      "errors": {
+        "invalidId": "Instance ID must be letters, numbers, hyphens or underscores (max 64).",
+        "invalidJson": "Config must be valid JSON.",
+        "duplicateId": "An instance with that ID already exists."
+      },
+      "toasts": {
+        "created": "Instance created",
+        "updated": "Instance updated",
+        "deleted": "Instance deleted",
+        "secretRegenerated": "Secret regenerated",
+        "actionFailed": "Action failed"
+      }
     }
   }
 }
