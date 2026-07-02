@@ -42,11 +42,17 @@ export function verifyIngressSignature(
     return safeEqualStr(provided, input.secret) ? { ok: true } : { ok: false, reason: 'shared-secret mismatch' };
   }
 
-  // hmac-sha256
+  // hmac-sha256. Substitute the template tokens in a SINGLE pass with a function replacer: a string
+  // replacement would (a) only replace the first occurrence and (b) interpret $&, $`, $', $$, $n in the
+  // replacement (the attacker-controlled rawBody), so a body containing a `$`-sequence would diverge the
+  // signed bytes from the provider's and reject a legitimately-signed delivery. The function form inserts
+  // each value literally and, because rawBody is substituted (not re-scanned), a `{timestamp}` embedded
+  // in the body is never re-interpreted.
   const template = spec.contentTemplate ?? '{rawBody}';
-  const signedContent = template
-    .replace('{rawBody}', input.rawBody)
-    .replace('{timestamp}', header(input.headers, spec.timestampHeader) ?? '');
+  const timestamp = header(input.headers, spec.timestampHeader) ?? '';
+  const signedContent = template.replace(/\{rawBody\}|\{timestamp\}/g, token =>
+    token === '{rawBody}' ? input.rawBody : timestamp,
+  );
   const digest = createHmac('sha256', input.secret)
     .update(signedContent)
     .digest(spec.encoding ?? 'hex');
@@ -54,7 +60,7 @@ export function verifyIngressSignature(
   return safeEqualStr(provided, expected) ? { ok: true } : { ok: false, reason: 'hmac mismatch' };
 }
 
-function safeEqualStr(a: string, b: string): boolean {
+export function safeEqualStr(a: string, b: string): boolean {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
   if (ba.length !== bb.length) return false;

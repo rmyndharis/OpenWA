@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { verifyIngressSignature } from './ingress-signature';
+import { safeEqualStr, verifyIngressSignature } from './ingress-signature';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 
@@ -66,7 +66,10 @@ export class IngressService {
     if (req.method === 'GET' && route.challenge) {
       const token = req.query[route.challenge.tokenParam];
       const echo = req.query[route.challenge.echoParam];
-      if (token && instance.verifyToken && token === instance.verifyToken) return { status: 200, body: echo ?? '' };
+      // Constant-time compare (mirrors the signature path) so the verify token can't be probed by timing.
+      if (token && instance.verifyToken && safeEqualStr(token, instance.verifyToken)) {
+        return { status: 200, body: echo ?? '' };
+      }
       return { status: 403, body: 'challenge failed' };
     }
 

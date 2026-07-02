@@ -187,6 +187,41 @@ describe('IngressService.handle', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects a GET challenge when the instance has no verify token (no match against null)', async () => {
+    const d = deps({
+      instances: {
+        resolve: jest.fn().mockResolvedValue({
+          id: 'meta:acct1',
+          pluginId: 'meta',
+          instanceId: 'acct1',
+          secret: 's',
+          enabled: true,
+          sessionScope: null,
+          verifyToken: null,
+        }),
+      },
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'meta',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        challenge: { method: 'GET', tokenParam: 'hub.verify_token', echoParam: 'hub.challenge' },
+      }),
+    });
+    const svc = new IngressService(d);
+    const res = await svc.handle({
+      pluginId: 'meta',
+      instanceId: 'acct1',
+      route: 'meta',
+      method: 'GET',
+      headers: {},
+      query: { 'hub.verify_token': '', 'hub.challenge': 'x' },
+      rawBody: '',
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('404s for an unknown route', async () => {
     const d = deps({ manifestRoute: jest.fn().mockReturnValue(undefined) });
     const svc = new IngressService(d);
