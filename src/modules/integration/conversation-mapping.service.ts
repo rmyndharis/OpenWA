@@ -2,12 +2,31 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryDeepPartialEntity, Repository } from 'typeorm';
 import { ConversationMapping, HandoverState } from './entities/conversation-mapping.entity';
+import { isUniqueViolation } from '../../common/utils/db-errors';
 
 export interface MappingKey {
   sessionId: string;
   chatId: string;
   pluginId: string;
   instanceId: string;
+}
+
+/**
+ * Thrown when a providerConversationId is already bound to a DIFFERENT chat for the same plugin+instance
+ * (the reverse unique key). Unlike a forward-key race — which converges by updating the existing row —
+ * this is a genuine conflict with no row to fall back to, so it surfaces instead of corrupting state.
+ */
+export class ConversationMappingConflict extends Error {
+  constructor(
+    readonly key: MappingKey,
+    readonly providerConversationId: string,
+  ) {
+    super(
+      `conversation mapping conflict: providerConversationId "${providerConversationId}" is already bound to ` +
+        `a different chat for plugin "${key.pluginId}" instance "${key.instanceId}"`,
+    );
+    this.name = 'ConversationMappingConflict';
+  }
 }
 
 @Injectable()
@@ -17,13 +36,42 @@ export class ConversationMappingService {
   async upsert(key: MappingKey, providerConversationId: string, patch?: Partial<ConversationMapping>): Promise<void> {
     const existing = await this.repo.findOne({ where: key });
     if (existing) {
-      await this.repo.update({ id: existing.id }, {
+      await this.updateById(existing.id, key, providerConversationId, patch);
+      return;
+    }
+    try {
+      await this.repo.save(this.repo.create({ ...key, providerConversationId, handoverState: 'bot', ...patch }));
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      // A concurrent writer inserted between our findOne and save (forward-key race) OR the reverse
+      // unique (pluginId,instanceId,providerConversationId) is bound to another chat. Re-read the
+      // FORWARD key: found → converge by updating it; not found → genuine reverse conflict → surface.
+      const raced = await this.repo.findOne({ where: key });
+      if (raced) {
+        await this.updateById(raced.id, key, providerConversationId, patch);
+        return;
+      }
+      throw new ConversationMappingConflict(key, providerConversationId);
+    }
+  }
+
+  // Update guarded against a reverse-unique collision: moving a row's providerConversationId onto a value
+  // already bound to another chat throws ConversationMappingConflict rather than a raw QueryFailedError.
+  private async updateById(
+    id: string,
+    key: MappingKey,
+    providerConversationId: string,
+    patch?: Partial<ConversationMapping>,
+  ): Promise<void> {
+    try {
+      await this.repo.update({ id }, {
         providerConversationId,
         ...patch,
       } as QueryDeepPartialEntity<ConversationMapping>);
-      return;
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ConversationMappingConflict(key, providerConversationId);
+      throw err;
     }
-    await this.repo.save(this.repo.create({ ...key, providerConversationId, handoverState: 'bot', ...patch }));
   }
 
   get(key: MappingKey): Promise<ConversationMapping | null> {

@@ -1,18 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
-
-// Cross-dialect unique-violation check by driver code/message — the two dialects we ship
-// (sqlite dev, postgres prod). Add another branch if a third driver is ever supported.
-export function isUniqueViolation(err: unknown): boolean {
-  if (!(err instanceof QueryFailedError)) return false;
-  const driver = err.driverError as { code?: string; message?: string } | undefined;
-  const code = driver?.code ?? '';
-  const message = driver?.message ?? err.message ?? '';
-  return code === '23505' /* postgres */ || /UNIQUE constraint failed|SQLITE_CONSTRAINT/i.test(message);
-}
+import { isUniqueViolation } from '../../common/utils/db-errors';
 
 export interface IngressEventInput {
   instanceId: string;

@@ -29,7 +29,7 @@ export class RedriveService {
       const stored = (row.payload ?? {}) as StoredDlqPayload;
       // Re-mint a jobId so BullMQ accepts the replay even if the original jobId lingers.
       const jobId = `redrive:${row.id}`;
-      await this.ingressEnqueue.enqueue(
+      const { outcome } = await this.ingressEnqueue.enqueue(
         {
           pluginId,
           instanceId,
@@ -41,8 +41,13 @@ export class RedriveService {
         },
         jobId,
       );
-      await this.repo.update({ id: row.id }, { redriven: true });
-      redriven++;
+      // Only retire the DLQ row once the replay was actually accepted (queued) or delivered. A swallowed
+      // inline-dispatch failure ('failed') leaves the row redriven=false so it stays redrivable, instead
+      // of silently marking it handled and permanently losing the event.
+      if (outcome !== 'failed') {
+        await this.repo.update({ id: row.id }, { redriven: true });
+        redriven++;
+      }
     }
     return { redriven };
   }

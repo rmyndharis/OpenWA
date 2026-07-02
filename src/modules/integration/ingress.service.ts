@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { verifyIngressSignature } from './ingress-signature';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
@@ -40,7 +40,9 @@ export interface IngressDeps {
       sessionId: string | null;
     }): Promise<boolean>;
   };
-  enqueue: (data: IngressJobData, jobId: string) => Promise<void>;
+  // Returns an enqueue outcome (queued/dispatched/failed); handle() ignores it — only durability
+  // follow-up paths like redrive act on it. Typed as unknown here to keep this pure module decoupled.
+  enqueue: (data: IngressJobData, jobId: string) => Promise<unknown>;
   now: () => number;
 }
 
@@ -79,7 +81,7 @@ export class IngressService {
     if (!verdict.ok) return { status: 401, body: verdict.reason ?? 'signature verification failed' };
 
     const dedupHeader = (route.dedupHeader ?? route.signature.dedupHeader ?? 'x-delivery').toLowerCase();
-    const deliveryId = req.headers[dedupHeader] ?? randomUUID();
+    const deliveryId = req.headers[dedupHeader] ?? deriveDeliveryId(req);
     const payload = { headers: req.headers, query: req.query, body: req.rawBody, rawBody: req.rawBody };
     const isNew = await this.deps.events.recordOrSkip({
       instanceId: req.instanceId,
@@ -108,6 +110,16 @@ export class IngressService {
     );
     return { status: 202, body: 'accepted' };
   }
+}
+
+/**
+ * Derives a DETERMINISTIC delivery id when the provider sends no dedup header, so a provider retry of
+ * the same delivery dedups instead of being treated as new. A random UUID would silently disable both
+ * the persist-dedup and BullMQ's jobId idempotency, causing duplicate downstream WhatsApp sends. Keyed
+ * on pluginId + instanceId + route + rawBody ONLY — never a server timestamp, which would defeat dedup.
+ */
+function deriveDeliveryId(req: IngressRequest): string {
+  return createHash('sha256').update([req.pluginId, req.instanceId, req.route, req.rawBody].join('\0')).digest('hex');
 }
 
 /**

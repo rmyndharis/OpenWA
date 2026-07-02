@@ -193,7 +193,9 @@ describe('IngressService.handle', () => {
     expect((await svc.handle(req)).status).toBe(404);
   });
 
-  it('falls back to a generated delivery id when the dedup header is absent', async () => {
+  it('derives a DETERMINISTIC delivery id from the body when the dedup header is absent', async () => {
+    // A random UUID here would defeat both persist-dedup and BullMQ jobId idempotency, so a provider
+    // retry of the same body must produce the SAME id, and a different body a DIFFERENT id.
     const d = deps();
     const svc = new IngressService(d);
     const res = await svc.handle({ ...req, headers: {} });
@@ -202,6 +204,16 @@ describe('IngressService.handle', () => {
     expect(typeof jobId).toBe('string');
     expect(jobId.length).toBeGreaterThan(0);
     expect(jobData.deliveryId).toBe(jobId);
+
+    // same body → same id (retry dedups)
+    const d2 = deps();
+    await new IngressService(d2).handle({ ...req, headers: {} });
+    expect((d2.enqueue.mock.calls[0] as [unknown, string])[1]).toBe(jobId);
+
+    // different body → different id
+    const d3 = deps();
+    await new IngressService(d3).handle({ ...req, headers: {}, rawBody: '{"a":1}' });
+    expect((d3.enqueue.mock.calls[0] as [unknown, string])[1]).not.toBe(jobId);
   });
 });
 

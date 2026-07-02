@@ -9,7 +9,7 @@ describe('RedriveService', () => {
 
   beforeEach(() => {
     repo = { find: jest.fn(), update: jest.fn().mockResolvedValue(undefined) };
-    ingressEnqueue = { enqueue: jest.fn().mockResolvedValue(undefined) };
+    ingressEnqueue = { enqueue: jest.fn().mockResolvedValue({ outcome: 'queued' }) };
   });
 
   function makeSvc(): RedriveService {
@@ -65,6 +65,32 @@ describe('RedriveService', () => {
     );
     expect(repo.update).toHaveBeenCalledWith({ id: 'f1' }, { redriven: true });
     expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
+  });
+
+  it('leaves the row redrivable (does not mark redriven) when the inline re-dispatch is swallowed as failed', async () => {
+    // A queue-disabled fallback that silently fails must NOT retire the DLQ row, or the event is lost
+    // permanently with no way to redrive it again.
+    const rows = [
+      {
+        id: 'f9',
+        direction: 'inbound',
+        pluginId: 'p',
+        instanceId: 'i',
+        deliveryId: 'd9',
+        payload: { route: 'chatwoot', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+        sessionId: 's',
+        redriven: false,
+      },
+    ];
+    (repo.find as jest.Mock).mockResolvedValue(rows);
+    (ingressEnqueue.enqueue as jest.Mock).mockResolvedValue({ outcome: 'failed' });
+    const svc = makeSvc();
+
+    const res = await svc.redriveInstance('p', 'i');
+
+    expect(res.redriven).toBe(0);
+    expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   it('queries only non-redriven inbound rows for the instance and returns 0 when none are found', async () => {

@@ -2,6 +2,7 @@ import { DataSource } from 'typeorm';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IngressEventService } from './ingress-event.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
+import { WidenIngressDedupKey1782100000000 } from '../../database/migrations/1782100000000-WidenIngressDedupKey';
 
 describe('IngressEventService.recordOrSkip', () => {
   let ds: DataSource;
@@ -11,6 +12,7 @@ describe('IngressEventService.recordOrSkip', () => {
     await ds.initialize();
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);
+    await new WidenIngressDedupKey1782100000000().up(runner);
     await runner.release();
     service = new IngressEventService(ds.getRepository(IngressEvent));
   });
@@ -35,5 +37,11 @@ describe('IngressEventService.recordOrSkip', () => {
   it('treats the same delivery id under a different instance as new', async () => {
     expect(await service.recordOrSkip(row())).toBe(true);
     expect(await service.recordOrSkip({ ...row(), instanceId: 'inst2' })).toBe(true);
+  });
+
+  it('treats the same instance+delivery id under a different plugin as new (dedup key includes pluginId)', async () => {
+    // instanceId is only unique within a plugin; two plugins sharing the string must not collide.
+    expect(await service.recordOrSkip(row())).toBe(true);
+    expect(await service.recordOrSkip({ ...row(), pluginId: 'other-plug' })).toBe(true);
   });
 });

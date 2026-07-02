@@ -1,9 +1,11 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
 import { jsonColumnType } from '../../../common/utils/column-types';
 
-// Persist-before-ack durable row + inbound dedup oracle. UNIQUE(instanceId, providerDeliveryId).
+// Persist-before-ack durable row + inbound dedup oracle. UNIQUE(pluginId, instanceId, providerDeliveryId):
+// instanceId is only unique within a plugin, so pluginId must be part of the key or two plugins sharing an
+// instanceId string would drop each other's deliveries as false duplicates.
 @Entity('ingress_events')
-@Index('UQ_ingress_events_instance_delivery', ['instanceId', 'providerDeliveryId'], { unique: true })
+@Index('UQ_ingress_events_instance_delivery', ['pluginId', 'instanceId', 'providerDeliveryId'], { unique: true })
 @Index('IDX_ingress_events_createdAt', ['createdAt'])
 export class IngressEvent {
   // Host-minted uuid (crypto.randomUUID()), NOT DB-generated — the id and the jobId (= deliveryId)
