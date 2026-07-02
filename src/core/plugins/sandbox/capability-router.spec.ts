@@ -28,6 +28,11 @@ function makeContext() {
     handover: {
       set: jest.fn().mockResolvedValue(undefined),
     },
+    mappings: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      get: jest.fn().mockResolvedValue(null),
+      getByProvider: jest.fn().mockResolvedValue(null),
+    },
   };
 }
 
@@ -64,6 +69,33 @@ describe('dispatchCapabilityVerb', () => {
     const out = await dispatchCapabilityVerb(ctx, 'net.fetch', ['https://api.example.com/t', init]);
     expect(ctx.net.fetch).toHaveBeenCalledWith('https://api.example.com/t', init);
     expect(out).toMatchObject({ ok: true, status: 200, body: 'x' });
+  });
+
+  it('routes mappings verbs to the context', async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const ctx = {
+      ...makeContext(),
+      mappings: {
+        upsert: (...a: unknown[]) => {
+          calls.push(['upsert', a]);
+          return Promise.resolve();
+        },
+        get: (...a: unknown[]) => {
+          calls.push(['get', a]);
+          return Promise.resolve(null);
+        },
+        getByProvider: (...a: unknown[]) => {
+          calls.push(['getByProvider', a]);
+          return Promise.resolve(null);
+        },
+      },
+    } as unknown as CapabilityContext;
+    await dispatchCapabilityVerb(ctx, 'mappings.upsert', [{ sessionId: 's', chatId: 'c', instanceId: 'i' }, 'conv1']);
+    await dispatchCapabilityVerb(ctx, 'mappings.getByProvider', ['i', 'conv1']);
+    expect(calls).toEqual([
+      ['upsert', [{ sessionId: 's', chatId: 'c', instanceId: 'i' }, 'conv1']],
+      ['getByProvider', ['i', 'conv1']],
+    ]);
   });
 
   it('rejects an unknown verb — only allowlisted capabilities are reachable', async () => {

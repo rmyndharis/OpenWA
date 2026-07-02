@@ -57,6 +57,11 @@ export interface SandboxCapabilityContext {
   handover: {
     set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
   };
+  mappings: {
+    upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<unknown>;
+    get(key: { sessionId: string; chatId: string; instanceId: string }): Promise<unknown>;
+    getByProvider(instanceId: string, providerConversationId: string): Promise<unknown>;
+  };
 }
 
 /** Build the proxy capability context handed to a sandboxed plugin in the worker. */
@@ -88,6 +93,12 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
     },
     handover: {
       set: (key, state) => client.call('handover.set', [key, state]),
+    },
+    mappings: {
+      upsert: (key, providerConversationId) => client.call('mappings.upsert', [key, providerConversationId]),
+      get: key => client.call('mappings.get', [key]),
+      getByProvider: (instanceId, providerConversationId) =>
+        client.call('mappings.getByProvider', [instanceId, providerConversationId]),
     },
   };
 }

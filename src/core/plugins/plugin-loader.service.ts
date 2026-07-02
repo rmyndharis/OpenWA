@@ -15,6 +15,7 @@ import {
   PluginNetCapability,
   PluginConversationsCapability,
   PluginHandoverCapability,
+  PluginMappingsCapability,
   PluginInstance,
   PluginStatus,
   PluginContext,
@@ -1038,6 +1039,36 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           await this.getConversationMappingService().setHandover(mapping.id, state);
         },
       } satisfies PluginHandoverCapability,
+      mappings: {
+        upsert: async (key, providerConversationId) => {
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
+          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          await this.getConversationMappingService().upsert(
+            { sessionId: key.sessionId, chatId: key.chatId, pluginId: plugin.manifest.id, instanceId: key.instanceId },
+            providerConversationId,
+          );
+        },
+        get: async key => {
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
+          this.assertSessionAllowed(plugin.manifest, key.sessionId);
+          const m = await this.getConversationMappingService().get({
+            sessionId: key.sessionId,
+            chatId: key.chatId,
+            pluginId: plugin.manifest.id,
+            instanceId: key.instanceId,
+          });
+          return m ? { providerConversationId: m.providerConversationId, handoverState: m.handoverState } : null;
+        },
+        getByProvider: async (instanceId, providerConversationId) => {
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
+          const m = await this.getConversationMappingService().getByProvider(
+            plugin.manifest.id,
+            instanceId,
+            providerConversationId,
+          );
+          return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
+        },
+      } satisfies PluginMappingsCapability,
     };
   }
 

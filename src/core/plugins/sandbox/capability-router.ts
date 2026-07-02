@@ -9,6 +9,11 @@ export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'sto
   handover: {
     set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
   };
+  mappings: {
+    upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<unknown>;
+    get(key: { sessionId: string; chatId: string; instanceId: string }): Promise<unknown>;
+    getByProvider(instanceId: string, providerConversationId: string): Promise<unknown>;
+  };
 };
 
 /**
@@ -58,6 +63,12 @@ export async function dispatchCapabilityVerb(
         args[0] as { sessionId: string; chatId: string; instanceId: string },
         args[1] as HandoverState,
       );
+    case 'mappings.upsert':
+      return context.mappings.upsert(args[0] as { sessionId: string; chatId: string; instanceId: string }, s(1));
+    case 'mappings.get':
+      return context.mappings.get(args[0] as { sessionId: string; chatId: string; instanceId: string });
+    case 'mappings.getByProvider':
+      return context.mappings.getByProvider(s(0), s(1));
     default:
       throw new Error(`Unknown capability verb: ${verb}`);
   }

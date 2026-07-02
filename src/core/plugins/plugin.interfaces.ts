@@ -298,6 +298,22 @@ export interface PluginHandoverCapability {
   set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
 }
 
+/**
+ * Plugin-facing conversation mapping: create/read the WA-chat <-> provider-conversation link an adapter
+ * needs so handover.set and conversation.send({source}) can resolve. Reuses the `conversation:send`
+ * permission — owning the mapping is part of owning the conversation.
+ */
+export interface PluginMappingsCapability {
+  upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<void>;
+  get(
+    key: { sessionId: string; chatId: string; instanceId: string },
+  ): Promise<{ providerConversationId: string; handoverState: HandoverState } | null>;
+  getByProvider(
+    instanceId: string,
+    providerConversationId: string,
+  ): Promise<{ sessionId: string; chatId: string; handoverState: HandoverState } | null>;
+}
+
 // ============================================================================
 // Plugin Context (passed to plugin on initialization)
 // ============================================================================
@@ -340,6 +356,9 @@ export interface PluginContext {
 
   // Flip a mapped conversation's bot/human/closed handover state. Requires `conversation:send`.
   handover: PluginHandoverCapability;
+
+  // Create/read the WA-chat <-> provider-conversation mapping. Requires `conversation:send`.
+  mappings: PluginMappingsCapability;
 }
 
 export interface PluginLogger {
