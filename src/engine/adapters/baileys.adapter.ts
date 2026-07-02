@@ -265,7 +265,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       const h = history as unknown as { lidPnMappings?: { lid: string; pn: string }[]; syncType?: unknown };
       const lidPnMappings = h.lidPnMappings;
       this.sessionStore.addLidMappings(lidPnMappings ?? []);
-      this.captureHistoryMessages(history.messages ?? []);
+      void this.captureHistoryMessages(history.messages ?? []);
       this.logger.debug('History sync received', {
         action: 'baileys_history_set',
         sessionId: this.config.sessionId,
@@ -1074,9 +1074,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
     // ILocationMessage has name/address; ILiveLocationMessage does not — use the static variant only.
     let location: IncomingMessage['location'];
     if (contentType === 'locationMessage' || contentType === 'liveLocationMessage') {
-      const lm = content.locationMessage ?? content.liveLocationMessage;
+      // Read off the NORMALIZED content: an ephemeral/disappearing-chat location nests under the wrapper,
+      // so the raw `content.locationMessage` is undefined and the coordinates would be silently dropped.
+      const lm = normalized.locationMessage ?? normalized.liveLocationMessage;
       if (lm) {
-        const staticLm = content.locationMessage; // only ILocationMessage has name/address
+        const staticLm = normalized.locationMessage; // only ILocationMessage has name/address
         location = {
           latitude: lm.degreesLatitude ?? 0,
           longitude: lm.degreesLongitude ?? 0,
@@ -1239,10 +1241,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * `onHistoryMessages` callback, harvesting `pushName` into contacts on the way (history `contacts`
    * carry no names) and seeding each chat's last-message preview.
    */
-  private captureHistoryMessages(messages: WAMessage[]): void {
+  private async captureHistoryMessages(messages: WAMessage[]): Promise<void> {
     if (!messages.length) {
       return;
     }
+    const b = await this.loadLib();
     const nameUpdates: { id: string; notify: string }[] = [];
     const mapped: IncomingMessage[] = [];
     for (const msg of messages) {
@@ -1255,7 +1258,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // Seed the chat's last-message preview + sort time (newest wins); else history-only chats
       // would read "No messages yet".
       this.sessionStore.recordMessage(msg);
-      const incoming = this.mapHistoryMessage(msg);
+      const incoming = this.mapHistoryMessage(b, msg);
       if (incoming) {
         mapped.push(incoming);
       }
@@ -1303,26 +1306,26 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * messages would be ruinous; the type is kept, the payload dropped). Returns null for protocol /
    * reaction / key / empty messages, which carry nothing for the chat view.
    */
-  private mapHistoryMessage(msg: WAMessage): IncomingMessage | null {
-    const content = msg.message;
-    if (!content || !msg.key?.remoteJid || !msg.key.id) {
+  private mapHistoryMessage(b: typeof BaileysLib, msg: WAMessage): IncomingMessage | null {
+    const raw = msg.message;
+    if (!raw || !msg.key?.remoteJid || !msg.key.id) {
       return null;
     }
-    const contentType = Object.keys(content)[0];
+    // Unwrap ephemeral/viewOnce/documentWithCaption/edited wrappers so the real type and body surface —
+    // else a disappearing-chat message maps to type 'unknown' with an empty body. Identity no-op when
+    // already unwrapped. Derive ONE contentType from the normalized content for both the skip-filter and
+    // the type mapping, and reuse extractBaileysBody (the same body extraction the live path uses).
+    const content = b.normalizeMessageContent(raw) ?? raw;
+    const contentType = b.getContentType(content);
     if (
+      !contentType ||
       contentType === 'protocolMessage' ||
       contentType === 'reactionMessage' ||
       contentType === 'senderKeyDistributionMessage'
     ) {
       return null;
     }
-    const body =
-      content.conversation ??
-      content.extendedTextMessage?.text ??
-      content.imageMessage?.caption ??
-      content.videoMessage?.caption ??
-      content.documentMessage?.caption ??
-      '';
+    const body = extractBaileysBody(content);
     return buildIncomingMessageFromBaileys(
       {
         id: msg.key.id,
