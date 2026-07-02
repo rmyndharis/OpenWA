@@ -58,7 +58,10 @@ export interface SandboxCapabilityContext {
     set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
   };
   mappings: {
-    upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<unknown>;
+    upsert(
+      key: { sessionId: string; chatId: string; instanceId: string },
+      providerConversationId: string,
+    ): Promise<unknown>;
     get(key: { sessionId: string; chatId: string; instanceId: string }): Promise<unknown>;
     getByProvider(instanceId: string, providerConversationId: string): Promise<unknown>;
   };

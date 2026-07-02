@@ -30,12 +30,6 @@ export class ConversationMappingService {
     return this.repo.findOne({ where: key });
   }
 
-  // Per-plugin mapping lookup for a chat (any instance). No longer used by the core handover gate — that
-  // is now session+chat-scoped via findHandoverForChat — but kept as a generic per-plugin accessor.
-  findForChat(sessionId: string, chatId: string, pluginId: string): Promise<ConversationMapping | null> {
-    return this.repo.findOne({ where: { sessionId, chatId, pluginId } });
-  }
-
   // Session+chat-scoped handover lookup for the core gate: the most-recently-updated human/closed row for
   // this chat, IGNORING pluginId. A handover taken by one plugin (e.g. the Chatwoot relay) then governs
   // every plugin on that chat — the gate exempts the owner and silences the rest.
@@ -45,8 +39,8 @@ export class ConversationMappingService {
   ): Promise<{ pluginId: string; handoverState: HandoverState } | null> {
     const row = await this.repo.findOne({
       where: [
-        { sessionId, chatId, handoverState: 'human' as HandoverState },
-        { sessionId, chatId, handoverState: 'closed' as HandoverState },
+        { sessionId, chatId, handoverState: 'human' },
+        { sessionId, chatId, handoverState: 'closed' },
       ],
       order: { updatedAt: 'DESC' },
     });

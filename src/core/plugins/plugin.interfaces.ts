@@ -305,9 +305,11 @@ export interface PluginHandoverCapability {
  */
 export interface PluginMappingsCapability {
   upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<void>;
-  get(
-    key: { sessionId: string; chatId: string; instanceId: string },
-  ): Promise<{ providerConversationId: string; handoverState: HandoverState } | null>;
+  get(key: {
+    sessionId: string;
+    chatId: string;
+    instanceId: string;
+  }): Promise<{ providerConversationId: string; handoverState: HandoverState } | null>;
   getByProvider(
     instanceId: string,
     providerConversationId: string,

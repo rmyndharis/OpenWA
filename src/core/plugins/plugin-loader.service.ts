@@ -1065,6 +1065,8 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
             instanceId,
             providerConversationId,
           );
+          // Parity with get/upsert: a plugin may only read a mapping for a session it is scoped to.
+          if (m) this.assertSessionAllowed(plugin.manifest, m.sessionId);
           return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
         },
       } satisfies PluginMappingsCapability,
