@@ -1,8 +1,13 @@
 import { Controller, Param, Post } from '@nestjs/common';
+import { RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { RedriveService } from './redrive.service';
 
-// NOT @Public — this is an operator action guarded by the global ApiKeyGuard (X-API-Key header).
+// Re-dispatching DLQ'd inbound payloads can cause real downstream sends, so this operator action is
+// ADMIN-gated — matching the sibling IntegrationInstanceController. (A bare API key, even VIEWER,
+// must NOT be able to trigger it.)
 @Controller('integration/instances')
+@RequireRole(ApiKeyRole.ADMIN)
 export class RedriveController {
   constructor(private readonly redrive: RedriveService) {}
 

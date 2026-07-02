@@ -1,4 +1,4 @@
-import { IsBoolean, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { IngressUrl } from '../ingress-url';
 
 // Safe charset: also prevents an instanceId containing ':' (which would collide the P1 ordering key).
@@ -11,6 +11,7 @@ export class CreateInstanceDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'sessionScope must not be empty (omit it for all sessions)' })
   @MaxLength(256)
   sessionScope?: string;
 
@@ -31,6 +32,7 @@ export class UpdateInstanceDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'sessionScope must not be empty (omit it for all sessions)' })
   @MaxLength(256)
   sessionScope?: string;
 

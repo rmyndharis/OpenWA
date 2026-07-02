@@ -83,4 +83,14 @@ describe('PluginInstanceService provisioning', () => {
     expect(await service.resolve('chatwoot', 'acct1')).toBeNull();
     expect(await service.remove('chatwoot', 'acct1')).toBe(false);
   });
+
+  it('normalizes an empty sessionScope to null (all-sessions) on mint/create/update, never a literal ""', async () => {
+    // '' would break outbound send (falsy sessionId) and be unrecoverable from the UI; store null instead.
+    const minted = await service.mint('chatwoot', 'm1', { sessionScope: '' });
+    expect(minted.sessionScope).toBeNull();
+    const created = await service.create('chatwoot', 'acct1', { sessionScope: '' });
+    expect(created.sessionScope).toBeNull();
+    const patched = await service.update('chatwoot', 'acct1', { sessionScope: '' });
+    expect(patched?.sessionScope).toBeNull();
+  });
 });

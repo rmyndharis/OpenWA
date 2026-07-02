@@ -29,7 +29,7 @@ export class PluginInstanceService {
       id,
       pluginId,
       instanceId,
-      sessionScope: opts.sessionScope ?? null,
+      sessionScope: opts.sessionScope || null,
       secret: randomBytes(32).toString('hex'),
       verifyToken: opts.verifyToken ?? null,
       config: opts.config ?? null,
@@ -58,7 +58,7 @@ export class PluginInstanceService {
       id,
       pluginId,
       instanceId,
-      sessionScope: opts.sessionScope ?? null,
+      sessionScope: opts.sessionScope || null,
       secret: randomBytes(32).toString('hex'),
       verifyToken: opts.verifyToken ?? null,
       config: opts.config ?? null,
@@ -92,7 +92,7 @@ export class PluginInstanceService {
   ): Promise<PluginInstance | null> {
     const inst = await this.resolve(pluginId, instanceId);
     if (!inst) return null;
-    if (patch.sessionScope !== undefined) inst.sessionScope = patch.sessionScope;
+    if (patch.sessionScope !== undefined) inst.sessionScope = patch.sessionScope || null;
     if (patch.config !== undefined) inst.config = patch.config;
     return this.repo.save(inst);
   }
