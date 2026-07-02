@@ -8,7 +8,7 @@ import { DataSource } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Public, RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
-import { isPathWithin } from '../../common/utils/path-safety';
+import { isPathWithin, isSafeSessionName } from '../../common/utils/path-safety';
 import { writeSecretFile } from '../../common/utils/secret-file';
 import { EngineFactory } from '../../engine/engine.factory';
 import { getEffectiveWebVersionInfo, resolveCurrentWebVersion } from '../../engine/wa-web-version';
@@ -625,7 +625,8 @@ export class InfraController {
       return {
         message: `Configuration saved successfully.${profileMsg} Server restart required to apply changes.`,
         saved: true,
-        envPath,
+        // Return a cwd-relative path so the response doesn't disclose the absolute host filesystem layout.
+        envPath: path.relative(process.cwd(), envPath),
         profiles,
       };
     } catch (error) {
@@ -904,6 +905,13 @@ export class InfraController {
       let sessionsCount = 0;
       if (data.tables.sessions?.length) {
         for (const session of data.tables.sessions) {
+          // A session name becomes the engine auth-directory key, so an unvalidated imported name (this
+          // path bypasses CreateSessionDto) could traverse the filesystem. Skip + warn instead of
+          // throwing, so one bad row doesn't 500 the whole restore.
+          if (!isSafeSessionName(session.name)) {
+            warnings.push(`Skipped session ${session.id}: unsafe name ${JSON.stringify(session.name)}`);
+            continue;
+          }
           try {
             await queryRunner.query(
               `INSERT INTO sessions (id, name, status, phone, "pushName", config, "proxyUrl", "proxyType", "connectedAt", "lastActiveAt", "createdAt", "updatedAt") 
@@ -1201,7 +1209,10 @@ export class InfraController {
 
     return {
       message: 'Storage export completed',
-      download: exportPath,
+      // cwd-relative rather than an absolute host path: doesn't leak the filesystem layout, and the
+      // import round-trip still works because importStorage's existsSync/createReadStream resolve a
+      // relative filePath against the same cwd this was made relative to.
+      download: path.relative(process.cwd(), exportPath),
     };
   }
 

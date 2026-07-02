@@ -8,6 +8,7 @@ import { BaileysPlugin } from '../plugins/engines/baileys';
 import { createLogger } from '../common/services/logger.service';
 import { BaileysMessageStoreService } from './adapters/baileys-message-store.service';
 import { LidMappingStoreService } from './identity/lid-mapping-store.service';
+import { isSafeSessionName } from '../common/utils/path-safety';
 
 export interface EngineCreateOptions {
   sessionId: string;
@@ -89,6 +90,14 @@ export class EngineFactory implements OnModuleInit {
   }
 
   create(options: EngineCreateOptions): IWhatsAppEngine {
+    // The sessionId becomes the engine's on-disk auth-directory key (path.join(authDir, sessionId) /
+    // session-${sessionId}), so a name containing '.', '/' or '\\' could traverse outside it. Normal
+    // creation validates via CreateSessionDto, but alternate paths (data import, seed) can reach this
+    // sink with a raw name — assert here so the traversal can never materialize regardless of source.
+    if (!isSafeSessionName(options.sessionId)) {
+      throw new Error(`Refusing to create an engine for an unsafe session name: ${JSON.stringify(options.sessionId)}`);
+    }
+
     // Try to get engine from plugin system
     const enginePlugin = this.pluginLoader.getPlugin(this.engineType);
 

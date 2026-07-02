@@ -821,12 +821,16 @@ describe('InfraController.exportStorage keeps the export import-able and sweeps 
 
     const result = await controller.exportStorage();
 
-    // Import-able: under <data>/exports — the import handler only accepts paths inside data/.
-    expect(result.download.startsWith(path.join(cwd, 'data', 'exports'))).toBe(true);
-    expect(await exists(result.download)).toBe(true);
+    // download is cwd-relative (no absolute host path leak) and stays under data/exports so the import
+    // handler — which only accepts paths inside data/ — can still consume it.
+    expect(path.isAbsolute(result.download)).toBe(false);
+    expect(result.download.startsWith(path.join('data', 'exports'))).toBe(true);
+    // Resolve against the (mocked) cwd to check on-disk existence; fs itself uses the real cwd.
+    const abs = path.join(cwd, result.download);
+    expect(await exists(abs)).toBe(true);
 
-    await waitForGone(result.download);
-    expect(await exists(result.download)).toBe(false);
+    await waitForGone(abs);
+    expect(await exists(abs)).toBe(false);
   });
 });
 

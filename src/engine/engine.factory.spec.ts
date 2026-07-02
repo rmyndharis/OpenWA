@@ -33,6 +33,18 @@ describe('EngineFactory', () => {
       remember: jest.fn().mockResolvedValue(undefined),
     }) as unknown as LidMappingStoreService;
 
+  it('refuses to create an engine for an unsafe session name (path-traversal into the auth dir)', () => {
+    const createEngine = jest.fn().mockReturnValue({});
+    const pluginLoader = {
+      getPlugin: jest.fn().mockReturnValue({ instance: { type: PluginType.ENGINE, createEngine } }),
+    } as unknown as PluginLoaderService;
+    const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
+
+    expect(() => factory.create({ sessionId: '../../etc' })).toThrow(/unsafe session name/i);
+    expect(() => factory.create({ sessionId: 'a/b' })).toThrow(/unsafe session name/i);
+    expect(createEngine).not.toHaveBeenCalled();
+  });
+
   it('passes ONLY engine-neutral fields to createEngine (no Puppeteer leak)', () => {
     const createEngine = jest.fn().mockReturnValue({});
     const pluginInstance = { type: PluginType.ENGINE, createEngine };
