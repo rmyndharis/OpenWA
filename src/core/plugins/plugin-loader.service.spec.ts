@@ -483,3 +483,45 @@ describe('PluginLoaderService — enable-failure hook cleanup', () => {
     expect(hooks.getHookCount('message:received')).toBe(1);
   });
 });
+
+describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () => {
+  it('delivers the instance-session-resolved config to the sandbox host', async () => {
+    const fakeInstanceService = { resolve: jest.fn().mockResolvedValue({ sessionScope: 'sess-1' }) };
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = {
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      getPluginConfig: jest.fn().mockReturnValue(null),
+      getPluginSessions: jest.fn().mockReturnValue(undefined),
+      getPluginSessionConfig: jest.fn().mockReturnValue(undefined),
+    } as unknown as PluginStorageService;
+    const moduleRef = { get: jest.fn().mockReturnValue(fakeInstanceService) } as unknown as ModuleRef;
+    const loader = new PluginLoaderService(configService, new HookManager(), pluginStorage, moduleRef);
+
+    const internals = loader as unknown as {
+      plugins: Map<string, unknown>;
+      sandboxHosts: Map<string, { dispatchWebhook: jest.Mock }>;
+    };
+    internals.plugins.set('chatwoot-adapter', {
+      manifest: { id: 'chatwoot-adapter', sessionScoped: true },
+      config: { baseUrl: 'base', accountId: 1 },
+      sessionConfig: { 'sess-1': { baseUrl: 'https://tenant1' } },
+    });
+    const dispatchWebhook = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    internals.sandboxHosts.set('chatwoot-adapter', { dispatchWebhook });
+
+    await loader.dispatchWebhookForInstance({
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      route: 'chatwoot',
+      deliveryId: 'd1',
+      sessionId: 'sess-1',
+      payload: { headers: {}, query: {}, body: '', rawBody: '' },
+    });
+
+    expect(fakeInstanceService.resolve).toHaveBeenCalledWith('chatwoot-adapter', 'acct1');
+    expect(dispatchWebhook).toHaveBeenCalledTimes(1);
+    // Session override (tenant1) merged over the base — this is what makes an instance multi-tenant.
+    expect(dispatchWebhook.mock.calls[0][0]).toMatchObject({ config: { baseUrl: 'https://tenant1', accountId: 1 } });
+  });
+});

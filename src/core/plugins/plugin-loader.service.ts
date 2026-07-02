@@ -38,6 +38,7 @@ import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
+import type { PluginInstanceService } from '../../modules/integration/plugin-instance.service';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
@@ -572,6 +573,19 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     if (!host) {
       throw new Error('no live sandbox host for plugin ' + d.pluginId);
     }
+    // Resolve this instance's per-session config (the base merged with the sessionScope override that
+    // provisioning wrote) so the ingress handler reads it as ctx.config — this is what makes a minted
+    // instance multi-tenant. Best-effort: an unresolved plugin just yields undefined (base config only).
+    const plugin = this.plugins.get(d.pluginId);
+    const instance = await this.getPluginInstanceService().resolve(d.pluginId, d.instanceId);
+    const config = plugin
+      ? resolvePluginConfig(
+          plugin.config,
+          plugin.sessionConfig,
+          instance?.sessionScope ?? undefined,
+          plugin.manifest.sessionScoped !== false,
+        )
+      : undefined;
     const result = await host.dispatchWebhook({
       instanceId: d.instanceId,
       route: d.route,
@@ -583,6 +597,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       verified: true,
       deliveryId: d.deliveryId,
       sessionId: d.sessionId,
+      config,
       timeoutMs: INGRESS_DISPATCH_TIMEOUT_MS,
     });
     if (!result.ok) {
@@ -619,6 +634,13 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       require('../../modules/integration/conversation-mapping.service') as typeof import('../../modules/integration/conversation-mapping.service');
     return this.moduleRef.get(mod.ConversationMappingService, { strict: false });
+  }
+
+  private getPluginInstanceService(): PluginInstanceService {
+    const mod =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('../../modules/integration/plugin-instance.service') as typeof import('../../modules/integration/plugin-instance.service');
+    return this.moduleRef.get(mod.PluginInstanceService, { strict: false });
   }
 
   /**
