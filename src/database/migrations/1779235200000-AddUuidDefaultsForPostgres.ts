@@ -14,10 +14,14 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   This migration is a no-op on SQLite (TypeORM generates the UUID in the
  *   driver layer there, so no DB default is needed).
  *
- *   `gen_random_uuid()` is a core built-in only from PostgreSQL 13; on PG <= 12
- *   it lives in the pgcrypto extension. We `CREATE EXTENSION IF NOT EXISTS
- *   pgcrypto` first so the default (and every insert that relies on it) works on
- *   older servers too. On PG 13+ the extension is harmless/redundant.
+ *   `gen_random_uuid()` is a core built-in from PostgreSQL 13; on PG <= 12 it lives
+ *   in the pgcrypto extension. We therefore version-gate: on PG 13+ no extension is
+ *   touched at all (the common case, and CREATE EXTENSION needs a privilege managed
+ *   Postgres often withholds), and only on PG <= 12 do we ensure pgcrypto — with a
+ *   clear, actionable error if the role cannot create it, instead of a boot crash-loop.
+ *
+ *   NOTE: editing an already-recorded migration body only benefits new / currently
+ *   crash-looping deployments; healthy ones that already ran it are unaffected.
  */
 export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterface {
   name = 'AddUuidDefaultsForPostgres1779235200000';
@@ -28,9 +32,37 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (queryRunner.connection.options.type !== 'postgres') return;
 
-    // gen_random_uuid() is core only on PG 13+; ensure pgcrypto is present so PG <= 12 resolves it too.
-    await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+    // gen_random_uuid() is a core built-in from PostgreSQL 13+, so on any modern server we need NO
+    // extension — and CREATE EXTENSION requires a privilege that managed Postgres (RDS/Cloud SQL/…)
+    // often withholds, so running it unconditionally crash-loops boot there. Probe the version with a
+    // non-erroring catalog query (never a caught SQL exception, which would poison the migration tx)
+    // and only touch pgcrypto on PG <= 12.
+    const versionRows = (await queryRunner.query(`SELECT current_setting('server_version_num')::int AS num`)) as
+      { num: number | string }[] | undefined;
+    const versionNum = Number(versionRows?.[0]?.num ?? 0);
 
+    if (versionNum > 0 && versionNum < 130000) {
+      // PG <= 12: gen_random_uuid() lives in pgcrypto. Check the catalog first (readable by any role);
+      // only attempt CREATE EXTENSION when it is genuinely missing, and if the role can't create it,
+      // fail with a clear, actionable error rather than a raw permission-denied crash-loop.
+      const installed = (await queryRunner.query(`SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'`)) as
+        unknown[] | undefined;
+      if (!installed?.length) {
+        try {
+          await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+        } catch (err) {
+          throw new Error(
+            `PostgreSQL ${versionNum} (< 13) needs the pgcrypto extension for gen_random_uuid(), but it is ` +
+              `not installed and this database role cannot create it. Have a superuser run ` +
+              `"CREATE EXTENSION pgcrypto;" once, then restart.`,
+            { cause: err },
+          );
+        }
+      }
+    }
+
+    // By this point gen_random_uuid() resolves (core on 13+, pgcrypto ensured on <= 12), so the DEFAULT
+    // expression — which Postgres validates at ALTER time — is safe to set.
     for (const table of this.tables) {
       const exists = await queryRunner.hasTable(table);
       if (!exists) continue;
