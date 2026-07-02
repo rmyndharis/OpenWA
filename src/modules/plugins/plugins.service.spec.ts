@@ -5,7 +5,7 @@ import AdmZip from 'adm-zip';
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
-import { PluginsService } from './plugins.service';
+import { PluginsService, isIngressCapable } from './plugins.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
 import { PluginStatus } from '../../core/plugins/plugin.interfaces';
@@ -376,5 +376,19 @@ describe('PluginsService i18n passthrough', () => {
   it('leaves i18n undefined when the manifest has none', () => {
     const svc = build(undefined);
     expect(svc.findOne('p').i18n).toBeUndefined();
+  });
+});
+
+describe('isIngressCapable', () => {
+  it('is true when the manifest has an ingress route AND the webhook:ingress permission', () => {
+    expect(isIngressCapable({ ingress: [{ route: 'events' }], permissions: ['webhook:ingress'] })).toBe(true);
+  });
+  it('is false without an ingress route', () => {
+    expect(isIngressCapable({ ingress: [], permissions: ['webhook:ingress'] })).toBe(false);
+    expect(isIngressCapable({ permissions: ['webhook:ingress'] })).toBe(false);
+  });
+  it('is false without the webhook:ingress permission', () => {
+    expect(isIngressCapable({ ingress: [{ route: 'events' }], permissions: [] })).toBe(false);
+    expect(isIngressCapable({ ingress: [{ route: 'events' }] })).toBe(false);
   });
 });

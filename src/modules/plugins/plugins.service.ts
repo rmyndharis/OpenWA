@@ -20,6 +20,12 @@ import { annotateCatalog, CatalogEntry, CatalogPlugin } from './catalog';
 /** Cap on the catalog JSON download (the catalog is small; this bounds a hostile response). */
 const CATALOG_MAX_BYTES = 1 * 1024 * 1024;
 
+/** A plugin can host provisioned instances iff it declares an ingress route AND the webhook:ingress
+ *  permission — mirrors IntegrationInstanceController.assertIngressCapable. */
+export function isIngressCapable(manifest: { ingress?: unknown[]; permissions?: string[] }): boolean {
+  return (manifest.ingress?.length ?? 0) > 0 && (manifest.permissions ?? []).includes('webhook:ingress');
+}
+
 @Injectable()
 export class PluginsService {
   constructor(
@@ -58,6 +64,7 @@ export class PluginsService {
       config: redactSecretConfig(plugin.config, plugin.manifest.configSchema),
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
+      ingressCapable: isIngressCapable(plugin.manifest),
       configSchema: plugin.manifest.configSchema,
       configUi: plugin.manifest.configUi,
       i18n: plugin.manifest.i18n,
@@ -88,6 +95,7 @@ export class PluginsService {
       config: redactSecretConfig(plugin.config, plugin.manifest.configSchema),
       builtIn: this.pluginLoader.isBuiltIn(plugin.manifest.id),
       provides: plugin.manifest.provides ?? [],
+      ingressCapable: isIngressCapable(plugin.manifest),
       configSchema: plugin.manifest.configSchema,
       configUi: plugin.manifest.configUi,
       i18n: plugin.manifest.i18n,
