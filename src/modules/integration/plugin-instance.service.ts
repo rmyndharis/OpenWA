@@ -4,8 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import type { PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
-
-const SECRET_MASK = '***';
+import { redactSecretConfig, restoreSecretConfig, SECRET_SENTINEL } from '../plugins/redact-config';
 
 // A supplied ingress secret must be a real, guessing-resistant value; an empty/short one would make the
 // public HMAC forgeable. Absent => auto-generate. Trimmed so pasted whitespace can't slip a weak secret in.
@@ -16,24 +15,6 @@ function normalizeSecret(supplied?: string): string {
     throw new BadRequestException('instance secret must be a non-empty string of at least 16 characters');
   }
   return s;
-}
-
-// Mask every config value the plugin's schema marks `secret:true` (e.g. a Chatwoot apiToken) on operator
-// reads — core does not otherwise redact instance `config`. Top-level fields only (the declarative
-// configSchema is flat for secret credentials).
-function redactSecrets(
-  config: Record<string, unknown> | null,
-  schema?: PluginConfigSchema,
-): Record<string, unknown> | null {
-  if (!config) return config;
-  // Schema unavailable (plugin unloaded / failed to load) — we can't tell which fields are secret, so
-  // fail closed by masking every value rather than risk leaking a credential such as an API token.
-  if (!schema?.properties) return Object.fromEntries(Object.keys(config).map(key => [key, SECRET_MASK]));
-  const out: Record<string, unknown> = { ...config };
-  for (const [key, field] of Object.entries(schema.properties)) {
-    if (key in out && field.secret) out[key] = SECRET_MASK;
-  }
-  return out;
 }
 
 export class InstanceExistsError extends Error {
@@ -73,9 +54,14 @@ export class PluginInstanceService {
   }
 
   // Operator-facing view: never leak the raw secret, and mask any `secret:true` config field (e.g. a
-  // provider apiToken) per the plugin's configSchema. Reuses the redact-config sentinel convention.
+  // provider apiToken) per the plugin's configSchema — recursively, at any depth, and fail-closed when
+  // the schema is unavailable — by reusing the shared redactSecretConfig (single source of truth).
   maskedView(instance: PluginInstance, schema?: PluginConfigSchema): PluginInstance {
-    return { ...instance, secret: SECRET_MASK, config: redactSecrets(instance.config, schema) };
+    return {
+      ...instance,
+      secret: SECRET_SENTINEL,
+      config: instance.config == null ? instance.config : redactSecretConfig(instance.config, schema),
+    };
   }
 
   async create(
@@ -120,11 +106,17 @@ export class PluginInstanceService {
     pluginId: string,
     instanceId: string,
     patch: { sessionScope?: string; config?: Record<string, unknown> },
+    schema?: PluginConfigSchema,
   ): Promise<PluginInstance | null> {
     const inst = await this.resolve(pluginId, instanceId);
     if (!inst) return null;
     if (patch.sessionScope !== undefined) inst.sessionScope = patch.sessionScope || null;
-    if (patch.config !== undefined) inst.config = patch.config;
+    if (patch.config !== undefined) {
+      // The operator view masks secrets as the sentinel, so a round-tripped config carries '***' for
+      // unchanged secrets. Restore the stored values instead of persisting the mask (which would corrupt
+      // the credential); genuinely-new values are written as provided.
+      inst.config = restoreSecretConfig(patch.config, inst.config ?? undefined, schema);
+    }
     return this.repo.save(inst);
   }
 

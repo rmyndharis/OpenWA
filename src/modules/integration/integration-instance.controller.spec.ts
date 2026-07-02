@@ -79,6 +79,53 @@ describe('IntegrationInstanceController provisioning bridge', () => {
     expect(setPluginSessions).toHaveBeenCalledWith('chatwoot-adapter', []);
   });
 
+  it('retires the "*" activation when a wildcard-scope instance is disabled and no other wildcard remains', async () => {
+    const { loader, audit, setPluginSessions } = build();
+    (loader.getPlugin as jest.Mock).mockReturnValue({
+      manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'] },
+      activeSessions: ['*'],
+    });
+    const base = { pluginId: 'chatwoot-adapter', instanceId: 'acct1', sessionScope: '*', config: {} };
+    const instances = {
+      resolve: jest.fn().mockResolvedValue({ ...base, enabled: true }),
+      setEnabled: jest.fn().mockResolvedValue({ ...base, enabled: false }),
+      update: jest.fn(),
+      list: jest.fn().mockResolvedValue([{ ...base, enabled: false }]), // only this one, now disabled
+      maskedView: (i: unknown) => i,
+    } as unknown as PluginInstanceService;
+    const controller = new IntegrationInstanceController(instances, loader, audit);
+
+    await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
+
+    // Previously a no-op: a disabled wildcard instance kept firing on every session. Now '*' is retired.
+    expect(setPluginSessions).toHaveBeenCalledWith('chatwoot-adapter', []);
+  });
+
+  it('keeps "*" active when another enabled wildcard instance remains', async () => {
+    const { loader, audit, setPluginSessions } = build();
+    (loader.getPlugin as jest.Mock).mockReturnValue({
+      manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'] },
+      activeSessions: ['*'],
+    });
+    const base = { pluginId: 'chatwoot-adapter', instanceId: 'acct1', sessionScope: '*', config: {} };
+    const instances = {
+      resolve: jest.fn().mockResolvedValue({ ...base, enabled: true }),
+      setEnabled: jest.fn().mockResolvedValue({ ...base, enabled: false }),
+      update: jest.fn(),
+      list: jest.fn().mockResolvedValue([
+        { ...base, enabled: false },
+        { pluginId: 'chatwoot-adapter', instanceId: 'acct2', sessionScope: '*', config: {}, enabled: true },
+      ]),
+      maskedView: (i: unknown) => i,
+    } as unknown as PluginInstanceService;
+    const controller = new IntegrationInstanceController(instances, loader, audit);
+
+    await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
+
+    // A second wildcard instance is still enabled → '*' must NOT be retired.
+    expect(setPluginSessions).not.toHaveBeenCalledWith('chatwoot-adapter', []);
+  });
+
   it('tears down the OLD scope when the bound session changes (PATCH sessionScope)', async () => {
     const { loader, audit, setPluginSessionConfig } = build();
     (loader.getPlugin as jest.Mock).mockReturnValue({

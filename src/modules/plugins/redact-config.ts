@@ -48,7 +48,15 @@ export function redactSecretConfig(
   schema?: PluginConfigSchema,
 ): Record<string, unknown> {
   const out = { ...(config ?? {}) };
-  if (!schema?.properties) return out;
+  // Fail CLOSED when the schema is unavailable (plugin unloaded / failed to load): we can't tell which
+  // fields are secret, so mask every meaningful value rather than leak a credential. Returning the
+  // config unchanged here would expose runtime-stored secrets on GET /plugins.
+  if (!schema?.properties) {
+    for (const key of Object.keys(out)) {
+      if (isMeaningful(out[key])) out[key] = SECRET_SENTINEL;
+    }
+    return out;
+  }
   return redactObject(out, schema.properties);
 }
 
@@ -172,6 +180,19 @@ export function restoreSecretConfig(
   existing: Record<string, unknown> | undefined,
   schema?: PluginConfigSchema,
 ): Record<string, unknown> {
-  if (!schema?.properties) return { ...incoming };
+  // Symmetric fail-closed restore for the schemaless case: redactSecretConfig masks EVERY value to the
+  // sentinel, so on write treat any sentinel value as "keep existing" (restore the stored value, or drop
+  // the key when nothing is stored). Returning `incoming` as-is would persist the sentinel and corrupt
+  // the stored config. Non-sentinel values (genuinely edited) are kept verbatim.
+  if (!schema?.properties) {
+    const out = { ...incoming };
+    const ex = existing ?? {};
+    for (const key of Object.keys(out)) {
+      if (out[key] !== SECRET_SENTINEL) continue;
+      if (isMeaningful(ex[key])) out[key] = ex[key];
+      else delete out[key];
+    }
+    return out;
+  }
   return restoreObject(incoming, existing, schema.properties);
 }

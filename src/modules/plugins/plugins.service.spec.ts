@@ -6,6 +6,7 @@ import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginsService, isIngressCapable } from './plugins.service';
+import { SECRET_SENTINEL } from './redact-config';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
 import { PluginStatus } from '../../core/plugins/plugin.interfaces';
@@ -89,7 +90,9 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
 
     expect(dto.version).toBe('2.0.0');
-    expect(dto.config).toEqual({ apiKey: 'secret-123' }); // config survived the in-place update
+    // Read view masks config for a schemaless plugin (fail-closed), but the stored value survived the update.
+    expect(dto.config).toEqual({ apiKey: SECRET_SENTINEL });
+    expect(loader.getPlugin('svc-plg')?.config).toEqual({ apiKey: 'secret-123' });
     expect(fs.existsSync(path.join(pluginsDir, 'svc-plg', 'index.js'))).toBe(true);
     expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false); // backup cleaned up
   });

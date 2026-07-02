@@ -47,7 +47,7 @@ export class IntegrationInstanceController {
       void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_CREATED, {
         metadata: { pluginId, instanceId: dto.instanceId },
       });
-      this.applyScopeBinding(pluginId, inst.sessionScope, inst.config ?? {}, inst.enabled);
+      await this.applyScopeBinding(pluginId, inst.sessionScope, inst.config ?? {}, inst.enabled);
       return this.view(inst, routes, /* reveal */ true);
     } catch (err) {
       if (err instanceof InstanceExistsError) throw new ConflictException(err.message);
@@ -94,14 +94,21 @@ export class IntegrationInstanceController {
     const previousScope = inst.sessionScope;
     if (dto.enabled !== undefined) inst = await this.instances.setEnabled(pluginId, instanceId, dto.enabled);
     if (dto.sessionScope !== undefined || dto.config !== undefined) {
-      inst = await this.instances.update(pluginId, instanceId, { sessionScope: dto.sessionScope, config: dto.config });
+      inst = await this.instances.update(
+        pluginId,
+        instanceId,
+        { sessionScope: dto.sessionScope, config: dto.config },
+        this.schemaFor(pluginId),
+      );
     }
     const updated = inst as PluginInstance;
-    // If the bound session changed, tear down the old scope so it stops firing with stale config.
-    if (previousScope && previousScope !== '*' && previousScope !== updated.sessionScope) {
-      this.applyScopeBinding(pluginId, previousScope, {}, false);
+    // If the bound session changed, tear down the OLD scope (incl. a wildcard/null scope) so it stops
+    // firing with stale config. The new scope is (re)bound right after; teardown runs first with the new
+    // scope already persisted, so the wildcard retirement check sees the current state correctly.
+    if (previousScope !== updated.sessionScope) {
+      await this.applyScopeBinding(pluginId, previousScope, {}, false);
     }
-    this.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled);
+    await this.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled);
     return this.view(updated, this.pluginRoutes(pluginId), false);
   }
 
@@ -110,9 +117,11 @@ export class IntegrationInstanceController {
   async remove(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<void> {
     const inst = await this.instances.resolve(pluginId, instanceId);
     if (!inst) throw new NotFoundException('instance not found');
-    // Deactivate + clear the session config BEFORE deletion (needs the instance's scope).
-    this.applyScopeBinding(pluginId, inst.sessionScope, {}, false);
+    const scope = inst.sessionScope;
+    // Delete the row FIRST, then tear down its scope: for a wildcard/null scope the teardown lists the
+    // remaining instances to decide whether to retire '*', and that check must not count this instance.
     await this.instances.remove(pluginId, instanceId);
+    await this.applyScopeBinding(pluginId, scope, {}, false);
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_DELETED, { metadata: { pluginId, instanceId } });
   }
 
@@ -131,6 +140,12 @@ export class IntegrationInstanceController {
   // Best-effort routes for read responses; empty when the plugin is gone or non-ingress (no throw).
   private pluginRoutes(pluginId: string): string[] {
     return this.loader.getPlugin(pluginId)?.manifest.ingress?.map(r => r.route) ?? [];
+  }
+
+  // The plugin's declarative config schema, used to restore masked secrets on update (undefined when the
+  // plugin is unloaded — restoreSecretConfig then fails closed).
+  private schemaFor(pluginId: string) {
+    return this.loader.getPlugin(pluginId)?.manifest.configSchema;
   }
 
   private view(inst: PluginInstance, routes: string[], reveal: boolean): InstanceView {
@@ -156,19 +171,33 @@ export class IntegrationInstanceController {
   // disabled or removed instance must not keep firing). A concrete scope writes sessionConfig[scope] and
   // toggles that session in activeSessions; a null/'*' scope binds the base config + all sessions ('*').
   // Best-effort: provisioning must not fail because the plugin is momentarily unloaded.
-  private applyScopeBinding(
+  private async applyScopeBinding(
     pluginId: string,
     scope: string | null,
     config: Record<string, unknown>,
     activate: boolean,
-  ): void {
+  ): Promise<void> {
     try {
       if (!scope || scope === '*') {
-        // 'all sessions' → base config + activate ['*']. A base binding cannot be cleanly torn down
-        // (updatePluginConfig merges, so one instance's keys aren't separable) — deactivation is a no-op.
+        // 'all sessions' → base config + activate ['*']. The merged base config cannot be cleanly torn
+        // down (updatePluginConfig merges, so one instance's keys aren't separable), but the '*'
+        // activation CAN be retired: on deactivate, drop '*' from activeSessions ONLY when no OTHER
+        // enabled instance still binds a wildcard/null scope — otherwise disabling/deleting a wildcard
+        // instance would leave the plugin firing on every session with stale config.
         if (activate) {
           this.loader.updatePluginConfig(pluginId, config);
           this.loader.setPluginSessions(pluginId, ['*']);
+          return;
+        }
+        const anyWildcardLeft = (await this.instances.list(pluginId)).some(
+          i => i.enabled && (!i.sessionScope || i.sessionScope === '*'),
+        );
+        if (!anyWildcardLeft) {
+          const current = this.loader.getPlugin(pluginId)?.activeSessions ?? [];
+          this.loader.setPluginSessions(
+            pluginId,
+            current.filter(s => s !== '*'),
+          );
         }
         return;
       }
