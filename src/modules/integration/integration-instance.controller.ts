@@ -41,6 +41,7 @@ export class IntegrationInstanceController {
       const inst = await this.instances.create(pluginId, dto.instanceId, {
         sessionScope: dto.sessionScope,
         verifyToken: dto.verifyToken,
+        secret: dto.secret,
         config: dto.config,
       });
       void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_CREATED, {

@@ -6,6 +6,15 @@ import { PluginInstance } from './entities/plugin-instance.entity';
 
 const SECRET_MASK = '***';
 
+// A supplied ingress secret must be a real, guessing-resistant value; an empty/short one would make the
+// public HMAC forgeable. Absent => auto-generate. Trimmed so pasted whitespace can't slip a weak secret in.
+function normalizeSecret(supplied?: string): string {
+  if (supplied === undefined) return randomBytes(32).toString('hex');
+  const s = supplied.trim();
+  if (s.length < 16) throw new Error('instance secret must be a non-empty string of at least 16 characters');
+  return s;
+}
+
 export class InstanceExistsError extends Error {
   constructor(pluginId: string, instanceId: string) {
     super(`instance ${instanceId} already exists for plugin ${pluginId}`);
@@ -20,7 +29,7 @@ export class PluginInstanceService {
   async mint(
     pluginId: string,
     instanceId: string,
-    opts: { sessionScope?: string; verifyToken?: string; config?: Record<string, unknown> },
+    opts: { sessionScope?: string; verifyToken?: string; secret?: string; config?: Record<string, unknown> },
   ): Promise<PluginInstance> {
     const id = `${pluginId}:${instanceId}`;
     const existing = await this.repo.findOne({ where: { id } });
@@ -30,7 +39,7 @@ export class PluginInstanceService {
       pluginId,
       instanceId,
       sessionScope: opts.sessionScope || null,
-      secret: randomBytes(32).toString('hex'),
+      secret: normalizeSecret(opts.secret),
       verifyToken: opts.verifyToken ?? null,
       config: opts.config ?? null,
       enabled: true,
@@ -50,7 +59,7 @@ export class PluginInstanceService {
   async create(
     pluginId: string,
     instanceId: string,
-    opts: { sessionScope?: string; verifyToken?: string; config?: Record<string, unknown> },
+    opts: { sessionScope?: string; verifyToken?: string; secret?: string; config?: Record<string, unknown> },
   ): Promise<PluginInstance> {
     const id = `${pluginId}:${instanceId}`;
     if (await this.repo.findOne({ where: { id } })) throw new InstanceExistsError(pluginId, instanceId);
@@ -59,7 +68,7 @@ export class PluginInstanceService {
       pluginId,
       instanceId,
       sessionScope: opts.sessionScope || null,
-      secret: randomBytes(32).toString('hex'),
+      secret: normalizeSecret(opts.secret),
       verifyToken: opts.verifyToken ?? null,
       config: opts.config ?? null,
       enabled: true,

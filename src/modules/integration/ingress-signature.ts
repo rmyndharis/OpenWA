@@ -23,6 +23,7 @@ export function verifyIngressSignature(
   input: VerifyInput,
 ): { ok: boolean; reason?: string } {
   if (spec.scheme === 'none') return { ok: true };
+  if (!input.secret) return { ok: false, reason: 'empty ingress secret' };
 
   if (spec.timestampHeader) {
     const tsRaw = header(input.headers, spec.timestampHeader);

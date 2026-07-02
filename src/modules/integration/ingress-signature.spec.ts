@@ -74,4 +74,16 @@ describe('verifyIngressSignature', () => {
   it('accepts scheme "none" without a signature', () => {
     expect(verifyIngressSignature({ scheme: 'none' }, { rawBody, headers: {}, secret, now: 0 }).ok).toBe(true);
   });
+
+  it('fails closed on an empty secret even for a structurally valid HMAC', () => {
+    const emptySecretSpec = { scheme: 'hmac-sha256' as const, header: 'x-sig' };
+    const digest = createHmac('sha256', '').update('body').digest('hex');
+    const out = verifyIngressSignature(emptySecretSpec, {
+      rawBody: 'body',
+      headers: { 'x-sig': digest },
+      secret: '',
+      now: 0,
+    });
+    expect(out.ok).toBe(false);
+  });
 });

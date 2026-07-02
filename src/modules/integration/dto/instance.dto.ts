@@ -1,4 +1,4 @@
-import { IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { IngressUrl } from '../ingress-url';
 
 // Safe charset: also prevents an instanceId containing ':' (which would collide the P1 ordering key).
@@ -19,6 +19,15 @@ export class CreateInstanceDto {
   @IsString()
   @MaxLength(512)
   verifyToken?: string;
+
+  // Operator-supplied ingress HMAC secret (e.g. the provider's webhook secret). When present it must be
+  // a real value (>= 16 chars) — an empty/short secret would make the public ingress signature forgeable.
+  // Omit to auto-generate a random 64-hex secret.
+  @IsOptional()
+  @IsString()
+  @MinLength(16, { message: 'secret must be at least 16 characters' })
+  @MaxLength(512)
+  secret?: string;
 
   @IsOptional()
   @IsObject()

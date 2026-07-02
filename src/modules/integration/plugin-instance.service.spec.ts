@@ -34,6 +34,15 @@ describe('PluginInstanceService', () => {
     expect((await service.resolve('chatwoot', 'acct1'))?.id).toBe('chatwoot:acct1');
     expect(await service.resolve('chatwoot', 'nope')).toBeNull();
   });
+
+  it('accepts a valid operator secret, rejects short/empty, else auto-generates', async () => {
+    const ok = await service.create('chatwoot-adapter', 'a1', { secret: 'cw-secret-16chars!' });
+    expect(ok.secret).toBe('cw-secret-16chars!');
+    await expect(service.create('chatwoot-adapter', 'a2', { secret: '   ' })).rejects.toThrow(/secret/i);
+    await expect(service.create('chatwoot-adapter', 'a3', { secret: 'short' })).rejects.toThrow(/16/);
+    const gen = await service.create('chatwoot-adapter', 'a4', {});
+    expect(gen.secret).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe('PluginInstanceService provisioning', () => {
