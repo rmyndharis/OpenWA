@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
-import type { PluginConfigField, PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
+import type { PluginConfigSchema } from '../../core/plugins/plugin.interfaces';
 
 const SECRET_MASK = '***';
 
@@ -12,7 +12,9 @@ const SECRET_MASK = '***';
 function normalizeSecret(supplied?: string): string {
   if (supplied === undefined) return randomBytes(32).toString('hex');
   const s = supplied.trim();
-  if (s.length < 16) throw new Error('instance secret must be a non-empty string of at least 16 characters');
+  if (s.length < 16) {
+    throw new BadRequestException('instance secret must be a non-empty string of at least 16 characters');
+  }
   return s;
 }
 
@@ -23,10 +25,13 @@ function redactSecrets(
   config: Record<string, unknown> | null,
   schema?: PluginConfigSchema,
 ): Record<string, unknown> | null {
-  if (!config || !schema?.properties) return config;
+  if (!config) return config;
+  // Schema unavailable (plugin unloaded / failed to load) — we can't tell which fields are secret, so
+  // fail closed by masking every value rather than risk leaking a credential such as an API token.
+  if (!schema?.properties) return Object.fromEntries(Object.keys(config).map(key => [key, SECRET_MASK]));
   const out: Record<string, unknown> = { ...config };
   for (const [key, field] of Object.entries(schema.properties)) {
-    if (key in out && (field as PluginConfigField).secret) out[key] = SECRET_MASK;
+    if (key in out && field.secret) out[key] = SECRET_MASK;
   }
   return out;
 }

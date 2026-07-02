@@ -47,6 +47,17 @@ describe('PluginInstanceService', () => {
     expect(config.accountId).toBe(3);
   });
 
+  it('masks the ENTIRE config when the schema is unavailable, e.g. the plugin is unloaded (fail-closed)', () => {
+    const inst = {
+      id: 'p:i',
+      secret: 'x',
+      config: { apiToken: 'live-token', accountId: 3 },
+    } as unknown as PluginInstance;
+    const config = service.maskedView(inst, undefined).config as Record<string, unknown>;
+    expect(config.apiToken).toBe('***');
+    expect(config.accountId).toBe('***');
+  });
+
   it('resolves an existing instance and returns null for an unknown one', async () => {
     await service.mint('chatwoot', 'acct1', {});
     expect((await service.resolve('chatwoot', 'acct1'))?.id).toBe('chatwoot:acct1');
