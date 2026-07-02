@@ -14,7 +14,7 @@ import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
 import { assertBase64WithinMediaCap } from './media-cap.util';
-import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderTemplate } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -52,7 +52,7 @@ export function resolveFinalBatchStatus(
  */
 export function sanitizeBatchError(error: unknown): { code: string; message: string } {
   if (error instanceof SsrfBlockedError) {
-    return { code: 'SEND_BLOCKED', message: 'Destination address is not allowed' };
+    return { code: 'SEND_BLOCKED', message: SSRF_BLOCKED_CLIENT_MESSAGE };
   }
   return { code: 'SEND_FAILED', message: error instanceof Error ? error.message : String(error) };
 }

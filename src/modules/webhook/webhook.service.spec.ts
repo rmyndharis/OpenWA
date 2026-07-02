@@ -153,13 +153,13 @@ describe('WebhookService', () => {
 
     // ── validate URL at registration, default-on ──────────
 
-    it('rejects an internal webhook URL at registration with 400 (protection on by default)', async () => {
+    it('rejects an internal webhook URL at registration with 400 and a generic message (no IP leak)', async () => {
       const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
       delete process.env.WEBHOOK_SSRF_PROTECT; // default → on
       try {
-        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).rejects.toBeInstanceOf(
-          BadRequestException,
-        );
+        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).rejects.toMatchObject({
+          response: { message: 'Destination address is not allowed' },
+        });
         expect(repository.create).not.toHaveBeenCalled();
       } finally {
         if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;

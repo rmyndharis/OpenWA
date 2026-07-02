@@ -333,12 +333,15 @@ describe('MessageService', () => {
       );
     });
 
-    it('maps a blocked-media-URL SSRF error to HTTP 400', async () => {
-      mockEngine.sendImageMessage.mockRejectedValueOnce(new SsrfBlockedError('Blocked internal address: 127.0.0.1'));
+    it('maps a blocked-media-URL SSRF error to HTTP 400 with a generic message (no internal IP leak)', async () => {
+      mockEngine.sendImageMessage.mockRejectedValueOnce(
+        new SsrfBlockedError('Host x resolves to a blocked internal address: 169.254.169.254'),
+      );
 
+      // Generic client message — the resolved internal IP must NOT reach the caller (recon oracle).
       await expect(
         service.sendImage('sess-1', { chatId: '628123456789@c.us', url: 'http://127.0.0.1/x.png' }),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toMatchObject({ response: { message: 'Destination address is not allowed' } });
     });
 
     it('rejects a base64 image over the media cap before sending or persisting', async () => {

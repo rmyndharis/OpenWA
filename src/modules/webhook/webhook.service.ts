@@ -21,6 +21,7 @@ import {
   withSafeFetch,
   isSsrfProtectionEnabled,
   SsrfBlockedError,
+  SSRF_BLOCKED_CLIENT_MESSAGE,
 } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 
@@ -76,7 +77,9 @@ export class WebhookService {
       await assertSafeFetchUrl(url);
     } catch (error) {
       if (error instanceof SsrfBlockedError) {
-        throw new BadRequestException(error.message);
+        // The raw message names the resolved internal IP (a recon oracle): log it server-side, return generic.
+        this.logger.warn(`Webhook URL rejected by SSRF guard: ${error.message}`);
+        throw new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE);
       }
       throw error;
     }

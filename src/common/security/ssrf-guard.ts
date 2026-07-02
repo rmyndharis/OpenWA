@@ -12,6 +12,14 @@ export class SsrfBlockedError extends Error {
 }
 
 /**
+ * Generic, non-revealing message to return to an API caller when an outbound URL is SSRF-blocked. The
+ * raw SsrfBlockedError message names the resolved internal IP ("… resolves to a blocked internal address:
+ * 10.0.0.5"), which is a recon / DNS-rebind oracle, so it must never reach a client — log the detail
+ * server-side and return this instead. Shared by the single-send, bulk, and webhook-registration paths.
+ */
+export const SSRF_BLOCKED_CLIENT_MESSAGE = 'Destination address is not allowed';
+
+/**
  * Outbound webhook SSRF protection. Default ON; disable only with an explicit
  * WEBHOOK_SSRF_PROTECT=false (e.g. a closed network that delivers to internal sidecars — prefer
  * the SSRF_ALLOWED_HOSTS escape-hatch instead of disabling protection wholesale).
