@@ -915,6 +915,14 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           priority,
         );
       },
+      // In-process built-ins are not reached by the ingress pipeline (it dispatches to sandbox hosts),
+      // so fail loud rather than silently never firing. Sandboxed plugins get a real registerWebhook
+      // from the worker bootstrap.
+      registerWebhook: () => {
+        throw new PluginCapabilityError(
+          `Plugin ${plugin.manifest.id}: registerWebhook (ingress) is only available to sandboxed plugins`,
+        );
+      },
       messages: {
         sendText: async (sessionId, chatId, text) => {
           // Validate permission + scope + that the session has a live engine BEFORE MessageService

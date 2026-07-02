@@ -8,6 +8,11 @@ import type { MessageResponseDto } from '../../modules/message/dto';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import type { PluginNetRequestInit, PluginNetResponse } from './plugin-net';
 import type { HandoverState } from '../../modules/integration/entities/conversation-mapping.entity';
+import type { WebhookRequest, WebhookResponse, WebhookHandler } from './sandbox/worker-webhooks';
+
+// Re-export the ingress webhook types on the public SDK surface so plugin authors can type their
+// handler without importing from sandbox internals.
+export type { WebhookRequest, WebhookResponse, WebhookHandler };
 
 // ============================================================================
 // Plugin Types
@@ -316,6 +321,10 @@ export interface PluginContext {
 
   // Register a hook handler
   registerHook: (event: HookEvent, handler: HookHandler, priority?: number) => void;
+
+  // Claim an inbound ingress webhook route (requires the `webhook:ingress` permission). Delivered only
+  // to sandboxed plugins via the ingress pipeline; in-process built-ins cannot receive ingress.
+  registerWebhook: (route: string, handler: WebhookHandler) => void;
 
   // Curated write surface — routes through MessageService (persistence preserved).
   messages: PluginMessagingCapability;

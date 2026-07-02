@@ -6,11 +6,12 @@ const MAX_TIMEOUT_MS = 30000;
 /** Cap the buffered response body so a hostile endpoint can't exhaust host memory through a plugin. */
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 
-/** Request a sandboxed plugin may make through ctx.net.fetch. Body is a string (text/JSON APIs). */
+/** Request a sandboxed plugin may make through ctx.net.fetch. Body may be a string (text/JSON) or raw
+ * bytes (binary uploads, e.g. multipart) — a Uint8Array survives the worker structuredClone bridge. */
 export interface PluginNetRequestInit {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | Uint8Array;
   timeoutMs?: number;
 }
 
