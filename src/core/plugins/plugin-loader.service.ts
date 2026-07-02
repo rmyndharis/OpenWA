@@ -973,17 +973,21 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       } satisfies PluginEngineReadCapability,
       net: {
         fetch: async (url, init) => {
-          // Two gates: the declared permission, then the effective host allowlist (manifest net.allow
-          // plus the hosts of any net.allowConfigHosts config keys, resolved for the firing session). The
-          // SSRF guard inside performPluginFetch still blocks internal IPs even when the host is allowed.
+          // Two gates: the declared permission, then the effective host allowlist = manifest net.allow
+          // UNION the hosts of net.allowConfigHosts keys across the base config AND every per-session
+          // override. The host gate has no firing-session context for a sandboxed plugin's cap round-trip,
+          // so admit every operator-configured tenant host (all public + still SSRF-guarded at connect)
+          // rather than resolving a single, possibly wrong (base-only), one. The SSRF guard inside
+          // performPluginFetch still blocks internal IPs even when the host is allowlisted.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.NET_FETCH);
-          const cfg = resolvePluginConfig(
-            plugin.config,
-            plugin.sessionConfig,
-            this.hookSession.getStore()?.sessionId,
-            plugin.manifest.sessionScoped !== false,
-          );
-          const allow = effectiveNetAllow(plugin.manifest.net?.allow, plugin.manifest.net?.allowConfigHosts, cfg);
+          const netConfigs = [plugin.config ?? {}, ...Object.values(plugin.sessionConfig ?? {})];
+          const allow = [
+            ...new Set(
+              netConfigs.flatMap(cfg =>
+                effectiveNetAllow(plugin.manifest.net?.allow, plugin.manifest.net?.allowConfigHosts, cfg),
+              ),
+            ),
+          ];
           if (!isNetHostAllowed(allow, url)) {
             throw new PluginCapabilityError(
               `Plugin ${plugin.manifest.id} may not fetch ${url} — add its host to net.allow or net.allowConfigHosts`,

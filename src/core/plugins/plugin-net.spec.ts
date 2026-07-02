@@ -111,4 +111,10 @@ describe('effectiveNetAllow', () => {
     expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'http://x' })).toEqual([]); // https-only
     expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://u:p@x' })).toEqual([]); // no credentials
   });
+  it("never admits the '*' wildcard sentinel from a config value, and preserves an explicit port", () => {
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://*' })).toEqual([]); // bare '*' would open all hosts
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://%2A' })).toEqual([]); // encoded '*' too
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://*:443/x' })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://host.com:8443' })).toEqual(['host.com:8443']);
+  });
 });

@@ -45,7 +45,8 @@ export function effectiveNetAllow(
     try {
       const u = new URL(raw);
       if (u.protocol !== 'https:' || u.username || u.password) continue;
-      out.push(u.hostname);
+      if (u.hostname.includes('*')) continue; // never let a config value inject the '*' wildcard sentinel
+      out.push(u.host); // host:port when a port is set, else bare host
     } catch {
       // Not a URL — skip.
     }
