@@ -8,6 +8,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { EngineFactory } from '../../engine/engine.factory';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
@@ -42,6 +43,7 @@ describe('SessionService', () => {
   let webhookService: jest.Mocked<Partial<WebhookService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
+  let lidMappingStore: jest.Mocked<Partial<LidMappingStoreService>>;
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -117,6 +119,12 @@ describe('SessionService', () => {
       get: jest.fn().mockImplementation(<T>(_key: string, def?: T): T => def as T),
     };
 
+    lidMappingStore = {
+      remember: jest.fn().mockResolvedValue(undefined),
+      getCached: jest.fn().mockReturnValue(undefined),
+      lidsForPhone: jest.fn().mockReturnValue([]),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
@@ -137,6 +145,7 @@ describe('SessionService', () => {
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
         { provide: ConfigService, useValue: configService },
+        { provide: LidMappingStoreService, useValue: lidMappingStore },
       ],
     }).compile();
 
@@ -1292,6 +1301,9 @@ describe('SessionService', () => {
         expect(received).toHaveLength(1);
         expect((received[0][2] as IncomingMessage).senderPhone).toBe('628111222333');
         expect(mockEngine.resolveContactPhone).toHaveBeenCalledWith('111@lid');
+        // #583 R3 Phase 2: the resolved inbound @lid -> phone is persisted so the read-path can bridge
+        // this contact's @lid and @c.us rows even if the operator never sent to them.
+        expect(lidMappingStore.remember).toHaveBeenCalledWith('111', '628111222333', expect.any(String));
       } finally {
         delete process.env.RESOLVE_LID_TO_PHONE;
       }

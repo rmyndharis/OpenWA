@@ -506,7 +506,14 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendChatState(chatId: string, state: ChatState): Promise<void> {
     this.ensureReady();
     const presence = state === 'typing' ? 'composing' : state === 'recording' ? 'recording' : 'paused';
-    await this.sock!.sendPresenceUpdate(presence, chatId);
+    try {
+      await this.sock!.sendPresenceUpdate(presence, chatId);
+    } catch (error) {
+      // Presence is best-effort — a failure here must never surface as a 500 on the direct typing
+      // endpoint or MCP tool (mirrors the whatsapp-web.js adapter; #583 R4). A migrated contact can
+      // yield `No LID for user` on the presence path even when the actual send succeeds.
+      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, String(error));
+    }
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {

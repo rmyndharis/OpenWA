@@ -1391,6 +1391,78 @@ describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(getNumberId).toHaveBeenCalledTimes(1);
   });
+
+  it('reply routes its send leg to the resolved @lid (#583 R1)', async () => {
+    const reply = jest.fn().mockResolvedValue(sentMessage);
+    const quoted = { id: { _serialized: 'Q1' }, reply };
+    const getChatById = jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue([quoted]) });
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    await ready({ getChatById, getNumberId }).replyToMessage('529934031058@c.us', 'Q1', 'hi');
+    expect(reply).toHaveBeenCalledWith('hi', '159442138038327@lid');
+  });
+
+  it('reply is unchanged for a non-migrated contact (#583 R1)', async () => {
+    const reply = jest.fn().mockResolvedValue(sentMessage);
+    const quoted = { id: { _serialized: 'Q1' }, reply };
+    const getChatById = jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue([quoted]) });
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '628@c.us' });
+    await ready({ getChatById, getNumberId }).replyToMessage('628@c.us', 'Q1', 'hi');
+    expect(reply).toHaveBeenCalledWith('hi', '628@c.us');
+  });
+
+  it('forward routes to the resolved @lid and recovers the id from that chat (#583 R1)', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const srcMsg = { id: { _serialized: 'M1' }, forward };
+    const srcChat = { fetchMessages: jest.fn().mockResolvedValue([srcMsg]) };
+    const destChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'OUT1' }, timestamp: 123 }]) };
+    const getChatById = jest.fn().mockResolvedValueOnce(srcChat).mockResolvedValueOnce(destChat);
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const res = await ready({ getChatById, getNumberId }).forwardMessage('src@c.us', '529934031058@c.us', 'M1');
+    expect(forward).toHaveBeenCalledWith('159442138038327@lid');
+    expect(getChatById).toHaveBeenNthCalledWith(2, '159442138038327@lid');
+    expect(res.id).toBe('OUT1');
+  });
+});
+
+describe('LID mapping persistence to LidMappingStore (#583 R3)', () => {
+  const readyWithStore = (client: unknown, lidMappingStore: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 's1',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+      lidMappingStore: lidMappingStore as never,
+    });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+  const makeStore = (remember: jest.Mock) => ({ remember, getCached: () => undefined, lidsForPhone: () => [] });
+
+  it('persists phone->lid (bare digits) when a contact resolves to an @lid', async () => {
+    const remember = jest.fn().mockResolvedValue(undefined);
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await readyWithStore({ getNumberId, sendMessage }, makeStore(remember)).sendTextMessage('529934031058@c.us', 'hi');
+    expect(remember).toHaveBeenCalledWith('159442138038327', '529934031058', 's1');
+  });
+
+  it('does not persist a confirmed non-migrated (@c.us) resolution', async () => {
+    const remember = jest.fn().mockResolvedValue(undefined);
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '628@c.us' });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await readyWithStore({ getNumberId, sendMessage }, makeStore(remember)).sendTextMessage('628@c.us', 'hi');
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('a rejecting remember never fails the send (fire-and-forget)', async () => {
+    const remember = jest.fn().mockRejectedValue(new Error('db down'));
+    const getNumberId = jest.fn().mockResolvedValue({ _serialized: '159442138038327@lid' });
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await expect(
+      readyWithStore({ getNumberId, sendMessage }, makeStore(remember)).sendTextMessage('529934031058@c.us', 'hi'),
+    ).resolves.toBeDefined();
+  });
 });
 
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {

@@ -52,7 +52,7 @@ export class EngineFactory implements OnModuleInit {
       provides: ['whatsapp-engine'],
     };
 
-    const wwjsPlugin = new WhatsAppWebJsPlugin(engineConfig);
+    const wwjsPlugin = new WhatsAppWebJsPlugin(engineConfig, this.lidMappingStore);
     this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin, engineConfig);
 
     // Register Baileys as a second built-in engine plugin. Same opaque engine blob; the plugin
@@ -147,6 +147,7 @@ export class EngineFactory implements OnModuleInit {
             type: options.proxyType ?? 'http',
           }
         : undefined,
+      lidMappingStore: this.lidMappingStore,
     });
   }
 

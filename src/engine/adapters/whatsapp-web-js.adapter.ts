@@ -34,7 +34,8 @@ import {
   ReactionEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { resolveWebVersionPin } from '../wa-web-version';
-import { isChannelJid } from '../identity/wa-id';
+import { isChannelJid, userPart } from '../identity/wa-id';
+import { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -139,6 +140,9 @@ export interface WhatsAppWebJsConfig {
     url: string;
     type: 'http' | 'https' | 'socks4' | 'socks5';
   };
+  // Shared lid<->phone table. Threaded in so the wwjs engine can persist the `phone -> lid` pairs it
+  // learns while resolving sends, letting the message read-path bridge `@c.us`/`@lid` rows (#583 R3).
+  lidMappingStore?: LidMappingStore;
 }
 
 const READY_RECONCILE_INTERVAL_MS = 2000;
@@ -844,6 +848,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       const wid = await this.getNumberId(chatId);
       if (wid) {
         this.resolvedSendIds.set(chatId, wid);
+        if (wid.endsWith('@lid')) {
+          // Persist the learned phone -> lid so the message read-path (resolveJidCandidates) can
+          // bridge this contact's `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment
+          // (#583 R3). Fire-and-forget: resolution (and the send) must never block/fail on the write.
+          void this.config.lidMappingStore
+            ?.remember(userPart(wid), userPart(chatId), this.config.sessionId)
+            ?.catch(() => {});
+        }
         return wid;
       }
       return chatId;
@@ -1099,7 +1111,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       throw new MessageNotFoundError(quotedMsgId);
     }
 
-    const msg = await quotedMsg.reply(text);
+    // Reply's send leg hits the same `No LID for user` path as a normal send for a migrated contact,
+    // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
+    // accepts an explicit target (#583 R1).
+    const msg = await this.sendResolved(chatId, to => quotedMsg.reply(text, to));
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
@@ -1116,7 +1131,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       throw new MessageNotFoundError(messageId);
     }
 
-    await msgToForward.forward(toChatId);
+    // The forward's send leg fails with `No LID for user` for a LID-migrated destination, so resolve
+    // it (and self-heal a stale mapping) via sendResolved. Capture the id actually sent to so the
+    // id-recovery below reads back from the SAME (resolved) chat, not the raw @c.us (#583 R1).
+    let resolvedTo = toChatId;
+    await this.sendResolved(toChatId, to => {
+      resolvedTo = to;
+      return msgToForward.forward(to);
+    });
 
     // whatsapp-web.js's forward() returns void, so BEST-EFFORT recover the REAL id of the sent copy by
     // reading it back from the destination chat (the most recent outgoing message). The delivery-ack
@@ -1127,7 +1149,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // which could cross-drive another row's delivery status. Concurrent forwards to the same chat may
     // mis-identify the copy — acceptable for delivery-status accuracy.
     try {
-      const destChat = await this.client!.getChatById(toChatId);
+      const destChat = await this.client!.getChatById(resolvedTo);
       const sentByMe = (await destChat?.fetchMessages({ limit: 5, fromMe: true })) ?? [];
       let sent: (typeof sentByMe)[number] | undefined;
       for (const m of sentByMe) {
@@ -1263,6 +1285,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // Reactions (Phase 3)
   async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
     this.ensureReady();
+    // NOTE: do NOT resolve chatId to @lid here — whatsapp-web.js reacts using the found message's own
+    // id, not this chatId, so LID-resolving the lookup gives no send benefit and would miss a message
+    // stored under the pre-migration @c.us chat (#583 R1 review).
     const chat = await this.client!.getChatById(chatId);
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId);
@@ -1511,6 +1536,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // Delete Message
   async deleteMessage(chatId: string, messageId: string, forEveryone: boolean = true): Promise<void> {
     this.ensureReady();
+    // NOTE: do NOT resolve chatId to @lid here — delete operates on the found message's own key, not
+    // this chatId, so LID-resolving the lookup gives no benefit and would miss a message stored under
+    // the pre-migration @c.us chat (#583 R1 review).
     const chat = await this.client!.getChatById(chatId);
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId || m.id.id === messageId);

@@ -611,6 +611,12 @@ describe('BaileysAdapter messaging', () => {
     expect(fakeSock.sendPresenceUpdate).toHaveBeenCalledWith('composing', '628111@s.whatsapp.net');
   });
 
+  it('sendChatState swallows a presence failure (best-effort, mirrors wwjs) (#583 R4)', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendPresenceUpdate.mockRejectedValueOnce(new Error('No LID for user'));
+    await expect(adapter.sendChatState('628111@s.whatsapp.net', 'typing')).resolves.toBeUndefined();
+  });
+
   it('messaging methods throw EngineNotReadyError before the connection is open', async () => {
     const adapter = newAdapter();
     await adapter.initialize({});

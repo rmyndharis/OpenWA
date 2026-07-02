@@ -241,7 +241,15 @@ export function Chats() {
       setChats(prevChats => {
         const chatIndex = prevChats.findIndex(c => c.id === newMsg.chatId);
         if (chatIndex === -1) {
-          void loadChats(selectedSessionId);
+          // A message for a chat not in the sidebar. Suppress the refetch ONLY for an outgoing echo
+          // addressed as `@lid`: a LID-migrated contact echoes back `@lid` while the user sent to
+          // `@c.us`, and the sent bubble is already reconciled in the active chat, so refetching on
+          // every such send just churns the chat list (#583 R2). Incoming messages and ordinary
+          // outgoing sends to a genuinely new chat still refetch so the sidebar stays complete.
+          const isMigratedEcho = newMsg.fromMe && (newMsg.chatId?.endsWith('@lid') ?? false);
+          if (!isMigratedEcho) {
+            void loadChats(selectedSessionId);
+          }
           return prevChats;
         }
 

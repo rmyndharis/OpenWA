@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Replying to and forwarding to a LID-migrated contact no longer fail with HTTP 500 on the whatsapp-web.js engine.** These paths sent to the phone id (`@c.us`) like the original send bug (#573), so a contact WhatsApp had migrated to `@lid` rejected them with `No LID for user`. They now resolve the recipient the same way as a normal send (including the self-heal retry), and a forward reads back its delivered id from the resolved chat so delivery status still reconciles. (#583)
+- **The typing/presence endpoint no longer returns HTTP 500 on the Baileys engine when a presence update fails.** Presence is best-effort; a failure (e.g. `No LID for user` for a migrated contact) is now caught and logged at `WARN` and the request succeeds, matching the whatsapp-web.js engine. This also covers the presence agent tool. (#583)
+- **Chat history for a LID-migrated contact is no longer split across two entries on the whatsapp-web.js engine.** The engine now records the `phone ↔ lid` mapping it learns (when resolving a send, and when resolving an inbound `@lid` sender's number), so the messages API bridges a contact's `@c.us` and `@lid` rows into one conversation — previously only the Baileys engine populated this mapping. (#583)
+- **The dashboard chat list no longer refetches on every message sent to a LID-migrated contact.** The outgoing echo can arrive addressed as `@lid` while the open chat is `@c.us`; the sent message is already shown via the send response, so the sidebar no longer triggers a full reload for an outgoing echo with no matching chat. (#583)
+
 ## [0.7.20] - 2026-07-02
 
 ### Fixed

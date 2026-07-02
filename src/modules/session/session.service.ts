@@ -17,6 +17,8 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { userPart } from '../../engine/identity/wa-id';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import {
@@ -144,6 +146,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly hookManager: HookManager,
     @Optional()
     private readonly configService?: ConfigService,
+    // Shared lid<->phone table (global). Used to persist an inbound @lid sender's resolved phone so
+    // an inbound-only migrated contact's `@lid` and `@c.us` rows bridge in the read-path (#583 R3 Ph2).
+    @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
   ) {}
 
   /**
@@ -1266,6 +1272,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       }
     }
     this.lidPhoneCache.set(key, phone);
+    // Persist a real @lid -> phone resolution so the read-path can bridge this contact's `@lid` and
+    // `@c.us` rows even when the operator never sent to them (#583 R3 Phase 2). Reuses the resolution
+    // above — no extra network call — and is fire-and-forget so dispatch never blocks/fails on it.
+    if (phone) {
+      void this.lidMappingStore?.remember(userPart(contactId), phone, sessionId)?.catch(() => {});
+    }
     return phone;
   }
 
