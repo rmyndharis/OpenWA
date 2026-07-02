@@ -21,6 +21,7 @@ import {
   IPlugin,
   PluginType,
   PluginLogger,
+  validateIngressManifest,
 } from './plugin.interfaces';
 import { isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
@@ -203,6 +204,10 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     if (!manifest.id || !manifest.name || !manifest.version || !manifest.type || !manifest.main) {
       throw new Error(`Invalid manifest: missing required fields`);
     }
+    // Reject a malformed ingress declaration (SDK-major mismatch, missing webhook:ingress permission,
+    // duplicate/empty routes, non-positive toleranceSec) at load time instead of letting it silently
+    // load and become provisionable. No-op for plugins that declare no ingress.
+    validateIngressManifest(manifest);
 
     // Check if plugin already loaded
     if (this.plugins.has(manifest.id)) {
@@ -973,8 +978,13 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
         },
         // Re-establish the in-flight hook context around the downstream send so an adapter that calls
         // conversation.send from within its own ingress handling can't echo-loop back into itself via
-        // its own outbound message:sending hook (mirrors the sandboxed worker-cap wrap below).
-        runGuarded: (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
+        // its own outbound message:sending hook. Gate on an ALREADY-in-flight event (mirrors the
+        // worker-cap wrap's `inFlight.length > 0` check): a plain top-level send must NOT suppress
+        // message:sending for unrelated observers (audit/moderation) — only genuine re-entrancy does.
+        runGuarded: (events, run) =>
+          (events as HookEvent[]).some(e => this.hookManager.isInFlight(e))
+            ? this.hookManager.runInFlight(events as HookEvent[], run)
+            : run(),
         sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
         reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
       } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,

@@ -119,6 +119,13 @@ export class HookManager {
     return this.inFlightEvents.run(merged, fn);
   }
 
+  /** True if `event` is already in-flight on the active async context (an ancestor handler is running
+   *  it). Lets a caller wrap a capability in {@link runInFlight} ONLY for genuine re-entrancy, instead
+   *  of unconditionally seeding the event and suppressing it for unrelated observers on a top-level call. */
+  isInFlight(event: HookEvent): boolean {
+    return this.inFlightEvents.getStore()?.has(event) ?? false;
+  }
+
   private async runHandlers<T>(
     event: HookEvent,
     data: T,

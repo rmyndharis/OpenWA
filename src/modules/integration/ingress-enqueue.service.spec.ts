@@ -58,4 +58,16 @@ describe('IngressEnqueueService', () => {
 
     await expect(svc.enqueue(data, 'd1')).resolves.toBeUndefined();
   });
+
+  it('falls back to inline dispatch (never throws) when queue.add() fails, e.g. Redis unreachable', async () => {
+    // Without this, the throw would 500 the ingress request; the provider retries, dedup returns
+    // "duplicate", and the already-persisted event is lost forever (no job, no DLQ row).
+    (config.get as jest.Mock).mockReturnValue(true);
+    queue.add.mockRejectedValue(new Error('Redis connection is closed'));
+    const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, queue as never);
+
+    await expect(svc.enqueue(data, 'd1')).resolves.toBeUndefined();
+    expect(queue.add).toHaveBeenCalledWith('ingress', data, { jobId: 'd1' });
+    expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);
+  });
 });

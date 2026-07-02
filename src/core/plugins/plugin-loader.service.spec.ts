@@ -294,6 +294,27 @@ describe('PluginLoaderService — uninstall', () => {
     );
     await expect(loader.uninstallPlugin('core-engine')).rejects.toThrow(/built-in/i);
   });
+
+  it('rejects a plugin that declares ingress routes but omits the webhook:ingress permission', () => {
+    // loadPlugin must run validateIngressManifest, so a malformed ingress declaration fails to load
+    // rather than silently loading and becoming provisionable.
+    const dir = path.join(pluginsDir, 'bad-ingress');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        id: 'bad-ingress',
+        name: 'Bad Ingress',
+        version: '1.0.0',
+        type: 'extension',
+        main: 'index.js',
+        ingress: [{ route: 'events', signature: { headerName: 'X-Sig', scheme: 'hmac-sha256' } }],
+        // permissions intentionally omitted → validateIngressManifest must reject
+      }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+    expect(() => loader.loadPlugin(dir)).toThrow(/webhook:ingress/i);
+  });
 });
 
 describe('PluginLoaderService — skips dot-prefixed directories on load (crash-leftover .bak)', () => {

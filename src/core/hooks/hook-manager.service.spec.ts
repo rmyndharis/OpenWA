@@ -2,7 +2,7 @@
 // so the no-await rule doesn't apply to them here.
 /* eslint-disable @typescript-eslint/require-await */
 import { HookManager } from './hook-manager.service';
-import { HookContext, HookResult } from './hook.interfaces';
+import { HookContext, HookResult, HookEvent } from './hook.interfaces';
 
 describe('HookManager', () => {
   let hm: HookManager;
@@ -183,5 +183,45 @@ describe('HookManager re-entrancy guard', () => {
     await manager.execute('message:received', { n: 1 }, { source: 'test' });
 
     expect(seen).toEqual(['received', 'sent']);
+  });
+});
+
+describe('HookManager.isInFlight + selective re-entrancy guard (conversation.send pattern)', () => {
+  const SENDING: HookEvent[] = ['message:sending'];
+
+  it('isInFlight is false at the top level and true only inside a matching in-flight context', () => {
+    const hm = new HookManager();
+    expect(hm.isInFlight('message:sending')).toBe(false);
+    let matching = false;
+    let unrelated = false;
+    hm.runInFlight(SENDING, () => {
+      matching = hm.isInFlight('message:sending');
+      unrelated = hm.isInFlight('message:received');
+    });
+    expect(matching).toBe(true);
+    expect(unrelated).toBe(false);
+  });
+
+  it('a top-level guarded send still fires message:sending for unrelated observers; genuine re-entrancy suppresses it', async () => {
+    const hm = new HookManager();
+    let observerCalls = 0;
+    hm.register('audit', 'message:sending', async ctx => {
+      observerCalls++;
+      return { continue: true, data: ctx.data };
+    });
+    // Mirrors the plugin-loader binding for ctx.conversations.send: guard ONLY on an already-in-flight event.
+    const runGuarded = <T>(events: HookEvent[], run: () => Promise<T>): Promise<T> =>
+      events.some(e => hm.isInFlight(e)) ? hm.runInFlight(events, run) : run();
+
+    // Top-level send: an unrelated audit/moderation observer MUST see the outbound message:sending.
+    await runGuarded(SENDING, () => hm.execute('message:sending', {}, { source: 'send' }));
+    expect(observerCalls).toBe(1);
+
+    // A send issued from WITHIN a message:sending handler's context (echo-loop) MUST be suppressed.
+    observerCalls = 0;
+    await hm.runInFlight(SENDING, () =>
+      runGuarded(SENDING, () => hm.execute('message:sending', {}, { source: 'reentrant-send' })),
+    );
+    expect(observerCalls).toBe(0);
   });
 });

@@ -29,11 +29,29 @@ export class IngressEnqueueService {
     const useQueue = queueEnabled && !!this.ingressQueue;
 
     if (useQueue && this.ingressQueue) {
-      // jobId = deliveryId gives BullMQ exactly-once enqueue semantics.
-      await this.ingressQueue.add('ingress', data, { jobId });
-      return;
+      try {
+        // jobId = deliveryId gives BullMQ exactly-once enqueue semantics.
+        await this.ingressQueue.add('ingress', data, { jobId });
+        return;
+      } catch (err) {
+        // Redis unreachable (enableOfflineQueue:false makes add() reject) — fall through to inline
+        // dispatch. Without this, the already-persisted event would be lost forever: the throw would
+        // 500 the ingress request, the provider retries, dedup returns "duplicate", and no job was
+        // ever enqueued (no DLQ row either). Mirrors WebhookService's queue-add fallback.
+        this.logger.error(
+          'Ingress queue add failed; dispatching inline',
+          err instanceof Error ? err.message : String(err),
+          {
+            pluginId: data.pluginId,
+            instanceId: data.instanceId,
+            route: data.route,
+            deliveryId: data.deliveryId,
+            action: 'ingress_queue_add_failed',
+          },
+        );
+      }
     }
-    // Queue disabled: dispatch inline AFTER the ingress_events row was persisted
+    // Queue disabled OR queue.add() failed: dispatch inline AFTER the ingress_events row was persisted
     // (persist-before-dispatch still holds), mirroring the webhook direct-delivery fallback.
     try {
       await this.loader.dispatchWebhookForInstance(data);
