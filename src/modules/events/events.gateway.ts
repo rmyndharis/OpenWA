@@ -11,6 +11,8 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveCorsPolicy } from '../../config/bootstrap-security';
 
 /**
@@ -64,23 +66,28 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   private logger = new Logger('EventsGateway');
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly auditService: AuditService,
+  ) {}
 
   afterInit() {
     this.logger.log('WebSocket Gateway initialized');
   }
 
   async handleConnection(client: Socket) {
-    // Prefer Socket.IO's `auth` field (not logged in URLs), then the header; the query
-    // param is a deprecated transition fallback (the key leaks into access logs).
+    // Accept the key only via Socket.IO's `auth` field or the header — never the query string, which
+    // leaks the credential into proxy/access logs. (The deprecated `?apiKey=` fallback was removed.)
     const handshakeAuth = client.handshake.auth as { apiKey?: string } | undefined;
-    const apiKey =
-      handshakeAuth?.apiKey ||
-      (client.handshake.headers['x-api-key'] as string) ||
-      (client.handshake.query.apiKey as string);
+    const apiKey = handshakeAuth?.apiKey || (client.handshake.headers['x-api-key'] as string);
 
     if (!apiKey) {
       this.logger.warn(`Client ${client.id} rejected: No API key provided`);
+      void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+        ipAddress: client.handshake.address,
+        metadata: { surface: 'websocket' },
+        errorMessage: 'missing API key',
+      });
       client.emit('message', this.createError('UNAUTHORIZED', 'API key required'));
       client.disconnect();
       return;
@@ -99,6 +106,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     } catch (error) {
       this.logger.warn(`Client ${client.id} rejected: Auth error`, {
         error: error instanceof Error ? error.message : String(error),
+      });
+      // Audit the rejected credential like the REST guard does, so probing over the WS surface leaves
+      // a forensic trail too. Fire-and-forget: audit logging must never affect the rejection path.
+      void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+        ipAddress: client.handshake.address,
+        metadata: { surface: 'websocket' },
+        errorMessage: error instanceof Error ? error.message : String(error),
       });
       client.emit('message', this.createError('UNAUTHORIZED', 'Authentication failed'));
       client.disconnect();

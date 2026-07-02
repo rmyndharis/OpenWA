@@ -124,6 +124,16 @@ export function createIpThrottle(ipRateLimiter: KeyRateLimiter): RequestHandler 
   };
 }
 
+/**
+ * Resolve the MCP read-only flag with a SECURE default: read-only unless the operator explicitly opts
+ * out with MCP_READONLY=false. Previously an unset MCP_READONLY defaulted to read-WRITE, silently
+ * exposing state-changing tools (send messages, group ops) to any MCP caller the moment MCP_ENABLED
+ * was on. An explicit `options.readOnly` (tests / programmatic mounts) still wins.
+ */
+export function resolveMcpReadOnly(optionsReadOnly?: boolean): boolean {
+  return optionsReadOnly ?? process.env.MCP_READONLY !== 'false';
+}
+
 export function mountMcpServer(
   httpAdapter: HttpAdapter,
   registry: ToolRegistryService,
@@ -134,7 +144,7 @@ export function mountMcpServer(
 ): void {
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
   const serverInfo = options.serverInfo ?? { name: 'openwa', version: '0.0.0' };
-  const readOnly = options.readOnly ?? process.env.MCP_READONLY === 'true';
+  const readOnly = resolveMcpReadOnly(options.readOnly);
 
   // Eagerly compute the tool list at mount time to validate the registry is populated
   // and to emit the log line once. The actual McpServer is re-created per request to

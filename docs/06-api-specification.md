@@ -20,7 +20,7 @@ A global API-key guard protects every route unless it is explicitly marked **pub
 X-API-Key: owa_k1_your-api-key-here
 ```
 
-> **REST auth is header-only.** A query-parameter API key is **not** accepted on REST routes. The only place an `?apiKey=` query value is honoured is the WebSocket (Socket.IO) handshake — see §6.5 Real-time API — which accepts the key via the handshake `auth.apiKey` field, the `X-API-Key` header, or an `?apiKey=` query string. Do not put the key in a REST URL.
+> **Auth is header-only (never in a URL).** A query-parameter API key is **not** accepted anywhere. REST routes take the key via the `X-API-Key` header; the WebSocket (Socket.IO) handshake — see §6.5 Real-time API — accepts it via the handshake `auth.apiKey` field or the `X-API-Key` header. The former `?apiKey=` query fallback was **removed** (it leaked the credential into proxy/access logs). Never put the key in a URL.
 
 The metrics endpoint is the lone exception to the API-key scheme: it authenticates with `Authorization: Bearer <METRICS_TOKEN>` instead of `X-API-Key`.
 
@@ -4332,7 +4332,7 @@ MCP Streamable-HTTP / JSON-RPC 2.0 transport that exposes the agent-tool registr
 Key facts:
 - **Path is exactly `POST /mcp` — no `/api` prefix.** The global `api` prefix applies only to Nest controllers; this route is mounted straight on Express.
 - Gated by **`MCP_ENABLED=true`**. When off, the module/route is never mounted and `POST /mcp` returns `404`.
-- `MCP_READONLY=true` registers only read-tier tools. Per-key sliding-window rate limit: `MCP_RATE_LIMIT_MAX` (default 60) per `MCP_RATE_LIMIT_WINDOW_MS` (default 60000).
+- MCP is **read-only by default**: only read-tier tools are registered unless you set `MCP_READONLY=false` to expose write tools. Per-key sliding-window rate limit: `MCP_RATE_LIMIT_MAX` (default 60) per `MCP_RATE_LIMIT_WINDOW_MS` (default 60000).
 - Stateless transport (no SSE/session id for normal calls).
 
 **Request body** — JSON-RPC 2.0 envelope (validated by the MCP SDK, **not** the Nest ValidationPipe)
@@ -4376,11 +4376,12 @@ Point a Socket.IO client at `<host>:2785` with path-less namespace `/events`:
 ws://<host>:2785/events      (or wss:// behind TLS)
 ```
 
-The client must authenticate during the Socket.IO handshake. Three sources are accepted, in this precedence order:
+The client must authenticate during the Socket.IO handshake. Two sources are accepted, in this precedence order:
 
 1. **Handshake `auth` (recommended)** — `io(url, { auth: { apiKey } })`. Not written to URLs or access logs.
 2. **Header** — `x-api-key: <key>`.
-3. **Query param (deprecated fallback)** — `?apiKey=<key>`. The key leaks into access logs; avoid in production.
+
+> The former `?apiKey=<key>` query fallback was **removed** — it leaked the credential into proxy/access logs. Pass the key via the handshake `auth` field or the `x-api-key` header only.
 
 If no key is supplied, or validation fails, the server emits an `error` message (`code: "UNAUTHORIZED"`) on the `message` event and immediately disconnects the socket. CORS for the namespace reuses the HTTP `CORS_ORIGINS` policy (dev allows any origin; production uses the allowlist).
 

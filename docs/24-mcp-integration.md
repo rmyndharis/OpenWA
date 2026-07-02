@@ -22,7 +22,7 @@
 
 | Capability | Status | Notes |
 |-----------|--------|-------|
-| **Read-only mode** | ✅ Implemented | `MCP_READONLY=true` mounts read tools only |
+| **Read-only mode** | ✅ Implemented | **Default read-only**; set `MCP_READONLY=false` to expose write tools |
 | **OAuth 2.1 (public exposure)** | 🔜 Planned | Static API key is used today (suitable for self-hosted/internal) |
 | **Agent-action audit provenance** | 🔜 Planned | Mark audited actions as agent-initiated |
 | **Env-tunable rate limits** | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS` |
@@ -134,8 +134,10 @@ These are destructive, privileged, or have no agent use case.
 
 ### Read-only mode
 
-Set `MCP_READONLY=true` to mount **only** `tier: 'read'` tools. This is the recommended
-posture when an agent only needs to observe.
+The server is **read-only by default** — it mounts **only** `tier: 'read'` tools unless you explicitly
+opt in to write tools with `MCP_READONLY=false`. Any other value (or leaving it unset) keeps the safe
+read-only posture, so enabling MCP never silently exposes state-changing tools. Set `MCP_READONLY=false`
+only when an agent genuinely needs to send messages / mutate state.
 
 ## 24.5 Authentication & Security
 
@@ -170,7 +172,7 @@ posture when an agent only needs to observe.
 ```bash
 MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compose
 # optional:
-MCP_READONLY=true                     # read tools only
+MCP_READONLY=false                    # expose write tools (default is read-only when unset)
 MCP_RATE_LIMIT_MAX=60                 # max tool calls per key per window (default 60)
 MCP_RATE_LIMIT_WINDOW_MS=60000        # sliding window in ms (default 60000 = 1 min)
 MCP_IP_RATE_LIMIT_MAX=120             # pre-auth per-IP request cap per window (default 120)

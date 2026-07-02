@@ -1,6 +1,38 @@
 import type { Request, Response } from 'express';
-import { createIpThrottle } from './mcp.server';
+import { createIpThrottle, resolveMcpReadOnly } from './mcp.server';
 import { KeyRateLimiter } from './mcp-rate-limit';
+
+describe('resolveMcpReadOnly (secure-by-default MCP read-only flag)', () => {
+  const prev = process.env.MCP_READONLY;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.MCP_READONLY;
+    else process.env.MCP_READONLY = prev;
+  });
+
+  it('defaults to read-only when MCP_READONLY is unset (write tools NOT exposed by default)', () => {
+    delete process.env.MCP_READONLY;
+    expect(resolveMcpReadOnly()).toBe(true);
+  });
+
+  it('exposes write tools only on an explicit MCP_READONLY=false opt-out', () => {
+    process.env.MCP_READONLY = 'false';
+    expect(resolveMcpReadOnly()).toBe(false);
+  });
+
+  it('stays read-only for any other value', () => {
+    process.env.MCP_READONLY = 'true';
+    expect(resolveMcpReadOnly()).toBe(true);
+    process.env.MCP_READONLY = 'yes';
+    expect(resolveMcpReadOnly()).toBe(true);
+  });
+
+  it('an explicit options.readOnly wins over the env', () => {
+    process.env.MCP_READONLY = 'false';
+    expect(resolveMcpReadOnly(true)).toBe(true);
+    delete process.env.MCP_READONLY;
+    expect(resolveMcpReadOnly(false)).toBe(false);
+  });
+});
 
 // The MCP mount is raw Express (outside the Nest guard pipeline) and the per-key limiter only fires
 // after key validation, so a missing/invalid-key flood would otherwise reach a DB lookup unthrottled.
