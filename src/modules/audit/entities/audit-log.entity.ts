@@ -30,6 +30,7 @@ export enum AuditAction {
 
   // Integration plugin-instance events
   INTEGRATION_INSTANCE_CREATED = 'integration_instance_created',
+  INTEGRATION_INSTANCE_UPDATED = 'integration_instance_updated',
   INTEGRATION_INSTANCE_SECRET_REGENERATED = 'integration_instance_secret_regenerated',
   INTEGRATION_INSTANCE_DELETED = 'integration_instance_deleted',
 }
