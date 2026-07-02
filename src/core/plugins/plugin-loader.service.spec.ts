@@ -522,6 +522,8 @@ describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () =>
     expect(fakeInstanceService.resolve).toHaveBeenCalledWith('chatwoot-adapter', 'acct1');
     expect(dispatchWebhook).toHaveBeenCalledTimes(1);
     // Session override (tenant1) merged over the base — this is what makes an instance multi-tenant.
-    expect(dispatchWebhook.mock.calls[0][0]).toMatchObject({ config: { baseUrl: 'https://tenant1', accountId: 1 } });
+    expect(dispatchWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({ config: { baseUrl: 'https://tenant1', accountId: 1 } }),
+    );
   });
 });
