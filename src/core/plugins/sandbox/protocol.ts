@@ -58,6 +58,9 @@ export type HostToWorkerMessage =
       verified: boolean;
       deliveryId: string;
       sessionId?: string;
+      // Per-instance-resolved config for this delivery (like the `hook` message's config). The worker
+      // exposes it as ctx.config for the duration of the handler via hookConfigStore.
+      config?: Record<string, unknown>;
     };
 
 export type WorkerToHostMessage =

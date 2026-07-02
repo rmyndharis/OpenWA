@@ -1,4 +1,6 @@
 import { PluginWorkerHost } from './plugin-worker-host';
+import { WebhookRegistry } from './worker-webhooks';
+import { hookConfigStore } from './worker-hooks';
 
 /**
  * A fake worker channel mirroring the IPC surface the host talks to. It conforms to
@@ -99,5 +101,30 @@ describe('PluginWorkerHost.dispatchWebhook', () => {
     channel.emitMessage({ kind: 'webhook-result', id: sent.id, status: 500, error: 'boom' });
 
     await expect(promise).resolves.toMatchObject({ ok: false, status: 500, error: 'boom' });
+  });
+});
+
+describe('WebhookRegistry config scoping', () => {
+  it('exposes the webhook message config via hookConfigStore during the handler', async () => {
+    let seen: Record<string, unknown> | undefined;
+    const reg = new WebhookRegistry(() => {});
+    reg.register('r', () => {
+      seen = hookConfigStore.getStore()?.config;
+    });
+    await reg.handleWebhook({
+      kind: 'webhook',
+      id: 1,
+      instanceId: 'i',
+      route: 'r',
+      method: 'POST',
+      headers: {},
+      query: {},
+      body: '',
+      rawBody: '',
+      verified: true,
+      deliveryId: 'd',
+      config: { baseUrl: 'https://x' },
+    });
+    expect(seen).toEqual({ baseUrl: 'https://x' });
   });
 });

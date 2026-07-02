@@ -1,4 +1,5 @@
 import { HostToWorkerMessage, WorkerToHostMessage } from './protocol';
+import { hookConfigStore } from './worker-hooks';
 
 /**
  * The verified inbound webhook a sandboxed plugin's handler sees. Mirrors the `webhook` wire message
@@ -41,32 +42,38 @@ export class WebhookRegistry {
       this.post({ kind: 'webhook-result', id: message.id, status: 404, error: 'no handler for route' });
       return;
     }
-    try {
-      const result = await handler({
-        instanceId: message.instanceId,
-        method: message.method,
-        headers: message.headers,
-        query: message.query,
-        body: message.body,
-        rawBody: message.rawBody,
-        verified: message.verified,
-        deliveryId: message.deliveryId,
-        sessionId: message.sessionId,
-      });
-      this.post({
-        kind: 'webhook-result',
-        id: message.id,
-        status: result?.status ?? 200,
-        headers: result?.headers,
-        body: result?.body,
-      });
-    } catch (err) {
-      this.post({
-        kind: 'webhook-result',
-        id: message.id,
-        status: 500,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // Run inside the per-instance config scope so ctx.config resolves to this delivery's instance config
+    // (mirrors WorkerHookRegistry.handleHook). Absent config => the bootstrap getter falls back to base.
+    const run = async () => {
+      try {
+        const result = await handler({
+          instanceId: message.instanceId,
+          method: message.method,
+          headers: message.headers,
+          query: message.query,
+          body: message.body,
+          rawBody: message.rawBody,
+          verified: message.verified,
+          deliveryId: message.deliveryId,
+          sessionId: message.sessionId,
+        });
+        this.post({
+          kind: 'webhook-result',
+          id: message.id,
+          status: result?.status ?? 200,
+          headers: result?.headers,
+          body: result?.body,
+        });
+      } catch (err) {
+        this.post({
+          kind: 'webhook-result',
+          id: message.id,
+          status: 500,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    if (message.config !== undefined) await hookConfigStore.run({ config: message.config }, run);
+    else await run();
   }
 }
