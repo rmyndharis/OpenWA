@@ -153,6 +153,7 @@ export class PluginWorkerHost {
     verified: boolean;
     deliveryId: string;
     sessionId?: string;
+    config?: Record<string, unknown>;
     timeoutMs: number;
     onTimeout?: () => void;
   }): Promise<{ status: number; headers?: Record<string, string>; body?: string; ok: boolean; error?: string }> {
@@ -177,6 +178,7 @@ export class PluginWorkerHost {
         verified: options.verified,
         deliveryId: options.deliveryId,
         sessionId: options.sessionId,
+        config: options.config,
       });
     });
   }
