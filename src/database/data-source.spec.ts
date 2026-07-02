@@ -1,5 +1,5 @@
 import { globSync } from 'glob';
-import dataDataSource, { postgresDataSource } from './data-source';
+import dataDataSource, { postgresDataSourceOptions } from './data-source';
 
 // The data CLI DataSource manages the DATA connection's migrations (session/webhook/message/
 // template/engine). It must NOT pull in the auth/audit entities — those belong to the always-SQLite
@@ -37,7 +37,7 @@ describe('data CLI DataSource', () => {
 // minutes on a large table. It must carry pool/connection timeouts for resilience but MUST NOT carry a
 // server-side statement_timeout, or a long migration would be aborted mid-flight.
 describe('Postgres migration connection pool timeouts', () => {
-  const extra = postgresDataSource.options.extra as Record<string, number | undefined>;
+  const extra = postgresDataSourceOptions.extra as Record<string, number | undefined>;
 
   it('sets idle and connection pool timeouts', () => {
     expect(extra.idleTimeoutMillis).toBe(30000);
