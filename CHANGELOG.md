@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Plugins can send media through `ctx.conversations.send`.** The conversation-send capability now accepts `image`, `video`, `audio`, and `file` envelopes that carry a `mediaUrl`, sending them by URL through the same media pipeline as the REST media endpoints (the caption comes from `text`). It stays under the existing `conversation:send` permission and the plugin's activated-session scope — the text/reply behavior is unchanged. A `replyTo` on a media envelope is rejected, since the engine media path cannot quote a message.
 - **Official Java SDK (`com.rmyndharis:openwa`).** A hand-written, synchronous Java 17 client covering the full REST surface — all 12 resources (sessions, messages, contacts, groups, webhooks, chats, labels, channels, catalog, status, templates, health) plus API-key validation — with typed request builders, immutable response records, a typed error hierarchy, and an injectable HTTP transport for testing. One runtime dependency (Gson); published to Maven Central as `com.rmyndharis:openwa:0.1.1`. Lives in `sdk/java` and is drift-tested against the backend DTOs like the JavaScript, Python, and PHP SDKs. (#602)
 
 ## [0.8.1] - 2026-07-02

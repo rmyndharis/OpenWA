@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { resolvePluginMainPath, buildSandboxWorkerEnv } from './plugin-loader.service';
+import { resolvePluginMainPath, buildSandboxWorkerEnv, dispatchConversationMedia } from './plugin-loader.service';
 
 /** Regression lock: a plugin's manifest.main must not escape its plugin directory. */
 describe('resolvePluginMainPath', () => {
@@ -65,6 +65,37 @@ describe('buildSandboxWorkerEnv', () => {
 
   it('defaults NODE_ENV to production when the host has none', () => {
     expect(buildSandboxWorkerEnv({}).NODE_ENV).toBe('production');
+  });
+});
+
+/** conversation.send media types must route to the matching MessageService method (not a copy-paste sibling). */
+describe('dispatchConversationMedia', () => {
+  const svc = () => ({
+    sendImage: jest.fn().mockResolvedValue({ messageId: 'i' }),
+    sendVideo: jest.fn().mockResolvedValue({ messageId: 'v' }),
+    sendAudio: jest.fn().mockResolvedValue({ messageId: 'a' }),
+    sendDocument: jest.fn().mockResolvedValue({ messageId: 'd' }),
+  });
+  const opts = (type: 'image' | 'video' | 'audio' | 'file') => ({
+    chatId: 'c@c.us',
+    url: 'https://cdn.example/m',
+    caption: 'cap',
+    type,
+  });
+
+  it.each([
+    ['image', 'sendImage'],
+    ['video', 'sendVideo'],
+    ['audio', 'sendAudio'],
+    ['file', 'sendDocument'],
+  ] as const)('routes %s to %s with a url+caption DTO', async (type, method) => {
+    const s = svc();
+    await dispatchConversationMedia(s, 's', opts(type));
+    expect(s[method]).toHaveBeenCalledWith('s', { chatId: 'c@c.us', url: 'https://cdn.example/m', caption: 'cap' });
+    // No sibling method is invoked for the wrong type.
+    for (const other of ['sendImage', 'sendVideo', 'sendAudio', 'sendDocument'] as const) {
+      if (other !== method) expect(s[other]).not.toHaveBeenCalled();
+    }
   });
 });
 

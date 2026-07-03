@@ -59,4 +59,71 @@ describe('conversation.send facade', () => {
     expect(runGuarded).toHaveBeenCalled();
     expect(res).toEqual({ id: 'm1' });
   });
+
+  it('routes a media envelope to sendMedia with the caption from text, not sendText', async () => {
+    const sendMedia = jest.fn().mockResolvedValue({ id: 'm2' });
+    const sendText = jest.fn();
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText,
+      reply: jest.fn(),
+      sendMedia,
+    } as never);
+    const res = await facade.send({
+      type: 'image',
+      mediaUrl: 'https://cdn.example/x.jpg',
+      text: 'a caption',
+      sessionId: 's',
+      chatId: 'chat@c.us',
+    });
+    expect(sendMedia).toHaveBeenCalledWith('s', {
+      chatId: 'chat@c.us',
+      url: 'https://cdn.example/x.jpg',
+      type: 'image',
+      caption: 'a caption',
+    });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(res).toEqual({ id: 'm2' });
+  });
+
+  it('rejects replyTo on a media envelope — media-reply is unsupported by the engine', async () => {
+    const sendMedia = jest.fn();
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText: jest.fn(),
+      reply: jest.fn(),
+      sendMedia,
+    } as never);
+    await expect(
+      facade.send({ type: 'image', mediaUrl: 'https://cdn.example/x.jpg', replyTo: 'Q1', sessionId: 's', chatId: 'c' }),
+    ).rejects.toThrow(PluginCapabilityError);
+    expect(sendMedia).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a text send when a media type carries no mediaUrl (URL-in-text fallback)', async () => {
+    const sendMedia = jest.fn();
+    const sendText = jest.fn().mockResolvedValue({ id: 't1' });
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText,
+      reply: jest.fn(),
+      sendMedia,
+    } as never);
+    const res = await facade.send({ type: 'video', text: 'https://cdn.example/v.mp4', sessionId: 's', chatId: 'c' });
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith('s', { chatId: 'c', text: 'https://cdn.example/v.mp4' });
+    expect(res).toEqual({ id: 't1' });
+  });
 });

@@ -31,7 +31,7 @@ import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
-import { buildConversationSendFacade } from './conversation-send-facade';
+import { buildConversationSendFacade, ConversationMediaType } from './conversation-send-facade';
 import { shouldDispatchToPlugin } from './handover-gate';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
@@ -95,6 +95,30 @@ export function buildSandboxWorkerEnv(source: NodeJS.ProcessEnv = process.env): 
   }
   env.NODE_ENV = source.NODE_ENV ?? 'production';
   return env;
+}
+
+/**
+ * Translate a normalized conversation media send into the concrete MessageService media method for the
+ * envelope's type. Kept pure (no `this`) so the loader binds it directly and it can be unit-tested in
+ * isolation. The switch is exhaustive over ConversationMediaType — adding a type without a case is a
+ * compile error here rather than a silent runtime fall-through.
+ */
+export function dispatchConversationMedia(
+  svc: Pick<MessageService, 'sendImage' | 'sendVideo' | 'sendAudio' | 'sendDocument'>,
+  sessionId: string,
+  opts: { chatId: string; url: string; type: ConversationMediaType; caption?: string },
+): Promise<unknown> {
+  const dto = { chatId: opts.chatId, url: opts.url, caption: opts.caption };
+  switch (opts.type) {
+    case 'image':
+      return svc.sendImage(sessionId, dto);
+    case 'video':
+      return svc.sendVideo(sessionId, dto);
+    case 'audio':
+      return svc.sendAudio(sessionId, dto);
+    case 'file':
+      return svc.sendDocument(sessionId, dto);
+  }
 }
 
 @Injectable()
@@ -1043,6 +1067,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
             : run(),
         sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
         reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
+        sendMedia: (sessionId, opts) => dispatchConversationMedia(this.getMessageService(), sessionId, opts),
       } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,
       handover: {
         set: async (key, state) => {
