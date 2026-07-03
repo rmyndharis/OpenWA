@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Official Java SDK (`com.rmyndharis:openwa`).** A hand-written, synchronous Java 17 client covering the full REST surface — all 12 resources (sessions, messages, contacts, groups, webhooks, chats, labels, channels, catalog, status, templates, health) plus API-key validation — with typed request builders, immutable response records, a typed error hierarchy, and an injectable HTTP transport for testing. One runtime dependency (Gson); distributed via Maven Central. Lives in `sdk/java` and is drift-tested against the backend DTOs like the JavaScript, Python, and PHP SDKs. (#602)
+
 ## [0.8.1] - 2026-07-02
 
 ### Changed
