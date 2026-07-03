@@ -55,6 +55,9 @@ describe('buildSandboxContext', () => {
     await ctx.engine.getGroupInfo('s', 'g');
     expect(call).toHaveBeenCalledWith('engine.getGroupInfo', ['s', 'g']);
 
+    await ctx.engine.getChatHistory('s', 'c@c.us', 20, true);
+    expect(call).toHaveBeenCalledWith('engine.getChatHistory', ['s', 'c@c.us', 20, true]);
+
     await ctx.storage.set('k', { a: 1 });
     expect(call).toHaveBeenCalledWith('storage.set', ['k', { a: 1 }]);
   });

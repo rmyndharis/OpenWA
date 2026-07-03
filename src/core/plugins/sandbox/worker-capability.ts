@@ -41,6 +41,7 @@ export interface SandboxCapabilityContext {
     getContactById(sessionId: string, contactId: string): Promise<unknown>;
     checkNumberExists(sessionId: string, phone: string): Promise<unknown>;
     getChats(sessionId: string): Promise<unknown>;
+    getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<unknown>;
   };
   storage: {
     get(key: string): Promise<unknown>;
@@ -81,6 +82,8 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
       getContactById: (sessionId, contactId) => client.call('engine.getContactById', [sessionId, contactId]),
       checkNumberExists: (sessionId, phone) => client.call('engine.checkNumberExists', [sessionId, phone]),
       getChats: sessionId => client.call('engine.getChats', [sessionId]),
+      getChatHistory: (sessionId, chatId, limit, includeMedia) =>
+        client.call('engine.getChatHistory', [sessionId, chatId, limit, includeMedia]),
     },
     storage: {
       get: key => client.call('storage.get', [key]),

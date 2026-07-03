@@ -12,6 +12,7 @@ function makeContext() {
       getContactById: jest.fn().mockResolvedValue(null),
       checkNumberExists: jest.fn().mockResolvedValue(true),
       getChats: jest.fn().mockResolvedValue([]),
+      getChatHistory: jest.fn().mockResolvedValue([]),
     },
     storage: {
       get: jest.fn().mockResolvedValue('v'),
@@ -54,6 +55,12 @@ describe('dispatchCapabilityVerb', () => {
     const ctx = makeContext();
     await dispatchCapabilityVerb(ctx, 'engine.getGroupInfo', ['s', 'g']);
     expect(ctx.engine.getGroupInfo).toHaveBeenCalledWith('s', 'g');
+  });
+
+  it('routes engine.getChatHistory with chatId, limit and includeMedia', async () => {
+    const ctx = makeContext();
+    await dispatchCapabilityVerb(ctx, 'engine.getChatHistory', ['s', 'c@c.us', 20, true]);
+    expect(ctx.engine.getChatHistory).toHaveBeenCalledWith('s', 'c@c.us', 20, true);
   });
 
   it('routes storage.get and returns its value', async () => {

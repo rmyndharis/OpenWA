@@ -1519,6 +1519,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       out.isStatusBroadcast = chatId === 'status@broadcast';
       const call = extractWwebjsCall(msg);
       if (call) out.call = call;
+      // Mirror the live handler's location + quoted-message enrichment so history renders identically —
+      // buildIncomingMessageBase sets type='location' but no coordinates, and never resolves quotes.
+      if (msg.type === MessageTypes.LOCATION && msg.location) {
+        out.location = {
+          latitude: Number(msg.location.latitude),
+          longitude: Number(msg.location.longitude),
+          description: msg.location.description || undefined,
+          address: msg.location.address || undefined,
+          url: msg.location.url || undefined,
+        };
+      }
+      if (msg.hasQuotedMsg) {
+        try {
+          const quoted = await msg.getQuotedMessage();
+          out.quotedMessage = { id: quoted.id._serialized, body: quoted.body };
+        } catch (error) {
+          this.logger.warn(`Failed to resolve quoted message for ${msg.id._serialized}: ${String(error)}`);
+        }
+      }
       if (includeMedia && msg.hasMedia) {
         try {
           // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the response/heap.

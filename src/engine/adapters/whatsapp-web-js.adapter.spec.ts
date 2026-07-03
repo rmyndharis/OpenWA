@@ -206,6 +206,55 @@ describe('WhatsAppWebJsAdapter readiness guard (#100)', () => {
   });
 });
 
+describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live path)', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('populates location coordinates and resolves the quoted message for historical messages', async () => {
+    const locMsg = {
+      id: { _serialized: 'M1' },
+      from: '621@c.us',
+      to: 'me',
+      body: '',
+      type: 'location',
+      timestamp: 100,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: false,
+      location: { latitude: -6.2, longitude: 106.8, description: 'Office', address: 'Jkt', url: '' },
+    };
+    const replyMsg = {
+      id: { _serialized: 'M2' },
+      from: '621@c.us',
+      to: 'me',
+      body: '..',
+      type: 'chat',
+      timestamp: 200,
+      fromMe: false,
+      hasMedia: false,
+      hasQuotedMsg: true,
+      getQuotedMessage: jest.fn().mockResolvedValue({ id: { _serialized: 'Q1' }, body: 'earlier' }),
+    };
+    const chat = { fetchMessages: jest.fn().mockResolvedValue([locMsg, replyMsg]) };
+    const client = { getChatById: jest.fn().mockResolvedValue(chat) };
+
+    const out = await readyAdapter(client).getChatHistory('621@c.us', 50, false);
+
+    expect(out[0].location).toEqual({
+      latitude: -6.2,
+      longitude: 106.8,
+      description: 'Office',
+      address: 'Jkt',
+      url: undefined,
+    });
+    expect(out[1].quotedMessage).toEqual({ id: 'Q1', body: 'earlier' });
+  });
+});
+
 describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a synthetic fwd_ id)', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });

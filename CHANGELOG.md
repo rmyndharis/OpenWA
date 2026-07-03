@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-07-03
+
+### Fixed
+
+- **The `engine.getChatHistory` plugin capability (added in 0.8.5) now reaches sandboxed plugins.** It was wired only into the host-side context, not the plugin-worker bridge, so a sandboxed plugin's `ctx.engine.getChatHistory` was `undefined` and the call failed silently. It is now bridged through the worker capability + router like the other engine reads. Historical messages from the whatsapp-web.js engine also carry location coordinates and quoted-message references now, matching the live message path (previously a backfilled location rendered empty and replies lost their thread link). (#609)
+
 ## [0.8.5] - 2026-07-03
 
 ### Added
