@@ -1,6 +1,7 @@
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
+  isUpgradeInsecureRequestsEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
@@ -41,6 +42,24 @@ describe('resolveCorsPolicy', () => {
 
   it('still allows wildcard in development', () => {
     expect(resolveCorsPolicy('*', 'development').allowAnyOrigin).toBe(true);
+  });
+});
+
+describe('isUpgradeInsecureRequestsEnabled', () => {
+  it('keeps the legacy default: on in production, off elsewhere (unset)', () => {
+    expect(isUpgradeInsecureRequestsEnabled(undefined, 'production')).toBe(true);
+    expect(isUpgradeInsecureRequestsEnabled(undefined, 'development')).toBe(false);
+    expect(isUpgradeInsecureRequestsEnabled(undefined)).toBe(false);
+  });
+  it('lets an explicit value override NODE_ENV', () => {
+    // HTTP-only private-network prod opts OUT so the dashboard stays reachable (#611)
+    expect(isUpgradeInsecureRequestsEnabled('false', 'production')).toBe(false);
+    // and it can be forced on outside production
+    expect(isUpgradeInsecureRequestsEnabled('true', 'development')).toBe(true);
+  });
+  it('treats any non-"true"/"false" value as unset (falls back to NODE_ENV)', () => {
+    expect(isUpgradeInsecureRequestsEnabled('', 'production')).toBe(true);
+    expect(isUpgradeInsecureRequestsEnabled('1', 'development')).toBe(false);
   });
 });
 

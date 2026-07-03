@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`CSP_UPGRADE_INSECURE_REQUESTS` env var** to control the CSP `upgrade-insecure-requests` directive. It defaults to the existing behaviour (on in production, off elsewhere); set it to `false` for an HTTP-only deployment on a trusted private network, where the browser would otherwise upgrade the dashboard to `https` and make it unreachable. Set it to `true` to force it on. (#611)
+
 ## [0.8.3] - 2026-07-03
 
 ### Added

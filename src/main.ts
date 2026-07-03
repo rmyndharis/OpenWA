@@ -14,6 +14,7 @@ import { createSwaggerConfig } from './config/swagger.config';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
+  isUpgradeInsecureRequestsEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
@@ -121,7 +122,14 @@ async function bootstrap() {
           connectSrc: ["'self'"],
           fontSrc: ["'self'", 'https://fonts.gstatic.com'],
           objectSrc: ["'none'"],
-          upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
+          // Auto-upgrade HTTP→HTTPS in production, unless CSP_UPGRADE_INSECURE_REQUESTS opts out for an
+          // HTTP-only private-network deployment (otherwise the browser forces the dashboard to https). (#611)
+          upgradeInsecureRequests: isUpgradeInsecureRequestsEnabled(
+            process.env.CSP_UPGRADE_INSECURE_REQUESTS,
+            process.env.NODE_ENV,
+          )
+            ? []
+            : null,
         },
       },
       hsts: {

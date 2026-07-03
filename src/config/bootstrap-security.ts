@@ -44,6 +44,19 @@ export function isSwaggerEnabled(enableSwaggerEnv?: string, nodeEnv?: string): b
   return nodeEnv !== 'production';
 }
 
+/**
+ * Whether to emit the CSP `upgrade-insecure-requests` directive (browsers auto-upgrade HTTP→HTTPS).
+ * An explicit CSP_UPGRADE_INSECURE_REQUESTS wins ('true'/'false'). When unset it keeps the legacy
+ * behaviour — ON in production only (the secure default for Internet-facing TLS deployments), OFF
+ * elsewhere. Set CSP_UPGRADE_INSECURE_REQUESTS=false for an HTTP-only deployment on a trusted private
+ * network, where the upgrade would otherwise force the dashboard to https and make it unreachable. (#611)
+ */
+export function isUpgradeInsecureRequestsEnabled(cspEnv?: string, nodeEnv?: string): boolean {
+  if (cspEnv === 'true') return true;
+  if (cspEnv === 'false') return false;
+  return nodeEnv === 'production';
+}
+
 /** Request body-size cap (DoS hardening). Default is media-aware (base64 sends ride in the JSON body). */
 export function resolveBodyLimit(bodySizeEnv?: string): string {
   const trimmed = bodySizeEnv?.trim();
