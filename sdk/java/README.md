@@ -128,32 +128,3 @@ mvn -B verify        # compile + run the full test suite
 Tests inject a recording `HttpTransport` and assert on the exact path — so the
 regression that would ship a broken `messages/text` path (the real path is
 `messages/send-text`) can never recur silently.
-
-## RELEASING
-
-Publishing to Maven Central is a one-time setup, then a tag. The
-`.github/workflows/java-sdk-release.yml` workflow cleanly no-ops until the
-credentials below exist.
-
-1. **Claim the namespace.** On [Sonatype Central](https://central.sonatype.com/),
-   register the `com.rmyndharis` namespace and verify ownership via the DNS
-   `TXT` record it issues on `rmyndharis.com`.
-2. **Generate a signing key.** Create a GPG key and publish it to a public
-   keyserver (e.g. `keyserver.ubuntu.com`):
-   ```bash
-   gpg --gen-key
-   gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>
-   gpg --armor --export-secret-keys <KEY_ID>   # value for GPG_PRIVATE_KEY
-   ```
-3. **Add repository secrets:** `MAVEN_CENTRAL_USERNAME` and
-   `MAVEN_CENTRAL_PASSWORD` (the two halves of a Sonatype Central user token),
-   `GPG_PRIVATE_KEY`, and `GPG_PASSPHRASE`.
-4. **Cut the release.** Drop `-SNAPSHOT` from the `pom.xml` `<version>`, then tag
-   and push:
-   ```bash
-   git tag java-sdk-v0.1.0
-   git push origin java-sdk-v0.1.0
-   ```
-
-The SDK version is the `pom.xml` `<version>` on a dedicated `java-sdk-v*` tag —
-**not** the monorepo `v*` application tags.

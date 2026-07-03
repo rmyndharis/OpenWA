@@ -158,7 +158,7 @@ System.out.println(result.messageId());
 Requires Java 17+. Errors are a typed, unchecked hierarchy — branch with
 `instanceof OpenWANotFoundError` / `OpenWAConflictError`. For testing, inject a
 custom `HttpTransport` that records the request — no network. See
-[`java/README.md`](java/README.md) for the full guide and `RELEASING` steps.
+[`java/README.md`](java/README.md) for the full guide.
 
 ## Reliability & security
 
