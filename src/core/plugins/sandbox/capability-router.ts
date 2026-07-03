@@ -51,6 +51,8 @@ export async function dispatchCapabilityVerb(
       return context.engine.getChats(s(0));
     case 'engine.getChatHistory':
       return context.engine.getChatHistory(s(0), s(1), args[2] as number | undefined, args[3] as boolean | undefined);
+    case 'engine.canonicalChatId':
+      return context.engine.canonicalChatId(s(0), s(1));
     case 'storage.get':
       return context.storage.get(s(0));
     case 'storage.set':

@@ -42,6 +42,7 @@ export interface SandboxCapabilityContext {
     checkNumberExists(sessionId: string, phone: string): Promise<unknown>;
     getChats(sessionId: string): Promise<unknown>;
     getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<unknown>;
+    canonicalChatId(sessionId: string, chatId: string): Promise<unknown>;
   };
   storage: {
     get(key: string): Promise<unknown>;
@@ -84,6 +85,7 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
       getChats: sessionId => client.call('engine.getChats', [sessionId]),
       getChatHistory: (sessionId, chatId, limit, includeMedia) =>
         client.call('engine.getChatHistory', [sessionId, chatId, limit, includeMedia]),
+      canonicalChatId: (sessionId, chatId) => client.call('engine.canonicalChatId', [sessionId, chatId]),
     },
     storage: {
       get: key => client.call('storage.get', [key]),

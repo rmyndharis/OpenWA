@@ -286,6 +286,12 @@ export interface PluginEngineReadCapability {
     limit?: number,
     includeMedia?: boolean,
   ): ReturnType<IWhatsAppEngine['getChatHistory']>;
+  /**
+   * Canonical (neutral) form of a chat id: resolves a `@lid` privacy id to its stable `<phone>@c.us`
+   * when the lid->phone mapping is known, and otherwise returns the id unchanged. Lets a plugin key a
+   * chat by one identity across WhatsApp's `@lid` migration (best-effort; an unresolved lid stays `@lid`).
+   */
+  canonicalChatId(sessionId: string, chatId: string): Promise<string>;
 }
 
 /** Outbound HTTP for a plugin — always through the host SSRF guard, scoped to `manifest.net.allow`. */

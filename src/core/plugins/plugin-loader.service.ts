@@ -1,6 +1,8 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
+import { toNeutralJid, userPart } from '../../engine/identity/wa-id';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { AsyncLocalStorage } from 'async_hooks';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -146,6 +148,10 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // instead of constructor injection to avoid the provider cycle
     // PluginLoaderService -> SessionService -> EngineFactory -> PluginLoaderService.
     private readonly moduleRef: ModuleRef,
+    // Shared lid->phone table (EngineModule is @Global and exports it). Optional so the many unit tests
+    // that construct this service with the 4 prior args still compile; when absent, canonicalChatId
+    // degrades to identity (no @lid resolution).
+    @Optional() private readonly lidMappingStore?: LidMappingStoreService,
   ) {
     this.pluginsDir = this.configService.get<string>('plugins.dir') ?? './plugins';
   }
@@ -1020,6 +1026,13 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
             Math.min(Math.max(Math.trunc(limit ?? 50), 1), 100),
             includeMedia ?? false,
           ),
+        canonicalChatId: (sessionId, chatId) => {
+          // resolveEngineRead is the gate only (engine:read permission + live session); the resolution
+          // itself is a synchronous host lid->phone lookup, not an engine call, mirroring the webhook
+          // from-filter. Not `async` (nothing to await) — a resolved promise satisfies the signature.
+          this.resolveEngineRead(plugin, sessionId);
+          return Promise.resolve(toNeutralJid(chatId, jid => this.lidMappingStore?.getCached(userPart(jid)) ?? null));
+        },
       } satisfies PluginEngineReadCapability,
       net: {
         fetch: async (url, init) => {
