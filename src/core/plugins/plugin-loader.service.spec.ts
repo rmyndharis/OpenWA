@@ -88,13 +88,27 @@ describe('dispatchConversationMedia', () => {
     ['video', 'sendVideo'],
     ['audio', 'sendAudio'],
     ['file', 'sendDocument'],
-  ] as const)('routes %s to %s with a url+caption DTO', async (type, method) => {
+  ] as const)('routes %s to %s with a url+caption DTO (no ptt)', async (type, method) => {
     const s = svc();
     await dispatchConversationMedia(s, 's', opts(type));
     expect(s[method]).toHaveBeenCalledWith('s', { chatId: 'c@c.us', url: 'https://cdn.example/m', caption: 'cap' });
     // No sibling method is invoked for the wrong type.
     for (const other of ['sendImage', 'sendVideo', 'sendAudio', 'sendDocument'] as const) {
       if (other !== method) expect(s[other]).not.toHaveBeenCalled();
+    }
+  });
+
+  it("routes 'voice' to sendAudio with ptt:true so it renders as a WhatsApp voice note", async () => {
+    const s = svc();
+    await dispatchConversationMedia(s, 's', { chatId: 'c@c.us', url: 'https://cdn.example/n.ogg', type: 'voice' });
+    expect(s.sendAudio).toHaveBeenCalledWith('s', {
+      chatId: 'c@c.us',
+      url: 'https://cdn.example/n.ogg',
+      caption: undefined,
+      ptt: true,
+    });
+    for (const other of ['sendImage', 'sendVideo', 'sendDocument'] as const) {
+      expect(s[other]).not.toHaveBeenCalled();
     }
   });
 });

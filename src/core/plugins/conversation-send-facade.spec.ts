@@ -90,6 +90,27 @@ describe('conversation.send facade', () => {
     expect(res).toEqual({ id: 'm2' });
   });
 
+  it('routes a voice envelope to sendMedia with type voice (loader maps it to a PTT audio send)', async () => {
+    const sendMedia = jest.fn().mockResolvedValue({ id: 'v1' });
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText: jest.fn(),
+      reply: jest.fn(),
+      sendMedia,
+    } as never);
+    await facade.send({ type: 'voice', mediaUrl: 'https://cdn.example/n.ogg', sessionId: 's', chatId: 'chat@c.us' });
+    expect(sendMedia).toHaveBeenCalledWith('s', {
+      chatId: 'chat@c.us',
+      url: 'https://cdn.example/n.ogg',
+      type: 'voice',
+      caption: undefined,
+    });
+  });
+
   it('rejects replyTo on a media envelope — media-reply is unsupported by the engine', async () => {
     const sendMedia = jest.fn();
     const facade = buildConversationSendFacade({

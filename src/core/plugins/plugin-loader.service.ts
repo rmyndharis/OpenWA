@@ -116,6 +116,10 @@ export function dispatchConversationMedia(
       return svc.sendVideo(sessionId, dto);
     case 'audio':
       return svc.sendAudio(sessionId, dto);
+    case 'voice':
+      // A voice envelope is a PTT note: sendAudio with ptt classifies it as 'voice' and defaults the
+      // codec to audio/ogg;opus, so it renders as a WhatsApp voice bubble rather than an audio file.
+      return svc.sendAudio(sessionId, { ...dto, ptt: true });
     case 'file':
       return svc.sendDocument(sessionId, dto);
   }

@@ -28,10 +28,13 @@ export interface ConversationSendDeps {
   ) => Promise<unknown>;
 }
 
-/** Envelope types carried as media by URL. `location` is a non-text type but has no mediaUrl, so it is excluded. */
-export type ConversationMediaType = 'image' | 'file' | 'audio' | 'video';
+/**
+ * Envelope types carried as media by URL. `voice` is a PTT audio note (the loader maps it to an audio
+ * send with `ptt`). `location` is a non-text type but has no mediaUrl, so it is excluded.
+ */
+export type ConversationMediaType = 'image' | 'file' | 'audio' | 'video' | 'voice';
 
-const MEDIA_TYPES: readonly ConversationMediaType[] = ['image', 'file', 'audio', 'video'];
+const MEDIA_TYPES: readonly ConversationMediaType[] = ['image', 'file', 'audio', 'video', 'voice'];
 
 const isMediaType = (type: ConversationSendEnvelope['type']): type is ConversationMediaType =>
   (MEDIA_TYPES as readonly string[]).includes(type);

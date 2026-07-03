@@ -215,7 +215,7 @@ export interface ConversationSendEnvelope {
   sessionId?: string;
   instanceId?: string;
   chatId?: string;
-  type: 'text' | 'image' | 'file' | 'audio' | 'video' | 'location';
+  type: 'text' | 'image' | 'file' | 'audio' | 'video' | 'voice' | 'location';
   text?: string;
   mediaUrl?: string;
   replyTo?: string;
