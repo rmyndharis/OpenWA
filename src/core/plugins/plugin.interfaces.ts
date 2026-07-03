@@ -279,6 +279,13 @@ export interface PluginEngineReadCapability {
   getContactById(sessionId: string, contactId: string): ReturnType<IWhatsAppEngine['getContactById']>;
   checkNumberExists(sessionId: string, phone: string): ReturnType<IWhatsAppEngine['checkNumberExists']>;
   getChats(sessionId: string): ReturnType<IWhatsAppEngine['getChats']>;
+  /** Recent messages for a chat (both directions), for history backfill. `limit` is clamped host-side. */
+  getChatHistory(
+    sessionId: string,
+    chatId: string,
+    limit?: number,
+    includeMedia?: boolean,
+  ): ReturnType<IWhatsAppEngine['getChatHistory']>;
 }
 
 /** Outbound HTTP for a plugin — always through the host SSRF guard, scoped to `manifest.net.allow`. */

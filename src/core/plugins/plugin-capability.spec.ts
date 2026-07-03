@@ -219,6 +219,31 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
     await ctx.engine.getGroupInfo('sess-1', 'g@g.us');
     expect(engine.getGroupInfo).toHaveBeenCalledWith('g@g.us');
   });
+
+  it('engine.getChatHistory delegates to the engine and clamps the limit to 100', async () => {
+    const engine = { getChatHistory: jest.fn().mockResolvedValue([]) };
+    build(engine);
+    const ctx = contextFor(makePlugin(['*'], ['engine:read']));
+    await ctx.engine.getChatHistory('sess-1', 'c@c.us', 500, true);
+    expect(engine.getChatHistory).toHaveBeenCalledWith('c@c.us', 100, true); // 500 clamped to 100
+  });
+
+  it('engine.getChatHistory defaults the limit and clamps a non-positive value to 1', async () => {
+    const engine = { getChatHistory: jest.fn().mockResolvedValue([]) };
+    build(engine);
+    const ctx = contextFor(makePlugin(['*'], ['engine:read']));
+    await ctx.engine.getChatHistory('sess-1', 'c@c.us'); // no limit → default 50, includeMedia → false
+    await ctx.engine.getChatHistory('sess-1', 'c@c.us', 0);
+    expect(engine.getChatHistory).toHaveBeenNthCalledWith(1, 'c@c.us', 50, false);
+    expect(engine.getChatHistory).toHaveBeenNthCalledWith(2, 'c@c.us', 1, false);
+  });
+
+  it('denies engine.getChatHistory without the engine:read permission', async () => {
+    const { sessionService } = build({ getChatHistory: jest.fn() });
+    const ctx = contextFor(makePlugin(['*'], ['messages:send']));
+    await expect(ctx.engine.getChatHistory('sess-1', 'c@c.us')).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(sessionService.getEngine).not.toHaveBeenCalled();
+  });
 });
 
 describe('PluginLoaderService capability facade — ctx.net', () => {

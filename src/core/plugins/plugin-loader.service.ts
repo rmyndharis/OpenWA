@@ -1012,6 +1012,14 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
         checkNumberExists: async (sessionId, phone) =>
           this.resolveEngineRead(plugin, sessionId).checkNumberExists(phone),
         getChats: async sessionId => this.resolveEngineRead(plugin, sessionId).getChats(),
+        getChatHistory: async (sessionId, chatId, limit, includeMedia) =>
+          this.resolveEngineRead(plugin, sessionId).getChatHistory(
+            chatId,
+            // Clamp to the REST non-deep ceiling (MessageService.MAX_CHAT_HISTORY_LIMIT = 100) so an
+            // untrusted plugin can't request an unbounded history fetch.
+            Math.min(Math.max(Math.trunc(limit ?? 50), 1), 100),
+            includeMedia ?? false,
+          ),
       } satisfies PluginEngineReadCapability,
       net: {
         fetch: async (url, init) => {
