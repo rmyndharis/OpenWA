@@ -1,0 +1,59 @@
+name: Java SDK Release
+
+# Publishes com.rmyndharis:openwa to Maven Central from sdk/java. Cleanly no-ops
+# until the one-time setup is done (see sdk/java/README.md -> RELEASING):
+#   - MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD  (Sonatype Central user token halves)
+#   - GPG_PRIVATE_KEY                                   (ASCII-armored signing key)
+#   - GPG_PASSPHRASE
+# The SDK version is the pom <version> on a dedicated tag (e.g. java-sdk-v0.1.0),
+# NOT the monorepo v* app tags.
+
+on:
+  push:
+    tags: ['java-sdk-v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/java
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Guard — skip if publish credentials are absent
+        id: guard
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+        run: |
+          if [ -z "${MAVEN_CENTRAL_USERNAME:-}" ]; then
+            echo "::notice::MAVEN_CENTRAL_USERNAME not set — skipping publish. See sdk/java/README.md -> RELEASING."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up JDK + signing key
+        if: steps.guard.outputs.publish == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      - name: Deploy to Maven Central
+        if: steps.guard.outputs.publish == 'true'
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -Prelease deploy -DskipTests
