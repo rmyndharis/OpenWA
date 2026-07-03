@@ -10,7 +10,18 @@ import com.rmyndharis.openwa.http.HttpRequestData;
 import com.rmyndharis.openwa.http.HttpResponseData;
 import com.rmyndharis.openwa.http.HttpTransport;
 import com.rmyndharis.openwa.model.AuthValidateResponse;
+import com.rmyndharis.openwa.resources.CatalogResource;
+import com.rmyndharis.openwa.resources.ChannelsResource;
+import com.rmyndharis.openwa.resources.ChatsResource;
+import com.rmyndharis.openwa.resources.ContactsResource;
+import com.rmyndharis.openwa.resources.GroupsResource;
+import com.rmyndharis.openwa.resources.HealthResource;
+import com.rmyndharis.openwa.resources.LabelsResource;
+import com.rmyndharis.openwa.resources.MessagesResource;
 import com.rmyndharis.openwa.resources.SessionsResource;
+import com.rmyndharis.openwa.resources.StatusResource;
+import com.rmyndharis.openwa.resources.TemplatesResource;
+import com.rmyndharis.openwa.resources.WebhooksResource;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.List;
@@ -34,6 +45,17 @@ public final class OpenWAClient {
 
     // ── Resources ──────────────────────────────────────────────────────
     public final SessionsResource sessions = new SessionsResource(this);
+    public final MessagesResource messages = new MessagesResource(this);
+    public final ContactsResource contacts = new ContactsResource(this);
+    public final GroupsResource groups = new GroupsResource(this);
+    public final WebhooksResource webhooks = new WebhooksResource(this);
+    public final ChatsResource chats = new ChatsResource(this);
+    public final LabelsResource labels = new LabelsResource(this);
+    public final ChannelsResource channels = new ChannelsResource(this);
+    public final CatalogResource catalog = new CatalogResource(this);
+    public final StatusResource status = new StatusResource(this);
+    public final TemplatesResource templates = new TemplatesResource(this);
+    public final HealthResource health = new HealthResource(this);
 
     public OpenWAClient(ClientConfig config) {
         if (config.baseUrl == null || config.baseUrl.isBlank()) {
