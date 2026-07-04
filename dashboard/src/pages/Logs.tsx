@@ -6,6 +6,7 @@ import { auditApi } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLogsQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { CustomSelect } from '../components/CustomSelect';
 import { pageWindow } from '../utils/pageWindow';
 import './Logs.css';
 
@@ -153,18 +154,19 @@ export function Logs() {
 
         <div className="filter-group">
           <Filter size={16} />
-          <select
+          <CustomSelect
             value={severityFilter}
-            onChange={e => {
-              setSeverityFilter(e.target.value);
+            onChange={value => {
+              setSeverityFilter(value);
               setPage(1);
             }}
-          >
-            <option value="all">{t('logs.severity.all')}</option>
-            <option value="info">{t('logs.severity.info')}</option>
-            <option value="warn">{t('logs.severity.warn')}</option>
-            <option value="error">{t('logs.severity.error')}</option>
-          </select>
+            options={[
+              { value: 'all', label: t('logs.severity.all') },
+              { value: 'info', label: t('logs.severity.info') },
+              { value: 'warn', label: t('logs.severity.warn') },
+              { value: 'error', label: t('logs.severity.error') },
+            ]}
+          />
         </div>
       </div>
 

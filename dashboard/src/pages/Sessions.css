@@ -87,19 +87,8 @@
   color: var(--text-muted);
 }
 
-.sessions-page .filter-group select {
-  padding: 0.75rem 0;
-  border: none;
-  background: none;
-  background-image: none;
-  font-size: 0.9375rem;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.sessions-page .filter-group select:focus {
-  outline: none;
-  box-shadow: none;
+.sessions-page .filter-group .custom-select {
+  flex: 1;
 }
 
 .sessions-page .sessions-grid {
@@ -268,7 +257,7 @@
     justify-content: space-between;
   }
 
-  .sessions-page .filter-group select {
+  .sessions-page .filter-group .custom-select {
     flex: 1;
   }
 

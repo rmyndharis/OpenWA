@@ -83,17 +83,8 @@
   color: var(--text-muted);
 }
 
-.logs-page .filter-group select{
-  padding: 0.75rem 0;
-  border: none;
-  background: none;
-  font-size: 0.9375rem;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.logs-page .filter-group select:focus{
-  outline: none;
+.logs-page .filter-group .custom-select{
+  flex: 1;
 }
 
 .logs-page .logs-table-container{
@@ -297,9 +288,8 @@
     justify-content: space-between;
   }
 
-  .logs-page .filter-group select{
+  .logs-page .filter-group .custom-select{
     flex: 1;
-    padding: 0.75rem 0;
   }
 
   .logs-page .logs-table-container{
