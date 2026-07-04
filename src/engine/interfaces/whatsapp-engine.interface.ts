@@ -206,6 +206,15 @@ export interface LocationInput {
   address?: string;
 }
 
+export interface PollInput {
+  /** Poll question / title. */
+  name: string;
+  /** Options to vote on (WhatsApp accepts between 2 and 12). */
+  options: string[];
+  /** When true a voter can pick several options; default is single choice. */
+  allowMultipleAnswers?: boolean;
+}
+
 export interface ReactionSender {
   senderId: string;
   emoji: string;
@@ -441,6 +450,7 @@ export interface IWhatsAppEngine {
   sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult>;
   sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult>;
   sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
+  sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult>;
 
   // Reply & Forward
   replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult>;

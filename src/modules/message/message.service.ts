@@ -322,6 +322,34 @@ export class MessageService {
     return this.persistSentState(message, result);
   }
 
+  async sendPoll(
+    sessionId: string,
+    dto: { chatId: string; name: string; options: string[]; allowMultipleAnswers?: boolean },
+  ): Promise<MessageResponseDto> {
+    const engine = this.getEngine(sessionId);
+
+    // Save message as pending BEFORE sending. A poll has no plain-text body, so store the
+    // question — that keeps the message history readable.
+    const message = await this.saveOutgoingMessage(sessionId, {
+      chatId: dto.chatId,
+      body: `📊 ${dto.name}`,
+      type: 'poll',
+    });
+
+    let result: MessageResult;
+    try {
+      result = await engine.sendPollMessage(dto.chatId, {
+        name: dto.name,
+        options: dto.options,
+        allowMultipleAnswers: dto.allowMultipleAnswers === true,
+      });
+    } catch (error) {
+      await this.saveFailedMessage(message);
+      throw this.toClientFacingError(error);
+    }
+    return this.persistSentState(message, result);
+  }
+
   async sendSticker(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
     const engine = this.getEngine(sessionId);
     const media = this.buildMediaInput(dto);

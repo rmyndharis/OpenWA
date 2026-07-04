@@ -8,6 +8,7 @@ import { SendBulkMessageDto, BulkMessageResponseDto } from './dto/bulk-message.d
 import {
   SendLocationDto,
   SendContactDto,
+  SendPollDto,
   ReplyMessageDto,
   ForwardMessageDto,
   ReactMessageDto,
@@ -215,6 +216,19 @@ export class MessageController {
     @Body() dto: SendMediaMessageDto,
   ): Promise<MessageResponseDto> {
     return this.messageService.sendSticker(sessionId, dto);
+  }
+
+  @Post('send-poll')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Send a native WhatsApp poll' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiResponse({
+    status: 201,
+    description: 'Poll sent',
+    type: MessageResponseDto,
+  })
+  async sendPoll(@Param('sessionId') sessionId: string, @Body() dto: SendPollDto): Promise<MessageResponseDto> {
+    return this.messageService.sendPoll(sessionId, dto);
   }
 
   @Post('reply')

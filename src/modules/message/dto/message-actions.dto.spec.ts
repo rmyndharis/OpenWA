@@ -1,6 +1,12 @@
 import { plainToInstance } from 'class-transformer';
 import { validate, ValidationError } from 'class-validator';
-import { SendLocationDto, ReactMessageDto, DeleteMessageDto, ForwardMessageDto } from './message-actions.dto';
+import {
+  SendLocationDto,
+  SendPollDto,
+  ReactMessageDto,
+  DeleteMessageDto,
+  ForwardMessageDto,
+} from './message-actions.dto';
 
 /**
  * Regression locks: these endpoints previously took inline @Body literals (no
@@ -31,6 +37,41 @@ describe('message action DTOs', () => {
   it('SendLocationDto: out-of-range latitude is rejected', async () => {
     const errs = await errorsFor(SendLocationDto, { chatId: 'x@c.us', latitude: 999, longitude: 106.8 });
     expect(errs.some(e => e.property === 'latitude')).toBe(true);
+  });
+
+  it('SendPollDto: a valid poll passes', async () => {
+    expect(
+      await errorsFor(SendPollDto, { chatId: '120363000@g.us', name: 'Where?', options: ['Park', 'Beach'] }),
+    ).toHaveLength(0);
+  });
+
+  it('SendPollDto: fewer than 2 options is rejected', async () => {
+    const errs = await errorsFor(SendPollDto, { chatId: 'x@c.us', name: 'Q', options: ['Only one'] });
+    expect(errs.some(e => e.property === 'options')).toBe(true);
+  });
+
+  it('SendPollDto: more than 12 options is rejected (WhatsApp cap)', async () => {
+    const errs = await errorsFor(SendPollDto, {
+      chatId: 'x@c.us',
+      name: 'Q',
+      options: Array.from({ length: 13 }, (_, i) => `Opt ${i}`),
+    });
+    expect(errs.some(e => e.property === 'options')).toBe(true);
+  });
+
+  it('SendPollDto: an empty option is rejected', async () => {
+    const errs = await errorsFor(SendPollDto, { chatId: 'x@c.us', name: 'Q', options: ['A', ''] });
+    expect(errs.some(e => e.property === 'options')).toBe(true);
+  });
+
+  it('SendPollDto: allowMultipleAnswers must be boolean when present', async () => {
+    const errs = await errorsFor(SendPollDto, {
+      chatId: 'x@c.us',
+      name: 'Q',
+      options: ['A', 'B'],
+      allowMultipleAnswers: 'yes',
+    });
+    expect(errs.some(e => e.property === 'allowMultipleAnswers')).toBe(true);
   });
 
   it('ReactMessageDto: empty emoji is VALID (removes the reaction — foot-gun preserved)', async () => {

@@ -15,6 +15,7 @@ import {
   GroupInfo,
   GroupParticipant,
   LocationInput,
+  PollInput,
   ContactCard,
   MessageReaction,
   Label,
@@ -1093,6 +1094,28 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.client!.sendMessage(to, messageMedia, {
         sendMediaAsSticker: true,
       }),
+    );
+    return {
+      id: msg.id._serialized,
+      timestamp: msg.timestamp,
+    };
+  }
+
+  async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
+    this.ensureReady();
+    // Import Poll dynamically like Location; the .default fallback covers builds where the
+    // classes land on module.default (a plain `module.Poll` would be undefined there and
+    // `new Poll` fails with "not a constructor").
+    const module = await import('whatsapp-web.js');
+    const Poll = module.Poll || module.default?.Poll;
+
+    // wwebjs's typings mark `messageSecret` as required, but at runtime it is optional (it is
+    // only used as a custom poll id), so cast to the constructor's options type to pass just
+    // allowMultipleAnswers.
+    type PollSendOptions = ConstructorParameters<typeof Poll>[2];
+    const pollOptions = { allowMultipleAnswers: poll.allowMultipleAnswers === true } as PollSendOptions;
+    const msg = await this.sendResolved(chatId, to =>
+      this.client!.sendMessage(to, new Poll(poll.name, poll.options, pollOptions)),
     );
     return {
       id: msg.id._serialized,

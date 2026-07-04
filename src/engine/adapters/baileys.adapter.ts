@@ -25,6 +25,7 @@ import {
   MessageReaction,
   MessageResult,
   PaginatedProducts,
+  PollInput,
   Product,
   ProductQueryOptions,
   ReactionEvent,
@@ -578,6 +579,19 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.ensureReady();
     return this.sendContent(chatId, {
       contacts: { displayName: contact.name, contacts: [{ vcard: buildVCard(contact) }] },
+    });
+  }
+
+  async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
+    this.ensureReady();
+    // selectableCount 1 = single choice; 0 = no limit, which is how WhatsApp expresses
+    // "allow multiple answers". Baileys generates the poll's messageSecret itself.
+    return this.sendContent(chatId, {
+      poll: {
+        name: poll.name,
+        values: poll.options,
+        selectableCount: poll.allowMultipleAnswers ? 0 : 1,
+      },
     });
   }
 

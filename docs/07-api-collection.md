@@ -331,6 +331,17 @@ curl -X POST "$BASE/api/sessions/my-session/messages/send-sticker" \
   -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/sticker.webp", "mimetype": "image/webp" }'
 ```
 
+#### POST /api/sessions/:sessionId/messages/send-poll
+
+Send a native WhatsApp poll (2–12 options; single choice unless `allowMultipleAnswers` is true).
+
+```bash
+curl -X POST "$BASE/api/sessions/my-session/messages/send-poll" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "chatId": "1203630000@g.us", "name": "Where should we meet?", "options": ["Park", "Beach", "Downtown"] }'
+```
+
 #### POST /api/sessions/:sessionId/messages/reply
 
 Reply to a message, quoting a prior one.

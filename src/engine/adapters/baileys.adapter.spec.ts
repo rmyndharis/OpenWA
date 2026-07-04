@@ -487,7 +487,7 @@ describe('BaileysAdapter capability gating', () => {
   });
 });
 
-describe('BaileysAdapter location + contact sends', () => {
+describe('BaileysAdapter location + contact + poll sends', () => {
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
@@ -536,6 +536,26 @@ describe('BaileysAdapter location + contact sends', () => {
     const vcard = call.contacts.contacts[0].vcard;
     expect(vcard).not.toMatch(/\nEMAIL:evil@x\.com/);
     expect(vcard).toContain('FN:Eve EMAIL:evil@x.com');
+  });
+
+  it('sendPollMessage maps name/values and defaults to single choice (selectableCount 1)', async () => {
+    const adapter = await ready();
+    await adapter.sendPollMessage('120363000@g.us', { name: 'Where?', options: ['Park', 'Beach'] });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
+      poll: { name: 'Where?', values: ['Park', 'Beach'], selectableCount: 1 },
+    });
+  });
+
+  it('sendPollMessage uses selectableCount 0 (no limit) when multiple answers are allowed', async () => {
+    const adapter = await ready();
+    await adapter.sendPollMessage('120363000@g.us', {
+      name: 'Toppings?',
+      options: ['Cheese', 'Ham', 'Olives'],
+      allowMultipleAnswers: true,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
+      poll: { name: 'Toppings?', values: ['Cheese', 'Ham', 'Olives'], selectableCount: 0 },
+    });
   });
 });
 

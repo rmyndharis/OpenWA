@@ -1138,6 +1138,39 @@ Send a sticker (by URL or base64; typically webp). Reuses `SendMediaMessageDto`.
 
 **Errors:** `400` media validation failure / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `500` engine error
 
+#### POST /api/sessions/:sessionId/messages/send-poll
+
+Send a native WhatsApp poll.
+
+**Auth:** API key (OPERATOR)
+
+**Path parameters**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| sessionId | string | Session ID |
+
+**Request body** — `SendPollDto`
+
+| Field | Type | Required | Constraints | Description |
+| --- | --- | --- | --- | --- |
+| chatId | string | Yes | non-empty | Target chat |
+| name | string | Yes | max 255 | Poll question / title |
+| options | string[] | Yes | 2–12 items, each non-empty, max 100 chars | Options to vote on |
+| allowMultipleAnswers | boolean | No | — | Allow picking several options (default single choice) |
+
+```json
+{ "chatId": "1203630000@g.us", "name": "Where should we meet?", "options": ["Park", "Beach", "Downtown"], "allowMultipleAnswers": false }
+```
+
+**Response** `201`
+
+```json
+{ "messageId": "true_1203630000@g.us_3EB0ABCD", "timestamp": 1719312000 }
+```
+
+**Errors:** `400` validation failure (option count/length) / session not active / unknown body field · `401` missing/invalid API key · `403` key role below OPERATOR · `500` engine error
+
 #### POST /api/sessions/:sessionId/messages/reply
 
 Reply to a message, quoting a prior message.

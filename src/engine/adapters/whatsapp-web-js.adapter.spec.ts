@@ -255,6 +255,56 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
   });
 });
 
+describe('WhatsAppWebJsAdapter.sendPollMessage', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('sends a wwebjs Poll with mapped options and the allowMultipleAnswers flag', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'POLL1' }, timestamp: 1700000010 });
+    const result = await readyAdapter({ sendMessage }).sendPollMessage('120363000@g.us', {
+      name: 'Where?',
+      options: ['Park', 'Beach'],
+      allowMultipleAnswers: true,
+    });
+
+    expect(result).toEqual({ id: 'POLL1', timestamp: 1700000010 });
+    const [to, poll] = sendMessage.mock.calls[0] as [
+      string,
+      {
+        pollName: string;
+        pollOptions: { name: string; localId: number }[];
+        options: { allowMultipleAnswers: boolean };
+      },
+    ];
+    expect(to).toBe('120363000@g.us');
+    expect(poll.pollName).toBe('Where?');
+    expect(poll.pollOptions).toEqual([
+      { name: 'Park', localId: 0 },
+      { name: 'Beach', localId: 1 },
+    ]);
+    expect(poll.options.allowMultipleAnswers).toBe(true);
+  });
+
+  it('defaults to single choice (allowMultipleAnswers false) when the flag is omitted', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'POLL2' }, timestamp: 1700000011 });
+    await readyAdapter({ sendMessage }).sendPollMessage('120363000@g.us', { name: 'Q', options: ['A', 'B'] });
+
+    const [, poll] = sendMessage.mock.calls[0] as [string, { options: { allowMultipleAnswers: boolean } }];
+    expect(poll.options.allowMultipleAnswers).toBe(false);
+  });
+
+  it('rejects with EngineNotReadyError when the session is not connected', async () => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    await expect(adapter.sendPollMessage('x@c.us', { name: 'Q', options: ['A', 'B'] })).rejects.toBeInstanceOf(
+      EngineNotReadyError,
+    );
+  });
+});
+
 describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a synthetic fwd_ id)', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });

@@ -23,6 +23,7 @@ function createMockEngine() {
     sendStickerMessage: jest.fn().mockResolvedValue(mockEngineResult),
     sendLocationMessage: jest.fn().mockResolvedValue(mockEngineResult),
     sendContactMessage: jest.fn().mockResolvedValue(mockEngineResult),
+    sendPollMessage: jest.fn().mockResolvedValue(mockEngineResult),
     replyToMessage: jest.fn().mockResolvedValue(mockEngineResult),
     forwardMessage: jest.fn().mockResolvedValue(mockEngineResult),
     reactToMessage: jest.fn().mockResolvedValue(undefined),
@@ -628,6 +629,39 @@ describe('MessageService', () => {
       expect(mockEngine.sendContactMessage).toHaveBeenCalledWith(
         'test@c.us',
         expect.objectContaining({ name: 'John Doe', number: '+628123456789' }),
+      );
+    });
+  });
+
+  // ── sendPoll ──────────────────────────────────────────────────────
+
+  describe('sendPoll', () => {
+    it('should send a poll and default to single choice', async () => {
+      const result = await service.sendPoll('sess-1', {
+        chatId: '120363000@g.us',
+        name: 'Where should we meet?',
+        options: ['Park', 'Beach'],
+      });
+
+      expect(result.messageId).toBe('wa-msg-1');
+      expect(mockEngine.sendPollMessage).toHaveBeenCalledWith('120363000@g.us', {
+        name: 'Where should we meet?',
+        options: ['Park', 'Beach'],
+        allowMultipleAnswers: false,
+      });
+    });
+
+    it('should pass allowMultipleAnswers through to the engine', async () => {
+      await service.sendPoll('sess-1', {
+        chatId: '120363000@g.us',
+        name: 'Pick toppings',
+        options: ['Cheese', 'Ham', 'Olives'],
+        allowMultipleAnswers: true,
+      });
+
+      expect(mockEngine.sendPollMessage).toHaveBeenCalledWith(
+        '120363000@g.us',
+        expect.objectContaining({ allowMultipleAnswers: true }),
       );
     });
   });
