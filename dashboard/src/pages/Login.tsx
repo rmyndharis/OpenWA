@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Languages } from 'lucide-react';
 import { GithubIcon } from '../components/GithubIcon';
+import { CustomSelect } from '../components/CustomSelect';
 import { languageOptions, resolveSupportedLanguage, type SupportedLanguage } from '../i18n';
 import { API_BASE_URL } from '../services/api';
 import './Login.css';
@@ -68,17 +69,12 @@ export function Login({ onLogin }: LoginProps) {
 
         <div className="login-language">
           <Languages size={18} />
-          <select
+          <CustomSelect
             value={currentLang}
-            onChange={event => changeLanguage(event.target.value as SupportedLanguage)}
-            aria-label={t('common.language')}
-          >
-            {languageOptions.map(option => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            onChange={value => changeLanguage(value as SupportedLanguage)}
+            options={languageOptions.map(opt => ({ value: opt.value, label: opt.label }))}
+            ariaLabel={t('common.language')}
+          />
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">

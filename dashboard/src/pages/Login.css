@@ -62,15 +62,9 @@
   flex-shrink: 0;
 }
 
-.login-container .login-language select{
+.login-container .login-language .custom-select{
   flex: 1;
   min-width: 0;
-  border: 0;
-  outline: 0;
-  color: var(--text-primary);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
 }
 
 .login-container .login-language:focus-within{
