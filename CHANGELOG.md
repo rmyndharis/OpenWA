@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dashboard `<select>` elements replaced with a custom dropdown component.** The "All Status" filter (Sessions), "All Severities" filter (Logs), and language picker (Login) now use a reusable `CustomSelect` component that matches the dashboard design system with proper dark/light theming, keyboard navigation (arrows, Home/End, type-ahead, Escape), and responsive behavior. Focus returns to the trigger on close, matching native `<select>` semantics. Thanks @haseeblodhi1899.
 - The **"Install a plugin" modal is wider on desktop** (480px → 680px) to give the plugin catalog list more room, while still collapsing to a full-width bottom sheet on small screens.
 
 ### Fixed
