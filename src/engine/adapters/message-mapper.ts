@@ -29,6 +29,8 @@ export function mapWwebjsMessageType(raw: string): MessageType {
       return 'contact';
     case 'call_log':
       return 'call';
+    case 'poll_creation':
+      return 'poll';
     case 'revoked':
       return 'revoked';
     default:

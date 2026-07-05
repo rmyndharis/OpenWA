@@ -124,6 +124,7 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['multi_vcard', 'contact'],
     ['call_log', 'call'],
     ['revoked', 'revoked'],
+    ['poll_creation', 'poll'],
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {
     expect(mapWwebjsMessageType(raw)).toBe(expected);

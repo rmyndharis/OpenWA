@@ -140,6 +140,7 @@ export const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'poll',
   'call',
   'revoked',
   'masked',

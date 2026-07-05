@@ -649,6 +649,10 @@ describe('MessageService', () => {
         options: ['Park', 'Beach'],
         allowMultipleAnswers: false,
       });
+      // A poll has no plain-text body, so it is persisted as type 'poll' with the question as the body.
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'poll', body: '📊 Where should we meet?' }),
+      );
     });
 
     it('should pass allowMultipleAnswers through to the engine', async () => {

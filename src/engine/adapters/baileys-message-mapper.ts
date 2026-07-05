@@ -32,6 +32,11 @@ export function mapBaileysMessageType(contentType: string | undefined, isPtt = f
     case 'contactMessage':
     case 'contactsArrayMessage':
       return 'contact';
+    case 'pollCreationMessage':
+    case 'pollCreationMessageV2':
+    case 'pollCreationMessageV3':
+      // Native polls; WhatsApp bumps the content key across versions, all map to the same neutral type.
+      return 'poll';
     case 'interactiveMessage':
     case 'buttonsMessage':
     case 'templateMessage':

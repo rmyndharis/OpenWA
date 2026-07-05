@@ -35,6 +35,7 @@ const TYPE_COLORS: Record<string, string> = {
   video: '#14b8a6',
   sticker: '#ef4444',
   location: '#84cc16',
+  poll: '#6366f1',
   revoked: '#f43f5e',
   masked: '#8b5cf6',
   unknown: '#64748b',

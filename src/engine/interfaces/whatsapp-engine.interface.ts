@@ -55,6 +55,7 @@ export type MessageType =
   | 'sticker'
   | 'location'
   | 'contact'
+  | 'poll'
   | 'call'
   | 'revoked'
   // A message WhatsApp deliberately withheld from linked/companion devices (e.g. high-security
