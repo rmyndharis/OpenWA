@@ -33,6 +33,10 @@ export interface MediaInput {
   data: Buffer | string; // Buffer or base64 or URL
   filename?: string;
   caption?: string;
+  /** Neutral WIDs (`<phone>@c.us`) to @mention in the caption. The adapter de-normalizes per engine. */
+  mentions?: string[];
+  /** When true, send as a WhatsApp voice note (PTT). audio-only; ignored by other media types. */
+  ptt?: boolean;
 }
 
 /**
@@ -51,7 +55,12 @@ export type MessageType =
   | 'sticker'
   | 'location'
   | 'contact'
+  | 'poll'
+  | 'call'
   | 'revoked'
+  // A message WhatsApp deliberately withheld from linked/companion devices (e.g. high-security
+  // business OTPs): the payload is absent by design, not unparseable. See `mapBaileysMessageType`.
+  | 'masked'
   | 'unknown';
 
 export interface IncomingMessage {
@@ -69,10 +78,16 @@ export interface IncomingMessage {
    * code can skip these without matching an engine-specific pseudo-JID (e.g. `status@broadcast`).
    */
   isStatusBroadcast?: boolean;
+  /** WhatsApp ephemeral/disappearing-messages timer in seconds. Set per-chat on each message
+   *  in the raw payload. 0 or undefined = no disappearing timer.
+   *  Known values: 86400 (24h), 604800 (7d), 7776000 (90d). */
+  ephemeralDuration?: number;
   /** For group messages, the WID of the participant who actually sent it (`from` is the group JID there). */
   author?: string;
   /** WIDs @mentioned in the message (empty/absent when none). Surfaced for command targeting. */
   mentionedIds?: string[];
+  /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went unanswered. */
+  call?: { video: boolean; missed: boolean };
   /**
    * Set by the adapter when the sender is identified by a privacy id (e.g. a WhatsApp `@lid`) rather
    * than a phone number, so engine-neutral code can decide whether to attempt phone resolution without
@@ -192,6 +207,15 @@ export interface LocationInput {
   address?: string;
 }
 
+export interface PollInput {
+  /** Poll question / title. */
+  name: string;
+  /** Options to vote on (WhatsApp accepts between 2 and 12). */
+  options: string[];
+  /** When true a voter can pick several options; default is single choice. */
+  allowMultipleAnswers?: boolean;
+}
+
 export interface ReactionSender {
   senderId: string;
   emoji: string;
@@ -227,9 +251,15 @@ export interface Status {
   expiresAt: Date;
 }
 
-export interface TextStatusOptions {
+export interface StatusPostOptions {
+  /** REQUIRED. Neutral JIDs (@c.us / @lid) permitted to see the status. Maps to Baileys statusJidList. */
+  recipients: string[];
+  /** Hex background colour (#RRGGBB). Text status only. */
   backgroundColor?: string;
+  /** Font index. Text status only. */
   font?: number;
+  /** Caption. Image/video status only. */
+  caption?: string;
 }
 
 export interface StatusResult {
@@ -329,6 +359,20 @@ export type DeliveryStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed
  */
 export interface RevokedMessage {
   id: string;
+  /**
+   * Serialized id of the ORIGINAL message that was deleted (when available).
+   *
+   * This is the reliable cross-engine field for reconciling the deleted message in
+   * your own storage — both adapters populate it with the original message id:
+   *  - whatsapp-web.js: `id` is the revocation NOTIFICATION (a distinct message), so
+   *    `id !== revokedId`. `revokedId` may be undefined when the original is not in
+   *    the local store.
+   *  - Baileys: the revoke arrives as a protocolMessage whose key already points at
+   *    the original, so `id === revokedId`.
+   *
+   * Consumers should match on `revokedId` (falling back to `id`) rather than `id`.
+   */
+  revokedId?: string;
   chatId: string;
   from: string;
   to: string;
@@ -397,7 +441,7 @@ export interface IWhatsAppEngine {
   getPushName(): string | null;
 
   // Messaging - Basic
-  sendTextMessage(chatId: string, text: string): Promise<MessageResult>;
+  sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult>;
   sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
   sendVideoMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
   sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
@@ -407,6 +451,7 @@ export interface IWhatsAppEngine {
   sendLocationMessage(chatId: string, location: LocationInput): Promise<MessageResult>;
   sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult>;
   sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
+  sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult>;
 
   // Reply & Forward
   replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult>;
@@ -475,9 +520,9 @@ export interface IWhatsAppEngine {
   // Status/Stories (Phase 3)
   getContactStatuses(): Promise<Status[]>;
   getContactStatus(contactId: string): Promise<Status[]>;
-  postTextStatus(text: string, options?: TextStatusOptions): Promise<StatusResult>;
-  postImageStatus(media: MediaInput, caption?: string): Promise<StatusResult>;
-  postVideoStatus(media: MediaInput, caption?: string): Promise<StatusResult>;
+  postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult>;
+  postImageStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult>;
+  postVideoStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult>;
   deleteStatus(statusId: string): Promise<void>;
 
   // Catalog (Phase 3) - WhatsApp Business only

@@ -4,6 +4,11 @@ import { DeliveryStatus, IncomingMessage, MessageType } from '../interfaces/what
  * Map a Baileys message content-type token (from `getContentType`) to the engine-neutral
  * {@link MessageType}. `audioMessage` splits on the `ptt` flag into `voice` vs `audio`,
  * mirroring the wwjs `ptt -> voice` mapping. Anything unmapped becomes `unknown`.
+ *
+ * Note: Baileys surfaces phone calls through the dedicated `call` socket event (a `WACallEvent`),
+ * never as a message content type returned by `getContentType`, so `call`-typed messages are
+ * intentionally not produced on this engine — unlike the wwjs adapter, which sources call detail
+ * from the gated `getChatHistory` path.
  */
 export function mapBaileysMessageType(contentType: string | undefined, isPtt = false): MessageType {
   switch (contentType) {
@@ -27,9 +32,72 @@ export function mapBaileysMessageType(contentType: string | undefined, isPtt = f
     case 'contactMessage':
     case 'contactsArrayMessage':
       return 'contact';
+    case 'pollCreationMessage':
+    case 'pollCreationMessageV2':
+    case 'pollCreationMessageV3':
+      // Native polls; WhatsApp bumps the content key across versions, all map to the same neutral type.
+      return 'poll';
+    case 'interactiveMessage':
+    case 'buttonsMessage':
+    case 'templateMessage':
+    case 'interactiveResponseMessage':
+      // WhatsApp Business interactive shapes (OTP/verification codes, button/template prompts). They
+      // carry display text that {@link extractBaileysBody} flattens into `body`, so they surface as
+      // `text` instead of being dropped as `unknown` with an empty body (#562).
+      return 'text';
+    case 'placeholderMessage':
+      // Meta masks high-security business messages (enterprise OTPs, banking alerts) on linked/
+      // companion devices — which Baileys is — delivering a bodyless `placeholderMessage` (its only
+      // PlaceholderType is MASK_LINKED_DEVICES). The text is withheld by design and never arrives on
+      // this device (a resend cannot recover it), so surface it as its own `masked` type rather than
+      // an indistinguishable `unknown` empty bubble, so clients can explain it (#574).
+      return 'masked';
     default:
       return 'unknown';
   }
+}
+
+/**
+ * The inbound message-content subset the body extractor reads. Declared structurally (not
+ * `proto.IMessage`) so body extraction is unit-testable with plain objects and stays decoupled from
+ * the Baileys proto shape — mirroring the rationale for {@link BaileysIncomingFields}.
+ */
+export interface BaileysBodyContent {
+  conversation?: string | null;
+  extendedTextMessage?: { text?: string | null } | null;
+  imageMessage?: { caption?: string | null } | null;
+  videoMessage?: { caption?: string | null } | null;
+  documentMessage?: { caption?: string | null } | null;
+  interactiveMessage?: { body?: { text?: string | null } | null } | null;
+  buttonsMessage?: { contentText?: string | null } | null;
+  templateMessage?: {
+    hydratedTemplate?: { hydratedContentText?: string | null } | null;
+    hydratedFourRowTemplate?: { hydratedContentText?: string | null } | null;
+  } | null;
+  interactiveResponseMessage?: { body?: { text?: string | null } | null } | null;
+}
+
+/**
+ * Extract the display text of an inbound Baileys message: plain text first, then a media caption,
+ * then the WhatsApp Business interactive shapes (interactive / buttons / template / interactive-
+ * response) whose text was previously dropped — the OTP/verification text businesses send via these
+ * shapes (#562). Returns `''` when the message carries no extractable text. Pass the NORMALIZED
+ * content (ephemeral/viewOnce/documentWithCaption wrappers already unwrapped), as the adapter does.
+ */
+export function extractBaileysBody(content: BaileysBodyContent): string {
+  return (
+    content.conversation ??
+    content.extendedTextMessage?.text ??
+    content.imageMessage?.caption ??
+    content.videoMessage?.caption ??
+    content.documentMessage?.caption ??
+    content.interactiveMessage?.body?.text ??
+    content.buttonsMessage?.contentText ??
+    content.templateMessage?.hydratedTemplate?.hydratedContentText ??
+    content.templateMessage?.hydratedFourRowTemplate?.hydratedContentText ??
+    content.interactiveResponseMessage?.body?.text ??
+    ''
+  );
 }
 
 /**
@@ -83,6 +151,10 @@ export interface BaileysIncomingFields {
   location?: IncomingMessage['location'];
   /** Pre-extracted quoted message context. Populated by the adapter when `contextInfo` is present. */
   quotedMessage?: IncomingMessage['quotedMessage'];
+  /** Ephemeral/disappearing-messages timer from `contextInfo.expiration` on the Baileys message. */
+  ephemeralDuration?: number;
+  /** @mentioned engine JIDs from `contextInfo.mentionedJid`; normalized and surfaced as `mentionedIds`. */
+  mentionedJids?: string[];
 }
 
 /**
@@ -141,6 +213,17 @@ export function buildIncomingMessageFromBaileys(
 
   if (fields.quotedMessage) {
     incoming.quotedMessage = fields.quotedMessage;
+  }
+
+  // Ephemeral/disappearing-messages timer, when the chat has one set.
+  if (fields.ephemeralDuration && fields.ephemeralDuration > 0) {
+    incoming.ephemeralDuration = fields.ephemeralDuration;
+  }
+
+  // @mentioned WIDs, normalized to the neutral convention — parity with the wwjs adapter
+  // (message-mapper.ts:90), consumed by command targeting and the `mentions` webhook filter.
+  if (fields.mentionedJids && fields.mentionedJids.length > 0) {
+    incoming.mentionedIds = fields.mentionedJids.map(normalizeJid);
   }
 
   return incoming;

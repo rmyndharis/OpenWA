@@ -324,6 +324,18 @@ describe('AuthService', () => {
       await expect(service.validateApiKey('ip-no-client')).rejects.toThrow('Client IP could not be determined');
     });
 
+    it('rejects a malformed client IP instead of coercing it into an allowed range', async () => {
+      const key = createMockApiKey({
+        allowedIps: ['10.0.0.1/32'],
+        keyHash: hashKey('ip-malformed'),
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+
+      // The previous lenient parser read '10.0.0.1abc' as 10.0.0.1 and let it through; the shared
+      // hardened matcher rejects a non-numeric octet, so the per-key whitelist holds.
+      await expect(service.validateApiKey('ip-malformed', '10.0.0.1abc')).rejects.toThrow('IP address not allowed');
+    });
+
     it('should throw UnauthorizedException when session not in allowedSessions', async () => {
       const key = createMockApiKey({
         allowedSessions: ['session-A'],

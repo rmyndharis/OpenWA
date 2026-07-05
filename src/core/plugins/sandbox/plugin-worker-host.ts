@@ -31,10 +31,31 @@ export class PluginWorkerHost {
     number,
     { resolve: (result: { continue: boolean; data?: unknown }) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  private readonly webhookPending = new Map<
+    number,
+    {
+      resolve: (result: {
+        status: number;
+        headers?: Record<string, string>;
+        body?: string;
+        ok: boolean;
+        error?: string;
+      }) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly healthPending = new Map<
     number,
     { resolve: (result: { healthy: boolean; message?: string }) => void; timer: ReturnType<typeof setTimeout> }
   >();
+  // Hook events currently dispatched to the worker and not yet settled, as a multiset. While the
+  // worker handles a hook it may issue capability calls that round-trip to the host; those run inside
+  // this in-flight set so a capability that re-fires the same event is short-circuited (HookManager's
+  // AsyncLocalStorage re-entrancy guard does not span the worker IPC boundary).
+  private readonly inFlightHookEvents = new Map<string, number>();
+
+  // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
+  private inFlightCaps = 0;
 
   constructor(
     private readonly channel: PluginWorkerChannel,
@@ -44,11 +65,34 @@ export class PluginWorkerHost {
     // Called when the worker subscribes a handler to an event, so the host can register a shim with
     // the hook manager that dispatches into the worker.
     private readonly onHookSubscribe?: (event: string, priority?: number) => void,
+    // Called when the worker claims an ingress route (registered a webhook handler for it), so the
+    // host can record it against the manifest-declared routes (mirrors onHookSubscribe for ingress).
+    private readonly onWebhookSubscribe?: (route: string) => void,
     // Routes a worker plugin's ctx.logger.* call to the host's per-plugin logger.
     private readonly onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+    // Runs a worker-initiated capability call inside the in-flight hook context, so a capability that
+    // re-fires an event this worker is currently handling is short-circuited (re-entrancy across IPC).
+    // Absent => capability calls run with no hook guard (e.g. before the bridge is wired, or in tests).
+    private readonly runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+    // Max worker-initiated capability calls the host will run concurrently for this worker. When this many
+    // cap requests are in flight, further cap messages are rejected with an error cap-result (the worker
+    // sees a thrown Error) instead of queuing host-side work — bounding the aggregate sendText/net.fetch/
+    // storage load a single sandboxed plugin can trigger. Absent/undefined => no cap (legacy behavior).
+    private readonly maxInFlightCaps?: number,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
+  }
+
+  private incInFlightHook(event: string): void {
+    this.inFlightHookEvents.set(event, (this.inFlightHookEvents.get(event) ?? 0) + 1);
+  }
+
+  private decInFlightHook(event: string): void {
+    const count = this.inFlightHookEvents.get(event);
+    if (count === undefined) return;
+    if (count <= 1) this.inFlightHookEvents.delete(event);
+    else this.inFlightHookEvents.set(event, count - 1);
   }
 
   /**
@@ -66,13 +110,20 @@ export class PluginWorkerHost {
     onTimeout?: () => void;
   }): Promise<{ continue: boolean; data?: unknown }> {
     const id = this.nextId++;
+    this.incInFlightHook(options.event);
     return new Promise(resolve => {
+      // settle decrements the in-flight counter on every exit path (worker result, timeout, or crash
+      // drain) since it is what the hookPending entry's resolve runs.
+      const settle = (result: { continue: boolean; data?: unknown }): void => {
+        this.decInFlightHook(options.event);
+        resolve(result);
+      };
       const timer = setTimeout(() => {
         this.hookPending.delete(id);
         options.onTimeout?.();
-        resolve({ continue: true });
+        settle({ continue: true });
       }, options.timeoutMs);
-      this.hookPending.set(id, { resolve, timer });
+      this.hookPending.set(id, { resolve: settle, timer });
       this.channel.postMessage({
         kind: 'hook',
         id,
@@ -80,6 +131,53 @@ export class PluginWorkerHost {
         data: options.data,
         sessionId: options.sessionId,
         source: options.source,
+        config: options.config,
+      });
+    });
+  }
+
+  /**
+   * Dispatch a verified inbound webhook to the worker and await its handler result. Cloned from
+   * dispatchHook: bounded by `timeoutMs`, and fail-open — a slow or wedged worker resolves a default
+   * 504 (the provider was already ack'd in async mode) rather than hanging the HTTP request. A
+   * mid-request worker crash is drained to 502 in handleExit, so the request never hangs forever.
+   */
+  dispatchWebhook(options: {
+    instanceId: string;
+    route: string;
+    method: string;
+    headers: Record<string, string>;
+    query: Record<string, string>;
+    body: string;
+    rawBody: string;
+    verified: boolean;
+    deliveryId: string;
+    sessionId?: string;
+    config?: Record<string, unknown>;
+    timeoutMs: number;
+    onTimeout?: () => void;
+  }): Promise<{ status: number; headers?: Record<string, string>; body?: string; ok: boolean; error?: string }> {
+    const id = this.nextId++;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        this.webhookPending.delete(id);
+        options.onTimeout?.();
+        resolve({ ok: false, status: 504 }); // fail-open: provider already ack'd in async mode
+      }, options.timeoutMs);
+      this.webhookPending.set(id, { resolve, timer });
+      this.channel.postMessage({
+        kind: 'webhook',
+        id,
+        instanceId: options.instanceId,
+        route: options.route,
+        method: options.method,
+        headers: options.headers,
+        query: options.query,
+        body: options.body,
+        rawBody: options.rawBody,
+        verified: options.verified,
+        deliveryId: options.deliveryId,
+        sessionId: options.sessionId,
         config: options.config,
       });
     });
@@ -194,6 +292,9 @@ export class PluginWorkerHost {
       case 'hook-subscribe':
         this.onHookSubscribe?.(message.event, message.priority);
         break;
+      case 'webhook-subscribe':
+        this.onWebhookSubscribe?.(message.route);
+        break;
       case 'log':
         this.onLog?.(message.level, message.message, message.meta);
         break;
@@ -205,6 +306,20 @@ export class PluginWorkerHost {
         const result: { continue: boolean; data?: unknown } = { continue: message.continue };
         if (message.data !== undefined) result.data = message.data;
         waiter.resolve(result);
+        break;
+      }
+      case 'webhook-result': {
+        const waiter = this.webhookPending.get(message.id);
+        if (!waiter) return;
+        this.webhookPending.delete(message.id);
+        clearTimeout(waiter.timer);
+        waiter.resolve({
+          ok: message.error == null,
+          status: message.status,
+          headers: message.headers,
+          body: message.body,
+          error: message.error,
+        });
         break;
       }
       case 'health-result': {
@@ -219,12 +334,29 @@ export class PluginWorkerHost {
   }
 
   private async handleCapRequest(message: Extract<WorkerToHostMessage, { kind: 'cap' }>): Promise<void> {
+    if (this.maxInFlightCaps !== undefined && this.inFlightCaps >= this.maxInFlightCaps) {
+      this.channel.postMessage({
+        kind: 'cap-result',
+        id: message.id,
+        ok: false,
+        error: `capability call rejected: too many concurrent capability calls (limit ${this.maxInFlightCaps})`,
+      });
+      return;
+    }
     if (!this.capDispatcher) {
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: false, error: 'no capability dispatcher' });
       return;
     }
+    this.inFlightCaps++;
     try {
-      const result = await this.capDispatcher(message.verb, message.args);
+      const dispatcher = this.capDispatcher;
+      const run = (): Promise<unknown> => dispatcher(message.verb, message.args);
+      // Run inside the in-flight hook context so a capability that re-fires an event this worker is
+      // currently handling is short-circuited by HookManager's re-entrancy guard (which otherwise
+      // can't see across the IPC boundary). No hooks in flight => run directly, no wrapping cost.
+      const inFlight = [...this.inFlightHookEvents.keys()];
+      const result =
+        this.runWithHookGuard && inFlight.length > 0 ? await this.runWithHookGuard(inFlight, run) : await run();
       this.channel.postMessage({ kind: 'cap-result', id: message.id, ok: true, result });
     } catch (error) {
       this.channel.postMessage({
@@ -233,6 +365,8 @@ export class PluginWorkerHost {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      this.inFlightCaps--;
     }
   }
 
@@ -261,6 +395,14 @@ export class PluginWorkerHost {
       resolve({ continue: true });
     });
     this.hookPending.clear();
+    // Drain in-flight webhooks: a mid-request worker crash must return 502, never hang the HTTP
+    // request. (The per-request timeout would eventually fail-open to 504, but the request should not
+    // wait the full window when the worker is already known dead.)
+    this.webhookPending.forEach(({ resolve, timer }) => {
+      clearTimeout(timer);
+      resolve({ ok: false, status: 502 });
+    });
+    this.webhookPending.clear();
   }
 
   private drain<T>(waiters: T[], fn: (w: T) => void): void {

@@ -28,6 +28,19 @@ export function hourBucketSql(dbType: string): string {
     : `CAST(strftime('%H', m.createdAt) AS INTEGER)`;
 }
 
+/**
+ * SQL for the most-recent-activity timestamp (MAX of createdAt) as an identical text format on both
+ * engines. SQLite's MAX over a `datetime` column returns the stored text; Postgres returns a timestamp
+ * the driver hydrates to a JS Date (serialized to a different ISO string). to_char/strftime pin both
+ * to `YYYY-MM-DD HH:MM:SS`, matching the format the time-series buckets already use, so the lastActive
+ * field is stable regardless of the backing database.
+ */
+export function maxCreatedAtSql(dbType: string): string {
+  return dbType === 'postgres'
+    ? `to_char(MAX(m."createdAt"), 'YYYY-MM-DD HH24:MI:SS')`
+    : `strftime('%Y-%m-%d %H:%M:%S', MAX(m.createdAt))`;
+}
+
 export interface OverviewStats {
   sessions: {
     active: number;
@@ -52,13 +65,13 @@ export interface MessageStats {
   timeSeries: TimeSeriesPoint[];
   byType: Record<string, number>;
   bySession: Array<{ sessionId: string; name: string; sent: number; received: number }>;
-  topChats: Array<{ chatId: string; messageCount: number }>;
+  topChats: Array<{ chatId: string; chatName: string | null; messageCount: number }>;
 }
 
 export interface SessionStats {
   session: { id: string; name: string; status: string };
   messages: { sent: number; received: number; today: number; failed: number };
-  topChats: Array<{ chatId: string; count: number; lastActive: string }>;
+  topChats: Array<{ chatId: string; chatName: string | null; count: number; lastActive: string }>;
   hourlyActivity: Array<{ hour: number; sent: number; received: number }>;
 }
 
@@ -195,11 +208,14 @@ export class StatsService {
       .createQueryBuilder('m')
       .select('m.chatId', 'chatId')
       .addSelect('COUNT(*)', 'messageCount')
+      .addSelect('MAX(m.chatName)', 'chatName')
       .where('m.createdAt >= :since', { since })
       .groupBy('m.chatId')
-      .orderBy('messageCount', 'DESC')
+      // Order by the aggregate expression, not the "messageCount" alias: Postgres folds an unquoted
+      // ORDER BY messageCount to lowercase and 42703s against the quoted alias (SQLite tolerated it).
+      .orderBy('COUNT(*)', 'DESC')
       .limit(10)
-      .getRawMany<{ chatId: string; messageCount: string }>();
+      .getRawMany<{ chatId: string; messageCount: string; chatName: string | null }>();
 
     return {
       timeSeries,
@@ -207,6 +223,7 @@ export class StatsService {
       bySession,
       topChats: topChats.map(c => ({
         chatId: c.chatId,
+        chatName: c.chatName ?? null,
         messageCount: parseInt(c.messageCount),
       })),
     };
@@ -249,12 +266,13 @@ export class StatsService {
       .createQueryBuilder('m')
       .select('m.chatId', 'chatId')
       .addSelect('COUNT(*)', 'count')
-      .addSelect('MAX(m.createdAt)', 'lastActive')
+      .addSelect(maxCreatedAtSql(this.dataDbType), 'lastActive')
+      .addSelect('MAX(m.chatName)', 'chatName')
       .where('m.sessionId = :sessionId', { sessionId })
       .groupBy('m.chatId')
       .orderBy('count', 'DESC')
       .limit(10)
-      .getRawMany<{ chatId: string; count: string; lastActive: string }>();
+      .getRawMany<{ chatId: string; count: string; lastActive: string; chatName: string | null }>();
 
     // Hourly activity (last 24h)
     const hourlyActivity = await this.getHourlyActivity(sessionId);
@@ -264,6 +282,7 @@ export class StatsService {
       messages: { sent, received, today: todayCount, failed },
       topChats: topChats.map(c => ({
         chatId: c.chatId,
+        chatName: c.chatName ?? null,
         count: parseInt(c.count),
         lastActive: c.lastActive,
       })),

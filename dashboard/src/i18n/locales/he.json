@@ -53,7 +53,8 @@
     "logout": "יציאה",
     "refresh": "רענון",
     "errorGeneric": "אירעה שגיאה",
-    "unknownError": "שגיאה לא ידועה"
+    "unknownError": "שגיאה לא ידועה",
+    "retry": "נסה שוב"
   },
   "theme": {
     "light": "בהיר",
@@ -77,6 +78,15 @@
     "logs": "לוגים"
   },
   "chats": {
+    "media": {
+      "location": "מיקום",
+      "call": "שיחה",
+      "callMissed": "שיחה שלא נענתה",
+      "callVideo": "שיחת וידאו",
+      "callVideoMissed": "שיחת וידאו שלא נענתה",
+      "omitted": "מדיה",
+      "image": "תמונה"
+    },
     "subtitle": "שליחה ומענה להודעות WhatsApp בזמן אמת",
     "noSessionsTitle": "אין סשנים מחוברים",
     "noSessionsDesc": "יש לחבר סשן WhatsApp מתפריט <1>Sessions</1> תחילה כדי להשתמש בתכונת הצ'אט.",
@@ -108,6 +118,7 @@
     "placeholderDesc": "בחר שיחה פעילה מהסרגל הצדדי כדי להתחיל לקרוא ולשלוח הודעות WhatsApp.",
     "deleteConfirm": "למחוק הודעה זו עבור כולם?",
     "messageDeleted": "🚫 הודעה זו נמחקה",
+    "messageMasked": "🔒 הוסתר על ידי וואטסאפ במכשירים המקושרים — בדוק בטלפון הראשי שלך",
     "errors": {
       "loadSessions": "טעינת הסשנים נכשלה",
       "loadChats": "טעינת השיחות נכשלה",
@@ -116,7 +127,8 @@
       "send": "שליחת ההודעה נכשלה",
       "react": "התגובה להודעה נכשלה",
       "delete": "מחיקת ההודעה נכשלה"
-    }
+    },
+    "loadMessagesError": "לא ניתן לטעון את ההודעות. בדקו את יומני השרת."
   },
   "errorBoundary": {
     "title": "משהו השתבש",
@@ -173,7 +185,8 @@
       "sent": "נשלחו",
       "received": "התקבלו",
       "messages": "הודעות",
-      "empty": "אין פעילות הודעות בתקופה זו."
+      "empty": "אין פעילות הודעות בתקופה זו.",
+      "error": "לא ניתן לטעון את ניתוח ההודעות. בדקו את יומני השרת."
     }
   },
   "sessionStatus": {
@@ -252,7 +265,7 @@
       "stop": "עצירה",
       "reconnect": "התחברות מחדש",
       "delete": "מחיקה",
-      "killStuck": "Kill Stuck"
+      "killStuck": "סגור תקוע"
     },
     "toasts": {
       "readyTitle": "ה-Session מוכן",
@@ -269,14 +282,32 @@
       "error": "שגיאה"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "סגירת סשן תקוע",
+      "message": "האם אתם בטוחים שברצונכם לסגור בכוח את הסשן \"{{name}}\"?",
+      "warning": "פעולה זו תסיים בכוח את תהליך הדפדפן של WhatsApp. ייתכן שיהיה צורך לסרוק מחדש את הסשן לאחר ההפעלה מחדש.",
+      "confirm": "סגור סשן",
+      "successTitle": "הסשן נסגר",
+      "success": "הסשן נסגר בכוח. ניתן להפעיל אותו מחדש כעת.",
+      "failedTitle": "הסגירה בכוח נכשלה",
+      "failed": "סגירת הסשן בכוח נכשלה."
+    },
+    "pairing": {
+      "tabQr": "קוד QR",
+      "tabPhone": "קישור עם מספר טלפון",
+      "phoneLabel": "מספר טלפון",
+      "phonePlaceholder": "לדוגמה: 919876543210",
+      "phoneHint": "ספרות בלבד (ללא +, רווחים או מקפים) בפורמט בין-לאומי (קידומת מדינה + מספר).",
+      "invalidPhone": "יש להזין מספר טלפון תקין: 6–15 ספרות, קידומת המדינה תחילה, ללא סימנים.",
+      "generateButton": "יצירת קוד קישור",
+      "generating": "יוצר קוד קישור...",
+      "codeLabel": "קוד הקישור שלך",
+      "changeNumber": "שינוי מספר / בקשת קוד חדש",
+      "instructions": "הוראות קישור",
+      "step1": "<strong>1.</strong> יש לפתוח את WhatsApp במכשיר",
+      "step2": "<strong>2.</strong> יש להקיש על <strong>תפריט</strong> או <strong>הגדרות</strong> ולבחור <strong>מכשירים מקושרים</strong>",
+      "step3": "<strong>3.</strong> יש להקיש על <strong>קישור מכשיר</strong>, ולאחר מכן על <strong>קישור עם מספר טלפון במקום זאת</strong>",
+      "step4": "<strong>4.</strong> יש להזין במכשיר את הקוד בן 8 התווים המוצג למעלה",
+      "waitingConnection": "ממתין לקישור המכשיר שלך…"
     }
   },
   "webhooks": {
@@ -293,10 +324,11 @@
     "available": "אירועים זמינים",
     "saveChanges": "שמירת שינויים",
     "filters": {
+      "badge": "{{count}} מסנן",
+      "badge_two": "שני מסננים",
+      "badge_other": "{{count}} מסננים",
       "title": "מסננים (אופציונלי)",
       "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
-      "badge": "{{count}} מסנן",
-      "badge_other": "{{count}} מסננים",
       "addCondition": "הוספת תנאי",
       "removeCondition": "הסרת תנאי",
       "caseSensitive": "תלוי רישיות",
@@ -359,48 +391,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "תבניות",
+    "subtitle": "צרו תבניות הודעה לשימוש חוזר עבור כל סשן WhatsApp",
+    "createTitle": "יצירת תבנית",
+    "editTitle": "עריכת תבנית",
+    "newTemplate": "תבנית חדשה",
+    "createTemplate": "צור תבנית",
+    "saveChanges": "שמירת שינויים",
+    "viewOnly": "צפייה בלבד",
+    "noSessions": "אין סשנים",
+    "sessionHint": "נשמר תחת {{name}}",
+    "namePlaceholder": "לדוגמה, order-confirmation",
+    "header": "כותרת",
+    "headerPlaceholder": "שורת פתיחה (אופציונלי)",
+    "body": "גוף ההודעה",
+    "bodyPlaceholder": "שלום {{customer}}, ההזמנה שלך {{orderId}} מוכנה.",
+    "footer": "כותרת תחתונה",
+    "footerPlaceholder": "שורת סיום (אופציונלי)",
+    "previewTitle": "תצוגה מקדימה",
+    "previewValuePlaceholder": "ערך לדוגמה",
+    "previewEmpty": "התחילו לכתוב תבנית כדי לראות אותה כאן בתצוגה מקדימה.",
+    "noPlaceholders": "השתמשו במצייני מיקום {{name}} כדי לבדוק החלפות.",
+    "savedTitle": "תבניות שמורות",
+    "count": "{{count}} בסך הכול",
+    "deleteTitle": "מחיקת תבנית",
+    "deleteConfirm": "למחוק את התבנית \"{{name}}\"? לא ניתן לבטל פעולה זו.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "העתקת שם התבנית"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "אין תבניות שמורות",
+      "description": "צרו תבנית לשימוש חוזר כדי לזרז תשובות והתראות נפוצות.",
+      "noSessionsTitle": "אין סשנים זמינים",
+      "noSessionsDesc": "צרו סשן WhatsApp לפני הוספת תבניות."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "התבנית נוצרה בהצלחה",
+      "createFailed": "יצירת התבנית נכשלה: {{message}}",
+      "updated": "התבנית עודכנה בהצלחה",
+      "updateFailed": "עדכון התבנית נכשל: {{message}}",
+      "deleted": "התבנית נמחקה בהצלחה",
+      "deleteFailed": "מחיקת התבנית נכשלה: {{message}}",
+      "copied": "שם התבנית הועתק"
     }
   },
   "apiKeys": {
@@ -577,7 +609,14 @@
       "sessionDataPath": "נתיב נתוני הפעלה",
       "browserArgs": "ארגומנטים של הדפדפן",
       "noBrowser": "מנוע זה מתחבר באמצעות WebSocket — אין לו דפדפן, ולכן אין הגדרות למצב ללא ממשק או לארגומנטים של הדפדפן. המנוע הפעיל מוחל לאחר הפעלה מחדש.",
-      "restartNote": "החלפת המנוע נכנסת לתוקף לאחר הפעלה מחדש של השרת."
+      "restartNote": "החלפת המנוע נכנסת לתוקף לאחר הפעלה מחדש של השרת.",
+      "webVersion": "גרסת WhatsApp Web",
+      "webVersionNative": "אוטומטי (ברירת המחדל של whatsapp-web.js)",
+      "webVersionSource": {
+        "pinned": "מקובע באמצעות WWEBJS_WEB_VERSION",
+        "auto": "נקבע אוטומטית, הגרסה היציבה הידועה העדכנית",
+        "native": "בחירה אוטומטית מובנית של whatsapp-web.js"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -588,16 +627,16 @@
       "queueTitle": "הפעלת מערכת התורים BullMQ",
       "queueDesc": "שימוש בתורי הודעות לאספקה אמינה של הודעות ו-Webhooks",
       "statsTitle": "סטטיסטיקות תור",
-      "messageQueue": "תור הודעות",
       "webhookQueue": "תור Webhooks",
       "pending": "בהמתנה",
       "completed": "הושלמו",
       "failed": "נכשלו",
-      "clearFailed": "ניקוי משימות שנכשלו",
       "viewBullMq": "פתיחת Bull MQ Dashboard",
       "disabledTitle": "Redis מושבת",
       "disabledDesc": "יש להפעיל את Redis למטמון, אחסון Sessions ותורי הודעות BullMQ.",
-      "passwordOptional": "(אופציונלי)"
+      "passwordOptional": "(אופציונלי)",
+      "bullMqUrlCopied": "כתובת לוח Bull MQ הועתקה",
+      "bullMqUrlHint": "פתח אותו עם מפתח API מסוג ADMIN — לשונית דפדפן אינה יכולה לאמת."
     },
     "storage": {
       "title": "הגדרות אחסון",
@@ -613,7 +652,8 @@
       "accessKey": "Access Key",
       "secretKey": "Secret Key",
       "endpoint": "Endpoint מותאם (אופציונלי)",
-      "endpointHint": "עבור MinIO או שירותים אחרים תואמי S3"
+      "endpointHint": "עבור MinIO או שירותים אחרים תואמי S3",
+      "s3Unreachable": "S3 (לא נגיש)"
     },
     "statusLabels": {
       "connected": "מחובר",
@@ -638,7 +678,25 @@
     },
     "toasts": {
       "saveFailed": "השמירה נכשלה"
-    }
+    },
+    "envPinNote": "מקובע על ידי משתנה סביבה — זהו הערך הפעיל; שינויים בלוח הבקרה לא ייכנסו לתוקף עד שמשתנה זה יבוטל.",
+    "migration": {
+      "title": "שימו לב — פעולה זו משנה את מנגנון אחסון הנתונים",
+      "dbWarning": "מסד הנתונים החדש מתחיל ריק. הורידו עכשיו גיבוי של הנתונים הנוכחיים (בעודכם עדיין על מסד הנתונים הישן), ולאחר מכן שחזרו אותו לאחר ההפעלה מחדש.",
+      "storageWarning": "קובצי מדיה קיימים אינם מועברים אוטומטית למנגנון האחסון החדש; הם יישארו במיקום הישן.",
+      "downloadBackup": "הורידו גיבוי תחילה",
+      "backupTitle": "גיבוי ושחזור נתונים",
+      "backupHint": "ייצאו את כל הנתונים כ-JSON לפני החלפת מסדי הנתונים, ולאחר מכן ייבאו אותם לאחר ההחלפה. הגיבוי מכיל סודות webhook ופרטי גישה של proxy בטקסט גלוי — אחסנו אותו באופן מאובטח ומחקו אותו לאחר השחזור.",
+      "export": "ייצוא נתונים",
+      "import": "ייבוא נתונים",
+      "exportFailed": "לא ניתן לייצא את הנתונים",
+      "importFailed": "לא ניתן לייבא את הנתונים",
+      "importOk": "הנתונים יובאו",
+      "importConfirm": "הייבוא יחליף את כל הנתונים הנוכחיים בגיבוי ({{rows}} שורות). לא ניתן לבטל פעולה זו. להמשיך?",
+      "invalidFile": "הקובץ הזה אינו גיבוי נתונים תקין של OpenWA.",
+      "importTooLarge": "הגיבוי גדול מדי עבור מגבלת הבקשה. הגדילו את BODY_SIZE_LIMIT בשרת ונסו שוב."
+    },
+    "statusLoadError": "לא ניתן לטעון את מצב התשתית הנוכחי. רעננו כדי לנסות שוב."
   },
   "plugins": {
     "title": "תוספים",
@@ -718,6 +776,65 @@
       "selectSession": "בחירת session…",
       "saveOverride": "שמירת דריסה",
       "clearOverride": "ניקוי דריסה"
+    },
+    "instances": {
+      "title": "מופעים",
+      "description": "הקצו מופעים לכל חשבון עבור אינטגרציה זו. לכל מופע יש מפתח חתימה סודי וכתובת URL לקליטה משלו.",
+      "create": "יצירת מופע",
+      "empty": "אין עדיין מופעים. צרו מופע כדי לקבל כתובת URL וסוד.",
+      "loadError": "טעינת המופעים נכשלה.",
+      "allSessions": "כל ה-Sessions",
+      "enabled": "מופעל",
+      "disabled": "מושבת",
+      "form": {
+        "instanceId": "מזהה מופע",
+        "instanceIdPlaceholder": "לדוגמה: acme-support",
+        "instanceIdHint": "אותיות, מספרים, מקפים וקווים תחתונים (עד 64 תווים).",
+        "sessionScope": "טווח session (אופציונלי)",
+        "sessionScopePlaceholder": "השאירו ריק לכל ה-Sessions",
+        "verifyToken": "טוקן אימות (אופציונלי)",
+        "verifyTokenPlaceholder": "הטוקן שהספק מחזיר בעת האימות",
+        "config": "תצורה (JSON אופציונלי)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "המופע נוצר",
+        "hint": "העתיקו את הסוד כעת — הוא מוצג רק פעם אחת.",
+        "secret": "מפתח חתימה סודי",
+        "ingressUrls": "כתובת/כתובות URL לקליטה"
+      },
+      "regenerate": {
+        "title": "יצירת סוד מחדש",
+        "confirm": "ליצור מחדש את מפתח החתימה הסודי של {{id}}? הסוד הנוכחי יפסיק לעבוד באופן מיידי.",
+        "action": "יצירה מחדש"
+      },
+      "edit": { "title": "עריכת {{id}}" },
+      "delete": {
+        "title": "מחיקת מופע",
+        "confirm": "למחוק את המופע {{id}}? כתובת ה-URL והסוד שלו יפסיקו לעבוד באופן מיידי.",
+        "action": "מחיקה"
+      },
+      "actions": {
+        "regenerate": "יצירת סוד מחדש",
+        "edit": "עריכה",
+        "delete": "מחיקה",
+        "copy": "העתקה",
+        "save": "שמירה",
+        "enable": "הפעלה",
+        "disable": "השבתה"
+      },
+      "errors": {
+        "invalidId": "מזהה המופע חייב לכלול אותיות, מספרים, מקפים או קווים תחתונים (עד 64 תווים).",
+        "invalidJson": "התצורה חייבת להיות JSON תקין.",
+        "duplicateId": "כבר קיים מופע עם מזהה זה."
+      },
+      "toasts": {
+        "created": "המופע נוצר",
+        "updated": "המופע עודכן",
+        "deleted": "המופע נמחק",
+        "secretRegenerated": "הסוד נוצר מחדש",
+        "actionFailed": "הפעולה נכשלה"
+      }
     }
   }
 }

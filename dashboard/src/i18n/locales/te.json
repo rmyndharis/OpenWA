@@ -53,7 +53,8 @@
     "logout": "లాగౌట్",
     "refresh": "రిఫ్రెష్",
     "errorGeneric": "ఒక లోపం సంభవించింది",
-    "unknownError": "తెలియని లోపం"
+    "unknownError": "తెలియని లోపం",
+    "retry": "మళ్లీ ప్రయత్నించండి"
   },
   "theme": {
     "light": "లైట్",
@@ -77,6 +78,15 @@
     "logs": "లాగ్స్"
   },
   "chats": {
+    "media": {
+      "location": "స్థానం",
+      "call": "కాల్",
+      "callMissed": "మిస్డ్ కాల్",
+      "callVideo": "వీడియో కాల్",
+      "callVideoMissed": "మిస్డ్ వీడియో కాల్",
+      "omitted": "మీడియా",
+      "image": "చిత్రం"
+    },
     "subtitle": "వాట్సాప్ సందేశాలను నిజ-సమయంలో పంపండి మరియు ప్రత్యుత్తరం ఇవ్వండి",
     "noSessionsTitle": "కనెక్ట్ అయిన సెషన్లు లేవు",
     "noSessionsDesc": "చాట్ ఫీచర్‌ను ఉపయోగించడానికి దయచేసి ముందుగా <1>సెషన్స్</1> మెను నుండి ఒక వాట్సాప్ సెషన్‌ను కనెక్ట్ చేయండి.",
@@ -108,6 +118,7 @@
     "placeholderDesc": "వాట్సాప్ సందేశాలను చదవడం మరియు పంపడం ప్రారంభించడానికి ఎడమ సైడ్‌బార్ నుండి ఒక యాక్టివ్ చాట్‌ను ఎంచుకోండి.",
     "deleteConfirm": "ఈ సందేశాన్ని అందరి కోసం తొలగించాలా?",
     "messageDeleted": "🚫 ఈ సందేశం తొలగించబడింది",
+    "messageMasked": "🔒 లింక్ చేసిన పరికరాల్లో WhatsApp దీన్ని దాచింది — మీ ప్రధాన ఫోన్‌లో చూడండి",
     "errors": {
       "loadSessions": "సెషన్లను లోడ్ చేయడం విఫలమైంది",
       "loadChats": "చాట్‌లను లోడ్ చేయడం విఫలమైంది",
@@ -116,7 +127,8 @@
       "send": "సందేశాన్ని పంపడం విఫలమైంది",
       "react": "సందేశానికి ప్రతిస్పందించడం విఫలమైంది",
       "delete": "సందేశాన్ని తొలగించడం విఫలమైంది"
-    }
+    },
+    "loadMessagesError": "సందేశాలను లోడ్ చేయడం సాధ్యం కాలేదు. సర్వర్ లాగ్‌లను తనిఖీ చేయండి."
   },
   "errorBoundary": {
     "title": "ఏదో తప్పు జరిగింది",
@@ -173,7 +185,8 @@
       "sent": "పంపినవి",
       "received": "స్వీకరించినవి",
       "messages": "సందేశాలు",
-      "empty": "ఈ వ్యవధిలో సందేశ కార్యకలాపం లేదు."
+      "empty": "ఈ వ్యవధిలో సందేశ కార్యకలాపం లేదు.",
+      "error": "సందేశ విశ్లేషణలను లోడ్ చేయలేకపోయాం. సర్వర్ లాగ్‌లను తనిఖీ చేయండి."
     }
   },
   "sessionStatus": {
@@ -252,7 +265,7 @@
       "stop": "ఆపివేయి",
       "reconnect": "మళ్లీ కనెక్ట్ చేయి",
       "delete": "తొలగించు",
-      "killStuck": "Kill Stuck"
+      "killStuck": "నిలిచిపోయినదాన్ని ఆపండి"
     },
     "toasts": {
       "readyTitle": "సెషన్ సిద్ధంగా ఉంది",
@@ -269,14 +282,32 @@
       "error": "లోపం"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "నిలిచిపోయిన సెషన్‌ను ఆపండి",
+      "message": "\"{{name}}\" సెషన్‌ను బలవంతంగా ఆపాలని మీరు ఖచ్చితంగా అనుకుంటున్నారా?",
+      "warning": "ఇది WhatsApp బ్రౌజర్ ప్రాసెస్‌ను బలవంతంగా ముగిస్తుంది. పునఃప్రారంభంలో సెషన్‌ను మళ్లీ స్కాన్ చేయాల్సి రావచ్చు.",
+      "confirm": "సెషన్‌ను ఆపండి",
+      "successTitle": "సెషన్ ఆపబడింది",
+      "success": "సెషన్ బలవంతంగా ఆపబడింది. మీరు ఇప్పుడు దాన్ని పునఃప్రారంభించవచ్చు.",
+      "failedTitle": "బలవంతంగా ఆపడం విఫలమైంది",
+      "failed": "సెషన్‌ను బలవంతంగా ఆపడం విఫలమైంది."
+    },
+    "pairing": {
+      "tabQr": "QR కోడ్",
+      "tabPhone": "ఫోన్ నంబర్‌తో లింక్ చేయండి",
+      "phoneLabel": "ఫోన్ నంబర్",
+      "phonePlaceholder": "ఉదాహరణకు, 919876543210",
+      "phoneHint": "అంతర్జాతీయ ఆకృతిలో (కంట్రీ కోడ్ + నంబర్) సంఖ్యలు మాత్రమే (+, ఖాళీలు, లేదా డాష్‌లు లేకుండా).",
+      "invalidPhone": "చెల్లుబాటు అయ్యే ఫోన్ నంబర్‌ను నమోదు చేయండి: 6–15 సంఖ్యలు, ముందుగా కంట్రీ కోడ్, ఎలాంటి చిహ్నాలు లేకుండా.",
+      "generateButton": "పెయిరింగ్ కోడ్‌ను రూపొందించండి",
+      "generating": "పెయిరింగ్ కోడ్‌ను రూపొందిస్తోంది...",
+      "codeLabel": "మీ పెయిరింగ్ కోడ్",
+      "changeNumber": "నంబర్ మార్చు / కొత్త కోడ్‌ను అభ్యర్థించు",
+      "instructions": "పెయిరింగ్ సూచనలు",
+      "step1": "<strong>1.</strong> మీ ఫోన్‌లో వాట్సాప్ తెరవండి",
+      "step2": "<strong>2.</strong> <strong>మెనూ</strong> లేదా <strong>Settings</strong> పై నొక్కి, <strong>Linked Devices</strong> ఎంచుకోండి",
+      "step3": "<strong>3.</strong> <strong>Link a Device</strong> పై నొక్కి, ఆపై <strong>Link with phone number instead</strong> పై నొక్కండి",
+      "step4": "<strong>4.</strong> పైన చూపిన 8-అక్షరాల కోడ్‌ను మీ ఫోన్‌లో నమోదు చేయండి",
+      "waitingConnection": "మీ ఫోన్ లింక్ అయ్యే వరకు వేచి ఉంది…"
     }
   },
   "webhooks": {
@@ -359,48 +390,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "టెంప్లేట్‌లు",
+    "subtitle": "ప్రతి WhatsApp సెషన్‌కు పునర్వినియోగ మెసేజ్ టెంప్లేట్‌లను సృష్టించండి",
+    "createTitle": "టెంప్లేట్ సృష్టించండి",
+    "editTitle": "టెంప్లేట్‌ను సవరించండి",
+    "newTemplate": "కొత్త టెంప్లేట్",
+    "createTemplate": "టెంప్లేట్ సృష్టించండి",
+    "saveChanges": "మార్పులను సేవ్ చేయండి",
+    "viewOnly": "వీక్షణ మాత్రమే",
+    "noSessions": "సెషన్‌లు లేవు",
+    "sessionHint": "{{name}} కింద సేవ్ చేయబడింది",
+    "namePlaceholder": "ఉదా., order-confirmation",
+    "header": "హెడర్",
+    "headerPlaceholder": "ఐచ్ఛిక పరిచయ లైన్",
+    "body": "బాడీ",
+    "bodyPlaceholder": "హాయ్ {{customer}}, మీ ఆర్డర్ {{orderId}} సిద్ధంగా ఉంది.",
+    "footer": "ఫుటర్",
+    "footerPlaceholder": "ఐచ్ఛిక ముగింపు లైన్",
+    "previewTitle": "ప్రివ్యూ",
+    "previewValuePlaceholder": "నమూనా విలువ",
+    "previewEmpty": "ఇక్కడ ప్రివ్యూ చూడటానికి టెంప్లేట్ రాయడం ప్రారంభించండి.",
+    "noPlaceholders": "సబ్‌స్టిట్యూషన్‌లను పరీక్షించడానికి {{name}} ప్లేస్‌హోల్డర్‌లను ఉపయోగించండి.",
+    "savedTitle": "సేవ్ చేసిన టెంప్లేట్‌లు",
+    "count": "మొత్తం {{count}}",
+    "deleteTitle": "టెంప్లేట్‌ను తొలగించండి",
+    "deleteConfirm": "\"{{name}}\" టెంప్లేట్‌ను తొలగించాలా? ఈ చర్యను రద్దు చేయలేరు.",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "టెంప్లేట్ పేరును కాపీ చేయండి"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "టెంప్లేట్‌లు ఏవీ సేవ్ కాలేదు",
+      "description": "సాధారణ ప్రత్యుత్తరాలు మరియు నోటిఫికేషన్‌లను వేగవంతం చేయడానికి పునర్వినియోగ టెంప్లేట్‌ను సృష్టించండి.",
+      "noSessionsTitle": "సెషన్‌లు అందుబాటులో లేవు",
+      "noSessionsDesc": "టెంప్లేట్‌లను జోడించే ముందు WhatsApp సెషన్‌ను సృష్టించండి."
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "టెంప్లేట్ విజయవంతంగా సృష్టించబడింది",
+      "createFailed": "టెంప్లేట్ సృష్టించడం విఫలమైంది: {{message}}",
+      "updated": "టెంప్లేట్ విజయవంతంగా నవీకరించబడింది",
+      "updateFailed": "టెంప్లేట్ నవీకరించడం విఫలమైంది: {{message}}",
+      "deleted": "టెంప్లేట్ విజయవంతంగా తొలగించబడింది",
+      "deleteFailed": "టెంప్లేట్ తొలగించడం విఫలమైంది: {{message}}",
+      "copied": "టెంప్లేట్ పేరు కాపీ చేయబడింది"
     }
   },
   "apiKeys": {
@@ -577,7 +608,14 @@
       "sessionDataPath": "సెషన్ డేటా పాత్",
       "browserArgs": "బ్రౌజర్ ఆర్గ్యుమెంట్‌లు",
       "noBrowser": "ఈ ఇంజిన్ WebSocket ద్వారా కనెక్ట్ అవుతుంది — దీనికి బ్రౌజర్ లేదు, కాబట్టి హెడ్‌లెస్ లేదా బ్రౌజర్-ఆర్గ్యుమెంట్ సెట్టింగ్‌లు లేవు. యాక్టివ్ ఇంజిన్ రీస్టార్ట్ తర్వాత వర్తిస్తుంది.",
-      "restartNote": "ఇంజిన్‌ను మార్చడం సర్వర్ రీస్టార్ట్ తర్వాత అమలులోకి వస్తుంది."
+      "restartNote": "ఇంజిన్‌ను మార్చడం సర్వర్ రీస్టార్ట్ తర్వాత అమలులోకి వస్తుంది.",
+      "webVersion": "WhatsApp Web బిల్డ్",
+      "webVersionNative": "ఆటో (whatsapp-web.js డిఫాల్ట్)",
+      "webVersionSource": {
+        "pinned": "WWEBJS_WEB_VERSION ద్వారా పిన్ చేయబడింది",
+        "auto": "ఆటో-రిజాల్వ్ చేయబడింది, ప్రస్తుతం తెలిసిన మంచి బిల్డ్",
+        "native": "whatsapp-web.js స్థానిక ఆటో-సెలెక్ట్"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -588,16 +626,16 @@
       "queueTitle": "BullMQ క్యూ సిస్టమ్‌ను ప్రారంభించండి",
       "queueDesc": "నమ్మకమైన సందేశం మరియు వెబ్‌హుక్ డెలివరీ కోసం సందేశ క్యూలను ఉపయోగించండి",
       "statsTitle": "క్యూ గణాంకాలు",
-      "messageQueue": "సందేశ క్యూ",
       "webhookQueue": "వెబ్‌హుక్ క్యూ",
       "pending": "పెండింగ్",
       "completed": "పూర్తయింది",
       "failed": "విఫలమైంది",
-      "clearFailed": "విఫలమైన జాబ్స్‌ను క్లియర్ చేయి",
       "viewBullMq": "Bull MQ డ్యాష్‌బోర్డ్‌ను చూడండి",
       "disabledTitle": "Redis నిలిపివేయబడింది",
       "disabledDesc": "క్యాషింగ్, సెషన్ స్టోరేజ్ మరియు BullMQ సందేశ క్యూల కోసం Redisని ప్రారంభించండి.",
-      "passwordOptional": "(ఐచ్ఛికం)"
+      "passwordOptional": "(ఐచ్ఛికం)",
+      "bullMqUrlCopied": "Bull MQ డాష్‌బోర్డ్ URL కాపీ చేయబడింది",
+      "bullMqUrlHint": "దాన్ని ADMIN API కీతో తెరవండి — బ్రౌజర్ ట్యాబ్ ప్రామాణీకరించలేదు."
     },
     "storage": {
       "title": "స్టోరేజ్ కాన్ఫిగరేషన్",
@@ -613,7 +651,8 @@
       "accessKey": "యాక్సెస్ కీ",
       "secretKey": "సీక్రెట్ కీ",
       "endpoint": "కస్టమ్ ఎండ్‌పాయింట్ (ఐచ్ఛికం)",
-      "endpointHint": "MinIO లేదా ఇతర S3-అనుకూల సేవల కోసం"
+      "endpointHint": "MinIO లేదా ఇతర S3-అనుకూల సేవల కోసం",
+      "s3Unreachable": "S3 (చేరుకోలేనిది)"
     },
     "statusLabels": {
       "connected": "కనెక్ట్ అయింది",
@@ -638,7 +677,25 @@
     },
     "toasts": {
       "saveFailed": "సేవ్ చేయడం విఫలమైంది"
-    }
+    },
+    "envPinNote": "ఒక ఎన్విరాన్‌మెంట్ వేరియబుల్ ద్వారా పిన్ చేయబడింది — ఇది ప్రస్తుతం అమలులో ఉన్న విలువ; ఆ వేరియబుల్‌ను తీసివేసే వరకు డ్యాష్‌బోర్డ్ మార్పులు వర్తించవు.",
+    "migration": {
+      "title": "గమనిక — ఇది డేటా బ్యాకెండ్‌ను మారుస్తుంది",
+      "dbWarning": "కొత్త డేటాబేస్ ఖాళీగా ప్రారంభమవుతుంది. ఇప్పుడే (ఇంకా పాత డేటాబేస్‌లో ఉన్నప్పుడే) మీ ప్రస్తుత డేటా బ్యాకప్‌ను డౌన్‌లోడ్ చేయండి, ఆపై రీస్టార్ట్ తర్వాత దాన్ని పునరుద్ధరించండి.",
+      "storageWarning": "ఇప్పటికే ఉన్న మీడియా ఫైళ్లు కొత్త స్టోరేజ్ బ్యాకెండ్‌కు స్వయంచాలకంగా తరలించబడవు; అవి పాత స్థానంలోనే ఉంటాయి.",
+      "downloadBackup": "ముందుగా బ్యాకప్ డౌన్‌లోడ్ చేయండి",
+      "backupTitle": "డేటా బ్యాకప్ & పునరుద్ధరణ",
+      "backupHint": "డేటాబేస్‌లను మార్చే ముందు మొత్తం డేటాను JSON గా ఎక్స్‌పోర్ట్ చేయండి, ఆపై మార్పు తర్వాత దాన్ని ఇంపోర్ట్ చేయండి. బ్యాకప్‌లో వెబ్‌హుక్ సీక్రెట్‌లు మరియు ప్రాక్సీ క్రెడెన్షియల్స్ సాదా-వచనంలో (ప్లెయిన్‌టెక్స్ట్) ఉంటాయి — దాన్ని సురక్షితంగా నిల్వ చేయండి మరియు పునరుద్ధరించిన తర్వాత దాన్ని తొలగించండి.",
+      "export": "డేటాను ఎక్స్‌పోర్ట్ చేయండి",
+      "import": "డేటాను ఇంపోర్ట్ చేయండి",
+      "exportFailed": "డేటాను ఎక్స్‌పోర్ట్ చేయలేకపోయాం",
+      "importFailed": "డేటాను ఇంపోర్ట్ చేయలేకపోయాం",
+      "importOk": "డేటా ఇంపోర్ట్ చేయబడింది",
+      "importConfirm": "ఇంపోర్ట్ చేయడం వల్ల ప్రస్తుత డేటా మొత్తం బ్యాకప్‌తో ({{rows}} వరుసలు) భర్తీ చేయబడుతుంది. దీన్ని వెనక్కి తీసుకోలేరు. కొనసాగించాలా?",
+      "invalidFile": "ఆ ఫైల్ చెల్లుబాటు అయ్యే OpenWA డేటా బ్యాకప్ కాదు.",
+      "importTooLarge": "బ్యాకప్ అభ్యర్థన పరిమితి కంటే పెద్దది. సర్వర్‌లో BODY_SIZE_LIMIT పెంచి మళ్లీ ప్రయత్నించండి."
+    },
+    "statusLoadError": "ప్రస్తుత ఇన్‌ఫ్రాస్ట్రక్చర్ స్థితిని లోడ్ చేయడం సాధ్యం కాలేదు. మళ్లీ ప్రయత్నించడానికి రిఫ్రెష్ చేయండి."
   },
   "plugins": {
     "title": "ప్లగిన్స్",
@@ -718,6 +775,65 @@
       "selectSession": "ఒక సెషన్‌ను ఎంచుకోండి…",
       "saveOverride": "ఓవర్‌రైడ్‌ను సేవ్ చేయండి",
       "clearOverride": "ఓవర్‌రైడ్‌ను క్లియర్ చేయండి"
+    },
+    "instances": {
+      "title": "ఇన్‌స్టాన్స్‌లు",
+      "description": "ఈ ఇంటిగ్రేషన్ కోసం ఖాతా వారీగా ఇన్‌స్టాన్స్‌లను ప్రొవిజన్ చేయండి. ప్రతి ఇన్‌స్టాన్స్‌కు దాని స్వంత సైనింగ్ సీక్రెట్ మరియు ఇన్‌గ్రెస్ URL ఉంటుంది.",
+      "create": "ఇన్‌స్టాన్స్‌ను సృష్టించండి",
+      "empty": "ఇంకా ఇన్‌స్టాన్స్‌లు లేవు. ఇన్‌గ్రెస్ URL మరియు సీక్రెట్ పొందడానికి ఒకటి సృష్టించండి.",
+      "loadError": "ఇన్‌స్టాన్స్‌లను లోడ్ చేయడం విఫలమైంది.",
+      "allSessions": "అన్ని సెషన్‌లు",
+      "enabled": "ప్రారంభించబడింది",
+      "disabled": "నిలిపివేయబడింది",
+      "form": {
+        "instanceId": "ఇన్‌స్టాన్స్ ఐడీ",
+        "instanceIdPlaceholder": "ఉదా. acme-support",
+        "instanceIdHint": "అక్షరాలు, సంఖ్యలు, హైఫన్‌లు, అండర్‌స్కోర్‌లు (గరిష్టంగా 64).",
+        "sessionScope": "సెషన్ స్కోప్ (ఆప్షనల్)",
+        "sessionScopePlaceholder": "అన్ని సెషన్‌ల కోసం ఖాళీగా ఉంచండి",
+        "verifyToken": "వెరిఫై టోకెన్ (ఆప్షనల్)",
+        "verifyTokenPlaceholder": "వెరిఫికేషన్ సమయంలో ప్రొవైడర్ తిప్పి పంపే టోకెన్",
+        "config": "కాన్ఫిగ్ (ఆప్షనల్ JSON)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "ఇన్‌స్టాన్స్ సృష్టించబడింది",
+        "hint": "సీక్రెట్‌ను ఇప్పుడే కాపీ చేయండి — ఇది ఒక్కసారి మాత్రమే చూపబడుతుంది.",
+        "secret": "సైనింగ్ సీక్రెట్",
+        "ingressUrls": "ఇన్‌గ్రెస్ URL(లు)"
+      },
+      "regenerate": {
+        "title": "సీక్రెట్‌ను రీజెనరేట్ చేయండి",
+        "confirm": "{{id}} కోసం సైనింగ్ సీక్రెట్‌ను రీజెనరేట్ చేయాలా? ప్రస్తుత సీక్రెట్ వెంటనే పనిచేయడం మానేస్తుంది.",
+        "action": "రీజెనరేట్ చేయి"
+      },
+      "edit": { "title": "{{id}}ను ఎడిట్ చేయండి" },
+      "delete": {
+        "title": "ఇన్‌స్టాన్స్‌ను డిలీట్ చేయండి",
+        "confirm": "ఇన్‌స్టాన్స్ {{id}}ను డిలీట్ చేయాలా? దీని ఇన్‌గ్రెస్ URL మరియు సీక్రెట్ వెంటనే పనిచేయడం మానేస్తాయి.",
+        "action": "డిలీట్ చేయి"
+      },
+      "actions": {
+        "regenerate": "సీక్రెట్‌ను రీజెనరేట్ చేయి",
+        "edit": "ఎడిట్ చేయి",
+        "delete": "డిలీట్ చేయి",
+        "copy": "కాపీ చేయి",
+        "save": "సేవ్ చేయి",
+        "enable": "ప్రారంభించు",
+        "disable": "నిలిపివేయి"
+      },
+      "errors": {
+        "invalidId": "ఇన్‌స్టాన్స్ ఐడీలో అక్షరాలు, సంఖ్యలు, హైఫన్‌లు లేదా అండర్‌స్కోర్‌లు మాత్రమే ఉండాలి (గరిష్టంగా 64).",
+        "invalidJson": "కాన్ఫిగ్ చెల్లుబాటు అయ్యే JSON గా ఉండాలి.",
+        "duplicateId": "ఆ ఐడీతో ఇన్‌స్టాన్స్ ఇప్పటికే ఉంది."
+      },
+      "toasts": {
+        "created": "ఇన్‌స్టాన్స్ సృష్టించబడింది",
+        "updated": "ఇన్‌స్టాన్స్ అప్‌డేట్ చేయబడింది",
+        "deleted": "ఇన్‌స్టాన్స్ డిలీట్ చేయబడింది",
+        "secretRegenerated": "సీక్రెట్ రీజెనరేట్ చేయబడింది",
+        "actionFailed": "చర్య విఫలమైంది"
+      }
     }
   }
 }

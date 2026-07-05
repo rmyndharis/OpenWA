@@ -5,7 +5,8 @@ import AdmZip from 'adm-zip';
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
-import { PluginsService } from './plugins.service';
+import { PluginsService, isIngressCapable } from './plugins.service';
+import { SECRET_SENTINEL } from './redact-config';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
 import { PluginStatus } from '../../core/plugins/plugin.interfaces';
@@ -89,9 +90,11 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
 
     expect(dto.version).toBe('2.0.0');
-    expect(dto.config).toEqual({ apiKey: 'secret-123' }); // config survived the in-place update
+    // Read view masks config for a schemaless plugin (fail-closed), but the stored value survived the update.
+    expect(dto.config).toEqual({ apiKey: SECRET_SENTINEL });
+    expect(loader.getPlugin('svc-plg')?.config).toEqual({ apiKey: 'secret-123' });
     expect(fs.existsSync(path.join(pluginsDir, 'svc-plg', 'index.js'))).toBe(true);
-    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg.bak'))).toBe(false); // backup cleaned up
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false); // backup cleaned up
   });
 
   it('updatePackage rejects a package whose id does not match', async () => {
@@ -113,13 +116,34 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
 
     // The rollback must leave the OLD version loaded — not the new, half-enabled (ERROR) instance.
     expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
-    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg.bak'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
     const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
       version: string;
     };
     expect(onDisk.version).toBe('1.0.0');
 
     enableSpy.mockRestore();
+  });
+
+  it('serializes concurrent lifecycle operations on the same plugin id', async () => {
+    service.install({ buffer: pkg() });
+    let resolveFirst: () => void = () => undefined;
+    const firstDone = new Promise<void>(r => (resolveFirst = r));
+    let calls = 0;
+    jest.spyOn(loader, 'uninstallPlugin').mockImplementation(() => {
+      calls++;
+      return calls === 1 ? firstDone : Promise.resolve();
+    });
+
+    const p1 = service.uninstall('svc-plg');
+    const p2 = service.uninstall('svc-plg');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(calls).toBe(1); // the second op is queued behind the first, not run concurrently
+
+    resolveFirst();
+    await Promise.all([p1, p2]);
+    expect(calls).toBe(2);
   });
 });
 
@@ -355,5 +379,19 @@ describe('PluginsService i18n passthrough', () => {
   it('leaves i18n undefined when the manifest has none', () => {
     const svc = build(undefined);
     expect(svc.findOne('p').i18n).toBeUndefined();
+  });
+});
+
+describe('isIngressCapable', () => {
+  it('is true when the manifest has an ingress route AND the webhook:ingress permission', () => {
+    expect(isIngressCapable({ ingress: [{ route: 'events' }], permissions: ['webhook:ingress'] })).toBe(true);
+  });
+  it('is false without an ingress route', () => {
+    expect(isIngressCapable({ ingress: [], permissions: ['webhook:ingress'] })).toBe(false);
+    expect(isIngressCapable({ permissions: ['webhook:ingress'] })).toBe(false);
+  });
+  it('is false without the webhook:ingress permission', () => {
+    expect(isIngressCapable({ ingress: [{ route: 'events' }], permissions: [] })).toBe(false);
+    expect(isIngressCapable({ ingress: [{ route: 'events' }] })).toBe(false);
   });
 });

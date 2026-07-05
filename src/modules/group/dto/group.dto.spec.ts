@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { validate, ValidationError } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { ParticipantsDto, CreateGroupDto, GroupSubjectDto } from './group.dto';
+import { ParticipantsDto, CreateGroupDto, GroupSubjectDto, GroupDescriptionDto } from './group.dto';
 
 // Mirror the global ValidationPipe options (src/main.ts): whitelist + forbidNonWhitelisted.
 const PIPE_OPTS = { whitelist: true, forbidNonWhitelisted: true };
@@ -39,5 +39,10 @@ describe('group DTO validation', () => {
   it('requires a non-empty subject on GroupSubjectDto', async () => {
     const errors = await errorsFor(GroupSubjectDto, { subject: '' });
     expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it('caps the group description length (accepts 1024, rejects beyond)', async () => {
+    expect(await errorsFor(GroupDescriptionDto, { description: 'a'.repeat(1024) })).toHaveLength(0);
+    expect((await errorsFor(GroupDescriptionDto, { description: 'a'.repeat(1025) })).length).toBeGreaterThan(0);
   });
 });

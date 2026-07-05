@@ -1,5 +1,7 @@
 import { PluginWorkerHost } from './plugin-worker-host';
 import { PluginWorkerChannel, HostToWorkerMessage, WorkerToHostMessage } from './protocol';
+import { HookManager } from '../../hooks/hook-manager.service';
+import { HookEvent } from '../../hooks/hook.interfaces';
 
 /** In-memory channel double: records what the host posts, lets the test push worker replies back. */
 class FakeChannel implements PluginWorkerChannel {
@@ -159,6 +161,37 @@ describe('PluginWorkerHost', () => {
 
       expect(ch.sent.find(m => m.kind === 'cap-result')).toMatchObject({ id: 9, ok: false });
     });
+
+    it('rejects a cap request over the in-flight limit and recovers after the in-flight one settles', async () => {
+      const ch = new FakeChannel();
+      let resolveFirst: (v: unknown) => void = () => undefined;
+      const dispatcher = jest
+        .fn()
+        .mockImplementationOnce(() => new Promise(r => (resolveFirst = r))) // first cap hangs, holding the slot
+        .mockResolvedValue({ ok: true });
+      // maxInFlightCaps = 1 (7th positional arg)
+      new PluginWorkerHost(ch, dispatcher, undefined, undefined, undefined, undefined, 1);
+
+      ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] }); // takes the only slot
+      await flush();
+      ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [] }); // over the limit
+      await flush();
+
+      expect(dispatcher).toHaveBeenCalledTimes(1); // the over-limit cap is rejected before dispatch
+      const rejected = ch.sent.find(m => m.kind === 'cap-result' && m.id === 2) as
+        { ok: boolean; error?: string } | undefined;
+      expect(rejected?.ok).toBe(false);
+      expect(rejected?.error).toMatch(/too many concurrent/);
+
+      resolveFirst({ ok: true }); // free the slot
+      await flush();
+      ch.reply({ kind: 'cap', id: 3, verb: 'messages.sendText', args: [] });
+      await flush();
+
+      expect(dispatcher).toHaveBeenCalledTimes(2); // slot released → a fresh cap dispatches
+      const ok3 = ch.sent.find(m => m.kind === 'cap-result' && m.id === 3) as { ok: boolean } | undefined;
+      expect(ok3?.ok).toBe(true);
+    });
   });
 
   describe('hook bridge', () => {
@@ -252,7 +285,7 @@ describe('PluginWorkerHost', () => {
     it('routes a worker log message to onLog', async () => {
       const ch = new FakeChannel();
       const onLog = jest.fn();
-      new PluginWorkerHost(ch, undefined, undefined, onLog);
+      new PluginWorkerHost(ch, undefined, undefined, undefined, onLog);
 
       ch.reply({ kind: 'log', level: 'warn', message: 'heads up', meta: { x: 1 } });
       await flush();
@@ -359,6 +392,60 @@ describe('PluginWorkerHost', () => {
 
       jest.advanceTimersByTime(1000); // no late rejection
       jest.useRealTimers();
+    });
+  });
+
+  describe('hook re-entrancy across the worker IPC boundary (amplification guard)', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('a worker capability that re-fires the in-flight hook event is not re-dispatched into the worker', async () => {
+      const hm = new HookManager();
+      const ch = new FakeChannel();
+      const EVENT = 'message:sending' as HookEvent;
+
+      // A worker capability call (messages.sendText) that re-fires message:sending on the host — the
+      // exact amplification loop: without the guard the re-fire dispatches into the worker again, which
+      // sends again, unboundedly.
+      const capDispatcher = async (verb: string): Promise<unknown> => {
+        if (verb === 'messages.sendText') {
+          await hm.execute(EVENT, { reentrant: true }, { source: 'cap' });
+        }
+        return { messageId: 'wamid' };
+      };
+
+      const host = new PluginWorkerHost(ch, capDispatcher, undefined, undefined, undefined, (events, run) =>
+        hm.runInFlight(events as HookEvent[], run),
+      );
+
+      // The host-side shim the loader registers: dispatch the event into the worker, await its result.
+      hm.register('plg', EVENT, async ctx => {
+        const r = await host.dispatchHook({
+          event: 'message:sending',
+          data: ctx.data,
+          source: ctx.source,
+          timeoutMs: 5000,
+        });
+        return { continue: r.continue, data: r.data };
+      });
+
+      // Fire the event: the shim posts exactly ONE 'hook' message into the worker.
+      const exec = hm.execute(EVENT, { n: 1 }, { source: 'test' });
+      await flush();
+      const firstHooks = ch.sent.filter(m => m.kind === 'hook');
+      expect(firstHooks).toHaveLength(1);
+      const hookId = firstHooks[0].id;
+
+      // The worker, mid-handler, issues a capability that re-fires message:sending on the host.
+      ch.reply({ kind: 'cap', id: 99, verb: 'messages.sendText', args: ['s1', 'c1', 'hi'] });
+      await flush();
+      await flush();
+
+      // The guard must short-circuit the re-fire: still exactly ONE dispatch into the worker.
+      expect(ch.sent.filter(m => m.kind === 'hook')).toHaveLength(1);
+
+      // The worker completes the original hook; the chain resolves normally.
+      ch.reply({ kind: 'hook-result', id: hookId, continue: true });
+      await expect(exec).resolves.toEqual({ continue: true, data: { n: 1 } });
     });
   });
 });

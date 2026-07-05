@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { resolvePluginMainPath, buildSandboxWorkerEnv } from './plugin-loader.service';
+import { resolvePluginMainPath, buildSandboxWorkerEnv, dispatchConversationMedia } from './plugin-loader.service';
 
 /** Regression lock: a plugin's manifest.main must not escape its plugin directory. */
 describe('resolvePluginMainPath', () => {
@@ -65,6 +65,51 @@ describe('buildSandboxWorkerEnv', () => {
 
   it('defaults NODE_ENV to production when the host has none', () => {
     expect(buildSandboxWorkerEnv({}).NODE_ENV).toBe('production');
+  });
+});
+
+/** conversation.send media types must route to the matching MessageService method (not a copy-paste sibling). */
+describe('dispatchConversationMedia', () => {
+  const svc = () => ({
+    sendImage: jest.fn().mockResolvedValue({ messageId: 'i' }),
+    sendVideo: jest.fn().mockResolvedValue({ messageId: 'v' }),
+    sendAudio: jest.fn().mockResolvedValue({ messageId: 'a' }),
+    sendDocument: jest.fn().mockResolvedValue({ messageId: 'd' }),
+  });
+  const opts = (type: 'image' | 'video' | 'audio' | 'file') => ({
+    chatId: 'c@c.us',
+    url: 'https://cdn.example/m',
+    caption: 'cap',
+    type,
+  });
+
+  it.each([
+    ['image', 'sendImage'],
+    ['video', 'sendVideo'],
+    ['audio', 'sendAudio'],
+    ['file', 'sendDocument'],
+  ] as const)('routes %s to %s with a url+caption DTO (no ptt)', async (type, method) => {
+    const s = svc();
+    await dispatchConversationMedia(s, 's', opts(type));
+    expect(s[method]).toHaveBeenCalledWith('s', { chatId: 'c@c.us', url: 'https://cdn.example/m', caption: 'cap' });
+    // No sibling method is invoked for the wrong type.
+    for (const other of ['sendImage', 'sendVideo', 'sendAudio', 'sendDocument'] as const) {
+      if (other !== method) expect(s[other]).not.toHaveBeenCalled();
+    }
+  });
+
+  it("routes 'voice' to sendAudio with ptt:true so it renders as a WhatsApp voice note", async () => {
+    const s = svc();
+    await dispatchConversationMedia(s, 's', { chatId: 'c@c.us', url: 'https://cdn.example/n.ogg', type: 'voice' });
+    expect(s.sendAudio).toHaveBeenCalledWith('s', {
+      chatId: 'c@c.us',
+      url: 'https://cdn.example/n.ogg',
+      caption: undefined,
+      ptt: true,
+    });
+    for (const other of ['sendImage', 'sendVideo', 'sendDocument'] as const) {
+      expect(s[other]).not.toHaveBeenCalled();
+    }
   });
 });
 
@@ -180,8 +225,12 @@ describe('PluginLoaderService — enable/config persistence', () => {
 
   it('writes registry.json without group/other access (plugin config can hold secrets)', () => {
     loader.registerBuiltInPlugin(manifest, {}, { apiKey: 'secret' });
-    const mode = fs.statSync(path.join(tmpDir, 'plugins', 'registry.json')).mode & 0o777;
-    expect(mode & 0o077).toBe(0);
+    const registryPath = path.join(tmpDir, 'plugins', 'registry.json');
+    expect(fs.existsSync(registryPath)).toBe(true);
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(registryPath).mode & 0o777;
+      expect(mode & 0o077).toBe(0);
+    }
   });
 
   it('restores the operator config on the next load instead of resetting to the default', () => {
@@ -289,6 +338,71 @@ describe('PluginLoaderService — uninstall', () => {
       {},
     );
     await expect(loader.uninstallPlugin('core-engine')).rejects.toThrow(/built-in/i);
+  });
+
+  it('rejects a plugin that declares ingress routes but omits the webhook:ingress permission', () => {
+    // loadPlugin must run validateIngressManifest, so a malformed ingress declaration fails to load
+    // rather than silently loading and becoming provisionable.
+    const dir = path.join(pluginsDir, 'bad-ingress');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({
+        id: 'bad-ingress',
+        name: 'Bad Ingress',
+        version: '1.0.0',
+        type: 'extension',
+        main: 'index.js',
+        ingress: [{ route: 'events', signature: { headerName: 'X-Sig', scheme: 'hmac-sha256' } }],
+        // permissions intentionally omitted → validateIngressManifest must reject
+      }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+    expect(() => loader.loadPlugin(dir)).toThrow(/webhook:ingress/i);
+  });
+});
+
+describe('PluginLoaderService — skips dot-prefixed directories on load (crash-leftover .bak)', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-dotskip-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const writePlugin = (dirName: string, id: string): void => {
+    const dir = path.join(pluginsDir, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'manifest.json'),
+      JSON.stringify({ id, name: id, version: '1.0.0', type: 'extension', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+  };
+
+  it('does not scan a crash-leftover .<id>.bak directory (no duplicate-id load race)', () => {
+    writePlugin('svc-plg', 'svc-plg');
+    writePlugin('.svc-plg.bak', 'svc-plg'); // a leftover update backup carrying the SAME manifest id
+
+    const loadSpy = jest.spyOn(loader, 'loadPlugin');
+    loader.onModuleInit();
+
+    const scanned = loadSpy.mock.calls.map(c => c[0]);
+    expect(scanned).toContain(path.join(pluginsDir, 'svc-plg'));
+    expect(scanned).not.toContain(path.join(pluginsDir, '.svc-plg.bak'));
   });
 });
 
@@ -412,5 +526,49 @@ describe('PluginLoaderService — enable-failure hook cleanup', () => {
     // Exactly one handler — the failed attempt left nothing behind. Without cleanup this is 2,
     // and every message:received would dispatch to the plugin twice.
     expect(hooks.getHookCount('message:received')).toBe(1);
+  });
+});
+
+describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () => {
+  it('delivers the instance-session-resolved config to the sandbox host', async () => {
+    const fakeInstanceService = { resolve: jest.fn().mockResolvedValue({ sessionScope: 'sess-1' }) };
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = {
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      getPluginConfig: jest.fn().mockReturnValue(null),
+      getPluginSessions: jest.fn().mockReturnValue(undefined),
+      getPluginSessionConfig: jest.fn().mockReturnValue(undefined),
+    } as unknown as PluginStorageService;
+    const moduleRef = { get: jest.fn().mockReturnValue(fakeInstanceService) } as unknown as ModuleRef;
+    const loader = new PluginLoaderService(configService, new HookManager(), pluginStorage, moduleRef);
+
+    const internals = loader as unknown as {
+      plugins: Map<string, unknown>;
+      sandboxHosts: Map<string, { dispatchWebhook: jest.Mock }>;
+    };
+    internals.plugins.set('chatwoot-adapter', {
+      manifest: { id: 'chatwoot-adapter', sessionScoped: true },
+      config: { baseUrl: 'base', accountId: 1 },
+      sessionConfig: { 'sess-1': { baseUrl: 'https://tenant1' } },
+    });
+    const dispatchWebhook = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    internals.sandboxHosts.set('chatwoot-adapter', { dispatchWebhook });
+
+    await loader.dispatchWebhookForInstance({
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      route: 'chatwoot',
+      deliveryId: 'd1',
+      sessionId: 'sess-1',
+      payload: { headers: {}, query: {}, body: '', rawBody: '' },
+    });
+
+    expect(fakeInstanceService.resolve).toHaveBeenCalledWith('chatwoot-adapter', 'acct1');
+    expect(dispatchWebhook).toHaveBeenCalledTimes(1);
+    // Session override (tenant1) merged over the base — this is what makes an instance multi-tenant.
+    expect(dispatchWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({ config: { baseUrl: 'https://tenant1', accountId: 1 } }),
+    );
   });
 });

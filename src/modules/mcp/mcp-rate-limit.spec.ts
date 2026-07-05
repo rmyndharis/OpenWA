@@ -1,4 +1,4 @@
-import { KeyRateLimiter, readRateLimitConfig } from './mcp-rate-limit';
+import { KeyRateLimiter, readRateLimitConfig, readIpRateLimitConfig } from './mcp-rate-limit';
 
 describe('readRateLimitConfig', () => {
   it('returns defaults for an empty env', () => {
@@ -58,6 +58,34 @@ describe('readRateLimitConfig', () => {
 
   it('falls back to default for MCP_RATE_LIMIT_WINDOW_MS 0.5', () => {
     expect(readRateLimitConfig({ MCP_RATE_LIMIT_WINDOW_MS: '0.5' }).windowMs).toBe(60_000);
+  });
+});
+
+describe('readIpRateLimitConfig', () => {
+  it('returns the IP defaults for an empty env (more generous than the per-key budget)', () => {
+    expect(readIpRateLimitConfig({})).toEqual({ max: 120, windowMs: 60_000 });
+  });
+
+  it('parses valid numeric env values', () => {
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_MAX: '500', MCP_IP_RATE_LIMIT_WINDOW_MS: '30000' })).toEqual({
+      max: 500,
+      windowMs: 30_000,
+    });
+  });
+
+  it('falls back to the IP defaults for non-numeric / zero / negative / blank values', () => {
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_MAX: 'abc' }).max).toBe(120);
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_MAX: '0' }).max).toBe(120);
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_MAX: '-5' }).max).toBe(120);
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_MAX: '' }).max).toBe(120);
+    expect(readIpRateLimitConfig({ MCP_IP_RATE_LIMIT_WINDOW_MS: '0.5' }).windowMs).toBe(60_000);
+  });
+
+  it('is independent of the per-key vars (they must not bleed into the IP budget)', () => {
+    expect(readIpRateLimitConfig({ MCP_RATE_LIMIT_MAX: '5', MCP_RATE_LIMIT_WINDOW_MS: '5' })).toEqual({
+      max: 120,
+      windowMs: 60_000,
+    });
   });
 });
 

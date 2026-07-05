@@ -31,4 +31,10 @@ describe('SettingsController', () => {
     const role = new Reflector().get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.update);
     expect(role).toBe(ApiKeyRole.ADMIN);
   });
+
+  it('GET /settings requires the ADMIN role (env-derived config is not for low-privilege keys)', () => {
+    const proto = SettingsController.prototype as unknown as Record<string, object>;
+    const role = new Reflector().get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.get);
+    expect(role).toBe(ApiKeyRole.ADMIN);
+  });
 });

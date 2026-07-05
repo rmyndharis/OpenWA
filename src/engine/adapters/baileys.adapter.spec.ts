@@ -487,7 +487,7 @@ describe('BaileysAdapter capability gating', () => {
   });
 });
 
-describe('BaileysAdapter location + contact sends', () => {
+describe('BaileysAdapter location + contact + poll sends', () => {
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
@@ -537,6 +537,26 @@ describe('BaileysAdapter location + contact sends', () => {
     expect(vcard).not.toMatch(/\nEMAIL:evil@x\.com/);
     expect(vcard).toContain('FN:Eve EMAIL:evil@x.com');
   });
+
+  it('sendPollMessage maps name/values and defaults to single choice (selectableCount 1)', async () => {
+    const adapter = await ready();
+    await adapter.sendPollMessage('120363000@g.us', { name: 'Where?', options: ['Park', 'Beach'] });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
+      poll: { name: 'Where?', values: ['Park', 'Beach'], selectableCount: 1 },
+    });
+  });
+
+  it('sendPollMessage uses selectableCount 0 (no limit) when multiple answers are allowed', async () => {
+    const adapter = await ready();
+    await adapter.sendPollMessage('120363000@g.us', {
+      name: 'Toppings?',
+      options: ['Cheese', 'Ham', 'Olives'],
+      allowMultipleAnswers: true,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120363000@g.us', {
+      poll: { name: 'Toppings?', values: ['Cheese', 'Ham', 'Olives'], selectableCount: 0 },
+    });
+  });
 });
 
 describe('BaileysAdapter messaging', () => {
@@ -561,6 +581,35 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
+  it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'hello' },
+      { ephemeralExpiration: 604800 },
+    );
+  });
+
+  it('sendTextMessage de-normalizes mentions to engine jids (#530)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('120@g.us', 'hi @62811', ['62811@c.us']);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120@g.us', {
+      text: 'hi @62811',
+      mentions: ['62811@s.whatsapp.net'],
+    });
+  });
+
+  it('sendTextMessage omits the mentions key when none are given (no behavior change)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('120@g.us', 'plain', []);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('120@g.us', { text: 'plain' });
+  });
+
   it('getNumberId resolves via onWhatsApp and returns a NEUTRAL jid (never @s.whatsapp.net)', async () => {
     fakeSock.onWhatsApp.mockResolvedValue([{ jid: '628111@s.whatsapp.net', exists: true }]);
     const adapter = await readyAdapter();
@@ -582,6 +631,12 @@ describe('BaileysAdapter messaging', () => {
     expect(fakeSock.sendPresenceUpdate).toHaveBeenCalledWith('composing', '628111@s.whatsapp.net');
   });
 
+  it('sendChatState swallows a presence failure (best-effort, mirrors wwjs) (#583 R4)', async () => {
+    const adapter = await readyAdapter();
+    fakeSock.sendPresenceUpdate.mockRejectedValueOnce(new Error('No LID for user'));
+    await expect(adapter.sendChatState('628111@s.whatsapp.net', 'typing')).resolves.toBeUndefined();
+  });
+
   it('messaging methods throw EngineNotReadyError before the connection is open', async () => {
     const adapter = newAdapter();
     await adapter.initialize({});
@@ -594,13 +649,19 @@ describe('BaileysAdapter messaging', () => {
 
 describe('BaileysAdapter inbound fan-out', () => {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-  const baileys = jest.requireMock('@whiskeysockets/baileys') as { getContentType: jest.Mock };
+  const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+    getContentType: jest.Mock;
+    normalizeMessageContent: jest.Mock;
+  };
 
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
     fakeSock.resetEmitter();
     jest.clearAllMocks();
     baileys.getContentType.mockReturnValue('conversation');
+    // clearAllMocks() wipes call history but keeps implementations, so a prior test's
+    // normalizeMessageContent override would leak into the next; reset it to the identity default.
+    baileys.normalizeMessageContent.mockImplementation((c: unknown) => c);
   });
 
   it('routes an inbound (not fromMe) message to onMessage with a neutral shape', async () => {
@@ -623,6 +684,108 @@ describe('BaileysAdapter inbound fan-out', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as { id: string; body: string; type: string; fromMe: boolean };
     expect(msg).toMatchObject({ id: 'IN1', body: 'hi there', type: 'text', fromMe: false });
+  });
+
+  it('extracts coordinates from an ephemeral (disappearing) location message', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    const inner = {
+      locationMessage: { degreesLatitude: 24.1, degreesLongitude: 55.2, name: 'Office', address: '1 Main St' },
+    };
+    baileys.getContentType.mockReturnValue('locationMessage');
+    baileys.normalizeMessageContent.mockReturnValue(inner); // unwrap the ephemeral wrapper
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'LOC1' },
+          message: { ephemeralMessage: { message: inner } }, // wrapped location
+          messageTimestamp: 1700000002,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { location?: Record<string, unknown> };
+    expect(msg.location).toMatchObject({
+      latitude: 24.1,
+      longitude: 55.2,
+      description: 'Office',
+      address: '1 Main St',
+    });
+  });
+
+  it('maps an ephemeral-wrapped history message to its real type and body (not unknown/empty)', async () => {
+    const onHistoryMessages = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onHistoryMessages });
+    const inner = { conversation: 'disappearing hello' };
+    baileys.normalizeMessageContent.mockReturnValue(inner); // unwrap the ephemeral wrapper
+    baileys.getContentType.mockReturnValue('conversation');
+    fakeSock.fire('messaging-history.set', {
+      contacts: [],
+      chats: [],
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'H1' },
+          message: { ephemeralMessage: { message: inner } },
+          messageTimestamp: 1700000000,
+          pushName: 'Alice',
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    expect(onHistoryMessages).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const mapped = onHistoryMessages.mock.calls[0][0] as Array<{ id: string; type: string; body: string }>;
+    expect(mapped[0]).toMatchObject({ id: 'H1', type: 'text', body: 'disappearing hello' });
+  });
+
+  it('surfaces inbound @mentions as neutral mentionedIds (contextInfo.mentionedJid)', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '120@g.us', participant: '628222@s.whatsapp.net', fromMe: false, id: 'IN_MENTION' },
+          message: {
+            extendedTextMessage: { text: '@628111 hi', contextInfo: { mentionedJid: ['628111@s.whatsapp.net'] } },
+          },
+          messageTimestamp: 1700000002,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { mentionedIds?: string[] };
+    expect(msg.mentionedIds).toEqual(['628111@c.us']);
+  });
+
+  it('omits mentionedIds on an inbound message without @mentions', async () => {
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'IN_NOMENTION' },
+          message: { conversation: 'plain text' },
+          messageTimestamp: 1700000003,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { mentionedIds?: string[] };
+    expect(msg.mentionedIds).toBeUndefined();
   });
 
   it('canonicalizes an inbound message JID from @s.whatsapp.net to @c.us', async () => {
@@ -874,6 +1037,46 @@ describe('BaileysAdapter inbound fan-out', () => {
     }
   });
 
+  it('inbound media: skips download and omits media field when MEDIA_DOWNLOAD_ENABLED=false', async () => {
+    const prev = process.env.MEDIA_DOWNLOAD_ENABLED;
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'false';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+      const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+        getContentType: jest.Mock;
+        downloadMediaMessage: jest.Mock;
+      };
+      baileys.getContentType.mockReturnValue('imageMessage');
+      baileys.downloadMediaMessage.mockClear();
+
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'DISABLED1' },
+            message: { imageMessage: { mimetype: 'image/png', caption: 'should not download' } },
+            messageTimestamp: 1700000040,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { media?: { omitted?: boolean; mimetype?: string }; type: string };
+      expect(msg.type).toBe('image');
+      expect(msg.media).toBeDefined();
+      expect(msg.media?.omitted).toBe(true);
+      expect(msg.media?.mimetype).toBe('image/png');
+      expect(baileys.downloadMediaMessage).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_ENABLED;
+      else process.env.MEDIA_DOWNLOAD_ENABLED = prev;
+    }
+  });
+
   it('inbound documentWithCaption: normalizeMessageContent unwraps wrapper, yields non-empty mimetype', async () => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const baileys = jest.requireMock('@whiskeysockets/baileys') as {
@@ -913,12 +1116,106 @@ describe('BaileysAdapter inbound fan-out', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as {
       type: string;
+      body: string;
       media: { mimetype: string; filename?: string; data: string };
     };
     expect(msg.type).toBe('document');
+    // The caption rides under the unwrapped documentMessage; reading the raw wrapper would lose it.
+    expect(msg.body).toBe('Q1 report');
     expect(msg.media.mimetype).toBe('application/pdf');
     expect(msg.media.filename).toBe('report.pdf');
     expect(msg.media.data).toBe(docBuf.toString('base64'));
+  });
+
+  it('extracts ephemeralDuration from an ephemeralMessage-wrapped inbound message (disappearing chat)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+      getContentType: jest.Mock;
+      normalizeMessageContent: jest.Mock;
+    };
+    // Mirror real Baileys: getContentType returns the OUTER key for a wrapped message ('ephemeralMessage')
+    // and the inner key once normalized ('extendedTextMessage'). This forces the test through the
+    // production normalize-then-getContentType path instead of a mock shortcut — if the adapter forgot to
+    // normalize before reading the type/body, the assertions below would fail.
+    baileys.getContentType.mockImplementation((m?: { ephemeralMessage?: unknown }) =>
+      m?.ephemeralMessage ? 'ephemeralMessage' : 'extendedTextMessage',
+    );
+    // A live disappearing message arrives wrapped in `ephemeralMessage`; normalizeMessageContent unwraps
+    // it to the inner content carrying the body and the timer on `contextInfo.expiration`. Reading the raw
+    // (wrapped) content would miss both — the exact case this guards.
+    baileys.normalizeMessageContent.mockReturnValue({
+      extendedTextMessage: { text: 'vanishes', contextInfo: { expiration: 86400 } },
+    });
+
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'EPH1' },
+          message: {
+            ephemeralMessage: {
+              message: { extendedTextMessage: { text: 'vanishes', contextInfo: { expiration: 86400 } } },
+            },
+          },
+          messageTimestamp: 1700000040,
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessage.mock.calls[0][0] as { type: string; body: string; ephemeralDuration?: number };
+    // The body and type are derived from the normalized inner content, not the ephemeralMessage wrapper.
+    expect(msg.type).toBe('text');
+    expect(msg.body).toBe('vanishes');
+    expect(msg.ephemeralDuration).toBe(86400);
+  });
+
+  it('wrapped voice note in a disappearing chat maps to type voice', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileys = jest.requireMock('@whiskeysockets/baileys') as {
+      getContentType: jest.Mock;
+      normalizeMessageContent: jest.Mock;
+    };
+    baileys.getContentType.mockImplementation((m?: { ephemeralMessage?: unknown }) =>
+      m?.ephemeralMessage ? 'ephemeralMessage' : 'audioMessage',
+    );
+    baileys.normalizeMessageContent.mockReturnValue({
+      audioMessage: { ptt: true, mimetype: 'audio/ogg; codecs=opus' },
+    });
+
+    const prev = process.env.MEDIA_DOWNLOAD_ENABLED;
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'false'; // omitted-marker path: no download mock needed
+    try {
+      const onMessage = jest.fn();
+      const adapter = newAdapter();
+      await adapter.initialize({ onMessage });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'EPHVOICE1' },
+            message: {
+              ephemeralMessage: {
+                message: { audioMessage: { ptt: true, mimetype: 'audio/ogg; codecs=opus' } },
+              },
+            },
+            messageTimestamp: 1700000041,
+          },
+        ],
+      });
+      await new Promise(r => setImmediate(r));
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const msg = onMessage.mock.calls[0][0] as { type: string };
+      expect(msg.type).toBe('voice');
+    } finally {
+      if (prev === undefined) delete process.env.MEDIA_DOWNLOAD_ENABLED;
+      else process.env.MEDIA_DOWNLOAD_ENABLED = prev;
+    }
   });
 
   it('inbound location: populates the location field with coordinates', async () => {
@@ -1025,11 +1322,14 @@ describe('BaileysAdapter inbound fan-out', () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const revoked = onMessageRevoked.mock.calls[0][0] as {
       id: string;
+      revokedId?: string;
       chatId: string;
       type: string;
       body: string;
     };
     expect(revoked.id).toBe('ORIGINAL_ID');
+    // The REVOKE protocolMessage key IS the original, so revokedId mirrors id here.
+    expect(revoked.revokedId).toBe('ORIGINAL_ID');
     expect(revoked.chatId).toBe('628111@c.us'); // canonicalized to the neutral dialect
     expect(revoked.type).toBe('revoked');
     expect(revoked.body).toBe('');
@@ -1143,6 +1443,20 @@ describe('BaileysAdapter media sends', () => {
     expect(res).toEqual({ id: 'M1', timestamp: 1700000005 });
   });
 
+  it('sendImageMessage de-normalizes media.mentions into the content (#530)', async () => {
+    const adapter = await ready();
+    await adapter.sendImageMessage('120@g.us', {
+      mimetype: 'image/png',
+      data: Buffer.from([1]),
+      caption: 'look @62811',
+      mentions: ['62811@c.us'],
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '120@g.us',
+      expect.objectContaining({ mentions: ['62811@s.whatsapp.net'] }),
+    );
+  });
+
   it('resolves a base64 data string to a Buffer (no URL fetch)', async () => {
     const adapter = await ready();
     await adapter.sendDocumentMessage('628111@s.whatsapp.net', {
@@ -1179,6 +1493,20 @@ describe('BaileysAdapter media sends', () => {
       audio: Buffer.from([1]),
       mimetype: 'audio/mp4',
       ptt: false,
+    });
+  });
+
+  it('sendAudioMessage with ptt sends a voice note (ptt:true)', async () => {
+    const adapter = await ready();
+    await adapter.sendAudioMessage('628111@s.whatsapp.net', {
+      mimetype: 'audio/ogg; codecs=opus',
+      data: Buffer.from([1]),
+      ptt: true,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      audio: Buffer.from([1]),
+      mimetype: 'audio/ogg; codecs=opus',
+      ptt: true,
     });
   });
 
@@ -1266,6 +1594,41 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
+  });
+
+  it('media sends honor the chat disappearing timer via the funnel (#473)', async () => {
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 86400 }]);
+    await adapter.sendImageMessage('628111@s.whatsapp.net', { mimetype: 'image/png', data: Buffer.from([1]) });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      expect.objectContaining({ image: Buffer.from([1]) }),
+      { ephemeralExpiration: 86400 },
+    );
+  });
+
+  it('replyToMessage merges the disappearing timer with the quoted option (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.replyToMessage('628111@s.whatsapp.net', 'TARGET', 'my reply');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      '628111@s.whatsapp.net',
+      { text: 'my reply' },
+      { quoted: stored, ephemeralExpiration: 604800 },
+    );
+  });
+
+  it('react and delete never carry an ephemeral timer (Baileys does not exclude reactions) (#473)', async () => {
+    fakeStore.getMessage.mockResolvedValue(stored);
+    const adapter = await ready();
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+    await adapter.reactToMessage('628111@s.whatsapp.net', 'TARGET', '👍');
+    await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      react: { text: '👍', key: stored.key },
+    });
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', { delete: stored.key });
   });
 
@@ -1632,5 +1995,83 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     fakeSock.fire('connection.update', { connection: 'open' });
     expect(await adapter.deleteChat('628999@s.whatsapp.net')).toBe(false);
     expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysAdapter status posting', () => {
+  beforeEach(() => {
+    fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+  });
+
+  const ready = async (): Promise<BaileysAdapter> => {
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks());
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  it('postTextStatus sends to status@broadcast with denormalized statusJidList + styling, no store write', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'STATUS1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    const result = await adapter.postTextStatus('hello', {
+      recipients: ['628111@c.us', '628222@lid'],
+      backgroundColor: '#25D366',
+      font: 2,
+    });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { text: 'hello' },
+      {
+        statusJidList: ['628111@s.whatsapp.net', '628222@lid'],
+        backgroundColor: '#25D366',
+        font: 2,
+      },
+    );
+    expect(result.statusId).toBe('STATUS1');
+    expect(result.expiresAt.getTime() - result.timestamp.getTime()).toBe(24 * 3_600_000);
+    expect(fakeStore.put).not.toHaveBeenCalled();
+  });
+
+  it('postImageStatus resolves media and threads recipients', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'IMG1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    await adapter.postImageStatus(
+      { mimetype: 'image/png', data: Buffer.from([1, 2, 3]) },
+      { recipients: ['628111@c.us'], caption: 'cap' },
+    );
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { image: Buffer.from([1, 2, 3]), caption: 'cap', mimetype: 'image/png' },
+      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+    );
+    expect(fakeStore.put).not.toHaveBeenCalled();
+  });
+
+  it('postVideoStatus resolves media and threads recipients', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'VID1' }, messageTimestamp: 1719600000 });
+    const adapter = await ready();
+    await adapter.postVideoStatus({ mimetype: 'video/mp4', data: 'AAAA' }, { recipients: ['628111@c.us'] });
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(
+      'status@broadcast',
+      { video: Buffer.from('AAAA', 'base64'), caption: undefined, mimetype: 'video/mp4' },
+      { statusJidList: ['628111@s.whatsapp.net'], backgroundColor: undefined, font: undefined },
+    );
+  });
+
+  it('deleteStatus revokes by constructing the key from statusId (no store lookup)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'STATUS1' } });
+    const adapter = await ready();
+    await adapter.deleteStatus('STATUS1');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('status@broadcast', {
+      delete: {
+        remoteJid: 'status@broadcast',
+        fromMe: true,
+        id: 'STATUS1',
+        participant: '628999@s.whatsapp.net',
+      },
+    });
+    expect(fakeStore.getMessage).not.toHaveBeenCalled();
   });
 });

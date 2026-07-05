@@ -38,10 +38,10 @@ All routes are under `$BASE/api/sessions` and require `X-API-Key: $API_KEY` (som
 
 #### GET /api/sessions
 
-List all sessions visible to the key.
+List all sessions visible to the key. Add `limit`/`offset` to page large installations.
 
 ```bash
-curl -X GET "$BASE/api/sessions" \
+curl -X GET "$BASE/api/sessions?limit=100&offset=0" \
   -H "X-API-Key: $API_KEY"
 ```
 
@@ -278,13 +278,13 @@ curl -X POST "$BASE/api/sessions/my-session/messages/send-video" \
 
 #### POST /api/sessions/:sessionId/messages/send-audio
 
-Send an audio/voice message by URL or base64.
+Send an audio message by URL or base64. Add `"ptt": true` to send a real WhatsApp voice note (mic bubble + waveform); the server defaults the mimetype to `audio/ogg; codecs=opus` when `ptt` is set without one.
 
 ```bash
 curl -X POST "$BASE/api/sessions/my-session/messages/send-audio" \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg" }'
+  -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/voice.ogg", "mimetype": "audio/ogg", "ptt": true }'
 ```
 
 #### POST /api/sessions/:sessionId/messages/send-document
@@ -329,6 +329,17 @@ curl -X POST "$BASE/api/sessions/my-session/messages/send-sticker" \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "chatId": "628123456789@c.us", "url": "https://example.com/sticker.webp", "mimetype": "image/webp" }'
+```
+
+#### POST /api/sessions/:sessionId/messages/send-poll
+
+Send a native WhatsApp poll (2–12 options; single choice unless `allowMultipleAnswers` is true).
+
+```bash
+curl -X POST "$BASE/api/sessions/my-session/messages/send-poll" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "chatId": "1203630000@g.us", "name": "Where should we meet?", "options": ["Park", "Beach", "Downtown"] }'
 ```
 
 #### POST /api/sessions/:sessionId/messages/reply
@@ -851,10 +862,10 @@ curl -X GET "$BASE/api/sessions/my-session/webhooks/f1e2d3c4-b5a6-7890-1234-5678
 
 #### GET /api/webhooks
 
-List webhooks visible to the calling key (scoped to its allowed sessions).
+List webhooks visible to the calling key (scoped to its allowed sessions). Add `limit`/`offset` to page large lists.
 
 ```bash
-curl -X GET "$BASE/api/webhooks" \
+curl -X GET "$BASE/api/webhooks?limit=100&offset=0" \
   -H "X-API-Key: $API_KEY"
 ```
 
@@ -1061,7 +1072,7 @@ curl "$BASE/api/stats/sessions/9f1c2d3e-…" \
 
 #### GET /api/settings
 
-Read runtime settings (env-derived). Any valid API key.
+Read runtime settings (env-derived). ADMIN key required (`403` otherwise).
 
 ```bash
 curl "$BASE/api/settings" \

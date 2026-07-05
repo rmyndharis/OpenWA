@@ -107,6 +107,7 @@ class SendMediaRequest(TypedDict, total=False):
     mimetype: str
     filename: str
     caption: str
+    ptt: bool  # audio only: send as a WhatsApp voice note (PTT)
 
 
 class SendLocationRequest(TypedDict, total=False):
@@ -501,8 +502,10 @@ class StatusRecord(TypedDict, total=False):
 
 
 class SendTextStatusRequest(TypedDict, total=False):
-    # text required; backgroundColor (hex, e.g. #25D366) and font optional.
+    # text and recipients required; backgroundColor (hex, e.g. #25D366) and font optional.
     text: str
+    # Recipient JIDs the status is addressed to (required by the server; empty -> 400).
+    recipients: list[str]
     backgroundColor: str
     font: int
 
@@ -512,12 +515,15 @@ class StatusMediaInput(TypedDict, total=False):
 
     url: str
     base64: str
+    mimetype: str
 
 
 class SendImageStatusRequest(TypedDict, total=False):
     """Server expects a nested ``{ image: { url|base64 } }`` body."""
 
     image: StatusMediaInput
+    # Recipient JIDs the status is addressed to (required by the server; empty -> 400).
+    recipients: list[str]
     caption: str
 
 
@@ -525,6 +531,8 @@ class SendVideoStatusRequest(TypedDict, total=False):
     """Server expects a nested ``{ video: { url|base64 } }`` body."""
 
     video: StatusMediaInput
+    # Recipient JIDs the status is addressed to (required by the server; empty -> 400).
+    recipients: list[str]
     caption: str
 
 

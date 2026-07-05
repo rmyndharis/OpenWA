@@ -1,4 +1,4 @@
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import { AddMessagesWaMessageIdUnique1781300000000 } from '../1781300000000-AddMessagesWaMessageIdUnique';
 
 describe('AddMessagesWaMessageIdUnique migration', () => {
@@ -63,5 +63,23 @@ describe('AddMessagesWaMessageIdUnique migration', () => {
     await ds.query(`DROP TABLE "messages"`);
     await expect(migration.up(runner)).resolves.toBeUndefined(); // absent table
     await runner.release();
+  });
+
+  it('lifts the runtime statement_timeout for the migration transaction on Postgres', async () => {
+    // The runtime data pool carries a statement_timeout that is inherited by the boot-migration
+    // connection; this DELETE / CREATE UNIQUE INDEX over the hot messages table must not be aborted.
+    const queries: string[] = [];
+    const pgRunner = {
+      connection: { options: { type: 'postgres' } },
+      hasTable: jest.fn().mockResolvedValue(true),
+      query: jest.fn((sql: string) => {
+        queries.push(sql);
+        return Promise.resolve([]);
+      }),
+    } as unknown as QueryRunner;
+
+    await new AddMessagesWaMessageIdUnique1781300000000().up(pgRunner);
+
+    expect(queries[0]).toBe('SET LOCAL statement_timeout = 0');
   });
 });

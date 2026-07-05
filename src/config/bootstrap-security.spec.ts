@@ -1,6 +1,7 @@
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
+  isUpgradeInsecureRequestsEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
@@ -41,6 +42,24 @@ describe('resolveCorsPolicy', () => {
 
   it('still allows wildcard in development', () => {
     expect(resolveCorsPolicy('*', 'development').allowAnyOrigin).toBe(true);
+  });
+});
+
+describe('isUpgradeInsecureRequestsEnabled', () => {
+  it('keeps the legacy default: on in production, off elsewhere (unset)', () => {
+    expect(isUpgradeInsecureRequestsEnabled(undefined, 'production')).toBe(true);
+    expect(isUpgradeInsecureRequestsEnabled(undefined, 'development')).toBe(false);
+    expect(isUpgradeInsecureRequestsEnabled(undefined)).toBe(false);
+  });
+  it('lets an explicit value override NODE_ENV', () => {
+    // HTTP-only private-network prod opts OUT so the dashboard stays reachable (#611)
+    expect(isUpgradeInsecureRequestsEnabled('false', 'production')).toBe(false);
+    // and it can be forced on outside production
+    expect(isUpgradeInsecureRequestsEnabled('true', 'development')).toBe(true);
+  });
+  it('treats any non-"true"/"false" value as unset (falls back to NODE_ENV)', () => {
+    expect(isUpgradeInsecureRequestsEnabled('', 'production')).toBe(true);
+    expect(isUpgradeInsecureRequestsEnabled('1', 'development')).toBe(false);
   });
 });
 
@@ -101,6 +120,75 @@ describe('assertNoDefaultSecretsInProduction', () => {
     expect(() =>
       assertNoDefaultSecretsInProduction({ nodeEnv: 'production', databaseType: 'postgres', databasePassword: '' }),
     ).toThrow(/DATABASE_PASSWORD/);
+  });
+
+  it('allows the built-in Postgres/MinIO default credentials in prod (internal-only network) (#488 review)', () => {
+    // The bundled containers are reachable only on the internal Docker network (not published), so the
+    // known 'openwa'/'minioadmin' creds the built-in flow provisions must not crash-loop a prod boot.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+      }),
+    ).not.toThrow();
+  });
+
+  it('still refuses an EXTERNAL Postgres with a default password even when MinIO is built-in', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'false',
+      }),
+    ).toThrow(/DATABASE_PASSWORD/);
+  });
+
+  it('does NOT exempt a weak secret when the built-in flag is set but the host is EXTERNAL', () => {
+    // POSTGRES_BUILTIN=true but DATABASE_HOST points at a reachable external DB → still enforced.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        databaseHost: 'db.example.com',
+      }),
+    ).toThrow(/DATABASE_PASSWORD/);
+    // MINIO_BUILTIN=true but S3_ENDPOINT is an external bucket → still enforced.
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+        s3Endpoint: 'https://s3.amazonaws.com',
+      }),
+    ).toThrow(/S3_ACCESS_KEY/);
+  });
+
+  it('exempts the built-in defaults when the host is the internal bundled service', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        databaseType: 'postgres',
+        databasePassword: 'openwa',
+        postgresBuiltIn: 'true',
+        databaseHost: 'postgres',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+        s3Endpoint: 'http://minio:9000',
+      }),
+    ).not.toThrow();
   });
 
   it('refuses prod with default MinIO/S3 credentials', () => {

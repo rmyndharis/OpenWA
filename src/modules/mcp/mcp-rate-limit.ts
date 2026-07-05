@@ -2,23 +2,37 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 
 const DEFAULT_MAX = 60;
 const DEFAULT_WINDOW_MS = 60_000;
+// Pre-auth per-IP budget: more generous than the per-key one so a legitimate multi-key host behind one
+// IP (e.g. a shared proxy) isn't starved, while still bounding an unauthenticated key-probing flood.
+const DEFAULT_IP_MAX = 120;
+
+const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
+  if (!raw || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  const i = Math.floor(n);
+  return i >= 1 ? i : fallback;
+};
 
 /**
  * Read MCP rate-limit configuration from the environment.
  * Falls back to the default for any missing, blank, non-positive, or non-numeric value.
  */
 export function readRateLimitConfig(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
-  const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
-    if (!raw || raw.trim() === '') return fallback;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return fallback;
-    const i = Math.floor(n);
-    return i >= 1 ? i : fallback;
-  };
-
   return {
     max: parsePositiveInt(env['MCP_RATE_LIMIT_MAX'], DEFAULT_MAX),
     windowMs: parsePositiveInt(env['MCP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
+  };
+}
+
+/**
+ * Read the PRE-AUTH per-IP MCP throttle config. Independent of the per-key vars above (which must not
+ * bleed in), with the same blank/non-positive/non-numeric fallback.
+ */
+export function readIpRateLimitConfig(env: NodeJS.ProcessEnv = process.env): { max: number; windowMs: number } {
+  return {
+    max: parsePositiveInt(env['MCP_IP_RATE_LIMIT_MAX'], DEFAULT_IP_MAX),
+    windowMs: parsePositiveInt(env['MCP_IP_RATE_LIMIT_WINDOW_MS'], DEFAULT_WINDOW_MS),
   };
 }
 

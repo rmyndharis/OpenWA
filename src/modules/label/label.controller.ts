@@ -66,6 +66,10 @@ export class LabelController {
     status: 200,
     description: 'Label added to chat',
   })
+  @ApiResponse({
+    status: 422,
+    description: 'Labels require a WhatsApp Business account, or the chat type has no labels',
+  })
   async addLabelToChat(
     @Param('sessionId') sessionId: string,
     @Param('chatId') chatId: string,
@@ -84,6 +88,10 @@ export class LabelController {
   @ApiResponse({
     status: 200,
     description: 'Label removed from chat',
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'Labels require a WhatsApp Business account, or the chat type has no labels',
   })
   async removeLabelFromChat(
     @Param('sessionId') sessionId: string,

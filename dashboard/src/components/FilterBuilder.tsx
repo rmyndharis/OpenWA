@@ -28,7 +28,9 @@ const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'call',
   'revoked',
+  'masked',
   'unknown',
 ];
 

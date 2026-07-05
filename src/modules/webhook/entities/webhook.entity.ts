@@ -17,7 +17,9 @@ export class Webhook {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
+  // varchar (not uuid) to match the authoritative migration DDL and sessions.id; the data connection
+  // runs synchronize:false, so a 'uuid' decorator here would only mislead schema diffs / a stray sync.
+  @Column({ type: 'varchar' })
   sessionId: string;
 
   @ManyToOne(() => Session, { onDelete: 'CASCADE' })

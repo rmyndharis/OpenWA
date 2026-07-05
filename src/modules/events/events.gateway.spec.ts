@@ -2,6 +2,8 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Socket } from 'socket.io';
 import { EventsGateway, isSessionSubscriptionAllowed } from './events.gateway';
 import { AuthService } from '../auth/auth.service';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
 import type { WSClientMessage, WSErrorResponse, WSSubscribedResponse, WSEventMessage } from './dto/ws-messages.dto';
 import { WEBHOOK_RESERVED_EVENTS } from '../webhook/dto/webhook.dto';
@@ -31,7 +33,12 @@ describe('isSessionSubscriptionAllowed (WS session-scope enforcement)', () => {
 
 interface MockSocket {
   id: string;
-  handshake: { headers: Record<string, string>; query: Record<string, string>; auth: { apiKey?: string } };
+  handshake: {
+    headers: Record<string, string>;
+    query: Record<string, string>;
+    auth: { apiKey?: string };
+    address: string;
+  };
   data: Record<string, unknown>;
   emit: jest.Mock;
   disconnect: jest.Mock;
@@ -45,7 +52,7 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 
   const makeSocket = (auth: { apiKey?: string } = {}): MockSocket => ({
     id: 'sock-1',
-    handshake: { headers: {}, query: {}, auth },
+    handshake: { headers: {}, query: {}, auth, address: '203.0.113.5' },
     data: {},
     emit: jest.fn(),
     disconnect: jest.fn(),
@@ -56,9 +63,12 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
   const subscribeMsg = (sessionId: string, events: string[]): WSClientMessage =>
     ({ type: 'subscribe', sessionId, events, requestId: 'r1' }) as unknown as WSClientMessage;
 
+  let auditService: { logWarn: jest.Mock };
+
   beforeEach(() => {
     authService = { validateApiKey: jest.fn() };
-    gateway = new EventsGateway(authService as unknown as AuthService);
+    auditService = { logWarn: jest.fn().mockResolvedValue(null) };
+    gateway = new EventsGateway(authService as unknown as AuthService, auditService as unknown as AuditService);
   });
 
   it('rejects a connection with no API key (and never calls validate)', async () => {
@@ -66,6 +76,24 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     await gateway.handleConnection(asSocket(sock));
     expect(sock.disconnect).toHaveBeenCalled();
     expect(authService.validateApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does NOT accept the API key from the query string (credential must not travel in the URL)', async () => {
+    const sock = makeSocket({});
+    sock.handshake.query.apiKey = 'leaky-key-in-url';
+    await gateway.handleConnection(asSocket(sock));
+    expect(authService.validateApiKey).not.toHaveBeenCalled(); // query key ignored → treated as missing
+    expect(sock.disconnect).toHaveBeenCalled();
+  });
+
+  it('audits a rejected WebSocket auth attempt (forensic parity with the REST guard)', async () => {
+    authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+    const sock = makeSocket({ apiKey: 'bad' });
+    await gateway.handleConnection(asSocket(sock));
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ ipAddress: '203.0.113.5', metadata: { surface: 'websocket' } }),
+    );
   });
 
   it('rejects a connection when validateApiKey throws (the real auth-failure contract)', async () => {

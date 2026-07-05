@@ -67,6 +67,26 @@ describe('buildIncomingMessageBase', () => {
     expect(r.contact).toBeUndefined();
   });
 
+  it('maps ephemeralDuration when present on _data', () => {
+    const r = buildIncomingMessageBase({
+      ...base,
+      _data: { ephemeralDuration: 86400 },
+    });
+    expect(r.ephemeralDuration).toBe(86400);
+  });
+
+  it('omits ephemeralDuration when absent from _data', () => {
+    expect(buildIncomingMessageBase(base).ephemeralDuration).toBeUndefined();
+  });
+
+  it('omits ephemeralDuration when ephemeralDuration is 0', () => {
+    const r = buildIncomingMessageBase({
+      ...base,
+      _data: { ephemeralDuration: 0 },
+    });
+    expect(r.ephemeralDuration).toBeUndefined();
+  });
+
   it('uses `to` as the chat for an outgoing (fromMe) message, not the account JID in `from`', () => {
     const r = buildIncomingMessageBase({ ...base, fromMe: true, from: 'me@c.us', to: 'peer@c.us' });
     expect(r.chatId).toBe('peer@c.us');
@@ -102,7 +122,9 @@ describe('mapWwebjsMessageType (engine type-token -> neutral MessageType boundar
     ['location', 'location'],
     ['vcard', 'contact'],
     ['multi_vcard', 'contact'],
+    ['call_log', 'call'],
     ['revoked', 'revoked'],
+    ['poll_creation', 'poll'],
     ['e2e_notification', 'unknown'], // any unmapped wwebjs type
   ])('maps wwebjs type %s -> %s', (raw, expected) => {
     expect(mapWwebjsMessageType(raw)).toBe(expected);

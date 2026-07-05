@@ -8,6 +8,7 @@ import { BaileysPlugin } from '../plugins/engines/baileys';
 import { createLogger } from '../common/services/logger.service';
 import { BaileysMessageStoreService } from './adapters/baileys-message-store.service';
 import { LidMappingStoreService } from './identity/lid-mapping-store.service';
+import { isSafeSessionName } from '../common/utils/path-safety';
 
 export interface EngineCreateOptions {
   sessionId: string;
@@ -52,7 +53,7 @@ export class EngineFactory implements OnModuleInit {
       provides: ['whatsapp-engine'],
     };
 
-    const wwjsPlugin = new WhatsAppWebJsPlugin(engineConfig);
+    const wwjsPlugin = new WhatsAppWebJsPlugin(engineConfig, this.lidMappingStore);
     this.pluginLoader.registerBuiltInPlugin(wwjsManifest, wwjsPlugin, engineConfig);
 
     // Register Baileys as a second built-in engine plugin. Same opaque engine blob; the plugin
@@ -89,6 +90,14 @@ export class EngineFactory implements OnModuleInit {
   }
 
   create(options: EngineCreateOptions): IWhatsAppEngine {
+    // The sessionId becomes the engine's on-disk auth-directory key (path.join(authDir, sessionId) /
+    // session-${sessionId}), so a name containing '.', '/' or '\\' could traverse outside it. Normal
+    // creation validates via CreateSessionDto, but alternate paths (data import, seed) can reach this
+    // sink with a raw name — assert here so the traversal can never materialize regardless of source.
+    if (!isSafeSessionName(options.sessionId)) {
+      throw new Error(`Refusing to create an engine for an unsafe session name: ${JSON.stringify(options.sessionId)}`);
+    }
+
     // Try to get engine from plugin system
     const enginePlugin = this.pluginLoader.getPlugin(this.engineType);
 
@@ -123,6 +132,15 @@ export class EngineFactory implements OnModuleInit {
   }
 
   private createFallbackEngine(options: EngineCreateOptions): IWhatsAppEngine {
+    // This legacy fallback can only construct the whatsapp-web.js adapter. If a different engine was
+    // requested (e.g. ENGINE_TYPE=baileys) and its plugin wasn't available, building wwebjs here would
+    // silently run the WRONG engine — fail loudly so the misconfiguration is visible instead.
+    if (this.engineType !== 'whatsapp-web.js') {
+      throw new Error(
+        `Engine '${this.engineType}' is unavailable and has no direct fallback; cannot start the session.`,
+      );
+    }
+
     // Legacy direct creation (fallback)
     return new WhatsAppWebJsAdapter({
       sessionId: options.sessionId,
@@ -138,6 +156,7 @@ export class EngineFactory implements OnModuleInit {
             type: options.proxyType ?? 'http',
           }
         : undefined,
+      lidMappingStore: this.lidMappingStore,
     });
   }
 

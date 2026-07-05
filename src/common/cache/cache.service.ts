@@ -75,7 +75,7 @@ export class CacheService implements OnModuleDestroy {
         db: this.configService.get<number>('REDIS_CACHE_DB', 1),
         lazyConnect: true,
         maxRetriesPerRequest: 3,
-        connectTimeout: 5000,
+        connectTimeout: this.configService.get<number>('redis.connectTimeoutMs', 5000),
         retryStrategy: times => {
           if (times > 3) return null;
           return Math.min(times * 500, 3000);

@@ -44,6 +44,12 @@ export function MessageTester() {
     }
   }, [sessions, session]);
 
+  // Clear the group selection when the session changes so a stale group id from the previous session
+  // can't be sent to; the effect below then re-seeds groups[0].id once the new session's groups load.
+  useEffect(() => {
+    setSelectedGroup('');
+  }, [session]);
+
   useEffect(() => {
     if (groups.length > 0 && !selectedGroup) {
       setSelectedGroup(groups[0].id);

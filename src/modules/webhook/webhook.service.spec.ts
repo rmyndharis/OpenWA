@@ -13,13 +13,14 @@ jest.mock('undici', () => {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { getQueueToken } from '@nestjs/bullmq';
-import { Repository } from 'typeorm';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { In, Repository } from 'typeorm';
+import { NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { fetch as undiciFetch } from 'undici';
 import { WebhookService, WebhookPayload } from './webhook.service';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { WebhookFilters } from './filters/filter-types';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { HookManager } from '../../core/hooks';
@@ -48,6 +49,7 @@ function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
 describe('WebhookService', () => {
   let service: WebhookService;
   let repository: jest.Mocked<Partial<Repository<Webhook>>>;
+  let failureRepository: jest.Mocked<Partial<Repository<WebhookDeliveryFailure>>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let webhookQueue: jest.Mocked<Record<string, jest.Mock>>;
@@ -61,6 +63,11 @@ describe('WebhookService', () => {
       save: jest.fn(),
       remove: jest.fn(),
       update: jest.fn(),
+    };
+
+    failureRepository = {
+      insert: jest.fn().mockResolvedValue({}),
+      find: jest.fn().mockResolvedValue([]),
     };
 
     configService = {
@@ -90,6 +97,7 @@ describe('WebhookService', () => {
       providers: [
         WebhookService,
         { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+        { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
         { provide: ConfigService, useValue: configService },
         { provide: HookManager, useValue: hookManager },
         { provide: LidMappingStoreService, useValue: lidStore },
@@ -145,13 +153,13 @@ describe('WebhookService', () => {
 
     // ── validate URL at registration, default-on ──────────
 
-    it('rejects an internal webhook URL at registration with 400 (protection on by default)', async () => {
+    it('rejects an internal webhook URL at registration with 400 and a generic message (no IP leak)', async () => {
       const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
       delete process.env.WEBHOOK_SSRF_PROTECT; // default → on
       try {
-        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).rejects.toBeInstanceOf(
-          BadRequestException,
-        );
+        await expect(service.create('sess-1', { url: 'http://127.0.0.1/hook' })).rejects.toMatchObject({
+          response: { message: 'Destination address is not allowed' },
+        });
         expect(repository.create).not.toHaveBeenCalled();
       } finally {
         if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
@@ -195,7 +203,20 @@ describe('WebhookService', () => {
 
       await service.findAll();
 
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' } });
+      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+    });
+
+    it('applies bounded pagination to cross-session listing', async () => {
+      (repository.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findAll(['sess-1'], { limit: 5000, offset: -5 });
+
+      expect(repository.find).toHaveBeenCalledWith({
+        where: { sessionId: In(['sess-1']) },
+        order: { createdAt: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
     });
   });
 
@@ -298,6 +319,35 @@ describe('WebhookService', () => {
       timeoutSpy.mockRestore();
     });
 
+    it('dispatches to sibling webhooks concurrently — a slow receiver does not block the others', async () => {
+      const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
+      const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([wA, wB]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+
+      let resolveSlow: (v: unknown) => void = () => undefined;
+      const slow = new Promise(r => (resolveSlow = r));
+      const calledUrls: string[] = [];
+      mockFetch.mockImplementation((url: string) => {
+        calledUrls.push(url);
+        return url.includes('a.example') ? slow : Promise.resolve({ ok: true, status: 200 });
+      });
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      // Flush until both fetches fire (or give up): with the old sequential loop, only A ever fires while
+      // it hangs, so this exhausts and the assertion below fails — exactly the regression we guard.
+      for (let i = 0; i < 20 && calledUrls.length < 2; i++) {
+        await new Promise(r => setImmediate(r));
+      }
+
+      // B is delivered even though A is still hanging — sequential code would not have reached B yet.
+      expect(calledUrls).toEqual(expect.arrayContaining(['https://a.example/hook', 'https://b.example/hook']));
+
+      resolveSlow({ ok: true, status: 200 });
+      await dispatchP;
+    });
+
     it('falls back to the original payload when a before-hook omits payload (no undefined body)', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);
@@ -317,6 +367,64 @@ describe('WebhookService', () => {
       expect(body).not.toBeUndefined();
       expect(body.event).toBe('message.received');
       expect(body.data).toEqual({ from: '628123456789@c.us' });
+    });
+
+    it('keeps the server-canonical idempotency/delivery ids on the signed body, overriding a tampering plugin', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // A webhook:before plugin returns a payload with forged identifiers (other hook events pass through).
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, ctx: { payload?: WebhookPayload }) =>
+        event === 'webhook:before' && ctx.payload
+          ? Promise.resolve({
+              continue: true,
+              data: { payload: { ...ctx.payload, idempotencyKey: 'PLUGIN-FORGED', deliveryId: 'PLUGIN-FORGED' } },
+            })
+          : Promise.resolve({ continue: true, data: {} }),
+      );
+
+      await service.dispatch('sess-1', 'message.received', { from: '628123456789@c.us' });
+
+      const call = mockFetch.mock.calls[0] as [unknown, { headers: Record<string, string>; body: string }];
+      const headers = call[1].headers;
+      const body = JSON.parse(call[1].body) as WebhookPayload;
+      // Receivers dedupe on the header, so the signed body field must equal the header — and both must
+      // be the server's value, not the plugin's forgery.
+      expect(body.idempotencyKey).toBe(headers['X-OpenWA-Idempotency-Key']);
+      expect(body.deliveryId).toBe(headers['X-OpenWA-Delivery-Id']);
+      expect(body.idempotencyKey).not.toBe('PLUGIN-FORGED');
+      expect(body.deliveryId).not.toBe('PLUGIN-FORGED');
+    });
+
+    it("isolates each webhook's data so an in-place before-hook mutation cannot bleed across webhooks", async () => {
+      const a = createMockWebhook({ id: 'wh-a', events: ['message.received'] });
+      const b = createMockWebhook({ id: 'wh-b', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([a, b]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // The hook mutates payload.data in place every time it runs (returns no payload key → finalPayload
+      // is the mutated input). With a shared data object the second webhook would see the first's tag.
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, ctx: { payload?: WebhookPayload }) => {
+        if (event === 'webhook:before' && ctx.payload) {
+          const d = ctx.payload.data as { tag?: number };
+          d.tag = (d.tag ?? 0) + 1;
+          return Promise.resolve({ continue: true, data: { payload: ctx.payload } });
+        }
+        return Promise.resolve({ continue: true, data: {} });
+      });
+
+      await service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+
+      const bodyA = JSON.parse((mockFetch.mock.calls[0] as [unknown, { body: string }])[1].body) as {
+        data: { tag: number };
+      };
+      const bodyB = JSON.parse((mockFetch.mock.calls[1] as [unknown, { body: string }])[1].body) as {
+        data: { tag: number };
+      };
+      // Each webhook starts from its own clone of the original data, so both see exactly one increment.
+      expect(bodyA.data.tag).toBe(1);
+      expect(bodyB.data.tag).toBe(1);
     });
 
     it('test() probes the receiver using the configured WEBHOOK_TIMEOUT', async () => {
@@ -647,16 +755,11 @@ describe('WebhookService', () => {
       // Verify signature format
       expect(capturedHeaders['X-OpenWA-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
 
-      // Verify signature correctness
-      const body = JSON.stringify({
-        event: 'message.received',
-        data: {},
-        timestamp: '',
-        sessionId: 'sess-1',
-        idempotencyKey: 'k',
-        deliveryId: 'd',
-      });
-      const expected = `sha256=${crypto.createHmac('sha256', 'test-secret-123').update(body).digest('hex')}`;
+      // Verify signature correctness against the ACTUAL delivered body. The body now carries the
+      // server-canonical idempotency/delivery ids (re-asserted over the plugin's 'k'/'d'), so the
+      // signature is checked against what the receiver actually gets — the real verification contract.
+      const sentBody = (mockFetch.mock.calls[0] as [unknown, { body: string }])[1].body;
+      const expected = `sha256=${crypto.createHmac('sha256', 'test-secret-123').update(sentBody).digest('hex')}`;
       expect(capturedHeaders['X-OpenWA-Signature']).toBe(expected);
 
       mockFetch.mockReset();
@@ -666,12 +769,15 @@ describe('WebhookService', () => {
   // ── dispatch (queue mode) ─────────────────────────────────────────
 
   describe('dispatch (queue mode)', () => {
+    afterEach(() => (undiciFetch as jest.Mock).mockReset());
+
     it('should add job to queue when queue is enabled', async () => {
       // Create a new service with queue enabled
       const queueModule: TestingModule = await Test.createTestingModule({
         providers: [
           WebhookService,
           { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
           {
             provide: ConfigService,
             useValue: {
@@ -723,6 +829,107 @@ describe('WebhookService', () => {
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           backoff: expect.objectContaining({ type: 'exponential' }),
         }),
+      );
+    });
+
+    it('falls back to direct delivery when queue add fails', async () => {
+      const queueModule: TestingModule = await Test.createTestingModule({
+        providers: [
+          WebhookService,
+          { provide: getRepositoryToken(Webhook, 'data'), useValue: repository },
+          { provide: getRepositoryToken(WebhookDeliveryFailure, 'data'), useValue: failureRepository },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn().mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+                if (key === 'queue.enabled') return true;
+                if (key === 'webhook.retryDelay') return 5000;
+                if (key === 'webhook.timeout') return 25000;
+                return def as T;
+              }),
+            },
+          },
+          { provide: HookManager, useValue: hookManager },
+          { provide: getQueueToken(QUEUE_NAMES.WEBHOOK), useValue: webhookQueue },
+        ],
+      }).compile();
+
+      const queueService = queueModule.get<WebhookService>(WebhookService);
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 1 });
+      const queuePayload: WebhookPayload = {
+        event: 'message.received',
+        data: {},
+        timestamp: '',
+        sessionId: 'sess-1',
+        idempotencyKey: 'k',
+        deliveryId: 'd',
+      };
+      const mockFetch = undiciFetch as jest.Mock;
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: { sessionId: 'sess-1', event: 'message.received', payload: queuePayload },
+      });
+      webhookQueue.add.mockRejectedValueOnce(new Error('redis down'));
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await queueService.dispatch('sess-1', 'message.received', {});
+
+      expect(webhookQueue.add).toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/webhook',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'webhook:delivered',
+        expect.objectContaining({ webhookId: webhook.id, fallback: 'queue_failed' }),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('delivery-failure dead-letter', () => {
+    it('records a durable failure when a direct delivery exhausts its retries', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'], retryCount: 1 });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (hookManager.execute as jest.Mock).mockResolvedValue({
+        continue: true,
+        data: {
+          payload: {
+            event: 'message.received',
+            timestamp: '',
+            sessionId: 'sess-1',
+            idempotencyKey: 'k',
+            deliveryId: 'd',
+            data: {},
+          },
+        },
+      });
+      const mockFetch = undiciFetch as jest.Mock;
+      mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+      await service.dispatch('sess-1', 'message.received', {});
+
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webhookId: webhook.id,
+          attempts: 1,
+          lastStatusCode: 500,
+          lastError: 'HTTP 500: Server Error',
+        }),
+      );
+      mockFetch.mockReset();
+    });
+
+    it('listDeliveryFailures queries most-recent-first, optionally scoped to a session', async () => {
+      (failureRepository.find as jest.Mock).mockResolvedValue([{ id: 'f1' }]);
+
+      const out = await service.listDeliveryFailures({ sessionId: 's1', limit: 10 });
+
+      expect(out).toHaveLength(1);
+      expect(failureRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: 's1' }, order: { createdAt: 'DESC' } }),
       );
     });
   });

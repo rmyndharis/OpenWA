@@ -105,6 +105,27 @@ export class HookManager {
     return this.inFlightEvents.run(nextInFlight, () => this.runHandlers(event, data, options));
   }
 
+  /**
+   * Run `fn` with `events` marked in-flight on the active async context (merged with anything already
+   * in flight). The re-entrancy guard in {@link execute} relies on AsyncLocalStorage, which does not
+   * span the sandbox worker IPC boundary: a worker handling a hook can issue a capability call that
+   * returns to the host on a fresh async context, where `getStore()` is empty. Wrapping that
+   * round-trip in this method re-establishes the in-flight set so a capability that re-fires the same
+   * in-flight event is short-circuited exactly as an in-process handler would be.
+   */
+  runInFlight<T>(events: Iterable<HookEvent>, fn: () => T): T {
+    const merged = new Set<HookEvent>(this.inFlightEvents.getStore());
+    for (const event of events) merged.add(event);
+    return this.inFlightEvents.run(merged, fn);
+  }
+
+  /** True if `event` is already in-flight on the active async context (an ancestor handler is running
+   *  it). Lets a caller wrap a capability in {@link runInFlight} ONLY for genuine re-entrancy, instead
+   *  of unconditionally seeding the event and suppressing it for unrelated observers on a top-level call. */
+  isInFlight(event: HookEvent): boolean {
+    return this.inFlightEvents.getStore()?.has(event) ?? false;
+  }
+
   private async runHandlers<T>(
     event: HookEvent,
     data: T,

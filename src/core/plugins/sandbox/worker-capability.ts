@@ -1,4 +1,6 @@
 import { WorkerToHostMessage, HostToWorkerMessage } from './protocol';
+import { ConversationSendEnvelope } from '../plugin.interfaces';
+import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
 
 /**
  * Worker-side correlation for capability calls. Each `call` posts a `cap` request and resolves when
@@ -39,6 +41,8 @@ export interface SandboxCapabilityContext {
     getContactById(sessionId: string, contactId: string): Promise<unknown>;
     checkNumberExists(sessionId: string, phone: string): Promise<unknown>;
     getChats(sessionId: string): Promise<unknown>;
+    getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<unknown>;
+    canonicalChatId(sessionId: string, chatId: string): Promise<unknown>;
   };
   storage: {
     get(key: string): Promise<unknown>;
@@ -48,6 +52,20 @@ export interface SandboxCapabilityContext {
   };
   net: {
     fetch(url: string, init?: unknown): Promise<unknown>;
+  };
+  conversations: {
+    send(env: ConversationSendEnvelope): Promise<unknown>;
+  };
+  handover: {
+    set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
+  };
+  mappings: {
+    upsert(
+      key: { sessionId: string; chatId: string; instanceId: string },
+      providerConversationId: string,
+    ): Promise<unknown>;
+    get(key: { sessionId: string; chatId: string; instanceId: string }): Promise<unknown>;
+    getByProvider(instanceId: string, providerConversationId: string): Promise<unknown>;
   };
 }
 
@@ -65,6 +83,9 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
       getContactById: (sessionId, contactId) => client.call('engine.getContactById', [sessionId, contactId]),
       checkNumberExists: (sessionId, phone) => client.call('engine.checkNumberExists', [sessionId, phone]),
       getChats: sessionId => client.call('engine.getChats', [sessionId]),
+      getChatHistory: (sessionId, chatId, limit, includeMedia) =>
+        client.call('engine.getChatHistory', [sessionId, chatId, limit, includeMedia]),
+      canonicalChatId: (sessionId, chatId) => client.call('engine.canonicalChatId', [sessionId, chatId]),
     },
     storage: {
       get: key => client.call('storage.get', [key]),
@@ -74,6 +95,18 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
     },
     net: {
       fetch: (url, init) => client.call('net.fetch', [url, init]),
+    },
+    conversations: {
+      send: env => client.call('conversation.send', [env]),
+    },
+    handover: {
+      set: (key, state) => client.call('handover.set', [key, state]),
+    },
+    mappings: {
+      upsert: (key, providerConversationId) => client.call('mappings.upsert', [key, providerConversationId]),
+      get: key => client.call('mappings.get', [key]),
+      getByProvider: (instanceId, providerConversationId) =>
+        client.call('mappings.getByProvider', [instanceId, providerConversationId]),
     },
   };
 }

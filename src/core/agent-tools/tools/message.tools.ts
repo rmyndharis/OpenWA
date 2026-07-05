@@ -157,6 +157,7 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
         mimetype: z.string().optional().describe('MIME type (required when using base64)'),
         filename: z.string().max(255).optional(),
         caption: z.string().max(1024).optional(),
+        ptt: z.boolean().optional().describe('Send as a WhatsApp voice note (PTT)'),
       }),
       handler: (input: {
         sessionId: string;
@@ -166,6 +167,7 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
         mimetype?: string;
         filename?: string;
         caption?: string;
+        ptt?: boolean;
       }) =>
         message.sendAudio(input.sessionId, {
           chatId: input.chatId,
@@ -174,6 +176,7 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
           mimetype: input.mimetype,
           filename: input.filename,
           caption: input.caption,
+          ptt: input.ptt,
         }),
     },
     {

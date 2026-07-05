@@ -1,4 +1,4 @@
-import { paginate } from './paginate';
+import { paginate, resolveListWindow } from './paginate';
 
 describe('paginate', () => {
   const items = Array.from({ length: 1500 }, (_, i) => i);
@@ -27,5 +27,29 @@ describe('paginate', () => {
 
   it('returns the whole collection when it is under the cap', () => {
     expect(paginate([1, 2, 3])).toEqual([1, 2, 3]);
+  });
+});
+
+describe('resolveListWindow', () => {
+  it('defaults a missing/non-finite window to { limit: 1000, offset: 0 }', () => {
+    expect(resolveListWindow()).toEqual({ limit: 1000, offset: 0 });
+    expect(resolveListWindow(NaN, NaN)).toEqual({ limit: 1000, offset: 0 });
+    expect(resolveListWindow(Infinity, -Infinity)).toEqual({ limit: 1000, offset: 0 });
+  });
+
+  it('clamps limit to [1, 1000] and offset to >= 0', () => {
+    expect(resolveListWindow(5000, -5)).toEqual({ limit: 1000, offset: 0 });
+    expect(resolveListWindow(0, 25)).toEqual({ limit: 1, offset: 25 });
+    expect(resolveListWindow(50, 10)).toEqual({ limit: 50, offset: 10 });
+  });
+
+  it('truncates fractional limit/offset toward zero', () => {
+    expect(resolveListWindow(10.9, 4.7)).toEqual({ limit: 10, offset: 4 });
+  });
+
+  it('keeps the boundary values exactly', () => {
+    expect(resolveListWindow(1, 0)).toEqual({ limit: 1, offset: 0 });
+    expect(resolveListWindow(1000, 0)).toEqual({ limit: 1000, offset: 0 });
+    expect(resolveListWindow(1001, 0)).toEqual({ limit: 1000, offset: 0 });
   });
 });

@@ -22,8 +22,33 @@ import './DashboardCharts.css';
 
 const PERIODS: StatsPeriod[] = ['24h', '7d', '30d'];
 
-// Distinct, theme-agnostic palette for the donut slices (recharts needs literal colors).
-const TYPE_COLORS = ['#25d366', '#3b82f6', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#64748b'];
+// Stable, distinct color per message type (recharts needs literal colors). Keyed by type name —
+// not array index — so two types can never share a color, and a slice keeps its color even when the
+// set of present types changes between requests. Covers every type mapMessageType() can emit.
+const TYPE_COLORS: Record<string, string> = {
+  text: '#25d366',
+  image: '#3b82f6',
+  contact: '#a855f7',
+  document: '#f59e0b',
+  audio: '#06b6d4',
+  voice: '#ec4899',
+  video: '#14b8a6',
+  sticker: '#ef4444',
+  location: '#84cc16',
+  poll: '#6366f1',
+  revoked: '#f43f5e',
+  masked: '#8b5cf6',
+  unknown: '#64748b',
+};
+
+// Deterministic fallback for any unmapped type, so its color is stable across renders.
+const FALLBACK_COLORS = ['#0ea5e9', '#d946ef', '#f97316', '#10b981', '#6366f1', '#eab308'];
+function colorForType(name: string): string {
+  if (TYPE_COLORS[name]) return TYPE_COLORS[name];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  return FALLBACK_COLORS[Math.abs(hash) % FALLBACK_COLORS.length];
+}
 
 // '2026-06-24 14:00:00' (hour buckets) → '14:00'; '2026-06-24' (day buckets) → '06-24'.
 function formatTick(ts: string, period: StatsPeriod): string {
@@ -38,16 +63,19 @@ function shortChat(chatId: string): string {
 export function DashboardCharts() {
   const { t } = useTranslation();
   const [period, setPeriod] = useState<StatsPeriod>('7d');
-  const { data, isLoading, isError } = useStatsMessagesQuery(period);
+  const { data, isLoading, isError, error } = useStatsMessagesQuery(period);
 
-  // Non-admin keys 403 on /stats/messages; hide the section rather than show a broken card.
-  if (isError) return null;
+  // Non-admin keys 403 on /stats/messages → hide the section entirely. Any OTHER error (e.g. a
+  // server 500) is a real fault: surface a small notice below instead of silently vanishing, which
+  // is what masked the #488 stats crash and made the whole chart "disappear" with no explanation.
+  const forbidden = (error as (Error & { status?: number }) | null)?.status === 403;
+  if (isError && forbidden) return null;
 
   const timeSeries = (data?.timeSeries ?? []).map(p => ({ ...p, label: formatTick(p.timestamp, period) }));
   const byType = Object.entries(data?.byType ?? {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
-  const topChats = (data?.topChats ?? []).slice(0, 8).map(c => ({ name: shortChat(c.chatId), count: c.messageCount }));
+  const topChats = (data?.topChats ?? []).slice(0, 8).map(c => ({ name: c.chatName || shortChat(c.chatId), count: c.messageCount }));
   const hasData = timeSeries.length > 0 || byType.length > 0 || topChats.length > 0;
 
   return (
@@ -74,6 +102,8 @@ export function DashboardCharts() {
 
       {isLoading ? (
         <div className="charts-empty">{t('common.loading')}</div>
+      ) : isError ? (
+        <div className="charts-empty">{t('dashboard.charts.error')}</div>
       ) : !hasData ? (
         <div className="charts-empty">{t('dashboard.charts.empty')}</div>
       ) : (
@@ -125,8 +155,8 @@ export function DashboardCharts() {
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie data={byType} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                    {byType.map((entry, i) => (
-                      <Cell key={entry.name} fill={TYPE_COLORS[i % TYPE_COLORS.length]} />
+                    {byType.map(entry => (
+                      <Cell key={entry.name} fill={colorForType(entry.name)} />
                     ))}
                   </Pie>
                   <Tooltip />

@@ -140,7 +140,10 @@ export const MESSAGE_TYPES = [
   'sticker',
   'location',
   'contact',
+  'poll',
+  'call',
   'revoked',
+  'masked',
   'unknown',
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
@@ -163,9 +166,10 @@ export interface ChatMessage {
   timestamp?: number;
   createdAt: string;
   metadata?: {
-    media?: { mimetype: string; filename?: string; data?: string };
+    media?: { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
     quotedMessage?: { id: string; body: string };
     reactions?: Record<string, string>;
+    call?: { video: boolean; missed: boolean };
   };
 }
 
@@ -204,15 +208,23 @@ export interface HealthStatus {
 }
 
 export interface InfraStatus {
-  database: { connected: boolean; type: string; host: string };
-  redis: { connected: boolean; host: string; port: number };
+  // `builtIn` = OpenWA's own bundled container is actually running and backing this service (live),
+  // not just the saved intent — falls back to the saved flag when Docker is unavailable. (#488)
+  database: { connected: boolean; type: string; host: string; builtIn: boolean };
+  redis: { enabled: boolean; connected: boolean; host: string; port: number; builtIn: boolean };
   queue: {
     enabled: boolean;
-    messages: { pending: number; completed: number; failed: number };
     webhooks: { pending: number; completed: number; failed: number };
   };
-  storage: { type: 'local' | 's3'; path?: string; bucket?: string };
-  engine: { type: string; headless: boolean };
+  storage: { type: 'local' | 's3'; path?: string; bucket?: string; builtIn: boolean; s3Available?: boolean };
+  engine: {
+    type: string;
+    headless: boolean;
+    // whatsapp-web.js only: the actual WhatsApp Web build in use (distinct from the library version)
+    // and how it was chosen. (#488)
+    webVersion?: string | null;
+    webVersionSource?: 'pinned' | 'auto' | 'native';
+  };
 }
 
 // Saved infrastructure config (from data/.env.generated) used to hydrate the form.
@@ -328,7 +340,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     // rather than statusText: the status code is what the toast connection-lost de-dup matches on,
     // and statusText is empty over HTTP/2 anyway.
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || `HTTP ${response.status}`);
+    // Carry the HTTP status on the Error (message unchanged, so the toast de-dup still matches) so
+    // callers can tell apart a permission 403 from a real server 5xx instead of guessing from text.
+    const err = new Error(error.message || `HTTP ${response.status}`) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
   }
 
   if (response.status === 204) {
@@ -378,6 +394,11 @@ export const sessionApi = {
   stop: (id: string) => request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
   forceKill: (id: string) => request<Session>(`/sessions/${id}/force-kill`, { method: 'POST' }),
   getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
+  requestPairingCode: (id: string, phoneNumber: string) =>
+    request<{ pairingCode: string; status: string }>(`/sessions/${id}/pairing-code`, {
+      method: 'POST',
+      body: JSON.stringify({ phoneNumber }),
+    }),
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
     request<{ id: string; name: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
@@ -613,6 +634,17 @@ export const infraApi = {
       body: JSON.stringify({ profiles: profiles || [], profilesToRemove: profilesToRemove || [] }),
     }),
   healthCheck: () => request<{ status: string; timestamp: string }>('/infra/health'),
+  // Data migration: export all Data-DB tables (call while still on the OLD database, before switching),
+  // then import after the switch + restart. Used by the DB-switch migration guard so data isn't lost.
+  exportData: () =>
+    request<{ exportedAt: string; dataDbType: string; tables: Record<string, unknown[]>; counts: Record<string, number> }>(
+      '/infra/export-data',
+    ),
+  importData: (tables: Record<string, unknown[]>) =>
+    request<{ imported: boolean; counts?: Record<string, number>; message?: string; warnings?: string[] }>('/infra/import-data', {
+      method: 'POST',
+      body: JSON.stringify({ tables }),
+    }),
 };
 
 // =============================================================================
@@ -673,6 +705,8 @@ export interface Plugin {
   config: Record<string, unknown>;
   builtIn: boolean;
   provides: string[];
+  /** Whether this plugin can host provisioned ingress instances (drives the Instances tab). */
+  ingressCapable: boolean;
   /** Declared config fields, when the plugin exposes a schema (drives the dashboard config form). */
   configSchema?: PluginConfigSchema;
   /** When set, the plugin ships a sandboxed-iframe config editor (preferred over configSchema). */
@@ -767,6 +801,64 @@ export const pluginsApi = {
 };
 
 // =============================================================================
+// Plugin instances API (Integration Fabric provisioning; mirrors src/modules/integration)
+// =============================================================================
+
+export interface IngressUrl {
+  route: string;
+  url: string;
+}
+
+export interface InstanceView {
+  id: string;
+  pluginId: string;
+  instanceId: string;
+  sessionScope: string | null;
+  secret: string; // '***' on reads; plaintext once on create/regenerate
+  verifyToken: string | null;
+  config: Record<string, unknown> | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  ingressUrls: IngressUrl[];
+}
+
+export type MintedInstance = InstanceView; // same shape; `secret` carries the plaintext once
+
+export interface CreateInstanceInput {
+  instanceId: string;
+  sessionScope?: string;
+  verifyToken?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface UpdateInstanceInput {
+  enabled?: boolean;
+  sessionScope?: string;
+  config?: Record<string, unknown>;
+}
+
+export const pluginInstancesApi = {
+  list: (pluginId: string) => request<InstanceView[]>(`/integration/plugins/${pluginId}/instances`),
+  create: (pluginId: string, body: CreateInstanceInput) =>
+    request<MintedInstance>(`/integration/plugins/${pluginId}/instances`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  regenerateSecret: (pluginId: string, instanceId: string) =>
+    request<MintedInstance>(`/integration/plugins/${pluginId}/instances/${instanceId}/regenerate-secret`, {
+      method: 'POST',
+    }),
+  update: (pluginId: string, instanceId: string, body: UpdateInstanceInput) =>
+    request<InstanceView>(`/integration/plugins/${pluginId}/instances/${instanceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  remove: (pluginId: string, instanceId: string) =>
+    request<void>(`/integration/plugins/${pluginId}/instances/${instanceId}`, { method: 'DELETE' }),
+};
+
+// =============================================================================
 // Statistics API (mirrors src/modules/stats)
 // =============================================================================
 
@@ -787,7 +879,7 @@ export interface MessageStats {
   timeSeries: MessageTimeSeriesPoint[];
   byType: Record<string, number>;
   bySession: Array<{ sessionId: string; name: string; sent: number; received: number }>;
-  topChats: Array<{ chatId: string; messageCount: number }>;
+  topChats: Array<{ chatId: string; chatName?: string | null; messageCount: number }>;
 }
 
 export const statsApi = {

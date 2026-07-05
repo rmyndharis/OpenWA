@@ -29,8 +29,11 @@ from disk is untrusted and sandboxed.
   (`SANDBOX_HOOK_TIMEOUT_MS`, default 5s). A slow or wedged handler is skipped (`continue: true`) so
   it can never stall the host's hook chain.
 - **Resource & runaway containment.** Each worker has a heap cap (`maxOldGenerationSizeMb`, default
-  256). An OOM terminates the worker, not the host. A runaway (even an infinite synchronous loop)
-  can be force-terminated; a crash rejects its in-flight calls and the host survives.
+  256). An OOM terminates the worker, not the host. A wedged **lifecycle** call (load/unload) times out
+  and tears the worker down, and a crash rejects its in-flight calls — the host survives either way. A
+  runaway **hook** handler (e.g. an infinite synchronous loop) is skipped on the hook timeout so it can't
+  stall the host's hook chain, but the worker keeps running it (pegging a core) until the plugin is
+  reloaded or hits the heap cap — it is contained to its own thread, not instantly force-killed.
 
 ## What the sandbox does NOT guarantee
 

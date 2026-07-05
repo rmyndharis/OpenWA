@@ -7,6 +7,16 @@ export interface ListOptions {
   offset?: number;
 }
 
+/** Normalize a query/list window for both in-memory slicing and database skip/take. */
+export function resolveListWindow(limit?: number, offset?: number): { limit: number; offset: number } {
+  const normalizedOffset = typeof offset === 'number' && Number.isFinite(offset) ? Math.max(Math.trunc(offset), 0) : 0;
+  const normalizedLimit =
+    typeof limit === 'number' && Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), DEFAULT_LIST_LIMIT)
+      : DEFAULT_LIST_LIMIT;
+  return { limit: normalizedLimit, offset: normalizedOffset };
+}
+
 /**
  * Bound an in-memory list for an HTTP response.
  *
@@ -21,10 +31,6 @@ export interface ListOptions {
  * to in-process callers (e.g. plugins), so this never narrows what those consumers see.
  */
 export function paginate<T>(items: T[], limit?: number, offset?: number): T[] {
-  const off = typeof offset === 'number' && Number.isFinite(offset) ? Math.max(Math.trunc(offset), 0) : 0;
-  const lim =
-    typeof limit === 'number' && Number.isFinite(limit)
-      ? Math.min(Math.max(Math.trunc(limit), 1), DEFAULT_LIST_LIMIT)
-      : DEFAULT_LIST_LIMIT;
+  const { limit: lim, offset: off } = resolveListWindow(limit, offset);
   return items.slice(off, off + lim);
 }

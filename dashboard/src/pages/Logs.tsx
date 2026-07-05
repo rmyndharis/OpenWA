@@ -6,6 +6,7 @@ import { auditApi } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLogsQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { pageWindow } from '../utils/pageWindow';
 import './Logs.css';
 
 export function Logs() {
@@ -206,7 +207,7 @@ export function Logs() {
             {t('common.previous')}
           </button>
           <span className="page-numbers">
-            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(p => (
+            {pageWindow(page, totalPages).map(p => (
               <button key={p} className={p === page ? 'active' : ''} onClick={() => setPage(p)}>
                 {p}
               </button>

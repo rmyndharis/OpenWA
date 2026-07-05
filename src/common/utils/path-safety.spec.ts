@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { isPathWithin, isSafeStorageKey } from './path-safety';
+import { isPathWithin, isSafeStorageKey, isSafeSessionName } from './path-safety';
 
 describe('isPathWithin', () => {
   const root = path.resolve('/srv/app/data');
@@ -52,5 +52,26 @@ describe('isSafeStorageKey', () => {
     expect(isSafeStorageKey(`foo${String.fromCharCode(0)}.txt`)).toBe(false); // NUL
     expect(isSafeStorageKey(`bar${String.fromCharCode(9)}.txt`)).toBe(false); // tab
     expect(isSafeStorageKey(`baz${String.fromCharCode(31)}.txt`)).toBe(false); // unit separator
+  });
+});
+
+describe('isSafeSessionName', () => {
+  it.each(['my-session', 'Session1', 'abc', 'A-B-2'])('accepts the safe name %j', n => {
+    expect(isSafeSessionName(n)).toBe(true);
+  });
+
+  it.each([
+    '../../etc', // traversal
+    'a/b', // slash
+    'a\\b', // backslash
+    'a.b', // dot (would traverse / change the auth dir)
+    'has space',
+    'name@x',
+    '', // empty
+    undefined,
+    null,
+    123,
+  ])('rejects the unsafe name %j', n => {
+    expect(isSafeSessionName(n as unknown)).toBe(false);
   });
 });

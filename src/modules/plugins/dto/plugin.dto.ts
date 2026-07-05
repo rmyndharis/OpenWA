@@ -34,6 +34,9 @@ export class PluginDto {
   @ApiProperty({ description: 'Features provided by this plugin' })
   provides!: string[];
 
+  @ApiProperty({ description: 'Whether this plugin can host provisioned ingress instances' })
+  ingressCapable!: boolean;
+
   @ApiProperty({ description: 'Whether the plugin is scoped to specific sessions (false = global)' })
   sessionScoped!: boolean;
 

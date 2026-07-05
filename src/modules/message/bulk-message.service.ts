@@ -14,7 +14,7 @@ import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
 import { assertBase64WithinMediaCap } from './media-cap.util';
-import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderTemplate } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -22,9 +22,9 @@ import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp
 interface BulkMessageContent {
   text?: string;
   caption?: string;
-  image?: { url?: string; base64?: string; mimetype?: string };
-  video?: { url?: string; base64?: string; mimetype?: string };
-  audio?: { url?: string; base64?: string; mimetype?: string };
+  image?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+  video?: { url?: string; base64?: string; mimetype?: string; filename?: string };
+  audio?: { url?: string; base64?: string; mimetype?: string; filename?: string; ptt?: boolean };
   document?: { url?: string; base64?: string; mimetype?: string; filename?: string };
 }
 
@@ -52,15 +52,29 @@ export function resolveFinalBatchStatus(
  */
 export function sanitizeBatchError(error: unknown): { code: string; message: string } {
   if (error instanceof SsrfBlockedError) {
-    return { code: 'SEND_BLOCKED', message: 'Destination address is not allowed' };
+    return { code: 'SEND_BLOCKED', message: SSRF_BLOCKED_CLIENT_MESSAGE };
   }
   return { code: 'SEND_FAILED', message: error instanceof Error ? error.message : String(error) };
+}
+
+/**
+ * Per-process cap on concurrently-processing bulk batches. Each in-flight batch holds its full message
+ * set (with base64 media) in memory and is dispatched fire-and-forget, so without a ceiling a burst of
+ * batches can exhaust host memory. Env-overridable; 0 disables the cap. Default is generous — it only
+ * trips a genuine runaway, not normal use. Per-process (not cluster-wide).
+ */
+const DEFAULT_MAX_CONCURRENT_BATCHES = 50;
+export function resolveMaxConcurrentBatches(): number {
+  const raw = Number(process.env.BULK_MAX_CONCURRENT_BATCHES);
+  if (!Number.isFinite(raw) || raw < 0) return DEFAULT_MAX_CONCURRENT_BATCHES;
+  return Math.floor(raw); // 0 = unlimited
 }
 
 @Injectable()
 export class BulkMessageService implements OnApplicationBootstrap {
   private readonly logger = new Logger(BulkMessageService.name);
   private readonly processingBatches = new Map<string, boolean>(); // Track active batches for cancellation
+  private inFlightBatches = 0; // count of batches currently in processBatch (memory bound, see cap above)
 
   constructor(
     @InjectRepository(MessageBatch, 'data')
@@ -107,10 +121,19 @@ export class BulkMessageService implements OnApplicationBootstrap {
 
     const batchId = dto.batchId || `batch_${randomUUID().split('-')[0]}`;
 
-    // Check if batchId already exists
-    const existing = await this.batchRepository.findOne({ where: { batchId } });
+    // Check if this batchId already exists FOR THIS SESSION. Scoping by sessionId (matching how
+    // getBatchStatus/cancelBatch already query) makes (sessionId, batchId) the namespace: one session
+    // can't deny another a batchId, and the 400-vs-202 difference can't probe another session's ids.
+    const existing = await this.batchRepository.findOne({ where: { batchId, sessionId } });
     if (existing) {
       throw new BadRequestException(`Batch ID '${batchId}' already exists`);
+    }
+
+    // Reject before persisting a row when too many batches are already processing, so a burst can't
+    // hold an unbounded number of full message sets (base64 media included) in memory at once.
+    const maxConcurrentBatches = resolveMaxConcurrentBatches();
+    if (maxConcurrentBatches > 0 && this.inFlightBatches >= maxConcurrentBatches) {
+      throw new BadRequestException(`Too many bulk batches in progress (max ${maxConcurrentBatches}); retry shortly`);
     }
 
     const options = {
@@ -194,7 +217,18 @@ export class BulkMessageService implements OnApplicationBootstrap {
     if (!batch) return;
 
     this.processingBatches.set(batch.id, true);
+    // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
+    // save/send, or normal completion) — otherwise the map leaks an entry per such batch.
+    try {
+      this.inFlightBatches++;
+      await this.executeBatch(batch);
+    } finally {
+      this.inFlightBatches--;
+      this.processingBatches.delete(batch.id);
+    }
+  }
 
+  private async executeBatch(batch: MessageBatch): Promise<void> {
     // Update status to processing
     batch.status = BatchStatus.PROCESSING;
     batch.startedAt = new Date();
@@ -307,10 +341,29 @@ export class BulkMessageService implements OnApplicationBootstrap {
     }
     batch.completedAt = new Date();
     batch.results = results;
+    // The batch is terminal now (never resumed), so drop the base64 media payloads before persisting —
+    // otherwise the message_batches row retains multi-MB media forever. Intermediate (cadence) saves
+    // above keep the payload so a batch interrupted mid-run can still resume from currentIndex.
+    this.stripBatchMediaPayloads(batch.messages);
     await this.batchRepository.save(batch);
 
-    this.processingBatches.delete(batch.id);
     this.logger.log(`Batch ${batch.batchId} completed: ${batch.progress.sent} sent, ${batch.progress.failed} failed`);
+  }
+
+  /**
+   * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
+   * terminal (never resumed), so the (often multi-MB) base64 in `message_batches.messages` is dead
+   * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
+   */
+  private stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
+    for (const m of messages) {
+      for (const key of ['image', 'video', 'audio', 'document']) {
+        const media = m.content[key] as { base64?: unknown } | undefined;
+        if (media && typeof media === 'object' && 'base64' in media) {
+          delete media.base64;
+        }
+      }
+    }
   }
 
   private applyVariables(content: BulkMessageContent, variables?: Record<string, string>): BulkMessageContent {
@@ -354,12 +407,14 @@ export class BulkMessageService implements OnApplicationBootstrap {
     result: MessageResult,
   ): Promise<void> {
     const media = content.image ?? content.video ?? content.audio ?? content.document;
+    // A bulk audio item flagged ptt is a voice note; store it in the 'voice' bucket like inbound PTT.
+    const persistType = type === 'audio' && content.audio?.ptt ? 'voice' : type;
     try {
       await this.messageService.saveOutgoingMessage(sessionId, {
         waMessageId: result.id,
         chatId,
         body: content.text ?? content.caption ?? '',
-        type,
+        type: persistType,
         timestamp: result.timestamp,
         status: MessageStatus.SENT,
         metadata: media
@@ -367,7 +422,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
               media: {
                 mimetype: media.mimetype,
                 data: media.url ?? media.base64,
-                filename: content.document?.filename,
+                filename: media.filename,
               },
             }
           : undefined,
@@ -400,8 +455,9 @@ export class BulkMessageService implements OnApplicationBootstrap {
         });
       case 'audio':
         return engine.sendAudioMessage(chatId, {
-          mimetype: content.audio?.mimetype || 'audio/mpeg',
+          mimetype: content.audio?.mimetype || (content.audio?.ptt ? 'audio/ogg; codecs=opus' : 'audio/mpeg'),
           data: content.audio?.url || content.audio?.base64 || '',
+          ptt: content.audio?.ptt,
         });
       case 'document':
         return engine.sendDocumentMessage(chatId, {

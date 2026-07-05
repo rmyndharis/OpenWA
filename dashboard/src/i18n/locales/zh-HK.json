@@ -53,7 +53,8 @@
     "logout": "登出",
     "refresh": "重新整理",
     "errorGeneric": "發生錯誤",
-    "unknownError": "未知錯誤"
+    "unknownError": "未知錯誤",
+    "retry": "重試"
   },
   "theme": {
     "light": "淺色",
@@ -77,6 +78,15 @@
     "logs": "記錄"
   },
   "chats": {
+    "media": {
+      "location": "位置",
+      "call": "通話",
+      "callMissed": "未接來電",
+      "callVideo": "視像通話",
+      "callVideoMissed": "未接視像通話",
+      "omitted": "媒體",
+      "image": "圖片"
+    },
     "subtitle": "即時傳送和回覆 WhatsApp 訊息",
     "noSessionsTitle": "沒有已連線的工作階段",
     "noSessionsDesc": "請先從 <1>工作階段</1> 選單連線一個 WhatsApp 工作階段，才能使用聊天功能。",
@@ -108,6 +118,7 @@
     "placeholderDesc": "從左側邊欄選擇一個活躍聊天，即可開始閱讀和傳送 WhatsApp 訊息。",
     "deleteConfirm": "為所有人刪除此訊息？",
     "messageDeleted": "🚫 此訊息已被刪除",
+    "messageMasked": "🔒 WhatsApp 已對已連結裝置隱藏此訊息 — 請在主手機上查看",
     "errors": {
       "loadSessions": "載入工作階段失敗",
       "loadChats": "載入聊天失敗",
@@ -116,7 +127,8 @@
       "send": "傳送訊息失敗",
       "react": "回應訊息失敗",
       "delete": "刪除訊息失敗"
-    }
+    },
+    "loadMessagesError": "無法載入訊息。請檢查伺服器日誌。"
   },
   "errorBoundary": {
     "title": "發生問題",
@@ -173,7 +185,8 @@
       "sent": "已傳送",
       "received": "已接收",
       "messages": "訊息",
-      "empty": "此期間沒有訊息活動。"
+      "empty": "此期間沒有訊息活動。",
+      "error": "無法載入訊息分析。請查看伺服器日誌。"
     }
   },
   "sessionStatus": {
@@ -252,7 +265,7 @@
       "stop": "停止",
       "reconnect": "重新連線",
       "delete": "刪除",
-      "killStuck": "Kill Stuck"
+      "killStuck": "強制終止"
     },
     "toasts": {
       "readyTitle": "工作階段就緒",
@@ -269,14 +282,32 @@
       "error": "錯誤"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "強制終止卡住的工作階段",
+      "message": "確定要強制終止工作階段「{{name}}」嗎？",
+      "warning": "這會強制結束 WhatsApp 瀏覽器程序。工作階段重新啟動後可能需要重新掃描。",
+      "confirm": "終止工作階段",
+      "successTitle": "工作階段已終止",
+      "success": "工作階段已強制終止。你現在可以重新啟動它。",
+      "failedTitle": "強制終止失敗",
+      "failed": "無法強制終止工作階段。"
+    },
+    "pairing": {
+      "tabQr": "QR 碼",
+      "tabPhone": "以電話號碼連結",
+      "phoneLabel": "電話號碼",
+      "phonePlaceholder": "例如：919876543210",
+      "phoneHint": "只可輸入數字（不可有 +、空格或連字號），須為國際格式（國家代碼 + 號碼）。",
+      "invalidPhone": "請輸入有效的電話號碼：6 至 15 位數字，國家代碼在前，不可有符號。",
+      "generateButton": "產生配對碼",
+      "generating": "正在產生配對碼...",
+      "codeLabel": "你的配對碼",
+      "changeNumber": "更改號碼／重新索取配對碼",
+      "instructions": "配對說明",
+      "step1": "<strong>1.</strong> 在手機上開啟 WhatsApp",
+      "step2": "<strong>2.</strong> 點按<strong>選單</strong>或<strong>設定</strong>，然後選擇<strong>已連結裝置</strong>",
+      "step3": "<strong>3.</strong> 點按<strong>連結裝置</strong>，然後點按<strong>改用電話號碼連結</strong>",
+      "step4": "<strong>4.</strong> 在手機上輸入上方顯示的 8 位字元配對碼",
+      "waitingConnection": "正在等待你的手機完成連結…"
     }
   },
   "webhooks": {
@@ -359,48 +390,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "範本",
+    "subtitle": "為每個 WhatsApp 工作階段建立可重用的訊息範本",
+    "createTitle": "建立範本",
+    "editTitle": "編輯範本",
+    "newTemplate": "新範本",
+    "createTemplate": "建立範本",
+    "saveChanges": "儲存變更",
+    "viewOnly": "僅供檢視",
+    "noSessions": "沒有工作階段",
+    "sessionHint": "儲存於 {{name}}",
+    "namePlaceholder": "例如：order-confirmation",
+    "header": "標題",
+    "headerPlaceholder": "可選的開首句",
+    "body": "內文",
+    "bodyPlaceholder": "你好 {{customer}}，你的訂單 {{orderId}} 已經準備好。",
+    "footer": "頁尾",
+    "footerPlaceholder": "可選的結尾句",
+    "previewTitle": "預覽",
+    "previewValuePlaceholder": "範例值",
+    "previewEmpty": "開始撰寫範本，即可在此預覽。",
+    "noPlaceholders": "使用 {{name}} 佔位符測試替換效果。",
+    "savedTitle": "已儲存的範本",
+    "count": "共 {{count}} 個",
+    "deleteTitle": "刪除範本",
+    "deleteConfirm": "確定刪除範本「{{name}}」？此操作無法復原。",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "複製範本名稱"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "未儲存任何範本",
+      "description": "建立可重用的範本，加快常用回覆和通知的速度。",
+      "noSessionsTitle": "沒有可用的工作階段",
+      "noSessionsDesc": "請先建立 WhatsApp 工作階段，才能新增範本。"
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "範本建立成功",
+      "createFailed": "建立範本失敗：{{message}}",
+      "updated": "範本更新成功",
+      "updateFailed": "更新範本失敗：{{message}}",
+      "deleted": "範本刪除成功",
+      "deleteFailed": "刪除範本失敗：{{message}}",
+      "copied": "已複製範本名稱"
     }
   },
   "apiKeys": {
@@ -577,7 +608,14 @@
       "sessionDataPath": "工作階段資料路徑",
       "browserArgs": "瀏覽器參數",
       "noBrowser": "此引擎透過 WebSocket 連線——沒有瀏覽器，因此沒有無頭模式或瀏覽器參數設定。使用中的引擎會在重新啟動後生效。",
-      "restartNote": "切換引擎會在伺服器重新啟動後生效。"
+      "restartNote": "切換引擎會在伺服器重新啟動後生效。",
+      "webVersion": "WhatsApp Web 版本",
+      "webVersionNative": "自動（whatsapp-web.js 預設）",
+      "webVersionSource": {
+        "pinned": "透過 WWEBJS_WEB_VERSION 鎖定",
+        "auto": "自動解析，目前已知可用的版本",
+        "native": "whatsapp-web.js 原生自動選取"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -588,16 +626,16 @@
       "queueTitle": "啟用 BullMQ 佇列系統",
       "queueDesc": "使用訊息佇列可靠地傳遞訊息和 Webhook",
       "statsTitle": "佇列統計",
-      "messageQueue": "訊息佇列",
       "webhookQueue": "Webhook 佇列",
       "pending": "待處理",
       "completed": "已完成",
       "failed": "失敗",
-      "clearFailed": "清除失敗任務",
       "viewBullMq": "查看 Bull MQ 控制面板",
       "disabledTitle": "Redis 已停用",
       "disabledDesc": "啟用 Redis 以使用快取、工作階段儲存及 BullMQ 訊息佇列。",
-      "passwordOptional": "（選填）"
+      "passwordOptional": "（選填）",
+      "bullMqUrlCopied": "已複製 Bull MQ 儀表板網址",
+      "bullMqUrlHint": "請使用 ADMIN API 金鑰開啟 — 瀏覽器分頁無法進行身份驗證。"
     },
     "storage": {
       "title": "儲存空間設定",
@@ -613,7 +651,8 @@
       "accessKey": "存取金鑰",
       "secretKey": "秘密金鑰",
       "endpoint": "自訂端點（選填）",
-      "endpointHint": "適用於 MinIO 或其他兼容 S3 的服務"
+      "endpointHint": "適用於 MinIO 或其他兼容 S3 的服務",
+      "s3Unreachable": "S3（無法連線）"
     },
     "statusLabels": {
       "connected": "已連線",
@@ -638,7 +677,25 @@
     },
     "toasts": {
       "saveFailed": "儲存失敗"
-    }
+    },
+    "envPinNote": "已由環境變數鎖定 — 這是正在運行的值；在取消設定該變數之前，儀表板的變更不會生效。",
+    "migration": {
+      "title": "請注意 — 此操作會更改資料後端",
+      "dbWarning": "新資料庫會以空白狀態啟動。請立即下載目前資料的備份（趁仍在舊資料庫時），然後在重新啟動後還原。",
+      "storageWarning": "現有的媒體檔案不會自動移至新的儲存後端；它們會保留在舊位置。",
+      "downloadBackup": "請先下載備份",
+      "backupTitle": "資料備份與還原",
+      "backupHint": "在切換資料庫前，請將所有資料匯出為 JSON，然後在切換後再匯入。備份以明文包含 webhook 密鑰及代理憑證 — 請妥善保存，並在還原後刪除。",
+      "export": "匯出資料",
+      "import": "匯入資料",
+      "exportFailed": "無法匯出資料",
+      "importFailed": "無法匯入資料",
+      "importOk": "資料已匯入",
+      "importConfirm": "匯入將以備份（{{rows}} 列）取代所有目前資料。此操作無法復原。是否繼續？",
+      "invalidFile": "該檔案並非有效的 OpenWA 資料備份。",
+      "importTooLarge": "備份超出請求大小限制。請在伺服器上調高 BODY_SIZE_LIMIT 後重試。"
+    },
+    "statusLoadError": "無法載入目前的基礎設施狀態。請重新整理以重試。"
   },
   "plugins": {
     "title": "外掛",
@@ -718,6 +775,65 @@
       "selectSession": "選擇工作階段…",
       "saveOverride": "儲存覆寫",
       "clearOverride": "清除覆寫"
+    },
+    "instances": {
+      "title": "執行個體",
+      "description": "為此整合按帳戶佈建執行個體。每個執行個體都有專屬的簽署密鑰和連入 URL。",
+      "create": "建立執行個體",
+      "empty": "尚無執行個體。建立一個即可取得連入 URL 和密鑰。",
+      "loadError": "載入執行個體失敗。",
+      "allSessions": "所有工作階段",
+      "enabled": "已啟用",
+      "disabled": "已停用",
+      "form": {
+        "instanceId": "執行個體 ID",
+        "instanceIdPlaceholder": "例如 acme-support",
+        "instanceIdHint": "字母、數字、連字號、底線（最多 64 個字元）。",
+        "sessionScope": "工作階段範圍（選填）",
+        "sessionScopePlaceholder": "留空表示套用至所有工作階段",
+        "verifyToken": "驗證權杖（選填）",
+        "verifyTokenPlaceholder": "服務商在驗證時回傳的權杖",
+        "config": "設定（選填 JSON）",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "執行個體已建立",
+        "hint": "請立即複製密鑰——只會顯示一次。",
+        "secret": "簽署密鑰",
+        "ingressUrls": "連入 URL"
+      },
+      "regenerate": {
+        "title": "重新產生密鑰",
+        "confirm": "要重新產生 {{id}} 的簽署密鑰嗎？目前的密鑰會立即失效。",
+        "action": "重新產生"
+      },
+      "edit": { "title": "編輯 {{id}}" },
+      "delete": {
+        "title": "刪除執行個體",
+        "confirm": "要刪除執行個體 {{id}} 嗎？其連入 URL 和密鑰會立即失效。",
+        "action": "刪除"
+      },
+      "actions": {
+        "regenerate": "重新產生密鑰",
+        "edit": "編輯",
+        "delete": "刪除",
+        "copy": "複製",
+        "save": "儲存",
+        "enable": "啟用",
+        "disable": "停用"
+      },
+      "errors": {
+        "invalidId": "執行個體 ID 只能包含字母、數字、連字號或底線（最多 64 個字元）。",
+        "invalidJson": "設定必須是有效的 JSON。",
+        "duplicateId": "已存在使用該 ID 的執行個體。"
+      },
+      "toasts": {
+        "created": "執行個體已建立",
+        "updated": "執行個體已更新",
+        "deleted": "執行個體已刪除",
+        "secretRegenerated": "密鑰已重新產生",
+        "actionFailed": "操作失敗"
+      }
     }
   }
 }

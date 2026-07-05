@@ -164,3 +164,7 @@ a:hover {
 .error-banner-text {
   color: #ef4444;
 }
+
+/* yarl theme — match dashboard dark palette. */
+.yarl__container { --yarl__color_backdrop: rgba(0, 0, 0, 0.92); }
+.yarl__button   { --yarl__color_button: rgba(255, 255, 255, 0.9); }

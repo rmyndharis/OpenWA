@@ -36,16 +36,37 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ STORAGE_TYPE: 's3' })).not.toThrow();
   });
 
-  it('rejects a non-integer rate-limit / webhook / pool-size value (a NaN silently disables throttling)', () => {
+  it('rejects a non-integer rate-limit / webhook / pool-size / redis-timeout / session-cap value', () => {
     expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: 'abc' })).toThrow(/RATE_LIMIT_SHORT_LIMIT/);
     expect(() => validateEnv({ WEBHOOK_TIMEOUT: '10s' })).toThrow(/WEBHOOK_TIMEOUT/);
     expect(() => validateEnv({ DATABASE_POOL_SIZE: '1.5' })).toThrow(/DATABASE_POOL_SIZE/);
+    expect(() => validateEnv({ REDIS_CONNECT_TIMEOUT_MS: 'soon' })).toThrow(/REDIS_CONNECT_TIMEOUT_MS/);
+    expect(() => validateEnv({ MAX_CONCURRENT_SESSIONS: 'many' })).toThrow(/MAX_CONCURRENT_SESSIONS/);
     expect(() => validateEnv({ RATE_LIMIT_LONG_TTL: '-5' })).toThrow(/RATE_LIMIT_LONG_TTL/);
     // valid integers (and unset) still pass
     expect(() =>
-      validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000', DATABASE_POOL_SIZE: '10' }),
+      validateEnv({
+        RATE_LIMIT_SHORT_LIMIT: '10',
+        WEBHOOK_TIMEOUT: '10000',
+        DATABASE_POOL_SIZE: '10',
+        REDIS_CONNECT_TIMEOUT_MS: '5000',
+        MAX_CONCURRENT_SESSIONS: '0',
+      }),
     ).not.toThrow();
     expect(() => validateEnv({})).not.toThrow();
+  });
+
+  it('rejects 0 for a rate-limit limit or the webhook timeout (self-DoS), but allows 0 where it is meaningful', () => {
+    expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: '0' })).toThrow(/RATE_LIMIT_SHORT_LIMIT/);
+    expect(() => validateEnv({ RATE_LIMIT_MEDIUM_LIMIT: '0' })).toThrow(/RATE_LIMIT_MEDIUM_LIMIT/);
+    expect(() => validateEnv({ RATE_LIMIT_LONG_LIMIT: '0' })).toThrow(/RATE_LIMIT_LONG_LIMIT/);
+    expect(() => validateEnv({ WEBHOOK_TIMEOUT: '0' })).toThrow(/WEBHOOK_TIMEOUT/);
+    // 0 stays valid where it has a real meaning: unlimited sessions, no webhook retries, a TTL.
+    expect(() =>
+      validateEnv({ MAX_CONCURRENT_SESSIONS: '0', WEBHOOK_MAX_RETRIES: '0', RATE_LIMIT_SHORT_TTL: '0' }),
+    ).not.toThrow();
+    // a positive value still passes
+    expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000' })).not.toThrow();
   });
 
   it('rejects a sqlite data DB path that collides with the internal main database file', () => {

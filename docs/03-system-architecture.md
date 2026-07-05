@@ -1482,8 +1482,9 @@ flowchart LR
 | **Standard** | PostgreSQL | Local | Redis | 5-10 | 2GB | Small business |
 | **Enterprise** | PostgreSQL | S3/MinIO | Redis | 10+ | 4GB+ | Agency, high volume |
 
-> Session counts are guidance only — there is **no enforced session cap** in the code
-> (no `MAX_SESSIONS` env var is read anywhere).
+> Session counts are guidance only by default. Set `MAX_CONCURRENT_SESSIONS` to a positive integer
+> to cap concurrently running or initializing engines; the default `0` keeps the historical
+> unlimited behavior.
 
 ### Configuration Examples
 

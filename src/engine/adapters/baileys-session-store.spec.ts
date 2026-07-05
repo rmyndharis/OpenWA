@@ -76,6 +76,104 @@ describe('BaileysSessionStore', () => {
     expect(store.lastMessage('unknown@s.whatsapp.net')).toBeNull();
   });
 
+  describe('getEphemeralExpiration (#473)', () => {
+    it('returns the cached disappearing-messages timer for a chat', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(604800);
+    });
+
+    it('accepts a neutral @c.us id and folds it to the engine dialect for lookup', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', ephemeralExpiration: 86400 }]);
+      expect(store.getEphemeralExpiration('628111@c.us')).toBe(86400);
+    });
+
+    it('returns undefined when the chat is unknown, disabled (0), or null (no forced disappear)', () => {
+      store.upsertChats([{ id: '628222@s.whatsapp.net', ephemeralExpiration: 0 }]);
+      store.upsertChats([{ id: '628333@s.whatsapp.net', ephemeralExpiration: null }]);
+      store.upsertChats([{ id: '628444@s.whatsapp.net' }]); // field absent
+      expect(store.getEphemeralExpiration('628222@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('628333@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('628444@s.whatsapp.net')).toBeUndefined();
+      expect(store.getEphemeralExpiration('nope@s.whatsapp.net')).toBeUndefined();
+    });
+
+    it('learns the timer from an inbound message ephemeralDuration without any chats.* upsert', () => {
+      // The real-world case: Chat.ephemeralExpiration is never populated, but every inbound message in
+      // a disappearing chat carries the live timer. A neutral @c.us send target must resolve it too.
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
+        message: { conversation: 'hi' },
+        messageTimestamp: 100,
+        ephemeralDuration: 7776000,
+      });
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(7776000);
+      expect(store.getEphemeralExpiration('628111@c.us')).toBe(7776000);
+    });
+
+    it('resolves a timer learned under @lid when the send targets the phone jid (#473 LID migration)', () => {
+      store.addLidMappings([{ lid: '41562515988583@lid', pn: '5491169954736@s.whatsapp.net' }]);
+      store.recordMessage({
+        key: { remoteJid: '41562515988583@lid', fromMe: false, id: 'M2' },
+        message: { conversation: 'hola' },
+        messageTimestamp: 100,
+        ephemeralDuration: 7776000,
+      });
+      // matchwa replies to the neutral phone jid OpenWA delivered on the webhook — the prior no-op case.
+      expect(store.getEphemeralExpiration('5491169954736@c.us')).toBe(7776000);
+      expect(store.getEphemeralExpiration('5491169954736@s.whatsapp.net')).toBe(7776000);
+      expect(store.getEphemeralExpiration('41562515988583@lid')).toBe(7776000);
+    });
+
+    it('ignores a non-positive ephemeralDuration and never clears a known timer', () => {
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
+        message: { conversation: 'hi' },
+        messageTimestamp: 100,
+        ephemeralDuration: 86400,
+      });
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M2' },
+        message: { conversation: 'later' },
+        messageTimestamp: 200,
+        ephemeralDuration: 0,
+      });
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(86400);
+    });
+
+    it('prefers the message-learned timer over a stale Chat.ephemeralExpiration', () => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', ephemeralExpiration: 604800 }]);
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
+        message: { conversation: 'hi' },
+        messageTimestamp: 100,
+        ephemeralDuration: 7776000,
+      });
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(7776000);
+    });
+
+    it('learns the timer from contextInfo.expiration when ephemeralDuration is absent (live 1:1)', () => {
+      // WebMessageInfo.ephemeralDuration is empty on a live 1:1 upsert; the per-message expiration on the
+      // content's contextInfo is the reliable source.
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M1' },
+        message: { extendedTextMessage: { text: 'hi', contextInfo: { expiration: 7776000 } } },
+        messageTimestamp: 100,
+      });
+      expect(store.getEphemeralExpiration('628111@s.whatsapp.net')).toBe(7776000);
+    });
+
+    it('unwraps an ephemeralMessage envelope to read contextInfo.expiration', () => {
+      store.recordMessage({
+        key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'M2' },
+        message: {
+          ephemeralMessage: { message: { extendedTextMessage: { text: 'hi', contextInfo: { expiration: 86400 } } } },
+        },
+        messageTimestamp: 100,
+      });
+      expect(store.getEphemeralExpiration('628111@c.us')).toBe(86400);
+    });
+  });
+
   it('resolves a phone jid to its user-part, a lid via lidPnMappings, and a contact phoneNumber', () => {
     expect(store.resolvePhone('628111@s.whatsapp.net')).toBe('628111');
     store.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);

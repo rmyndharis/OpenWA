@@ -6,8 +6,11 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as crypto from 'crypto';
 import { Webhook } from './entities/webhook.entity';
+import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
+import { recordWebhookDeliveryFailure, statusCodeFromError } from './utils/record-delivery-failure';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
 import { evaluateFilters } from './filters/filter-evaluator';
@@ -18,6 +21,7 @@ import {
   withSafeFetch,
   isSsrfProtectionEnabled,
   SsrfBlockedError,
+  SSRF_BLOCKED_CLIENT_MESSAGE,
 } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 
@@ -49,6 +53,8 @@ export class WebhookService {
   constructor(
     @InjectRepository(Webhook, 'data')
     private readonly webhookRepository: Repository<Webhook>,
+    @InjectRepository(WebhookDeliveryFailure, 'data')
+    private readonly failureRepository: Repository<WebhookDeliveryFailure>,
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     @Optional()
@@ -71,7 +77,9 @@ export class WebhookService {
       await assertSafeFetchUrl(url);
     } catch (error) {
       if (error instanceof SsrfBlockedError) {
-        throw new BadRequestException(error.message);
+        // The raw message names the resolved internal IP (a recon oracle): log it server-side, return generic.
+        this.logger.warn(`Webhook URL rejected by SSRF guard: ${error.message}`);
+        throw new BadRequestException(SSRF_BLOCKED_CLIENT_MESSAGE);
       }
       throw error;
     }
@@ -99,14 +107,30 @@ export class WebhookService {
     });
   }
 
-  async findAll(allowedSessions?: string[] | null): Promise<Webhook[]> {
+  async findAll(allowedSessions?: string[] | null, opts: ListOptions = {}): Promise<Webhook[]> {
     // A session-restricted key only sees its own sessions' webhooks; an unrestricted key
     // (null/empty allowlist, e.g. ADMIN) sees all — mirroring the ApiKeyGuard allowedSessions model.
-    const options: FindManyOptions<Webhook> = { order: { createdAt: 'DESC' } };
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    const options: FindManyOptions<Webhook> = { order: { createdAt: 'DESC' }, take: limit, skip: offset };
     if (allowedSessions && allowedSessions.length > 0) {
       options.where = { sessionId: In(allowedSessions) };
     }
     return this.webhookRepository.find(options);
+  }
+
+  /**
+   * Recently-failed webhook deliveries (most recent first), so an operator can see what was lost during
+   * a receiver outage. ADMIN-only operational data; an optional sessionId narrows it. Bounded by the
+   * shared pagination window.
+   */
+  async listDeliveryFailures(opts: ListOptions & { sessionId?: string } = {}): Promise<WebhookDeliveryFailure[]> {
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    return this.failureRepository.find({
+      where: opts.sessionId ? { sessionId: opts.sessionId } : {},
+      order: { createdAt: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
   }
 
   async findOne(sessionId: string, id: string): Promise<Webhook> {
@@ -225,8 +249,10 @@ export class WebhookService {
     const occurredAt = new Date().toISOString();
     const idempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
-    // Dispatch to all matching webhooks
-    for (const webhook of matchingWebhooks) {
+    // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
+    // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
+    // recursive retry with backoff sleeps).
+    const tasks = matchingWebhooks.map(async webhook => {
       // Generate unique delivery ID for each webhook
       const deliveryId = generateDeliveryId();
 
@@ -236,7 +262,10 @@ export class WebhookService {
         sessionId,
         idempotencyKey,
         deliveryId,
-        data,
+        // Give each webhook its own copy of the event data: a webhook:before hook that mutates
+        // payload.data in place would otherwise bleed that change into every later webhook for this
+        // event (they all shared one object reference).
+        data: structuredClone(data),
       };
 
       // Execute hook before webhook dispatch - plugins can modify payload
@@ -251,12 +280,18 @@ export class WebhookService {
           webhookId: webhook.id,
           action: 'webhook_cancelled_by_plugin',
         });
-        continue;
+        return;
       }
 
       // Use the plugin-modified payload, falling back to the original if a before-hook returned a
       // result without a `payload` key — otherwise we'd POST an `undefined` body.
       const finalPayload = (hookResult as { payload?: WebhookPayload }).payload ?? payload;
+
+      // The idempotency + delivery ids are server-generated and are the documented dedup key
+      // (receivers dedupe on the X-OpenWA-Idempotency-Key header). Re-assert them onto the post-hook
+      // payload so a webhook:before plugin can't desync the signed body field from the header.
+      finalPayload.idempotencyKey = idempotencyKey;
+      finalPayload.deliveryId = deliveryId;
 
       // Build headers — custom headers FIRST so the system headers below always win.
       const headers: Record<string, string> = {
@@ -327,6 +362,42 @@ export class WebhookService {
             webhookId: webhook.id,
             action: 'webhook_queue_failed',
           });
+
+          // Fallback: deliver directly when the queue add failed (e.g. Redis unreachable with the
+          // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
+          // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
+          // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
+          try {
+            await this.deliverWebhook(webhook, finalPayload, headers);
+
+            await this.hookManager.execute(
+              'webhook:delivered',
+              { sessionId, event, webhookId: webhook.id, deliveryId, fallback: 'queue_failed' },
+              { sessionId, source: 'WebhookService' },
+            );
+
+            await this.hookManager.execute(
+              'webhook:after',
+              { sessionId, event, webhookId: webhook.id, success: true, fallback: 'queue_failed' },
+              { sessionId, source: 'WebhookService' },
+            );
+          } catch (fallbackError) {
+            await this.hookManager.execute(
+              'webhook:error',
+              {
+                sessionId,
+                event,
+                webhookId: webhook.id,
+                error: `Queue fallback delivery failed: ${String(fallbackError)}`,
+              },
+              { sessionId, source: 'WebhookService' },
+            );
+
+            this.logger.error(`Queue fallback delivery failed for webhook ${webhook.id}`, String(fallbackError), {
+              webhookId: webhook.id,
+              action: 'webhook_queue_fallback_failed',
+            });
+          }
         }
       } else {
         // Direct delivery when queue is disabled
@@ -360,7 +431,8 @@ export class WebhookService {
           });
         }
       }
-    }
+    });
+    await Promise.allSettled(tasks);
   }
 
   /**
@@ -422,6 +494,20 @@ export class WebhookService {
         await this.delay(delay * attempt);
         return this.deliverWebhook(webhook, payload, headers, attempt + 1);
       }
+      // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
+      // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
+      const errMessage = error instanceof Error ? error.message : String(error);
+      await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+        webhookId: webhook.id,
+        sessionId: payload.sessionId,
+        event: payload.event,
+        url: webhook.url,
+        idempotencyKey: payload.idempotencyKey,
+        deliveryId: payload.deliveryId,
+        attempts: attempt,
+        lastStatusCode: statusCodeFromError(errMessage),
+        lastError: errMessage,
+      });
       throw error;
     }
   }

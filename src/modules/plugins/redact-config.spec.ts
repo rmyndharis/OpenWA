@@ -28,11 +28,17 @@ describe('redactSecretConfig', () => {
     expect(redactSecretConfig({ endpoint: 'https://x' }, schema)).toEqual({ endpoint: 'https://x' });
   });
 
-  it('returns a copy unchanged when there is no schema', () => {
-    const cfg = { apiKey: 's3cr3t' };
+  it('fails closed and masks every value when there is no schema (cannot tell which fields are secret)', () => {
+    const cfg = { apiKey: 's3cr3t', endpoint: 'https://x' };
     const out = redactSecretConfig(cfg, undefined);
-    expect(out).toEqual(cfg);
+    expect(out).toEqual({ apiKey: SECRET_SENTINEL, endpoint: SECRET_SENTINEL });
     expect(out).not.toBe(cfg); // copy, not the same ref
+  });
+
+  it('round-trips a schemaless config: sentinel values restore the stored value, edited values persist', () => {
+    const masked = redactSecretConfig({ apiKey: 's3cr3t', region: 'us' }, undefined);
+    const restored = restoreSecretConfig({ ...masked, region: 'eu' }, { apiKey: 's3cr3t', region: 'us' }, undefined);
+    expect(restored).toEqual({ apiKey: 's3cr3t', region: 'eu' });
   });
 });
 
@@ -280,6 +286,36 @@ describe('restoreSecretConfig (scalar-secret array)', () => {
     expect(restoreSecretConfig({ keys: [SECRET_SENTINEL] }, { keys: [] }, scalarSecretArraySchema)).toEqual({
       keys: [],
     });
+  });
+
+  it('preserves stored secrets when a new key is appended (length grows)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL, SECRET_SENTINEL, 'brand-new'] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2', 'k3', 'brand-new'] });
+  });
+
+  it('preserves stored secrets when a blank trailing entry is appended (the blank is dropped)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL, SECRET_SENTINEL, ''] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2', 'k3'] });
+  });
+
+  it('preserves the remaining stored secrets when the last key is removed (length shrinks)', () => {
+    expect(
+      restoreSecretConfig(
+        { keys: [SECRET_SENTINEL, SECRET_SENTINEL] },
+        { keys: ['k1', 'k2', 'k3'] },
+        scalarSecretArraySchema,
+      ),
+    ).toEqual({ keys: ['k1', 'k2'] });
   });
 });
 

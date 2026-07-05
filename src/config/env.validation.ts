@@ -80,17 +80,37 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   };
   for (const key of [
     'RATE_LIMIT_SHORT_TTL',
-    'RATE_LIMIT_SHORT_LIMIT',
     'RATE_LIMIT_MEDIUM_TTL',
-    'RATE_LIMIT_MEDIUM_LIMIT',
     'RATE_LIMIT_LONG_TTL',
-    'RATE_LIMIT_LONG_LIMIT',
-    'WEBHOOK_TIMEOUT',
     'WEBHOOK_MAX_RETRIES',
     'WEBHOOK_RETRY_DELAY',
     'DATABASE_POOL_SIZE',
+    'REDIS_CONNECT_TIMEOUT_MS',
+    'MAX_CONCURRENT_SESSIONS', // 0 = unlimited
+    'INGRESS_INSTANCE_TTL',
   ]) {
     checkNonNegativeInt(key);
+  }
+
+  // Some knobs are nonsensical at 0 and contradict the "non-negative" intent: a rate-limit LIMIT of 0
+  // disables that tier's throttling (a self-DoS), and a webhook timeout of 0 aborts every delivery
+  // immediately. Require a positive integer for these.
+  const checkPositiveInt = (key: string): void => {
+    const raw = str(key);
+    if (raw === undefined) return;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      errors.push(`${key} must be a positive integer (got "${raw}")`);
+    }
+  };
+  for (const key of [
+    'RATE_LIMIT_SHORT_LIMIT',
+    'RATE_LIMIT_MEDIUM_LIMIT',
+    'RATE_LIMIT_LONG_LIMIT',
+    'WEBHOOK_TIMEOUT',
+    'INGRESS_INSTANCE_LIMIT',
+  ]) {
+    checkPositiveInt(key);
   }
 
   if (errors.length > 0) {

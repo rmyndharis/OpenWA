@@ -152,7 +152,8 @@ export function Webhooks() {
         sessionId: newWebhook.sessionId,
         url: newWebhook.url,
         events: newWebhook.events,
-        filters: newWebhook.filters,
+        // Don't persist message-filters when no message events are selected (the filter UI is hidden).
+        filters: supportsFilters(newWebhook.events) ? newWebhook.filters : null,
       });
       setShowCreateModal(false);
       setNewWebhook({ url: '', events: ['message.received'], sessionId: '', filters: null });
@@ -228,7 +229,8 @@ export function Webhooks() {
           url: editWebhook.url,
           events: editWebhook.events,
           active: editWebhook.active,
-          filters: editWebhook.filters ?? null,
+          // Clear message-filters if the edit removed all message events (the filter UI is hidden then).
+          filters: supportsFilters(editWebhook.events) ? (editWebhook.filters ?? null) : null,
         },
       });
       setShowEditModal(false);

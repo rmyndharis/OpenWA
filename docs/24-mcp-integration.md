@@ -22,7 +22,7 @@
 
 | Capability | Status | Notes |
 |-----------|--------|-------|
-| **Read-only mode** | ✅ Implemented | `MCP_READONLY=true` mounts read tools only |
+| **Read-only mode** | ✅ Implemented | **Default read-only**; set `MCP_READONLY=false` to expose write tools |
 | **OAuth 2.1 (public exposure)** | 🔜 Planned | Static API key is used today (suitable for self-hosted/internal) |
 | **Agent-action audit provenance** | 🔜 Planned | Mark audited actions as agent-initiated |
 | **Env-tunable rate limits** | ✅ Implemented | `MCP_RATE_LIMIT_MAX` / `MCP_RATE_LIMIT_WINDOW_MS` |
@@ -134,8 +134,10 @@ These are destructive, privileged, or have no agent use case.
 
 ### Read-only mode
 
-Set `MCP_READONLY=true` to mount **only** `tier: 'read'` tools. This is the recommended
-posture when an agent only needs to observe.
+The server is **read-only by default** — it mounts **only** `tier: 'read'` tools unless you explicitly
+opt in to write tools with `MCP_READONLY=false`. Any other value (or leaving it unset) keeps the safe
+read-only posture, so enabling MCP never silently exposes state-changing tools. Set `MCP_READONLY=false`
+only when an agent genuinely needs to send messages / mutate state.
 
 ## 24.5 Authentication & Security
 
@@ -152,7 +154,12 @@ posture when an agent only needs to observe.
   calls. Buckets are pruned when idle. This is independent of the REST throttler.
   Tune with `MCP_RATE_LIMIT_MAX` (default `60`) and `MCP_RATE_LIMIT_WINDOW_MS`
   (default `60000`). Any missing, blank, non-positive, or non-numeric value falls back
-  to the default.
+  to the default. A **second, pre-auth per-IP throttle** runs on the `/mcp` mount *before*
+  key validation (the raw Express mount bypasses the global REST throttler, so a
+  missing/invalid key would otherwise reach a DB lookup unthrottled). It keys on the
+  resolved client IP (honoring `TRUSTED_PROXIES`) and is tuned with `MCP_IP_RATE_LIMIT_MAX`
+  (default `120`) and `MCP_IP_RATE_LIMIT_WINDOW_MS` (default `60000`), with the same
+  fallback rules — independent of the per-key vars.
 - **Response parity.** Tools reuse the REST response DTOs, so sensitive fields the REST
   API strips (e.g. webhook HMAC secrets and custom headers, session proxy URLs and engine
   config) are **not** exposed over MCP.
@@ -165,9 +172,11 @@ posture when an agent only needs to observe.
 ```bash
 MCP_ENABLED=true npm run start:prod   # or set MCP_ENABLED in your .env / compose
 # optional:
-MCP_READONLY=true                     # read tools only
+MCP_READONLY=false                    # expose write tools (default is read-only when unset)
 MCP_RATE_LIMIT_MAX=60                 # max tool calls per key per window (default 60)
 MCP_RATE_LIMIT_WINDOW_MS=60000        # sliding window in ms (default 60000 = 1 min)
+MCP_IP_RATE_LIMIT_MAX=120             # pre-auth per-IP request cap per window (default 120)
+MCP_IP_RATE_LIMIT_WINDOW_MS=60000     # per-IP window in ms (default 60000 = 1 min)
 ```
 
 Point an MCP client at `POST /mcp`. For Claude Code, a `.mcp.json` at your project root

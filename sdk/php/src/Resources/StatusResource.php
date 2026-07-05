@@ -34,7 +34,8 @@ class StatusResource
     }
 
     /**
-     * @param array<string,mixed> $body
+     * @param array<string,mixed> $body Body must include a required `recipients` key
+     *                                   (list<string> of recipient JIDs; empty -> 400).
      * @return array<string,mixed>
      */
     public function sendText(string $sessionId, array $body): array
@@ -42,13 +43,21 @@ class StatusResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-text", [], $body);
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * @param array<string,mixed> $body Body must include a required `recipients` key
+     *                                   (list<string> of recipient JIDs; empty -> 400).
+     * @return array<string,mixed>
+     */
     public function sendImage(string $sessionId, array $body): array
     {
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-image", [], $body);
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * @param array<string,mixed> $body Body must include a required `recipients` key
+     *                                   (list<string> of recipient JIDs; empty -> 400).
+     * @return array<string,mixed>
+     */
     public function sendVideo(string $sessionId, array $body): array
     {
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/status/send-video", [], $body);

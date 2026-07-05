@@ -2,19 +2,69 @@ import {
   capInboundMedia,
   inboundMediaMaxBytes,
   inboundMediaConcurrency,
+  inboundMediaTimeoutMs,
+  withInboundDownloadTimeout,
   coerceDeclaredSize,
+  isMediaDownloadEnabled,
 } from './inbound-media-cap';
 
 describe('inbound media cap', () => {
   const ENV = 'MEDIA_DOWNLOAD_MAX_BYTES';
   const CONC = 'INBOUND_MEDIA_CONCURRENCY';
+  const TMO = 'MEDIA_DOWNLOAD_TIMEOUT_MS';
   const orig = process.env[ENV];
   const origConc = process.env[CONC];
+  const origTmo = process.env[TMO];
   afterEach(() => {
     if (orig === undefined) delete process.env[ENV];
     else process.env[ENV] = orig;
     if (origConc === undefined) delete process.env[CONC];
     else process.env[CONC] = origConc;
+    if (origTmo === undefined) delete process.env[TMO];
+    else process.env[TMO] = origTmo;
+  });
+
+  describe('inboundMediaTimeoutMs', () => {
+    it('defaults to 30000', () => {
+      delete process.env[TMO];
+      expect(inboundMediaTimeoutMs()).toBe(30_000);
+    });
+    it('honors a positive override', () => {
+      process.env[TMO] = '5000';
+      expect(inboundMediaTimeoutMs()).toBe(5000);
+    });
+    it('falls back to the default for a non-positive/garbage override', () => {
+      process.env[TMO] = '0';
+      expect(inboundMediaTimeoutMs()).toBe(30_000);
+      process.env[TMO] = 'abc';
+      expect(inboundMediaTimeoutMs()).toBe(30_000);
+    });
+  });
+
+  describe('withInboundDownloadTimeout', () => {
+    it('returns the value when the download settles before the deadline', async () => {
+      const onTimeout = jest.fn();
+      await expect(withInboundDownloadTimeout(Promise.resolve('buf'), 1000, onTimeout)).resolves.toBe('buf');
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it('resolves null and runs onTimeout when the download outlasts the deadline', async () => {
+      const onTimeout = jest.fn();
+      const slow = new Promise<string>(resolve => setTimeout(() => resolve('late'), 1000).unref?.());
+      await expect(withInboundDownloadTimeout(slow, 5, onTimeout)).resolves.toBeNull();
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it('swallows a late rejection from the abandoned download (no unhandled rejection)', async () => {
+      let rejectFn: (e: Error) => void = () => undefined;
+      const slow = new Promise<string>((_, reject) => {
+        rejectFn = reject;
+      });
+      await expect(withInboundDownloadTimeout(slow, 5)).resolves.toBeNull();
+      // Reject AFTER the race settled — must not surface as an unhandled rejection.
+      rejectFn(new Error('media socket closed'));
+      await Promise.resolve();
+    });
   });
 
   describe('inboundMediaConcurrency', () => {
@@ -67,6 +117,57 @@ describe('inbound media cap', () => {
       expect(inboundMediaMaxBytes()).toBe(50 * 1024 * 1024);
       process.env[ENV] = 'abc';
       expect(inboundMediaMaxBytes()).toBe(50 * 1024 * 1024);
+    });
+  });
+
+  describe('isMediaDownloadEnabled', () => {
+    const ENV = 'MEDIA_DOWNLOAD_ENABLED';
+    const orig = process.env[ENV];
+    afterEach(() => {
+      if (orig === undefined) delete process.env[ENV];
+      else process.env[ENV] = orig;
+    });
+
+    it('defaults to true when unset', () => {
+      delete process.env[ENV];
+      expect(isMediaDownloadEnabled()).toBe(true);
+    });
+
+    it('returns false when set to "false"', () => {
+      process.env[ENV] = 'false';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns false for case/whitespace variants of false', () => {
+      process.env[ENV] = 'FALSE';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = 'False';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = ' false ';
+      expect(isMediaDownloadEnabled()).toBe(false);
+      process.env[ENV] = ' FALSE ';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns false when set to "0"', () => {
+      process.env[ENV] = '0';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns false when set to "no"', () => {
+      process.env[ENV] = 'no';
+      expect(isMediaDownloadEnabled()).toBe(false);
+    });
+
+    it('returns true for any other value', () => {
+      process.env[ENV] = 'true';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = '1';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = 'yes';
+      expect(isMediaDownloadEnabled()).toBe(true);
+      process.env[ENV] = 'whatever';
+      expect(isMediaDownloadEnabled()).toBe(true);
     });
   });
 

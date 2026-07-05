@@ -7,8 +7,14 @@ import type { LidMappingStore } from '../identity/lid-mapping-store.service';
  * Baileys `Contact` does not include a `phoneNumber` field, but WhatsApp Business events may supply
  * the resolved phone JID alongside the lid-based id. We extend the input type locally so callers can
  * pass `phoneNumber` when available (e.g. from `contacts.upsert` payloads that carry lid+pn pairs).
+ *
+ * `jid` is declared locally as well: it carries the contact's phone `@s.whatsapp.net` on
+ * `@whiskeysockets/baileys` 6.7.x, but the field was dropped from `Contact` in 6.17.x. Declaring it
+ * here (optional) keeps the `merged.jid` phone fallback type-safe across both engine versions — the
+ * value is read at runtime on 6.7.x and is simply `undefined` (harmlessly skipped) on newer Baileys,
+ * instead of becoming an `error`-typed access that trips the type-aware `no-unsafe-*` lint rules.
  */
-type BaileysContactWithPhone = BaileysContact & { phoneNumber?: string };
+type BaileysContactWithPhone = BaileysContact & { phoneNumber?: string; jid?: string };
 
 interface LastMessage {
   key: WAMessageKey;
@@ -26,6 +32,15 @@ export class BaileysSessionStore {
   private readonly chats = new Map<string, Chat>();
   private readonly lastMessages = new Map<string, LastMessage>();
   private readonly lidToPn = new Map<string, string>();
+  /**
+   * Per-chat disappearing-messages timer (seconds) learned from inbound messages (#473), the reliable
+   * source for it: `Chat.ephemeralExpiration` (from `chats.*`/history sync) is empirically absent for a
+   * long-standing timer after a reconnect (observed live: 0 of 159 cached chats carried it). Keyed by
+   * both the raw and neutral JID so an outbound send addressed in either dialect (phone `@c.us` /
+   * `@s.whatsapp.net` or `@lid`) resolves to the same entry. See {@link extractEphemeralDuration} for
+   * which message field is read.
+   */
+  private readonly ephemeralByChat = new Map<string, number>();
 
   /**
    * @param lidStore  optional persisted, cross-session lid->phone table that backs resolution beyond
@@ -100,6 +115,10 @@ export class BaileysSessionStore {
     if (!chatId || !msg.key) {
       return;
     }
+    // Learn the chat's disappearing-messages timer from the message itself (#473). This runs before the
+    // newest-message guard so every inbound refreshes it; the timer is cached under both the raw and
+    // neutral JID so an outbound send addressed in either dialect (phone or @lid) finds it.
+    this.recordEphemeralFromMessage(chatId, msg);
     const timestamp = this.toUnixSeconds(msg.messageTimestamp);
     const existing = this.lastMessages.get(chatId);
     if (existing && existing.timestamp >= timestamp) {
@@ -107,6 +126,60 @@ export class BaileysSessionStore {
     }
     const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? '';
     this.lastMessages.set(chatId, { key: msg.key, timestamp, text });
+  }
+
+  /**
+   * Cache a positive disappearing-messages timer learned from an inbound message under both the raw chat
+   * JID and its neutral form, so {@link getEphemeralExpiration} hits regardless of which dialect the caller
+   * sends to. A non-positive/absent value means "no live timer on this message" and is left untouched (a
+   * single non-ephemeral message must not clear a known timer; WhatsApp keeps stamping it while on).
+   */
+  private recordEphemeralFromMessage(chatId: string, msg: WAMessage): void {
+    const duration = this.extractEphemeralDuration(msg);
+    if (duration === undefined) {
+      return;
+    }
+    this.ephemeralByChat.set(chatId, duration);
+    this.ephemeralByChat.set(this.toNeutralJid(chatId), duration);
+  }
+
+  /**
+   * Best-effort read of a message's disappearing timer (seconds). `WebMessageInfo.ephemeralDuration` is
+   * populated on history-synced messages but is typically ABSENT on a live 1:1 `messages.upsert`, so fall
+   * back to the per-message `contextInfo.expiration` WhatsApp stamps on every message in a disappearing
+   * chat — read after unwrapping the ephemeral / view-once / document-with-caption envelope.
+   */
+  private extractEphemeralDuration(msg: WAMessage): number | undefined {
+    const fromInfo = msg.ephemeralDuration;
+    if (typeof fromInfo === 'number' && fromInfo > 0) {
+      return fromInfo;
+    }
+    const fromContext = this.contextExpiration(msg.message);
+    return typeof fromContext === 'number' && fromContext > 0 ? fromContext : undefined;
+  }
+
+  /** Walk a message's content (unwrapping known envelopes) and return the first positive `contextInfo.expiration`. */
+  private contextExpiration(content: WAMessage['message'], depth = 0): number | undefined {
+    if (!content || typeof content !== 'object' || depth > 4) {
+      return undefined;
+    }
+    const nodes = content as Record<
+      string,
+      { contextInfo?: { expiration?: number | null }; message?: WAMessage['message'] } | undefined
+    >;
+    for (const node of Object.values(nodes)) {
+      const exp = node?.contextInfo?.expiration;
+      if (typeof exp === 'number' && exp > 0) {
+        return exp;
+      }
+      if (node?.message) {
+        const nested = this.contextExpiration(node.message, depth + 1);
+        if (nested !== undefined) {
+          return nested;
+        }
+      }
+    }
+    return undefined;
   }
 
   listContacts(): Contact[] {
@@ -125,6 +198,30 @@ export class BaileysSessionStore {
   lastMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null {
     const m = this.lastMessages.get(chatId) ?? this.lastMessages.get(this.toEngineJid(chatId));
     return m ? { key: m.key, timestamp: m.timestamp } : null;
+  }
+
+  /**
+   * The chat's disappearing-messages timer in seconds (#473), or `undefined` when no timer is known.
+   * Only a positive value is returned: `0` / `null` / absent all mean "no known timer", so the caller
+   * omits the per-message `ephemeralExpiration` and reproduces today's send behavior (Baileys' own send
+   * guard is truthy). This keeps a stale-empty or boot-window cache from ever forcing a message to
+   * disappear. Folds a neutral `@c.us` id to the engine dialect first, like the other chat lookups.
+   */
+  getEphemeralExpiration(chatId: string): number | undefined {
+    // Prefer the timer learned from inbound messages (reliably present); try the raw, engine, and
+    // neutral keys so an @lid-keyed entry and a phone-dialect send target resolve to the same value.
+    const fromMessage =
+      this.ephemeralByChat.get(chatId) ??
+      this.ephemeralByChat.get(this.toEngineJid(chatId)) ??
+      this.ephemeralByChat.get(this.toNeutralJid(chatId));
+    if (typeof fromMessage === 'number' && fromMessage > 0) {
+      return fromMessage;
+    }
+    // Fallback to the chat object's own timer for sessions/engines that do surface it on `chats.*`.
+    const chat =
+      this.chats.get(chatId) ?? this.chats.get(this.toEngineJid(chatId)) ?? this.chats.get(this.toNeutralJid(chatId));
+    const exp = chat?.ephemeralExpiration;
+    return typeof exp === 'number' && exp > 0 ? exp : undefined;
   }
 
   resolvePhone(id: string): string | null {

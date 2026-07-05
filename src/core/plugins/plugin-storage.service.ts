@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createLogger } from '../../common/services/logger.service';
-import { isPathWithin } from '../../common/utils/path-safety';
+import { isPathWithin, isSafeStorageKey } from '../../common/utils/path-safety';
 import { PluginStatus, PluginStorage, PluginRegistryEntry } from './plugin.interfaces';
 
 /** Unique-per-write counter so concurrent writes to the same key don't collide on the temp file. */
@@ -26,6 +26,29 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
       /* best-effort temp cleanup */
     }
     throw err;
+  }
+}
+
+const ENCODED_KEY_PREFIX = 'key-';
+
+function encodeStorageKey(key: string): string {
+  return (
+    ENCODED_KEY_PREFIX +
+    Buffer.from(key, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  );
+}
+
+function decodeStorageFileName(stem: string): string | null {
+  if (!stem.startsWith(ENCODED_KEY_PREFIX)) return null;
+  const encoded = stem.slice(ENCODED_KEY_PREFIX.length);
+  const padded = encoded.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (encoded.length % 4)) % 4);
+  try {
+    const decoded = Buffer.from(padded, 'base64').toString('utf8');
+    // Only accept it as one of our base64url-encoded names if it round-trips exactly. A literal legacy
+    // filename that merely starts with `key-` would otherwise be mis-decoded into a garbage key.
+    return encodeStorageKey(decoded) === stem ? decoded : null;
+  } catch {
+    return null;
   }
 }
 
@@ -185,11 +208,21 @@ export class PluginStorageService {
 
     const logger = this.logger;
 
-    // Containment: a plugin storage key must resolve INSIDE its own sandbox dir. path.join normalizes
-    // `..`, so a key like `../../x` would otherwise escape and clobber another plugin's data, the
-    // registry, or .env.generated. Reject anything that escapes; JID chars (`:`,`@`,`.`,`-`) are fine.
-    const resolveKeyPath = (key: string): string | null =>
-      isPathWithin(pluginDataDir, `${key}.json`) ? path.join(pluginDataDir, `${key}.json`) : null;
+    // Containment: validate the logical key, then encode it to a filesystem-safe filename. This keeps
+    // JID-style keys (`group:sess-1:12345@g.us`) portable on Windows while still rejecting traversal.
+    const resolveKeyPath = (key: string): string | null => {
+      if (!isSafeStorageKey(key)) return null;
+      const fileName = `${encodeStorageKey(key)}.json`;
+      return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
+    };
+
+    // Backward compatibility for pre-encoded storage files (`state.json`). Reads/deletes consult it,
+    // but new writes always use the encoded filename above.
+    const resolveLegacyKeyPath = (key: string): string | null => {
+      if (!isSafeStorageKey(key)) return null;
+      const fileName = `${key}.json`;
+      return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
+    };
 
     return {
       get: <T = unknown>(key: string): Promise<T | null> => {
@@ -199,9 +232,13 @@ export class PluginStorageService {
           return Promise.resolve(null);
         }
         try {
-          if (fs.existsSync(filePath)) {
-            const content = fs.readFileSync(filePath, 'utf-8');
-            return Promise.resolve(JSON.parse(content) as T);
+          const legacyPath = resolveLegacyKeyPath(key);
+          const candidates = legacyPath && legacyPath !== filePath ? [filePath, legacyPath] : [filePath];
+          for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+              const content = fs.readFileSync(candidate, 'utf-8');
+              return Promise.resolve(JSON.parse(content) as T);
+            }
           }
         } catch (error) {
           logger.error(`Failed to read plugin data: ${pluginId}/${key}`, String(error));
@@ -212,7 +249,7 @@ export class PluginStorageService {
       set: <T = unknown>(key: string, value: T): Promise<void> => {
         const filePath = resolveKeyPath(key);
         if (!filePath) {
-          return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
+          return Promise.reject(new Error(`Unsafe plugin storage key: ${key}`));
         }
         try {
           // 0o600 (owner-only): a plugin-persisted secret must not land in a group/other-readable file.
@@ -220,6 +257,11 @@ export class PluginStorageService {
           // pre-existed (writeFileSync mode only applies on create). Mirrors saveRegistry's hardening.
           atomicWriteFileSync(filePath, JSON.stringify(value, null, 2), { mode: 0o600 });
           fs.chmodSync(filePath, 0o600);
+          // Migrate off any pre-encoding legacy file for this key so a stale copy can't shadow reads/lists.
+          const legacyPath = resolveLegacyKeyPath(key);
+          if (legacyPath && legacyPath !== filePath && fs.existsSync(legacyPath)) {
+            fs.unlinkSync(legacyPath);
+          }
           return Promise.resolve();
         } catch (error) {
           logger.error(`Failed to write plugin data: ${pluginId}/${key}`, String(error));
@@ -230,11 +272,15 @@ export class PluginStorageService {
       delete: (key: string): Promise<void> => {
         const filePath = resolveKeyPath(key);
         if (!filePath) {
-          return Promise.reject(new Error(`Unsafe plugin storage key (escapes sandbox): ${key}`));
+          return Promise.reject(new Error(`Unsafe plugin storage key: ${key}`));
         }
         try {
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
+          const legacyPath = resolveLegacyKeyPath(key);
+          const candidates = legacyPath && legacyPath !== filePath ? [filePath, legacyPath] : [filePath];
+          for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+              fs.unlinkSync(candidate);
+            }
           }
           return Promise.resolve();
         } catch (error) {
@@ -246,7 +292,14 @@ export class PluginStorageService {
       list: (prefix?: string): Promise<string[]> => {
         try {
           const files = fs.readdirSync(pluginDataDir);
-          let keys = files.filter(f => f.endsWith('.json')).map(f => f.replace('.json', ''));
+          let keys = Array.from(
+            new Set(
+              files
+                .filter(f => f.endsWith('.json'))
+                .map(f => f.slice(0, -'.json'.length))
+                .map(stem => decodeStorageFileName(stem) ?? stem),
+            ),
+          );
 
           if (prefix) {
             keys = keys.filter(k => k.startsWith(prefix));

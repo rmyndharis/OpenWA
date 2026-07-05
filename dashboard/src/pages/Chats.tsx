@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   Search,
@@ -21,46 +22,28 @@ import {
   asMessageType,
   type Session,
   type Chat,
-  type ChatMessage,
   type MessageType,
 } from '../services/api';
-import { mapEngineHistoryMessage, mergeChatMessages } from '../utils/chatMessages';
+import { mergeDeliveryStatus, type ChatMessageView } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useToast } from '../components/Toast';
 import { PageHeader } from '../components/PageHeader';
+import {
+  useChatMessages,
+  useChatMessagesActions,
+  messagesQueryKey,
+} from '../hooks/useChatMessages';
+import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
+import MessageBody from '../components/chats/MessageBody';
+import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import './Chats.css';
 
-type MessageMedia = { mimetype: string; filename?: string; data?: string };
+type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
 
-interface ChatMessageView extends ChatMessage {
-  metadata?: {
-    media?: MessageMedia;
-    quotedMessage?: { id: string; body: string };
-    reactions?: Record<string, string>;
-  };
-}
-
-// Delivery acks must only ADVANCE the tick, never regress it. The backend DB update is forward-only
-// (ackStatusTransitionFrom), but the live websocket ack fires on every receipt (incl. pending/sent)
-// and engine acks can arrive out of order or be replayed on reconnect — so a late/duplicate lower
-// ack must not visually downgrade a row already shown as delivered/read. This mirrors the backend's
-// transition rules exactly: pending<sent<delivered<read advances by rank; `failed` only applies from
-// pending/sent (a late failure must not clobber a confirmed delivered/read), and is terminal once set.
-const DELIVERY_RANK: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 };
-const mergeDeliveryStatus = (
-  current: ChatMessageView['status'] | undefined,
-  incoming: ChatMessageView['status'] | undefined,
-): ChatMessageView['status'] | undefined => {
-  if (!incoming) return current;
-  if (!current) return incoming;
-  if (current === 'failed') return 'failed'; // terminal — nothing advances from failed
-  if (incoming === 'failed') return current === 'pending' || current === 'sent' ? 'failed' : current;
-  if (!(incoming in DELIVERY_RANK)) return current; // unknown status — ignore
-  if (!(current in DELIVERY_RANK)) return incoming;
-  return DELIVERY_RANK[incoming] >= DELIVERY_RANK[current] ? incoming : current;
-};
+// mergeDeliveryStatus (forward-only delivery-tick merge) is shared with mergeOrAppend in utils/chatMessages
+// so the WS append path and the ack path apply the exact same rule.
 
 interface IncomingWsMessage {
   id: string;
@@ -73,6 +56,9 @@ interface IncomingWsMessage {
   fromMe?: boolean;
   media?: MessageMedia;
   quotedMessage?: { id: string; body: string };
+  // The backend emits `call` as a top-level field on the live `message.received` event (it's only
+  // folded into `metadata` on the persisted/history path), so declare it here to carry it through.
+  call?: { video: boolean; missed: boolean };
   metadata?: ChatMessageView['metadata'];
 }
 
@@ -111,10 +97,18 @@ export function Chats() {
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<ChatMessageView[]>([]);
-  const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
+  const {
+    data: messages = [],
+    isLoading: loadingMessages,
+    isError: messagesError,
+  } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
+  const { appendMessage, updateMessage } = useChatMessagesActions();
+  const queryClient = useQueryClient();
   const [messageInput, setMessageInput] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
+
+  // Lightbox state for media viewer
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // File attachments
   const [attachment, setAttachment] = useState<{
@@ -127,9 +121,16 @@ export function Chats() {
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
 
   // References
-  const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
+
+  // Per-chat scroll-position memory + auto-scroll heuristic.
+  // Pass `messages.length > 0` as the loaded signal: it stays stable once the
+  // chat has any message (doesn't toggle per append) and covers both the
+  // first-fetch resolution and a WS-driven first message on a previously-empty
+  // chat. `loadingMessages` alone would miss the latter case.
+  const { containerRef: messagesContainerRef, onMessageAppended } =
+    useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
 
   // Popular emojis
   const popularEmojis = ['😀', '😂', '👍', '❤️', '🔥', '👏', '🙏', '🎉', '💡', '🤔', '😅', '😍', '😊', '😭', '😎', '😜', '🚀', '✨'];
@@ -177,11 +178,19 @@ export function Chats() {
     if (selectedSessionId) {
       void loadChats(selectedSessionId);
       setActiveChat(null);
-      setMessages([]);
       setAttachment(null);
       setPreviewUrl(null);
     }
   }, [selectedSessionId, loadChats]);
+
+  // Revoke the object URL created for an image-attachment preview once it is replaced, cleared, or
+  // the page unmounts. The cleanup runs with the previous value on every change, so this single
+  // effect covers all paths (new file, remove, session switch) — otherwise each preview leaks a
+  // blob held for the lifetime of the document.
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   const markChatRead = useCallback(
     (chatId: string) => {
@@ -199,47 +208,55 @@ export function Chats() {
 
       const newMsg = event.message as unknown as IncomingWsMessage;
 
-      // Update message list if the message belongs to the currently active chat
+      const mappedMessage: ChatMessageView = {
+        id: newMsg.id,
+        waMessageId: newMsg.id,
+        chatId: newMsg.chatId,
+        from: newMsg.from,
+        to: newMsg.to,
+        body: newMsg.body,
+        type: asMessageType(newMsg.type),
+        direction: newMsg.fromMe ? 'outgoing' : 'incoming',
+        status: 'sent',
+        timestamp: newMsg.timestamp,
+        createdAt: new Date(newMsg.timestamp * 1000).toISOString(),
+        metadata: newMsg.metadata || {
+          media: newMsg.media,
+          quotedMessage: newMsg.quotedMessage,
+          call: newMsg.call,
+        },
+      };
+
+      // Always write to the React Query cache for this message's session — keeps non-active chats
+      // up to date so re-opening them shows fresh data without a refetch.
+      appendMessage(event.sessionId, newMsg.chatId, mappedMessage);
+
+      // If the message belongs to the currently visible chat, mark-as-read and run the scroll heuristic.
       if (activeChat && newMsg.chatId === activeChat.id) {
         markChatRead(activeChat.id);
-
-        const mappedMessage: ChatMessageView = {
-          id: newMsg.id,
-          waMessageId: newMsg.id,
-          chatId: newMsg.chatId,
-          from: newMsg.from,
-          to: newMsg.to,
-          body: newMsg.body,
-          type: asMessageType(newMsg.type),
-          direction: newMsg.fromMe ? 'outgoing' : 'incoming',
-          status: 'sent',
-          timestamp: newMsg.timestamp,
-          createdAt: new Date(newMsg.timestamp * 1000).toISOString(),
-          metadata: newMsg.metadata || {
-            media: newMsg.media,
-            quotedMessage: newMsg.quotedMessage,
-          },
-        };
-
-        setMessages(prev => {
-          if (prev.some(m => m.id === mappedMessage.id || m.waMessageId === mappedMessage.id)) {
-            return prev;
-          }
-          return [...prev, mappedMessage];
-        });
+        if (!newMsg.fromMe) onMessageAppended('incoming');
       }
 
       // Update sidebar chat list
       setChats(prevChats => {
         const chatIndex = prevChats.findIndex(c => c.id === newMsg.chatId);
         if (chatIndex === -1) {
-          void loadChats(selectedSessionId);
+          // A message for a chat not in the sidebar. Suppress the refetch ONLY for an outgoing echo
+          // addressed as `@lid`: a LID-migrated contact echoes back `@lid` while the user sent to
+          // `@c.us`, and the sent bubble is already reconciled in the active chat, so refetching on
+          // every such send just churns the chat list (#583 R2). Incoming messages and ordinary
+          // outgoing sends to a genuinely new chat still refetch so the sidebar stays complete.
+          const isMigratedEcho = newMsg.fromMe && (newMsg.chatId?.endsWith('@lid') ?? false);
+          if (!isMigratedEcho) {
+            void loadChats(selectedSessionId);
+          }
           return prevChats;
         }
 
         const updatedChats = [...prevChats];
         const targetChat = { ...updatedChats[chatIndex] };
-        targetChat.lastMessage = newMsg.body;
+        // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
+        targetChat.lastMessage = newMsg.type === 'location' ? `📍 ${t('chats.media.location')}` : newMsg.body;
         targetChat.timestamp = newMsg.timestamp;
 
         if (!newMsg.fromMe && (!activeChat || activeChat.id !== targetChat.id)) {
@@ -251,59 +268,84 @@ export function Chats() {
         return updatedChats;
       });
     },
-    [selectedSessionId, activeChat, loadChats, markChatRead],
+    [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended, t],
   );
 
   const handleIncomingMessageAck = useCallback(
     (event: { sessionId: string; messageId: string; status: ChatMessageView['status'] }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      setMessages(prev =>
-        prev.map(msg => {
-          if (msg.id === event.messageId || msg.waMessageId === event.messageId) {
-            // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
-            // Merge forward-only so an out-of-order/replayed lower ack can't downgrade the tick.
-            return { ...msg, status: mergeDeliveryStatus(msg.status, event.status) ?? msg.status };
-          }
-          return msg;
-        }),
-      );
+      // Acks can arrive for any cached chat under this session. Walk every cache entry under
+      // ['messages', event.sessionId, *] and apply the forward-only delivery merge in place.
+      const caches = queryClient.getQueriesData<ChatMessageView[]>({
+        queryKey: ['messages', event.sessionId],
+      });
+      for (const [key, list] of caches) {
+        if (!list) continue;
+        const idx = list.findIndex(
+          m => m.id === event.messageId || m.waMessageId === event.messageId,
+        );
+        if (idx === -1) continue;
+        const target = list[idx];
+        // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
+        // Merge forward-only so an out-of-order/replayed lower ack can't downgrade the tick.
+        const nextStatus = mergeDeliveryStatus(target.status, event.status) ?? target.status;
+        const next = list.slice();
+        next[idx] = { ...target, status: nextStatus };
+        queryClient.setQueryData(key, next);
+      }
     },
-    [selectedSessionId],
+    [selectedSessionId, queryClient],
   );
 
   const handleIncomingMessageReaction = useCallback(
     (event: { sessionId: string; messageId: string; reactions: Record<string, string> }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      setMessages(prev =>
-        prev.map(msg => {
-          if (msg.id === event.messageId || msg.waMessageId === event.messageId) {
-            const metadata = msg.metadata || {};
-            return { ...msg, metadata: { ...metadata, reactions: event.reactions } };
-          }
-          return msg;
-        }),
-      );
+      // Reactions update `metadata.reactions` while preserving `metadata.media` / `metadata.quotedMessage`,
+      // so we must read the prior message and deep-merge — `updateMessage`'s shallow merge would clobber
+      // the rest of metadata.
+      const caches = queryClient.getQueriesData<ChatMessageView[]>({
+        queryKey: ['messages', event.sessionId],
+      });
+      for (const [key, list] of caches) {
+        if (!list) continue;
+        const idx = list.findIndex(
+          m => m.id === event.messageId || m.waMessageId === event.messageId,
+        );
+        if (idx === -1) continue;
+        const target = list[idx];
+        const next = list.slice();
+        next[idx] = {
+          ...target,
+          metadata: { ...(target.metadata || {}), reactions: event.reactions },
+        };
+        queryClient.setQueryData(key, next);
+      }
     },
-    [selectedSessionId],
+    [selectedSessionId, queryClient],
   );
 
   const handleIncomingMessageRevoked = useCallback(
     (event: { sessionId: string; id: string; type: string }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      setMessages(prev =>
-        prev.map(msg => {
-          if (msg.id === event.id || msg.waMessageId === event.id) {
-            // The backend emits an empty body; the localized "deleted" label is rendered below.
-            return { ...msg, body: '', type: asMessageType(event.type) };
-          }
-          return msg;
-        }),
-      );
+      // Walk every cached chat under this session, find the message by id or waMessageId and zero it
+      // — the backend emits an empty body; the localized "deleted" label is rendered below.
+      const caches = queryClient.getQueriesData<ChatMessageView[]>({
+        queryKey: ['messages', event.sessionId],
+      });
+      for (const [key, list] of caches) {
+        if (!list) continue;
+        const idx = list.findIndex(m => m.id === event.id || m.waMessageId === event.id);
+        if (idx === -1) continue;
+        const target = list[idx];
+        const next = list.slice();
+        next[idx] = { ...target, body: '', type: asMessageType(event.type) };
+        queryClient.setQueryData(key, next);
+      }
     },
-    [selectedSessionId],
+    [selectedSessionId, queryClient],
   );
 
   const { isConnected, connectionFailed, reconnect, subscribe, unsubscribe } = useWebSocket({
@@ -328,34 +370,8 @@ export function Chats() {
     }
   }, [selectedSessionId, isConnected, subscribe, unsubscribe]);
 
-  // 4. Fetch message history for the selected chat
-  const loadMessages = useCallback(
-    async (chatId: string) => {
-      if (!selectedSessionId || !chatId) return;
-      try {
-        setLoadingMessages(true);
-        markChatRead(chatId);
-        // The DB holds only messages captured live since the gateway connected; the engine holds the
-        // real WhatsApp history (including messages from before connect). Merge both so a freshly
-        // paired session shows the conversation instead of an empty thread. Tolerate either side
-        // failing — only surface an error if both do.
-        const [dbRes, historyRes] = await Promise.allSettled([
-          sessionApi.getChatMessages(selectedSessionId, chatId, 100),
-          sessionApi.getChatHistory(selectedSessionId, chatId, 100, true),
-        ]);
-        if (dbRes.status === 'rejected' && historyRes.status === 'rejected') throw dbRes.reason;
-        const dbMessages = dbRes.status === 'fulfilled' ? dbRes.value.messages : [];
-        const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
-        setMessages(mergeChatMessages(dbMessages, history));
-      } catch (err) {
-        showErrorToast(t('chats.errors.loadMessages'), err instanceof Error ? err.message : undefined);
-        setMessages([]);
-      } finally {
-        setLoadingMessages(false);
-      }
-    },
-    [selectedSessionId, markChatRead, t, showErrorToast],
-  );
+  // 4. Message history is fetched by useChatMessages (React Query). The active-chat side effects
+  // (mark-as-read + clear sidebar unread badge) live in a small effect below.
 
   const handleReactMessage = async (msg: ChatMessageView, emoji: string) => {
     if (!selectedSessionId || !activeChat) return;
@@ -381,8 +397,10 @@ export function Chats() {
         emoji: emojiToSend,
       });
 
-      setMessages(prev =>
-        prev.map(m => {
+      // Deep-merge metadata.reactions so existing media / quotedMessage on metadata survive.
+      const key = messagesQueryKey(selectedSessionId, activeChat.id);
+      queryClient.setQueryData<ChatMessageView[]>(key, (old = []) =>
+        old.map(m => {
           if (m.id === msg.id || m.waMessageId === msg.id) {
             const metadata = m.metadata || {};
             const reactions = { ...(metadata.reactions || {}) };
@@ -414,34 +432,25 @@ export function Chats() {
         forEveryone: true,
       });
 
-      setMessages(prev =>
-        prev.map(m => {
-          if (m.id === msg.id || m.waMessageId === msg.id) {
-            return { ...m, body: '', type: 'revoked' };
-          }
-          return m;
-        }),
-      );
+      updateMessage(selectedSessionId, activeChat.id, msg.id, { body: '', type: 'revoked' });
     } catch (err) {
       showErrorToast(t('chats.errors.delete'), err instanceof Error ? err.message : undefined);
     }
   };
 
+  // Side effects when the active chat changes: mark-as-read on the gateway + clear sidebar unread badge.
+  // The message-history fetch is driven by useChatMessages; scroll restoration is driven by
+  // useChatScrollPosition (both keyed off activeChat?.id). Deliberately keying off `activeChat?.id`
+  // (not the whole object) so a sidebar reshuffle that mutates the activeChat instance doesn't re-fire
+  // the mark-as-read RPC for the same chat.
   useEffect(() => {
-    if (activeChat) {
-      void loadMessages(activeChat.id);
-      setChats(prev => prev.map(c => (c.id === activeChat.id ? { ...c, unreadCount: 0 } : c)));
-    } else {
-      setMessages([]);
-    }
-  }, [activeChat, loadMessages]);
+    if (!activeChat) return;
+    markChatRead(activeChat.id);
+    setChats(prev => prev.map(c => (c.id === activeChat.id ? { ...c, unreadCount: 0 } : c)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChat?.id, markChatRead]);
 
-  // 5. Scroll chat to bottom
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // 6. Handle file selection & base64 conversion
+  // 5. Handle file selection & base64 conversion
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -522,7 +531,8 @@ export function Chats() {
           : undefined,
     };
 
-    setMessages(prev => [...prev, tempMessage]);
+    appendMessage(selectedSessionId, activeChat.id, tempMessage);
+    onMessageAppended('outgoing');
 
     const currentAttachment = attachment;
     const currentReplyingTo = replyingTo;
@@ -555,17 +565,22 @@ export function Chats() {
         result = await messageApi.sendText(selectedSessionId, activeChat.id, textToSend);
       }
 
-      setMessages(prev => {
-        // Race guard: the realtime `message.sent` echo can arrive before this response and already
-        // append the message by its real WA id (the dedup at receive time misses because the
-        // optimistic placeholder still carries the temp id). If so, drop the placeholder instead of
-        // renaming it — otherwise both the echo and the renamed temp render as duplicate bubbles.
-        const echoAlreadyAdded = prev.some(m => m.id === result.messageId || m.waMessageId === result.messageId);
+      // Race guard: the realtime `message.sent` echo can arrive before this response and already
+      // append the message by its real WA id (the dedup at receive time misses because the
+      // optimistic placeholder still carries the temp id). If so, drop the placeholder instead of
+      // renaming it — otherwise both the echo and the renamed temp render as duplicate bubbles.
+      const sendKey = messagesQueryKey(selectedSessionId, activeChat.id);
+      queryClient.setQueryData<ChatMessageView[]>(sendKey, (prev = []) => {
+        const echoAlreadyAdded = prev.some(
+          m => m.id === result.messageId || m.waMessageId === result.messageId,
+        );
         if (echoAlreadyAdded) {
           return prev.filter(m => m.id !== tempId);
         }
         return prev.map(m =>
-          m.id === tempId ? { ...m, id: result.messageId, waMessageId: result.messageId, status: 'sent' } : m,
+          m.id === tempId
+            ? { ...m, id: result.messageId, waMessageId: result.messageId, status: 'sent' }
+            : m,
         );
       });
 
@@ -585,7 +600,7 @@ export function Chats() {
       });
     } catch (err) {
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
-      setMessages(prev => prev.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m)));
+      updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
     } finally {
       setSending(false);
     }
@@ -599,25 +614,44 @@ export function Chats() {
 
   const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
 
-  const formatChatTime = (timestamp?: number) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp * 1000);
-    const today = new Date();
-    if (date.toDateString() === today.toDateString()) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) {
-      return t('chats.yesterday');
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+  const formatChatTime = useCallback(
+    (timestamp?: number) => {
+      if (!timestamp) return '';
+      const date = new Date(timestamp * 1000);
+      const today = new Date();
+      if (date.toDateString() === today.toDateString()) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      if (date.toDateString() === yesterday.toDateString()) {
+        return t('chats.yesterday');
+      }
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    },
+    [t],
+  );
 
   const filteredChats = chats.filter(
     c =>
       c.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       c.id.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
+  // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
+  // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
+  const imageMedia = useMemo<LightboxItem[]>(
+    () =>
+      messages
+        .filter(m => m.type === 'image' && Boolean(getMediaSrc(m.metadata?.media)))
+        .map(m => ({
+          id: m.id,
+          url: getMediaSrc(m.metadata?.media),
+          alt: m.body || m.metadata?.media?.filename || '',
+          senderName: undefined,
+          timestamp: formatChatTime(m.timestamp || Math.floor(new Date(m.createdAt).getTime() / 1000)),
+        })),
+    [messages, formatChatTime],
   );
 
   return (
@@ -755,11 +789,16 @@ export function Chats() {
                 </header>
 
                 {/* Messages body */}
-                <div className="room-messages">
+                <div className="room-messages" ref={messagesContainerRef}>
                   {loadingMessages ? (
                     <div className="messages-loading">
                       <Loader2 className="animate-spin" size={32} />
                       <span>{t('chats.loadingMessages')}</span>
+                    </div>
+                  ) : messagesError ? (
+                    <div className="messages-empty">
+                      <MessageSquare size={32} />
+                      <span>{t('chats.loadMessagesError')}</span>
                     </div>
                   ) : messages.length === 0 ? (
                     <div className="messages-empty">
@@ -778,7 +817,43 @@ export function Chats() {
 
                       const renderMedia = () => {
                         if (msg.type === 'revoked') return null;
+                        // location/call have no downloadable media payload — render them before the
+                        // mediaInfo gate. The raw body (a base64 thumbnail / empty token) is suppressed below.
+                        if (msg.type === 'location') {
+                          // WhatsApp location messages carry a base64 JPEG map-preview thumbnail in `body`.
+                          const thumb = msg.body && msg.body.length > 100 ? `data:image/jpeg;base64,${msg.body}` : '';
+                          return (
+                            <div className="message-location">
+                              {thumb && (
+                                <img
+                                  src={thumb}
+                                  alt=""
+                                  style={{ maxWidth: 220, borderRadius: 8, display: 'block', marginBottom: 4 }}
+                                />
+                              )}
+                              <span className="message-media-omitted">📍 {t('chats.media.location')}</span>
+                            </div>
+                          );
+                        }
+                        if (msg.type === 'call') {
+                          const call = msg.metadata?.call;
+                          const callKey = call?.video
+                            ? call.missed
+                              ? 'callVideoMissed'
+                              : 'callVideo'
+                            : call?.missed
+                              ? 'callMissed'
+                              : 'call';
+                          return (
+                            <div className="message-media-omitted">
+                              {`${call?.video ? '📹' : '📞'} ${t(`chats.media.${callKey}`)}`}
+                            </div>
+                          );
+                        }
                         if (!mediaInfo) return null;
+                        if (mediaInfo.omitted) {
+                          return <div className="message-media-omitted">📎 {t('chats.media.omitted')}</div>;
+                        }
                         const mediaSrc = getMediaSrc(mediaInfo);
                         if (!mediaSrc) return null;
 
@@ -789,8 +864,12 @@ export function Chats() {
                               <div className="message-media-image">
                                 <img
                                   src={mediaSrc}
-                                  alt={mediaInfo.filename || 'WhatsApp Image'}
+                                  alt={mediaInfo.filename || t('chats.media.image')}
                                   className="chat-image-media"
+                                  onClick={() => {
+                                    const idx = imageMedia.findIndex(x => x.id === msg.id);
+                                    if (idx >= 0) setLightboxIndex(idx);
+                                  }}
                                 />
                               </div>
                             );
@@ -826,6 +905,7 @@ export function Chats() {
                       const reactions = msg.metadata?.reactions || {};
                       const hasReactions = Object.keys(reactions).length > 0;
                       const isRevoked = msg.type === 'revoked';
+                      const isMasked = msg.type === 'masked';
 
                       return (
                         <div
@@ -841,7 +921,10 @@ export function Chats() {
                               {/* Quoted message display */}
                               {msg.metadata?.quotedMessage && (
                                 <div className="message-quote-box">
-                                  <div className="quote-body">{msg.metadata.quotedMessage.body}</div>
+                                  <MessageBody
+                                    text={msg.metadata.quotedMessage.body}
+                                    className="quote-body"
+                                  />
                                 </div>
                               )}
 
@@ -849,10 +932,14 @@ export function Chats() {
 
                               {isRevoked ? (
                                 <div className="message-text">{t('chats.messageDeleted')}</div>
+                              ) : isMasked ? (
+                                <div className="message-text message-masked">{t('chats.messageMasked')}</div>
                               ) : (
                                 msg.body &&
-                                (!mediaInfo || msg.body !== mediaInfo.filename) && (
-                                  <div className="message-text">{msg.body}</div>
+                                (!mediaInfo || msg.body !== mediaInfo.filename) &&
+                                msg.type !== 'location' &&
+                                msg.type !== 'call' && (
+                                  <MessageBody text={msg.body} className="message-text" />
                                 )
                               )}
 
@@ -938,7 +1025,6 @@ export function Chats() {
                       );
                     })
                   )}
-                  <div ref={chatBottomRef} />
                 </div>
 
                 {/* Attachment preview banner */}
@@ -1059,6 +1145,13 @@ export function Chats() {
           </main>
         </div>
       )}
+
+      <MediaLightbox
+        items={imageMedia}
+        index={lightboxIndex}
+        onClose={() => setLightboxIndex(null)}
+        onNavigate={setLightboxIndex}
+      />
     </div>
   );
 }

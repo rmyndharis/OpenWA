@@ -81,6 +81,61 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
     expect(BLANK_SHADOWED_ENV_KEYS).toContain('DATABASE_PASSWORD');
   });
 
+  it('covers every dashboard-switchable infra key so a blank compose forward lets .env.generated win (#488)', () => {
+    // Database / storage / redis selection + their detail fields. With these blank-forwarded by
+    // compose, a dashboard switch saved to .env.generated actually applies at runtime (like ENGINE_TYPE),
+    // while a real host value still pins.
+    for (const key of [
+      'DATABASE_TYPE',
+      'DATABASE_HOST',
+      'DATABASE_PORT',
+      'DATABASE_USERNAME',
+      'DATABASE_NAME',
+      'STORAGE_TYPE',
+      'STORAGE_LOCAL_PATH',
+      'S3_BUCKET',
+      'S3_ENDPOINT',
+      'S3_REGION',
+      'S3_ACCESS_KEY_ID',
+      'S3_SECRET_ACCESS_KEY',
+      // legacy S3 names forwarded blank for backward compat — must also be cleared when blank
+      'S3_ACCESS_KEY',
+      'S3_SECRET_KEY',
+      'REDIS_ENABLED',
+      'REDIS_HOST',
+      'REDIS_PORT',
+    ]) {
+      expect(BLANK_SHADOWED_ENV_KEYS).toContain(key);
+    }
+  });
+
+  it.each([
+    ['DATABASE_TYPE', 'postgres'],
+    ['STORAGE_TYPE', 's3'],
+    ['REDIS_ENABLED', 'true'],
+  ])('lets .env.generated supply %s when the forwarded value is blank, but a host value pins', (key, fileValue) => {
+    const prev = process.env[key];
+    try {
+      withGenerated(`${key}=${fileValue}`, genPath => {
+        // blank forward (operator set nothing) → cleared → file wins
+        process.env[key] = '';
+        clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+        dotenv.config({ path: genPath, override: false });
+        expect(process.env[key]).toBe(fileValue);
+      });
+      // real host value → survives → pins (ignores the file)
+      withGenerated(`${key}=${fileValue}`, genPath => {
+        process.env[key] = 'host-pinned';
+        clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+        dotenv.config({ path: genPath, override: false });
+        expect(process.env[key]).toBe('host-pinned');
+      });
+    } finally {
+      if (prev === undefined) delete process.env[key];
+      else process.env[key] = prev;
+    }
+  });
+
   it('lets .env.generated supply the password when the forwarded DATABASE_PASSWORD is blank', () => {
     withGenerated('DATABASE_PASSWORD=s3cret', genPath => {
       process.env[KEY] = ''; // compose `${DATABASE_PASSWORD:-}` with nothing set on the host

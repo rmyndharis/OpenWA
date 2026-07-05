@@ -27,4 +27,11 @@ describe('AddBaileysStoredMessages migration', () => {
 
     await runner.release();
   });
+
+  it('down() does not throw when the named indexes were never created (synchronize-bootstrapped DB)', async () => {
+    const runner = ds.createQueryRunner();
+    // No up(): the named indexes never existed (a synchronize-built schema uses hash-named ones).
+    await expect(new AddBaileysStoredMessages1781000000000().down(runner)).resolves.toBeUndefined();
+    await runner.release();
+  });
 });

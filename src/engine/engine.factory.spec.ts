@@ -33,6 +33,18 @@ describe('EngineFactory', () => {
       remember: jest.fn().mockResolvedValue(undefined),
     }) as unknown as LidMappingStoreService;
 
+  it('refuses to create an engine for an unsafe session name (path-traversal into the auth dir)', () => {
+    const createEngine = jest.fn().mockReturnValue({});
+    const pluginLoader = {
+      getPlugin: jest.fn().mockReturnValue({ instance: { type: PluginType.ENGINE, createEngine } }),
+    } as unknown as PluginLoaderService;
+    const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
+
+    expect(() => factory.create({ sessionId: '../../etc' })).toThrow(/unsafe session name/i);
+    expect(() => factory.create({ sessionId: 'a/b' })).toThrow(/unsafe session name/i);
+    expect(createEngine).not.toHaveBeenCalled();
+  });
+
   it('passes ONLY engine-neutral fields to createEngine (no Puppeteer leak)', () => {
     const createEngine = jest.fn().mockReturnValue({});
     const pluginInstance = { type: PluginType.ENGINE, createEngine };
@@ -89,5 +101,21 @@ describe('EngineFactory', () => {
 
     const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
     expect(() => factory.create({ sessionId: 'sess-2' })).not.toThrow();
+  });
+
+  it('throws instead of silently building whatsapp-web.js when a non-wwebjs engine has no plugin', () => {
+    // The legacy fallback only builds wwebjs; reaching it with ENGINE_TYPE=baileys must fail loudly
+    // rather than run the wrong engine.
+    const pluginLoader = {
+      getPlugin: jest.fn().mockReturnValue(undefined),
+    } as unknown as PluginLoaderService;
+
+    const factory = new EngineFactory(
+      buildConfigService({ 'engine.type': 'baileys' }),
+      pluginLoader,
+      buildMessageStore(),
+      buildLidStore(),
+    );
+    expect(() => factory.create({ sessionId: 'sess-b' })).toThrow(/baileys/i);
   });
 });

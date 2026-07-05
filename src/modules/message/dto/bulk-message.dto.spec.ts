@@ -26,3 +26,20 @@ describe('SendBulkMessageDto nested media validation', () => {
     expect((await validateBulk(imageItem({ base64: 12345 }))).length).toBeGreaterThan(0);
   });
 });
+
+const textItem = (text: string, extra: Record<string, unknown> = {}) => ({
+  messages: [{ chatId: 'c@c.us', type: 'text', content: { text }, ...extra }],
+});
+
+describe('SendBulkMessageDto content length + variables validation', () => {
+  it('accepts text at the 4096 cap and rejects beyond it (parity with single-send)', async () => {
+    expect(await validateBulk(textItem('a'.repeat(4096)))).toHaveLength(0);
+    expect((await validateBulk(textItem('a'.repeat(4097)))).length).toBeGreaterThan(0);
+  });
+
+  it('accepts an object variables map and rejects a non-object', async () => {
+    expect(await validateBulk(textItem('hi', { variables: { name: 'Alice' } }))).toHaveLength(0);
+    expect((await validateBulk(textItem('hi', { variables: 'oops' }))).length).toBeGreaterThan(0);
+    expect((await validateBulk(textItem('hi', { variables: [1, 2, 3] }))).length).toBeGreaterThan(0);
+  });
+});

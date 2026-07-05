@@ -1,4 +1,4 @@
-import { isNetHostAllowed, performPluginFetch } from './plugin-net';
+import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import type { withSafeFetch } from '../../common/security/ssrf-guard';
 
 /** A stand-in for withSafeFetch that hands `use` a canned Response and records the init it was given. */
@@ -94,5 +94,54 @@ describe('performPluginFetch', () => {
     const fetcher = fakeSafeFetch(cannedResponse('x', { 'content-length': big }), sink);
 
     await expect(performPluginFetch('https://api.example.com/t', {}, { fetch: fetcher })).rejects.toThrow(/cap/i);
+  });
+
+  it('rejects once the global concurrent-fetch cap is reached, and recovers after slots free up', async () => {
+    // Each in-flight fetch buffers up to the body cap host-side, so total buffering must stay bounded.
+    // Hold all slots open with a gated fetch, prove the next call rejects fast, then drain and recover.
+    let release!: () => void;
+    const gate = new Promise<void>(r => (release = r));
+    const blocking = (<T>(_url: string, _init: RequestInit, use: (r: Response) => Promise<T> | T): Promise<T> =>
+      gate.then(() => use(cannedResponse('{}', {})))) as typeof withSafeFetch;
+
+    const inflight: Promise<unknown>[] = [];
+    for (let i = 0; i < 16; i++) {
+      inflight.push(performPluginFetch('https://api.example.com/t', {}, { fetch: blocking }));
+    }
+    // The 17th call reserves no slot — it rejects immediately without awaiting the gate.
+    await expect(performPluginFetch('https://api.example.com/t', {}, { fetch: blocking })).rejects.toThrow(
+      /too many concurrent/i,
+    );
+
+    release();
+    await Promise.all(inflight);
+
+    // Slots freed → a fresh fetch succeeds again.
+    const sink: { init?: RequestInit } = {};
+    await expect(
+      performPluginFetch('https://api.example.com/t', {}, { fetch: fakeSafeFetch(cannedResponse('{}', {}), sink) }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe('effectiveNetAllow', () => {
+  it('adds the host of each named config URL to the static allowlist', () => {
+    expect(effectiveNetAllow(['api.static.com'], ['baseUrl'], { baseUrl: 'https://chat.acme.com' })).toEqual([
+      'api.static.com',
+      'chat.acme.com',
+    ]);
+  });
+  it('ignores missing / non-string / non-https / credentialed config values', () => {
+    expect(effectiveNetAllow([], ['baseUrl'], {})).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 42 })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'not a url' })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'http://x' })).toEqual([]); // https-only
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://u:p@x' })).toEqual([]); // no credentials
+  });
+  it("never admits the '*' wildcard sentinel from a config value, and preserves an explicit port", () => {
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://*' })).toEqual([]); // bare '*' would open all hosts
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://%2A' })).toEqual([]); // encoded '*' too
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://*:443/x' })).toEqual([]);
+    expect(effectiveNetAllow([], ['baseUrl'], { baseUrl: 'https://host.com:8443' })).toEqual(['host.com:8443']);
   });
 });

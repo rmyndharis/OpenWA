@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { StatsService, timeSeriesTimestampSql, hourBucketSql } from './stats.service';
+import { StatsService, timeSeriesTimestampSql, hourBucketSql, maxCreatedAtSql } from './stats.service';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 
@@ -18,6 +18,14 @@ describe('stats SQL dialect helpers', () => {
     expect(timeSeriesTimestampSql('postgres', 'hour')).toBe(`to_char(m."createdAt", 'YYYY-MM-DD HH24:00:00')`);
     expect(timeSeriesTimestampSql('postgres', 'day')).toBe(`to_char(m."createdAt", 'YYYY-MM-DD')`);
     expect(hourBucketSql('postgres')).toBe(`CAST(EXTRACT(HOUR FROM m."createdAt") AS INTEGER)`);
+  });
+
+  it('formats MAX(createdAt) to an identical text timestamp on both engines (lastActive parity)', () => {
+    // Postgres returns a timestamp the driver hydrates to a JS Date (serialized to a different ISO
+    // string than SQLite's stored text); pinning both to the same to_char/strftime format keeps the
+    // lastActive field stable regardless of the backing database.
+    expect(maxCreatedAtSql('sqlite')).toBe(`strftime('%Y-%m-%d %H:%M:%S', MAX(m.createdAt))`);
+    expect(maxCreatedAtSql('postgres')).toBe(`to_char(MAX(m."createdAt"), 'YYYY-MM-DD HH24:MI:SS')`);
   });
 });
 
@@ -76,6 +84,19 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     expect(totals.received).toBe(1);
     // The hour bucket must be the zero-padded chronological label strftime produces.
     expect(stats.timeSeries[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:00:00$/);
+  });
+
+  it('getMessageStats topChats surfaces chatName via the MAX aggregate (ignoring null rows)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ chatId: 'alice@c.us', chatName: 'Alice', direction: MessageDirection.INCOMING });
+    await seedMessage({ chatId: 'alice@c.us', chatName: undefined, direction: MessageDirection.INCOMING });
+
+    const stats = await service.getMessageStats('24h');
+    const chat = stats.topChats.find(c => c.chatId === 'alice@c.us');
+    // MAX(m.chatName) across the group returns the non-null name, so a legacy null row can't blank it.
+    expect(chat?.chatName).toBe('Alice');
   });
 
   it('time-series query never groups by the bare reserved word `timestamp` (Postgres-safe)', async () => {
@@ -145,6 +166,46 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
         expect(sql).not.toMatch(new RegExp(`ORDER BY\\s+["']?${kw}["']?\\s*(,|$|\\s|ASC|DESC)`, 'i'));
       }
     }
+  });
+
+  it('no analytics query orders/groups by an unquoted mixed-case alias (Postgres case-folds it → 42703)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ direction: MessageDirection.OUTGOING });
+
+    Object.defineProperty(service, 'dataDbType', { get: () => 'postgres', configurable: true });
+
+    const captured: string[] = [];
+    const repo = ds.getRepository(Message);
+    const origCreate = repo.createQueryBuilder.bind(repo);
+    jest.spyOn(repo, 'createQueryBuilder').mockImplementation((alias?: string) => {
+      const qb = origCreate(alias);
+      jest.spyOn(qb, 'getRawMany').mockImplementation(() => {
+        captured.push(qb.getQuery());
+        return Promise.resolve([]);
+      });
+      return qb;
+    });
+
+    await service.getMessageStats('24h'); // time-series + byType + bySession + topChats
+    await service.getSessionStats('s1');
+
+    expect(captured.length).toBeGreaterThan(0);
+    // Postgres folds an UNQUOTED identifier to lowercase; a mixed-case alias defined with quotes
+    // (COUNT(*) AS "messageCount") then no longer matches a bare `ORDER BY messageCount` → it looks for
+    // "messagecount" and 42703s. SQLite is case-insensitive so it never surfaced. Flag any bare
+    // (unquoted) ORDER BY / GROUP BY term that contains an uppercase letter.
+    const offenders: string[] = [];
+    for (const sql of captured) {
+      for (const clause of sql.match(/\b(?:ORDER|GROUP) BY\s+[^\s,]+/gi) ?? []) {
+        const term = clause.replace(/\b(?:ORDER|GROUP) BY\s+/i, '');
+        // Only a BARE identifier (no quotes, no dots, no parens) folds — `COUNT(*)`, `to_char(...)`,
+        // `"m"."chatId"` are all safe; `messageCount` is the landmine.
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(term) && /[A-Z]/.test(term)) offenders.push(`${clause}  ::  ${sql}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('getSessionStats returns 24 hourly buckets with the right counts', async () => {

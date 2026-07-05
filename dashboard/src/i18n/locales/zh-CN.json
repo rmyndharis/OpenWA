@@ -53,7 +53,8 @@
     "logout": "退出登录",
     "refresh": "刷新",
     "errorGeneric": "发生错误",
-    "unknownError": "未知错误"
+    "unknownError": "未知错误",
+    "retry": "重试"
   },
   "theme": {
     "light": "浅色",
@@ -77,6 +78,15 @@
     "logs": "日志"
   },
   "chats": {
+    "media": {
+      "location": "位置",
+      "call": "通话",
+      "callMissed": "未接来电",
+      "callVideo": "视频通话",
+      "callVideoMissed": "未接视频通话",
+      "omitted": "媒体",
+      "image": "图片"
+    },
     "subtitle": "实时发送和回复 WhatsApp 消息",
     "noSessionsTitle": "没有已连接的会话",
     "noSessionsDesc": "请先从 <1>会话</1> 菜单连接一个 WhatsApp 会话，才能使用聊天功能。",
@@ -108,6 +118,7 @@
     "placeholderDesc": "从左侧边栏选择一个活跃聊天，即可开始阅读和发送 WhatsApp 消息。",
     "deleteConfirm": "为所有人删除此消息？",
     "messageDeleted": "🚫 此消息已被删除",
+    "messageMasked": "🔒 WhatsApp 已对关联设备隐藏此消息 — 请在主手机上查看",
     "errors": {
       "loadSessions": "加载会话失败",
       "loadChats": "加载聊天失败",
@@ -116,7 +127,8 @@
       "send": "发送消息失败",
       "react": "回应消息失败",
       "delete": "删除消息失败"
-    }
+    },
+    "loadMessagesError": "无法加载消息。请检查服务器日志。"
   },
   "errorBoundary": {
     "title": "出了点问题",
@@ -173,7 +185,8 @@
       "sent": "已发送",
       "received": "已接收",
       "messages": "消息",
-      "empty": "此期间没有消息活动。"
+      "empty": "此期间没有消息活动。",
+      "error": "无法加载消息分析数据。请检查服务器日志。"
     }
   },
   "sessionStatus": {
@@ -252,7 +265,7 @@
       "stop": "停止",
       "reconnect": "重新连接",
       "delete": "删除",
-      "killStuck": "Kill Stuck"
+      "killStuck": "终止卡死会话"
     },
     "toasts": {
       "readyTitle": "会话就绪",
@@ -269,14 +282,32 @@
       "error": "错误"
     },
     "forceKill": {
-      "title": "Kill Stuck Session",
-      "message": "Are you sure you want to force-kill session \"{{name}}\"?",
-      "warning": "This will forcefully terminate the WhatsApp browser process. The session may need to be re-scanned on restart.",
-      "confirm": "Kill Session",
-      "successTitle": "Session Killed",
-      "success": "Session has been force-killed. You can restart it now.",
-      "failedTitle": "Force-Kill Failed",
-      "failed": "Failed to force-kill the session."
+      "title": "终止卡死的会话",
+      "message": "确定要强制终止会话“{{name}}”吗？",
+      "warning": "此操作将强制结束 WhatsApp 浏览器进程。重启后该会话可能需要重新扫码。",
+      "confirm": "终止会话",
+      "successTitle": "会话已终止",
+      "success": "会话已被强制终止。您现在可以重新启动它。",
+      "failedTitle": "强制终止失败",
+      "failed": "强制终止会话失败。"
+    },
+    "pairing": {
+      "tabQr": "QR 码",
+      "tabPhone": "使用电话号码关联",
+      "phoneLabel": "电话号码",
+      "phonePlaceholder": "例如：919876543210",
+      "phoneHint": "仅填数字（不含 +、空格或连字符），使用国际格式（国家/地区代码 + 号码）。",
+      "invalidPhone": "请输入有效的电话号码：6–15 位数字，国家/地区代码在前，不含任何符号。",
+      "generateButton": "生成配对码",
+      "generating": "正在生成配对码...",
+      "codeLabel": "您的配对码",
+      "changeNumber": "更换号码 / 重新获取配对码",
+      "instructions": "配对说明",
+      "step1": "<strong>1.</strong> 在手机上打开 WhatsApp",
+      "step2": "<strong>2.</strong> 点击<strong>菜单</strong>或<strong>设置</strong>，然后选择<strong>已关联设备</strong>",
+      "step3": "<strong>3.</strong> 点击<strong>关联设备</strong>，然后点击<strong>改用电话号码关联</strong>",
+      "step4": "<strong>4.</strong> 在手机上输入上方显示的 8 位字符配对码",
+      "waitingConnection": "正在等待您的手机完成关联…"
     }
   },
   "webhooks": {
@@ -359,48 +390,48 @@
     }
   },
   "templates": {
-    "title": "Templates",
-    "subtitle": "Create reusable message templates for each WhatsApp session",
-    "createTitle": "Create Template",
-    "editTitle": "Edit Template",
-    "newTemplate": "New Template",
-    "createTemplate": "Create Template",
-    "saveChanges": "Save Changes",
-    "viewOnly": "View Only",
-    "noSessions": "No sessions",
-    "sessionHint": "Saved under {{name}}",
-    "namePlaceholder": "e.g., order-confirmation",
-    "header": "Header",
-    "headerPlaceholder": "Optional intro line",
-    "body": "Body",
-    "bodyPlaceholder": "Hi {{customer}}, your order {{orderId}} is ready.",
-    "footer": "Footer",
-    "footerPlaceholder": "Optional closing line",
-    "previewTitle": "Preview",
-    "previewValuePlaceholder": "Sample value",
-    "previewEmpty": "Start writing a template to preview it here.",
-    "noPlaceholders": "Use {{name}} placeholders to test substitutions.",
-    "savedTitle": "Saved Templates",
-    "count": "{{count}} total",
-    "deleteTitle": "Delete Template",
-    "deleteConfirm": "Delete template \"{{name}}\"? This action cannot be undone.",
+    "title": "模板",
+    "subtitle": "为每个 WhatsApp 会话创建可复用的消息模板",
+    "createTitle": "创建模板",
+    "editTitle": "编辑模板",
+    "newTemplate": "新建模板",
+    "createTemplate": "创建模板",
+    "saveChanges": "保存更改",
+    "viewOnly": "仅查看",
+    "noSessions": "暂无会话",
+    "sessionHint": "保存在 {{name}} 下",
+    "namePlaceholder": "例如：order-confirmation",
+    "header": "页眉",
+    "headerPlaceholder": "可选的开头语",
+    "body": "正文",
+    "bodyPlaceholder": "您好 {{customer}}，您的订单 {{orderId}} 已就绪。",
+    "footer": "页脚",
+    "footerPlaceholder": "可选的结尾语",
+    "previewTitle": "预览",
+    "previewValuePlaceholder": "示例值",
+    "previewEmpty": "开始编写模板后即可在此预览。",
+    "noPlaceholders": "使用 {{name}} 占位符可测试替换效果。",
+    "savedTitle": "已保存的模板",
+    "count": "共 {{count}} 个",
+    "deleteTitle": "删除模板",
+    "deleteConfirm": "确定删除模板“{{name}}”吗？此操作无法撤销。",
     "actions": {
-      "copyName": "Copy template name"
+      "copyName": "复制模板名称"
     },
     "empty": {
-      "title": "No templates saved",
-      "description": "Create a reusable template to speed up common replies and notifications.",
-      "noSessionsTitle": "No sessions available",
-      "noSessionsDesc": "Create a WhatsApp session before adding templates."
+      "title": "暂无已保存的模板",
+      "description": "创建可复用的模板，加快处理常见回复和通知。",
+      "noSessionsTitle": "暂无可用会话",
+      "noSessionsDesc": "添加模板前请先创建 WhatsApp 会话。"
     },
     "toasts": {
-      "created": "Template created successfully",
-      "createFailed": "Failed to create template: {{message}}",
-      "updated": "Template updated successfully",
-      "updateFailed": "Failed to update template: {{message}}",
-      "deleted": "Template deleted successfully",
-      "deleteFailed": "Failed to delete template: {{message}}",
-      "copied": "Template name copied"
+      "created": "模板创建成功",
+      "createFailed": "创建模板失败：{{message}}",
+      "updated": "模板更新成功",
+      "updateFailed": "更新模板失败：{{message}}",
+      "deleted": "模板删除成功",
+      "deleteFailed": "删除模板失败：{{message}}",
+      "copied": "已复制模板名称"
     }
   },
   "apiKeys": {
@@ -577,7 +608,14 @@
       "sessionDataPath": "会话数据路径",
       "browserArgs": "浏览器参数",
       "noBrowser": "该引擎通过 WebSocket 连接——没有浏览器，因此没有无头模式或浏览器参数设置。活动引擎将在重启后生效。",
-      "restartNote": "切换引擎将在服务器重启后生效。"
+      "restartNote": "切换引擎将在服务器重启后生效。",
+      "webVersion": "WhatsApp Web 构建版本",
+      "webVersionNative": "自动（whatsapp-web.js 默认）",
+      "webVersionSource": {
+        "pinned": "通过 WWEBJS_WEB_VERSION 锁定",
+        "auto": "自动解析，当前已知可用的构建版本",
+        "native": "whatsapp-web.js 原生自动选择"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -588,16 +626,16 @@
       "queueTitle": "启用 BullMQ 队列系统",
       "queueDesc": "使用消息队列可靠地投递消息和 Webhook",
       "statsTitle": "队列统计",
-      "messageQueue": "消息队列",
       "webhookQueue": "Webhook 队列",
       "pending": "待处理",
       "completed": "已完成",
       "failed": "失败",
-      "clearFailed": "清除失败任务",
       "viewBullMq": "查看 Bull MQ 仪表盘",
       "disabledTitle": "Redis 已禁用",
       "disabledDesc": "启用 Redis 以使用缓存、会话存储和 BullMQ 消息队列。",
-      "passwordOptional": "（可选）"
+      "passwordOptional": "（可选）",
+      "bullMqUrlCopied": "已复制 Bull MQ 仪表板网址",
+      "bullMqUrlHint": "请使用 ADMIN API 密钥打开 — 浏览器标签页无法进行身份验证。"
     },
     "storage": {
       "title": "存储配置",
@@ -613,7 +651,8 @@
       "accessKey": "访问密钥",
       "secretKey": "秘密密钥",
       "endpoint": "自定义端点（可选）",
-      "endpointHint": "适用于 MinIO 或其他兼容 S3 的服务"
+      "endpointHint": "适用于 MinIO 或其他兼容 S3 的服务",
+      "s3Unreachable": "S3（无法连接）"
     },
     "statusLabels": {
       "connected": "已连接",
@@ -638,7 +677,25 @@
     },
     "toasts": {
       "saveFailed": "保存失败"
-    }
+    },
+    "envPinNote": "已由环境变量锁定 —— 此为当前运行值；在取消该变量之前，仪表盘的更改不会生效。",
+    "migration": {
+      "title": "请注意 —— 此操作将更改数据后端",
+      "dbWarning": "新数据库将从空白状态开始。请立即（在仍使用旧数据库时）下载当前数据的备份，然后在重启后恢复。",
+      "storageWarning": "现有的媒体文件不会自动迁移到新的存储后端；它们将保留在原位置。",
+      "downloadBackup": "请先下载备份",
+      "backupTitle": "数据备份与恢复",
+      "backupHint": "在切换数据库之前，将所有数据导出为 JSON，然后在切换后导入。备份中包含明文的 webhook 密钥和代理凭据 —— 请妥善保管，并在恢复完成后将其删除。",
+      "export": "导出数据",
+      "import": "导入数据",
+      "exportFailed": "无法导出数据",
+      "importFailed": "无法导入数据",
+      "importOk": "数据已导入",
+      "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
+      "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
+      "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
+    },
+    "statusLoadError": "无法加载当前基础设施状态。请刷新重试。"
   },
   "plugins": {
     "title": "插件",
@@ -718,6 +775,65 @@
       "selectSession": "选择一个会话…",
       "saveOverride": "保存覆盖配置",
       "clearOverride": "清除覆盖配置"
+    },
+    "instances": {
+      "title": "实例",
+      "description": "为此集成按账户配置实例。每个实例都有自己的签名密钥和接入 URL。",
+      "create": "创建实例",
+      "empty": "暂无实例。创建一个以获取接入 URL 和密钥。",
+      "loadError": "加载实例失败。",
+      "allSessions": "所有会话",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "form": {
+        "instanceId": "实例 ID",
+        "instanceIdPlaceholder": "例如 acme-support",
+        "instanceIdHint": "字母、数字、连字符、下划线（最多 64 个字符）。",
+        "sessionScope": "会话范围（可选）",
+        "sessionScopePlaceholder": "留空表示所有会话",
+        "verifyToken": "验证令牌（可选）",
+        "verifyTokenPlaceholder": "服务商在验证时回传的令牌",
+        "config": "配置（可选 JSON）",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "实例已创建",
+        "hint": "请立即复制密钥——它只会显示一次。",
+        "secret": "签名密钥",
+        "ingressUrls": "接入 URL"
+      },
+      "regenerate": {
+        "title": "重新生成密钥",
+        "confirm": "要重新生成 {{id}} 的签名密钥吗？当前密钥将立即失效。",
+        "action": "重新生成"
+      },
+      "edit": { "title": "编辑 {{id}}" },
+      "delete": {
+        "title": "删除实例",
+        "confirm": "要删除实例 {{id}} 吗？其接入 URL 和密钥将立即失效。",
+        "action": "删除"
+      },
+      "actions": {
+        "regenerate": "重新生成密钥",
+        "edit": "编辑",
+        "delete": "删除",
+        "copy": "复制",
+        "save": "保存",
+        "enable": "启用",
+        "disable": "禁用"
+      },
+      "errors": {
+        "invalidId": "实例 ID 只能包含字母、数字、连字符或下划线（最多 64 个字符）。",
+        "invalidJson": "配置必须是有效的 JSON。",
+        "duplicateId": "已存在具有该 ID 的实例。"
+      },
+      "toasts": {
+        "created": "实例已创建",
+        "updated": "实例已更新",
+        "deleted": "实例已删除",
+        "secretRegenerated": "密钥已重新生成",
+        "actionFailed": "操作失败"
+      }
     }
   }
 }

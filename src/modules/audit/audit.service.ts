@@ -5,6 +5,9 @@ import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entit
 import { ApiKey } from '../auth/entities/api-key.entity';
 import { createLogger } from '../../common/services/logger.service';
 
+/** Upper bound on a single audit-log page, so a large `limit` can't load the whole table at once. */
+export const MAX_AUDIT_PAGE_SIZE = 200;
+
 interface AuditContext {
   apiKey?: ApiKey;
   sessionId?: string;
@@ -131,11 +134,17 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       where.createdAt = Between(options.startDate, options.endDate);
     }
 
+    // Clamp the page size so an arbitrarily large `limit` can't load the whole table into one response.
+    const requested = options.limit && options.limit > 0 ? options.limit : 50;
+    const take = Math.min(requested, MAX_AUDIT_PAGE_SIZE);
+
     const [data, total] = await this.auditRepository.findAndCount({
       where,
       order: { createdAt: 'DESC' },
-      take: options.limit || 50,
-      skip: options.offset || 0,
+      take,
+      // Clamp to a non-negative skip: a negative offset (e.g. from an unvalidated `?offset=-5`) would
+      // otherwise reach the query driver verbatim.
+      skip: options.offset && options.offset > 0 ? options.offset : 0,
     });
 
     return { data, total };

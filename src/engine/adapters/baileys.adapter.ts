@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as qrcode from 'qrcode';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from '@whiskeysockets/baileys';
-import { buildIncomingMessageFromBaileys, mapBaileysStatus } from './baileys-message-mapper';
+import { buildIncomingMessageFromBaileys, extractBaileysBody, mapBaileysStatus } from './baileys-message-mapper';
 import { mapBaileysGroup, mapBaileysGroupInfo } from './baileys-group-mapper';
 import type { ILogger } from '@whiskeysockets/baileys/lib/Utils/logger.js';
 import {
@@ -25,6 +25,7 @@ import {
   MessageReaction,
   MessageResult,
   PaginatedProducts,
+  PollInput,
   Product,
   ProductQueryOptions,
   ReactionEvent,
@@ -32,7 +33,7 @@ import {
   Status,
   StatusResult,
   ChatSummary,
-  TextStatusOptions,
+  StatusPostOptions,
 } from '../interfaces/whatsapp-engine.interface';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -41,11 +42,15 @@ import { MessageNotFoundError } from '../../common/errors/message-not-found.erro
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
+import { buildVCard } from './vcard';
 import {
   capInboundMedia,
+  coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
-  coerceDeclaredSize,
+  inboundMediaTimeoutMs,
+  isMediaDownloadEnabled,
+  withInboundDownloadTimeout,
 } from './inbound-media-cap';
 import { ConcurrencyLimiter } from './concurrency-limiter';
 
@@ -185,7 +190,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     }
 
     // An internal reconnect (transient drop) overwrites this.sock WITHOUT going through
-    // disconnect/logout/destroy, so the previous socket's WebSocket and the 9 ev listeners we
+    // disconnect/logout/destroy, so the previous socket's WebSocket and the 10 ev listeners we
     // register below would leak on every reconnect. Tear the prior socket down first. Detach OUR
     // connection.update listener BEFORE end(): Baileys' own end() synchronously emits a synthetic
     // connection.update {connection:'close'}, which — if still wired — would re-enter
@@ -202,6 +207,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         previous.ev.removeAllListeners('chats.upsert');
         previous.ev.removeAllListeners('chats.update');
         previous.ev.removeAllListeners('messaging-history.set');
+        previous.ev.removeAllListeners('chats.phoneNumberShare');
         previous.end(undefined);
       } catch {
         // end() may already have run from Baileys' own close handler — a safe no-op.
@@ -260,7 +266,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       const h = history as unknown as { lidPnMappings?: { lid: string; pn: string }[]; syncType?: unknown };
       const lidPnMappings = h.lidPnMappings;
       this.sessionStore.addLidMappings(lidPnMappings ?? []);
-      this.captureHistoryMessages(history.messages ?? []);
+      void this.captureHistoryMessages(history.messages ?? []);
       this.logger.debug('History sync received', {
         action: 'baileys_history_set',
         sessionId: this.config.sessionId,
@@ -464,9 +470,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   // ----- Messaging -----
 
-  async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
+  async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
-    const sent = await this.sock!.sendMessage(chatId, { text });
+    const options = this.withEphemeral(chatId);
+    const content = { text, ...this.withMentions(mentions) };
+    const sent = options
+      ? await this.sock!.sendMessage(chatId, content, options)
+      : await this.sock!.sendMessage(chatId, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
@@ -497,25 +507,42 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendChatState(chatId: string, state: ChatState): Promise<void> {
     this.ensureReady();
     const presence = state === 'typing' ? 'composing' : state === 'recording' ? 'recording' : 'paused';
-    await this.sock!.sendPresenceUpdate(presence, chatId);
+    try {
+      await this.sock!.sendPresenceUpdate(presence, chatId);
+    } catch (error) {
+      // Presence is best-effort — a failure here must never surface as a 500 on the direct typing
+      // endpoint or MCP tool (mirrors the whatsapp-web.js adapter; #583 R4). A migrated contact can
+      // yield `No LID for user` on the presence path even when the actual send succeeds.
+      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, String(error));
+    }
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { image: data, caption: media.caption, mimetype });
+    return this.sendContent(chatId, {
+      image: data,
+      caption: media.caption,
+      mimetype,
+      ...this.withMentions(media.mentions),
+    });
   }
 
   async sendVideoMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { video: data, caption: media.caption, mimetype });
+    return this.sendContent(chatId, {
+      video: data,
+      caption: media.caption,
+      mimetype,
+      ...this.withMentions(media.mentions),
+    });
   }
 
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
     const { data, mimetype } = await this.resolveMediaBuffer(media);
-    return this.sendContent(chatId, { audio: data, mimetype, ptt: false });
+    return this.sendContent(chatId, { audio: data, mimetype, ptt: media.ptt ?? false });
   }
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -526,6 +553,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       mimetype,
       fileName: media.filename ?? 'file',
       caption: media.caption,
+      ...this.withMentions(media.mentions),
     });
   }
 
@@ -550,7 +578,20 @@ export class BaileysAdapter implements IWhatsAppEngine {
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
     this.ensureReady();
     return this.sendContent(chatId, {
-      contacts: { displayName: contact.name, contacts: [{ vcard: this.buildVCard(contact) }] },
+      contacts: { displayName: contact.name, contacts: [{ vcard: buildVCard(contact) }] },
+    });
+  }
+
+  async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
+    this.ensureReady();
+    // selectableCount 1 = single choice; 0 = no limit, which is how WhatsApp expresses
+    // "allow multiple answers". Baileys generates the poll's messageSecret itself.
+    return this.sendContent(chatId, {
+      poll: {
+        name: poll.name,
+        values: poll.options,
+        selectableCount: poll.allowMultipleAnswers ? 0 : 1,
+      },
     });
   }
 
@@ -639,6 +680,16 @@ export class BaileysAdapter implements IWhatsAppEngine {
    */
   private toEngineParticipants(participants: string[]): string[] {
     return participants.map(p => this.sessionStore.toEngineJid(p));
+  }
+
+  /**
+   * Build the `{ mentions }` slice of a Baileys message content, de-normalizing neutral `@c.us` WIDs to
+   * the engine dialect. Returns an empty object when none are given so the content is byte-identical to
+   * the pre-#530 send (no stray `mentions` key). The text must still contain the `@<number>` token for
+   * WhatsApp to render the tag — that is the caller's responsibility.
+   */
+  private withMentions(mentions?: string[]): { mentions?: string[] } {
+    return mentions?.length ? { mentions: this.toEngineParticipants(mentions) } : {};
   }
 
   async leaveGroup(groupId: string): Promise<void> {
@@ -796,17 +847,44 @@ export class BaileysAdapter implements IWhatsAppEngine {
   getContactStatus(_contactId: string): Promise<Status[]> {
     return this.unsupported('getContactStatus');
   }
-  postTextStatus(_text: string, _options?: TextStatusOptions): Promise<StatusResult> {
-    return this.unsupported('postTextStatus');
+  postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postStatus({ text }, options);
   }
-  postImageStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    return this.unsupported('postImageStatus');
+  postImageStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus('image', media, options);
   }
-  postVideoStatus(_media: MediaInput, _caption?: string): Promise<StatusResult> {
-    return this.unsupported('postVideoStatus');
+  postVideoStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus('video', media, options);
   }
-  deleteStatus(_statusId: string): Promise<void> {
-    return this.unsupported('deleteStatus');
+  private async postMediaStatus(
+    kind: 'image' | 'video',
+    media: MediaInput,
+    options: StatusPostOptions,
+  ): Promise<StatusResult> {
+    this.ensureReady();
+    const { data, mimetype } = await this.resolveMediaBuffer(media);
+    const content: AnyMessageContent =
+      kind === 'image'
+        ? { image: data, caption: options.caption, mimetype }
+        : { video: data, caption: options.caption, mimetype };
+    return this.postStatus(content, options);
+  }
+  /**
+   * Best-effort status revoke. Unlike deleteMessage, status messages are NOT persisted, so the revoke
+   * key must be constructed from statusId alone (no messageStore lookup). The participant is the
+   * engine-dialect self JID (`<me>@s.whatsapp.net`). The revoke shape is empirically UNVERIFIED — the
+   * live spike only tested posting; if WhatsApp rejects it, fall back to EngineNotSupportedError.
+   */
+  async deleteStatus(statusId: string): Promise<void> {
+    this.ensureReady();
+    await this.sock!.sendMessage('status@broadcast', {
+      delete: {
+        remoteJid: 'status@broadcast',
+        fromMe: true,
+        id: statusId,
+        participant: this.sessionStore.toEngineJid(this.normalizedSelfJid()),
+      },
+    });
   }
   getCatalog(): Promise<Catalog | null> {
     return this.unsupported('getCatalog');
@@ -874,7 +952,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // sender resolves to its phone in this message and for later contact lookups (#362). The pairs
       // also write through to the persistent lid->phone table via addLidMappings.
       this.sessionStore.recordKeyLidMappings(msg.key);
-      const contentType = b.getContentType(msg.message ?? undefined);
+      // A live disappearing message (also viewOnce / documentWithCaption / edited) arrives wrapped, so the
+      // raw `getContentType` returns the OUTER wrapper key (e.g. 'ephemeralMessage') and downstream type/
+      // body/media/location detection would miss the real inner content. Normalize ONCE so the true inner
+      // type drives routing here AND mapMessage. normalizeMessageContent leaves protocolMessage and
+      // reactionMessage untouched, so the early-return branches below still match.
+      const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+      const contentType = b.getContentType(normalizedRoot);
 
       // --- protocolMessage REVOKE: don't emit onMessage ---
       if (contentType === 'protocolMessage') {
@@ -884,6 +968,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
           const to = msg.key.fromMe === true ? remoteJid : this.normalizedSelfJid();
           const revoked: RevokedMessage = {
             id: pm.key?.id ?? '',
+            // The REVOKE protocolMessage's key points at the ORIGINAL deleted message,
+            // so `id` already IS the original here. Mirror it into `revokedId` so that
+            // field is the reliable cross-engine handle (wwebjs sets it separately).
+            revokedId: pm.key?.id ?? undefined,
             chatId: this.sessionStore.toNeutralJid(remoteJid),
             from: this.sessionStore.toNeutralJid(from),
             to: this.sessionStore.toNeutralJid(to),
@@ -950,50 +1038,61 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * for under-cap media the concatenated buffer is byte-identical to the 'buffer' mode it replaces.
    */
   private async downloadInboundMediaCapped(msg: WAMessage, maxBytes: number): Promise<Buffer | null> {
-    const b = await this.loadLib();
-    const stream = (await b.downloadMediaMessage(
-      msg,
-      'stream',
-      {},
-      {
-        logger: createSilentLogger(),
-        reuploadRequest: this.sock!.updateMediaMessage,
-      },
-    )) as AsyncIterable<Buffer> & { destroy?: () => void };
+    // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
+    // download/read error still rejects (propagating to the caller's catch as before); only a
+    // wall-clock timeout or the byte-cap overflow resolves to null.
+    let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
+    const download = (async (): Promise<Buffer | null> => {
+      const b = await this.loadLib();
+      stream = (await b.downloadMediaMessage(
+        msg,
+        'stream',
+        {},
+        {
+          logger: createSilentLogger(),
+          reuploadRequest: this.sock!.updateMediaMessage,
+        },
+      )) as AsyncIterable<Buffer> & { destroy?: () => void };
 
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of stream) {
-      total += chunk.length;
-      if (total > maxBytes) {
-        stream.destroy?.();
-        return null;
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of stream) {
+        total += chunk.length;
+        if (total > maxBytes) {
+          stream.destroy?.();
+          return null;
+        }
+        chunks.push(chunk);
       }
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks);
+      return Buffer.concat(chunks);
+    })();
+
+    // A slow/trickling sender never trips the byte cap, so without a deadline it pins a concurrency
+    // slot (and, on Baileys, the whole inbound handler) indefinitely. On timeout, destroy the stream
+    // and treat it as no usable media (same null the cap-abort returns).
+    return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => stream?.destroy?.());
   }
 
   private async mapMessage(msg: WAMessage, contentType: string | undefined): Promise<IncomingMessage> {
     const b = await this.loadLib();
     const content = msg.message ?? {};
+    // Read body/isPtt off the NORMALIZED content: a disappearing message (ephemeralMessage), a captioned
+    // document (documentWithCaptionMessage) and viewOnce/edited wrappers nest the real text/caption under
+    // an inner message, so the raw wrapper exposes none at top level. Identity no-op when unwrapped.
+    const normalized = b.normalizeMessageContent(content) ?? content;
 
-    // Body: text first, then media caption as fallback.
-    const body =
-      content.conversation ??
-      content.extendedTextMessage?.text ??
-      content.imageMessage?.caption ??
-      content.videoMessage?.caption ??
-      content.documentMessage?.caption ??
-      '';
+    // Body: text first, then media caption, then WhatsApp Business interactive shapes (#562).
+    const body = extractBaileysBody(normalized);
 
     // --- location ---
     // ILocationMessage has name/address; ILiveLocationMessage does not — use the static variant only.
     let location: IncomingMessage['location'];
     if (contentType === 'locationMessage' || contentType === 'liveLocationMessage') {
-      const lm = content.locationMessage ?? content.liveLocationMessage;
+      // Read off the NORMALIZED content: an ephemeral/disappearing-chat location nests under the wrapper,
+      // so the raw `content.locationMessage` is undefined and the coordinates would be silently dropped.
+      const lm = normalized.locationMessage ?? normalized.liveLocationMessage;
       if (lm) {
-        const staticLm = content.locationMessage; // only ILocationMessage has name/address
+        const staticLm = normalized.locationMessage; // only ILocationMessage has name/address
         location = {
           latitude: lm.degreesLatitude ?? 0,
           longitude: lm.degreesLongitude ?? 0,
@@ -1013,70 +1112,101 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'documentWithCaptionMessage' ||
       contentType === 'stickerMessage';
     if (isMediaType) {
-      // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
-      // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
-      const normalizedContent = b.normalizeMessageContent(content) ?? content;
-      const subMessage =
-        normalizedContent.imageMessage ??
-        normalizedContent.videoMessage ??
-        normalizedContent.audioMessage ??
-        normalizedContent.documentMessage ??
-        normalizedContent.stickerMessage;
-      const mimetype = subMessage?.mimetype ?? '';
-      const filename = normalizedContent.documentMessage?.fileName ?? undefined;
-      const maxBytes = inboundMediaMaxBytes();
-      const declared = coerceDeclaredSize(subMessage?.fileLength);
-
-      if (declared > maxBytes) {
-        // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
-        // (Baileys integrity-checks content against the declared size, so this is a robust bound).
-        media = { mimetype, filename, omitted: true, sizeBytes: declared };
-        this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
-          msgId: msg.key.id,
-          sizeBytes: declared,
-        });
+      if (!isMediaDownloadEnabled()) {
+        // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
+        // mimetype is available pre-download from the message content.
+        const normalizedContent = b.normalizeMessageContent(content) ?? content;
+        const subMessage =
+          normalizedContent.imageMessage ??
+          normalizedContent.videoMessage ??
+          normalizedContent.audioMessage ??
+          normalizedContent.documentMessage ??
+          normalizedContent.stickerMessage;
+        media = {
+          mimetype: subMessage?.mimetype ?? '',
+          filename: normalizedContent.documentMessage?.fileName ?? undefined,
+          omitted: true,
+          sizeBytes: coerceDeclaredSize(subMessage?.fileLength),
+        };
       } else {
-        try {
-          // Stream-download with a running-total abort so a sender who understates fileLength still
-          // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
-          const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
-          if (buf === null) {
-            media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
-            this.logger.warn('Inbound media exceeded MEDIA_DOWNLOAD_MAX_BYTES mid-download; aborted', {
+        // normalizeMessageContent unwraps documentWithCaptionMessage / viewOnceMessage / ephemeralMessage
+        // so we reach the inner media sub-message — needed BEFORE download for the declared-size pre-gate.
+        const normalizedContent = b.normalizeMessageContent(content) ?? content;
+        const subMessage =
+          normalizedContent.imageMessage ??
+          normalizedContent.videoMessage ??
+          normalizedContent.audioMessage ??
+          normalizedContent.documentMessage ??
+          normalizedContent.stickerMessage;
+        const mimetype = subMessage?.mimetype ?? '';
+        const filename = normalizedContent.documentMessage?.fileName ?? undefined;
+        const maxBytes = inboundMediaMaxBytes();
+        const declared = coerceDeclaredSize(subMessage?.fileLength);
+
+        if (declared > maxBytes) {
+          // Pre-download gate: an honest over-cap sender's media is never decrypted into heap at all
+          // (Baileys integrity-checks content against the declared size, so this is a robust bound).
+          media = { mimetype, filename, omitted: true, sizeBytes: declared };
+          this.logger.warn('Inbound media declared size exceeds MEDIA_DOWNLOAD_MAX_BYTES; skipped download', {
+            msgId: msg.key.id,
+            sizeBytes: declared,
+          });
+        } else {
+          try {
+            // Stream-download with a running-total abort so a sender who understates fileLength still
+            // can't materialise an over-cap blob. For under-cap media this yields the identical buffer.
+            const buf = await this.downloadInboundMediaCapped(msg, maxBytes);
+            if (buf === null) {
+              media = { mimetype, filename, omitted: true, sizeBytes: maxBytes };
+              this.logger.warn(
+                'Inbound media download aborted (over MEDIA_DOWNLOAD_MAX_BYTES or past MEDIA_DOWNLOAD_TIMEOUT_MS); emitting omitted marker',
+                { msgId: msg.key.id },
+              );
+            } else {
+              // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
+              // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
+              media = capInboundMedia({
+                mimetype,
+                filename,
+                sizeBytes: buf.byteLength,
+                toBase64: () => buf.toString('base64'),
+              });
+            }
+          } catch (err) {
+            this.logger.debug('Failed to download inbound media; emitting message without media', {
+              error: err instanceof Error ? err.message : String(err),
               msgId: msg.key.id,
             });
-          } else {
-            // capInboundMedia is the last line (lazy base64, never persist/webhook/broadcast an over-cap
-            // blob); the real heap bound is the pre-gate + streaming abort + concurrency limiter.
-            media = capInboundMedia({
-              mimetype,
-              filename,
-              sizeBytes: buf.byteLength,
-              toBase64: () => buf.toString('base64'),
-            });
           }
-        } catch (err) {
-          this.logger.debug('Failed to download inbound media; emitting message without media', {
-            error: err instanceof Error ? err.message : String(err),
-            msgId: msg.key.id,
-          });
         }
       }
     }
 
-    // --- quoted message ---
+    // --- quoted message + disappearing-messages timer ---
     let quotedMessage: IncomingMessage['quotedMessage'];
+    // Read context off the NORMALIZED content: a live disappearing message arrives wrapped in
+    // `ephemeralMessage` (also viewOnce / documentWithCaption), whose inner content carries the
+    // contextInfo. The raw wrapper exposes none at top level, so both the quote and the timer
+    // (`contextInfo.expiration`) would be missed if we read the raw content here.
+    const normalizedForContext = b.normalizeMessageContent(content) ?? content;
     const subForContext =
-      content.extendedTextMessage ??
-      content.imageMessage ??
-      content.videoMessage ??
-      content.audioMessage ??
-      content.documentMessage ??
-      content.stickerMessage ??
-      content.locationMessage;
+      normalizedForContext.extendedTextMessage ??
+      normalizedForContext.imageMessage ??
+      normalizedForContext.videoMessage ??
+      normalizedForContext.audioMessage ??
+      normalizedForContext.documentMessage ??
+      normalizedForContext.stickerMessage ??
+      normalizedForContext.locationMessage;
     const contextInfo = (
       subForContext as
-        | { contextInfo?: { stanzaId?: string | null; quotedMessage?: Record<string, unknown> | null } }
+        | {
+            contextInfo?: {
+              stanzaId?: string | null;
+              quotedMessage?: Record<string, unknown> | null;
+              expiration?: number | null;
+              mentionedJid?: string[] | null;
+            };
+          }
         | undefined
     )?.contextInfo;
     if (contextInfo?.quotedMessage && contextInfo.stanzaId) {
@@ -1105,13 +1235,15 @@ export class BaileysAdapter implements IWhatsAppEngine {
         participant: msg.key.participant ?? undefined,
         body,
         contentType,
-        isPtt: content.audioMessage?.ptt === true,
+        isPtt: normalized.audioMessage?.ptt === true,
         timestamp: this.toUnixSeconds(msg.messageTimestamp),
         pushName: msg.pushName ?? undefined,
         selfJid: this.normalizedSelfJid(),
         media,
         location,
         quotedMessage,
+        ephemeralDuration: contextInfo?.expiration ?? undefined,
+        mentionedJids: contextInfo?.mentionedJid ?? undefined,
       },
       jid => this.sessionStore.toNeutralJid(jid),
     );
@@ -1123,10 +1255,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * `onHistoryMessages` callback, harvesting `pushName` into contacts on the way (history `contacts`
    * carry no names) and seeding each chat's last-message preview.
    */
-  private captureHistoryMessages(messages: WAMessage[]): void {
+  private async captureHistoryMessages(messages: WAMessage[]): Promise<void> {
     if (!messages.length) {
       return;
     }
+    const b = await this.loadLib();
     const nameUpdates: { id: string; notify: string }[] = [];
     const mapped: IncomingMessage[] = [];
     for (const msg of messages) {
@@ -1139,7 +1272,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // Seed the chat's last-message preview + sort time (newest wins); else history-only chats
       // would read "No messages yet".
       this.sessionStore.recordMessage(msg);
-      const incoming = this.mapHistoryMessage(msg);
+      const incoming = this.mapHistoryMessage(b, msg);
       if (incoming) {
         mapped.push(incoming);
       }
@@ -1187,26 +1320,26 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * messages would be ruinous; the type is kept, the payload dropped). Returns null for protocol /
    * reaction / key / empty messages, which carry nothing for the chat view.
    */
-  private mapHistoryMessage(msg: WAMessage): IncomingMessage | null {
-    const content = msg.message;
-    if (!content || !msg.key?.remoteJid || !msg.key.id) {
+  private mapHistoryMessage(b: typeof BaileysLib, msg: WAMessage): IncomingMessage | null {
+    const raw = msg.message;
+    if (!raw || !msg.key?.remoteJid || !msg.key.id) {
       return null;
     }
-    const contentType = Object.keys(content)[0];
+    // Unwrap ephemeral/viewOnce/documentWithCaption/edited wrappers so the real type and body surface —
+    // else a disappearing-chat message maps to type 'unknown' with an empty body. Identity no-op when
+    // already unwrapped. Derive ONE contentType from the normalized content for both the skip-filter and
+    // the type mapping, and reuse extractBaileysBody (the same body extraction the live path uses).
+    const content = b.normalizeMessageContent(raw) ?? raw;
+    const contentType = b.getContentType(content);
     if (
+      !contentType ||
       contentType === 'protocolMessage' ||
       contentType === 'reactionMessage' ||
       contentType === 'senderKeyDistributionMessage'
     ) {
       return null;
     }
-    const body =
-      content.conversation ??
-      content.extendedTextMessage?.text ??
-      content.imageMessage?.caption ??
-      content.videoMessage?.caption ??
-      content.documentMessage?.caption ??
-      '';
+    const body = extractBaileysBody(content);
     return buildIncomingMessageFromBaileys(
       {
         id: msg.key.id,
@@ -1251,18 +1384,23 @@ export class BaileysAdapter implements IWhatsAppEngine {
   }
 
   /** Build a minimal WhatsApp-compatible vCard from a neutral contact card. */
-  private buildVCard(contact: ContactCard): string {
-    const clean = (s: string): string => s.replace(/[\r\n]+/g, ' ');
-    const name = clean(contact.name);
-    const number = clean(contact.number);
-    const waid = number.replace(/\D/g, '');
-    return [
-      'BEGIN:VCARD',
-      'VERSION:3.0',
-      `FN:${name}`,
-      `TEL;type=CELL;type=VOICE;waid=${waid}:${number}`,
-      'END:VCARD',
-    ].join('\n');
+  /**
+   * Fold the chat's known disappearing-messages timer into Baileys' send options so outbound messages
+   * honor the chat's ephemeral setting (#473). Returns `options` unchanged when no positive timer is
+   * cached: omitting `ephemeralExpiration` reproduces today's behavior (Baileys' send guard is truthy),
+   * so an unknown / boot-window / stale-empty cache never forces a message to disappear. Returning
+   * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
+   * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
+   */
+  private withEphemeral(
+    chatId: string,
+    options?: MiscMessageGenerationOptions,
+  ): MiscMessageGenerationOptions | undefined {
+    const ephemeralExpiration = this.sessionStore.getEphemeralExpiration(chatId);
+    if (ephemeralExpiration === undefined) {
+      return options;
+    }
+    return { ...options, ephemeralExpiration };
   }
 
   /** Send a Baileys content object and shape the result like the other sends. */
@@ -1271,8 +1409,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
   ): Promise<MessageResult> {
-    const sent = options
-      ? await this.sock!.sendMessage(chatId, content, options)
+    const merged = this.withEphemeral(chatId, options);
+    const sent = merged
+      ? await this.sock!.sendMessage(chatId, content, merged)
       : await this.sock!.sendMessage(chatId, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
@@ -1291,6 +1430,33 @@ export class BaileysAdapter implements IWhatsAppEngine {
       throw new MessageNotFoundError(messageId);
     }
     return found;
+  }
+
+  /**
+   * Post a status (story) to `status@broadcast` with a denormalized `statusJidList` (the allow-list of
+   * neutral recipients folded back to the engine dialect). Image/video variants route through here too.
+   * The outbound status echo is NOT persisted — status isn't a chat message (the inbound filter in
+   * handleMessagesUpsert already skips `type:'append'` echoes).
+   */
+  private async postStatus(content: AnyMessageContent, options: StatusPostOptions): Promise<StatusResult> {
+    this.ensureReady();
+    const statusJidList = options.recipients.map(r => this.sessionStore.toEngineJid(r));
+    const sent = await this.sock!.sendMessage('status@broadcast', content, {
+      statusJidList,
+      backgroundColor: options.backgroundColor,
+      font: options.font,
+    });
+    return this.toStatusResult(sent);
+  }
+
+  /** Shape a Baileys send result into a StatusResult; expiresAt is timestamp + 24h (WhatsApp status TTL). */
+  private toStatusResult(sent: WAMessage | undefined): StatusResult {
+    const ts = sent?.messageTimestamp ? new Date(this.toUnixSeconds(sent.messageTimestamp) * 1000) : new Date();
+    return {
+      statusId: sent?.key?.id ?? '',
+      timestamp: ts,
+      expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
+    };
   }
 
   private unsupported(method: string): Promise<any> {

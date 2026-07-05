@@ -22,6 +22,22 @@ export interface LogContext {
   [key: string]: unknown;
 }
 
+// Defense-in-depth: redact the VALUES of secret-named keys before they reach the log sink, so a
+// careless `logger.info('…', { password })` can't leak a credential. Matches the key NAME only
+// (case-insensitive), never the value's content, to avoid false positives on innocuous fields.
+const SECRET_KEY_PATTERN = /password|passwd|secret|token|api[-_]?key|authorization|credential|pepper|private[-_]?key/i;
+
+/** Return a copy of `value` with secret-named keys' values replaced by `[REDACTED]` (recursive, depth-bounded). */
+function redactSecrets(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value !== 'object' || depth > 4) return value;
+  if (Array.isArray(value)) return value.map(v => redactSecrets(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = SECRET_KEY_PATTERN.test(key) ? '[REDACTED]' : redactSecrets(val, depth + 1);
+  }
+  return out;
+}
+
 // ANSI color codes — mirrors the palette NestJS's built-in ConsoleLogger uses so our
 // pretty output blends in with the framework's own `[Nest] … LOG [Context]` lines.
 const ANSI = {
@@ -100,7 +116,8 @@ export class LoggerService implements NestLoggerService {
 
     const timestamp = new Date().toISOString();
     const contextName = typeof context === 'string' ? context : this.context;
-    const metadata = typeof context === 'object' && context !== null ? context : {};
+    const metadata =
+      typeof context === 'object' && context !== null ? (redactSecrets(context) as Record<string, unknown>) : {};
 
     const logEntry = {
       timestamp,

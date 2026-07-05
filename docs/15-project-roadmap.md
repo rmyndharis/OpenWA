@@ -67,6 +67,9 @@ timeline
 | v0.2.10 | Dashboard/CI follow-ups (MessageTester JID, neutral MessageType, qemu v4) | ✅ Released |
 | v0.3.0  | Engine pluggability (Baileys engine, plugin layer)                              | ✅ Released |
 | v0.4.0  | Single-port deployment (dashboard on API port, Traefik removed)                 | ✅ Released |
+| v0.5.x  | Plugin/dashboard hardening and SDK/docs increments                              | ✅ Released |
+| v0.6.x  | Operational hardening, API surface refinements, dashboard follow-ups            | ✅ Released |
+| v0.7.x  | Dashboard chat UX, infra backup/restore, media-download toggle, infra follow-ups | ✅ Released |
 | v1.0.0  | Enterprise Ready (K8s Operator, multi-tenant)                                   | 📋 Planned  |
 
 > SDK / docs-site / observability features (Node & Python SDK, Postman collection, Grafana, OpenTelemetry)
@@ -459,8 +462,8 @@ gantt
 
 | Feature            | Priority | Status |
 | ------------------ | -------- | ------ |
-| Horizontal scaling | P2       | ✅     |
-| Session affinity   | P2       | ✅     |
+| Horizontal scaling | P2       | 📄 Design reference only; single active owner per session remains required |
+| Session affinity   | P2       | 📄 Documented for future topology, not implemented as multi-replica runtime |
 | Security audit     | P0       | ✅     |
 
 #### Community & Tooling
@@ -491,7 +494,7 @@ v0.1.0 Release Package:
 ## 15.6 Future Roadmap (v0.3.0+)
 
 > **Note:** Version 0.1.0 is the initial stable release including all features from Phases 1-3.
-> Versions 0.1.7 through 0.4.6 have since shipped (see the CHANGELOG); v1.0.0
+> Versions 0.1.7 through 0.7.8 have since shipped (see the CHANGELOG); v1.0.0
 > onward is forward-looking.
 
 ```mermaid
@@ -571,6 +574,32 @@ Delivered additively whenever ready, per SemVer (not gated to one version). The 
 | OpenTelemetry Tracing  | P2       | ☐ Open | Distributed tracing support      |
 | Performance Benchmarks | P1       | ☐ Open | Documented performance metrics   |
 | Memory Optimization    | P1       | ☐ Open | Reduced memory per session       |
+
+### Integration Fabric — inbound integrations for plugins (in progress)
+
+A core substrate that lets sandboxed marketplace plugins implement bidirectional external integrations
+(helpdesk agent inboxes, chatbot flow builders, CRMs) **without running their own server**. Until now a
+plugin could only make outbound calls; the Integration Fabric adds a governed **inbound** path — the core
+receives a signature-verified webhook, dedups and queues it, and hands it to the plugin, which replies to
+the WhatsApp chat through a normalized capability. The core owns ingress, verification, ordering,
+delivery, and the dead-letter queue; the plugin owns only provider-specific logic. Plugins consume it
+through a stable, versioned **Integration SDK (v1)**. Motivated by #553.
+
+Delivered in phases (additive; see [25 - Integration Fabric](./25-integration-fabric.md) for the
+architecture and design rationale):
+
+| Phase | Scope                                                                                                                                                                          | Status                         |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| P0    | Core substrate: inbound webhook RPC, `@Public` ingress endpoint with HMAC-over-raw-body verification, plugin-instance primitive, normalized send capability, identity/dedup/DLQ tables, ingress queue. SDK v1 frozen. | ✅ Merged (internal substrate) |
+| P1    | Scale-correctness: per-conversation FIFO ordering, per-instance fairness, DLQ redrive, bot/human handover.                                                                    | ✅ Merged (internal substrate) |
+| P2    | Operator provisioning (mint plugin instances and secrets, dashboard) + the first adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.           | 📋 Planned                     |
+| P3    | Second adapter (chatbot flow builder) — validates the substrate generalizes.                                                                                                 | 📋 Planned                     |
+| P4    | Developer experience: SDK reference docs, compatibility test suite, secret rotation, multi-node routing.                                                                      | 📋 Planned                     |
+
+> **P0 and P1 are an internal foundation, not a user-facing feature yet.** The ingress flow requires an
+> operator provisioning step (minting a plugin instance and its secret) that lands in P2; until then it is
+> reachable only by direct configuration. The public SDK reference and the first ready-to-use adapter
+> arrive in P2–P4.
 
 ### v1.0.0 - Enterprise Ready
 
@@ -659,7 +688,7 @@ flowchart TB
 | Dashboard functional  | All features | ✅ Achieved       | Internal |
 | PostgreSQL stable     | ✅           | ✅ Achieved       | Internal |
 | Webhook delivery rate | > 99%        | ✅ Achieved       | Internal |
-| Test coverage         | > 70%        | ⚠️ ~5% (deferred) | Internal |
+| Test coverage         | > 70%        | ⚠️ 66.87% line coverage; 80% improvement plan active | Internal |
 | GitHub stars          | 100+         | 📋 Pending        | External |
 
 ### Phase 3 Success Criteria
@@ -668,7 +697,7 @@ flowchart TB
 | ----------------------------- | ------- | ----------------- | -------- |
 | Feature parity with WAHA Plus | 90%+    | ✅ Achieved       | Internal |
 | API response time (p95)       | < 200ms | ✅ Achieved       | Internal |
-| Test coverage                 | > 80%   | ⚠️ ~5% (deferred) | Internal |
+| Test coverage                 | > 80%   | ⚠️ 66.87% line coverage; in progress | Internal |
 | Documentation coverage        | 100%    | ✅ 95%+           | Internal |
 | Production users              | 50+     | 📋 Pending        | External |
 | GitHub stars                  | 500+    | 📋 Pending        | External |

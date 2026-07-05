@@ -6,14 +6,14 @@ OpenWA now has an active Jest test suite covering the backend core, engine adapt
 database migrations, plugin hooks, and smoke-level e2e boot paths. This document describes the current
 test layout and the expected testing workflow for contributors.
 
-Status snapshot from the repository state on 2026-06-21:
+Status snapshot from the repository state on 2026-06-28:
 
 | Area | Current state |
 |------|---------------|
-| Backend unit tests | 89 Jest suites / 987 tests passing with `npm test -- --runInBand` |
-| E2E smoke tests | 3 Jest suites / 11 tests passing with `npm run test:e2e -- --runInBand` |
-| Test files | 92 `*.spec.ts` / `*.e2e-spec.ts` files under `src/` and `test/` |
-| Dashboard checks | CI runs dashboard lint, i18n parity check, and dashboard build |
+| Backend unit tests | 113 Jest suites / 1481 tests passing with `npm test -- --runInBand` |
+| E2E smoke tests | 5 Jest suites / 31 tests passing plus 3 todo with `npm run test:e2e -- --runInBand` |
+| Dashboard checks | Dashboard lint, unit tests, i18n parity check, and build |
+| Coverage baseline | 66.87% line coverage; active target is 80% (see `docs/superpowers/specs/2025-01-28-test-coverage-improvement-design.md`) |
 | Coverage gate | Jest global thresholds plus stricter thresholds for security-sensitive modules |
 
 The exact counts will change as the project evolves. Use the commands below as the source of truth.
@@ -22,6 +22,7 @@ The exact counts will change as the project evolves. Use the commands below as t
 find src test -name '*.spec.ts' -o -name '*.e2e-spec.ts' | wc -l
 npm test -- --runInBand
 npm run test:e2e -- --runInBand
+npm --prefix dashboard run test:unit
 ```
 
 ## 09.2 Test Commands
@@ -34,6 +35,7 @@ npm run test:e2e -- --runInBand
 | `npm run test:e2e` | Run smoke-level e2e tests from `test/` |
 | `npm run lint` | Run backend ESLint with type-aware rules |
 | `cd dashboard && npm run lint` | Run dashboard ESLint |
+| `cd dashboard && npm run test:unit` | Run dashboard pure utility/unit tests |
 | `cd dashboard && npm run i18n:check` | Verify dashboard locale key parity |
 | `cd dashboard && npm run build` | Type-check and build the dashboard |
 
@@ -138,7 +140,7 @@ CI is defined in `.github/workflows/ci.yml`.
 |-----|--------|
 | `lint` | `npm audit --audit-level=critical`, backend ESLint, formatting check |
 | `test` | backend coverage run, e2e smoke tests, Codecov upload |
-| `dashboard` | dashboard install, lint, i18n parity, build |
+| `dashboard` | dashboard install, lint, unit tests, i18n parity, build |
 | `build` | backend build after lint/test/dashboard jobs pass |
 | `docker` | multi-arch Docker build and push on branch pushes |
 
@@ -217,7 +219,7 @@ Live WhatsApp checks require an operator-owned account and should not be part of
 - No default CI job exercises a real WhatsApp connection.
 - No default CI job exercises real PostgreSQL, Redis, S3/MinIO, or Docker socket proxy integration.
 - Performance testing is not automated.
-- Dashboard UI tests are not currently automated beyond lint, i18n parity, and build.
+- Dashboard browser/visual UI tests are not currently automated; dashboard pure utility tests run via `npm --prefix dashboard run test:unit`.
 
 These gaps are intentional for the default suite because the project prioritizes deterministic tests that
 run without external services. Add opt-in integration jobs only when they are isolated, documented, and do

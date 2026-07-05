@@ -91,6 +91,51 @@ describe('InfraController.importStorage filePath validation (Vuln 3)', () => {
   });
 });
 
+describe('InfraController.getStatus queue job counts (F-18)', () => {
+  function buildStatusController(opts: { queueEnabled: boolean; queue?: { getJobCounts: jest.Mock } }) {
+    const configService = {
+      get: (key: string, def?: unknown) => (key === 'queue.enabled' ? opts.queueEnabled : def),
+    };
+    const dataSource = { isInitialized: true } as unknown;
+    const engineFactory = { create: jest.fn() };
+    const dockerService = { isDockerAvailable: () => false, getRunningBuiltinServices: jest.fn() };
+    const cacheService = { isAvailable: jest.fn().mockResolvedValue(false), refreshS3Availability: jest.fn() };
+    const storageService = { refreshS3Availability: jest.fn() };
+    const shutdownService = {};
+    return new InfraController(
+      configService as never,
+      dataSource as never,
+      dataSource as never,
+      engineFactory as never,
+      dockerService as never,
+      cacheService as never,
+      storageService as never,
+      shutdownService as never,
+      opts.queue as never,
+    );
+  }
+
+  it('reports live webhook job counts when the queue is enabled (pending = wait+active+delayed)', async () => {
+    const getJobCounts = jest.fn().mockResolvedValue({ wait: 2, active: 1, delayed: 3, completed: 10, failed: 1 });
+    const controller = buildStatusController({ queueEnabled: true, queue: { getJobCounts } });
+
+    const status = await controller.getStatus();
+
+    expect(getJobCounts).toHaveBeenCalledWith('wait', 'active', 'delayed', 'completed', 'failed');
+    expect(status.queue).toEqual({ enabled: true, webhooks: { pending: 6, completed: 10, failed: 1 } });
+  });
+
+  it('reports zeros (and does not touch the queue) when the queue is disabled', async () => {
+    const getJobCounts = jest.fn();
+    const controller = buildStatusController({ queueEnabled: false, queue: { getJobCounts } });
+
+    const status = await controller.getStatus();
+
+    expect(getJobCounts).not.toHaveBeenCalled();
+    expect(status.queue).toEqual({ enabled: false, webhooks: { pending: 0, completed: 0, failed: 0 } });
+  });
+});
+
 describe('InfraController.saveConfig SSL reject-unauthorized', () => {
   function writtenEnv(config: unknown): string {
     const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
@@ -457,6 +502,31 @@ describe('InfraController.importData round-trips export-data (no silent message/
     expect((await ds.getRepository(Message).findOneByOrFail({ id: 'm1' })).body).toBe('keep me');
     expect(await ds.getRepository(Session).findOneBy({ id: 's2' })).toBeNull();
   });
+
+  it('refuses an empty/garbage backup — does not wipe existing data (#488 review must-fix)', async () => {
+    await seedSession('s1');
+    await ds.getRepository(Message).save(
+      ds.getRepository(Message).create({
+        id: 'm1',
+        sessionId: 's1',
+        chatId: 'c1',
+        from: 'a',
+        to: 'b',
+        body: 'keep me',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.DELIVERED,
+      }),
+    );
+
+    // A wrong/empty file (no rows to restore) must NOT commit the all-rows DELETE and report success.
+    const res = await controller.importData({ tables: {} });
+
+    expect(res.imported).toBe(false);
+    expect(res.warnings.length).toBeGreaterThan(0);
+    expect(await ds.getRepository(Session).count()).toBe(1);
+    expect(await ds.getRepository(Message).count()).toBe(1);
+  });
 });
 
 describe('InfraController.import/export preserves every data-DB table', () => {
@@ -613,6 +683,14 @@ describe('InfraController.getConfig (#226)', () => {
 });
 
 describe('InfraController.getStatus engine (F7 — reads the real engine.puppeteer.* keys)', () => {
+  // Pin the WA-Web version so getStatus does not fire the wa-version registry fetch (no network in tests).
+  const savedWebVer = process.env.WWEBJS_WEB_VERSION;
+  beforeAll(() => (process.env.WWEBJS_WEB_VERSION = 'off'));
+  afterAll(() => {
+    if (savedWebVer === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVer;
+  });
+
   it('reports the saved headless/browserArgs instead of stale defaults from non-existent flat keys', async () => {
     const map: Record<string, unknown> = {
       'engine.type': 'whatsapp-web.js',
@@ -627,11 +705,11 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
       config as never,
       ds as never,
       ds as never,
-      {} as never,
-      {} as never,
+      {} as never, // engineFactory
+      { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      {} as never,
-      {} as never,
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      {} as never, // shutdownService
     );
 
     const status = await controller.getStatus();
@@ -642,6 +720,14 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
 });
 
 describe('InfraController.getStatus storage (reads the real storage.localPath key)', () => {
+  // Pin the WA-Web version so getStatus does not fire the wa-version registry fetch (no network in tests).
+  const savedWebVer = process.env.WWEBJS_WEB_VERSION;
+  beforeAll(() => (process.env.WWEBJS_WEB_VERSION = 'off'));
+  afterAll(() => {
+    if (savedWebVer === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = savedWebVer;
+  });
+
   const buildController = (map: Record<string, unknown>) => {
     const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
     const cache = { isAvailable: () => Promise.resolve(false) };
@@ -650,11 +736,11 @@ describe('InfraController.getStatus storage (reads the real storage.localPath ke
       config as never,
       ds as never,
       ds as never,
-      {} as never,
-      {} as never,
+      {} as never, // engineFactory
+      { isDockerAvailable: () => false } as never, // dockerService — no Docker in unit tests
       cache as never,
-      {} as never,
-      {} as never,
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      {} as never, // shutdownService
     );
   };
 
@@ -735,11 +821,46 @@ describe('InfraController.exportStorage keeps the export import-able and sweeps 
 
     const result = await controller.exportStorage();
 
-    // Import-able: under <data>/exports — the import handler only accepts paths inside data/.
-    expect(result.download.startsWith(path.join(cwd, 'data', 'exports'))).toBe(true);
-    expect(await exists(result.download)).toBe(true);
+    // download is cwd-relative (no absolute host path leak) and stays under data/exports so the import
+    // handler — which only accepts paths inside data/ — can still consume it.
+    expect(path.isAbsolute(result.download)).toBe(false);
+    expect(result.download.startsWith(path.join('data', 'exports'))).toBe(true);
+    // Resolve against the (mocked) cwd to check on-disk existence; fs itself uses the real cwd.
+    const abs = path.join(cwd, result.download);
+    expect(await exists(abs)).toBe(true);
 
-    await waitForGone(result.download);
-    expect(await exists(result.download)).toBe(false);
+    await waitForGone(abs);
+    expect(await exists(abs)).toBe(false);
+  });
+});
+
+describe('InfraController.requestRestart constrains teardown to managed profiles', () => {
+  const buildController = (dockerService: Record<string, unknown>) =>
+    new InfraController(
+      { get: () => undefined } as never,
+      { isInitialized: true } as never,
+      { isInitialized: true } as never,
+      {} as never, // engineFactory
+      dockerService as never,
+      { isAvailable: () => Promise.resolve(false) } as never, // cacheService
+      { isS3Available: () => false, refreshS3Availability: () => Promise.resolve(false) } as never, // storageService
+      { shutdown: jest.fn() } as never, // shutdownService
+    );
+
+  it('removes only allowlisted profiles, never an unknown or empty entry', async () => {
+    const removeService = jest.fn().mockResolvedValue(true);
+    const controller = buildController({
+      isDockerAvailable: () => true,
+      removeService,
+      orchestrateProfiles: jest.fn().mockResolvedValue({}),
+    });
+
+    // '' (matches any container by substring) and 'evil' must be dropped; only managed profiles act.
+    await controller.requestRestart({ profilesToRemove: ['', 'evil', 'postgres', 'redis'] });
+
+    const removed = removeService.mock.calls.map(call => String((call as unknown[])[0])).sort();
+    expect(removed).toEqual(['postgres', 'redis']);
+    expect(removed).not.toContain('');
+    expect(removed).not.toContain('evil');
   });
 });

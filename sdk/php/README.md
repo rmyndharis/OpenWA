@@ -44,6 +44,10 @@ $client = new Client([
 ]);
 ```
 
+## Messaging
+
+> Voice notes: pass `'ptt' => true` to `sendAudio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.
+
 ## Errors
 
 A non-2xx response throws a typed `OpenWA\Exceptions\OpenWAApiException` subclass —

@@ -6,15 +6,20 @@ import {
   OnModuleDestroy,
   OnModuleInit,
   OnApplicationBootstrap,
+  Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { MessageBatch } from '../message/entities/message-batch.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
-import { paginate, ListOptions } from '../../common/utils/paginate';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { userPart } from '../../engine/identity/wa-id';
+import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import {
   IWhatsAppEngine,
@@ -82,6 +87,12 @@ export function clampReconnectDelay(rawDelay: number, baseDelay: number): number
   return clampNumber(Number.isFinite(rawDelay) ? rawDelay : baseDelay, 0, RECONNECT_DELAY_CAP_MS);
 }
 
+export function resolveMaxConcurrentSessions(configService?: Pick<ConfigService, 'get'>): number | null {
+  const configured = configService?.get<number>('sessions.maxConcurrent', 0) ?? 0;
+  if (!Number.isFinite(configured) || configured <= 0) return null;
+  return Math.floor(configured);
+}
+
 @Injectable()
 export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicationBootstrap {
   private readonly logger = createLogger('SessionService');
@@ -101,9 +112,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
 
-  // Last session.status value dispatched to webhooks per session. Some engines signal one transition
-  // via BOTH onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards the
-  // webhook POST against firing the same status twice. Cleared on delete().
+  // Last session.status value broadcast per session. Some engines signal one transition via BOTH
+  // onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards both the WS emit
+  // and the webhook POST against firing the same status twice. Cleared on delete().
   private readonly lastDispatchedStatus = new Map<string, SessionStatus>();
 
   // Sessions currently being stopped/deleted. An in-flight executeReconnect awaits
@@ -133,6 +144,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    @Optional()
+    private readonly configService?: ConfigService,
+    // Shared lid<->phone table (global). Used to persist an inbound @lid sender's resolved phone so
+    // an inbound-only migrated contact's `@lid` and `@c.us` rows bridge in the read-path (#583 R3 Ph2).
+    @Optional()
+    private readonly lidMappingStore?: LidMappingStoreService,
   ) {}
 
   /**
@@ -267,9 +284,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       status: SessionStatus.CREATED,
     });
 
-    const saved = await this.dataSource.transaction(async manager => {
-      return await manager.save(session);
-    });
+    // The findOne pre-check above is a fast path for the common case, but it's a check-then-insert
+    // TOCTOU: two concurrent same-name creates both pass it, then one hits the name UNIQUE constraint.
+    // Translate that violation to a 409 (matching the pre-check) instead of leaking a raw 500.
+    let saved: Session;
+    try {
+      saved = await this.dataSource.transaction(async manager => {
+        return await manager.save(session);
+      });
+    } catch (err) {
+      if (isUniqueConstraintError(err)) {
+        throw new ConflictException(`Session with name '${dto.name}' already exists`);
+      }
+      throw err;
+    }
     this.logger.log(`Session created: ${saved.name}`, {
       sessionId: saved.id,
       action: 'create',
@@ -284,11 +312,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return saved;
   }
 
-  async findAll(allowedSessions?: string[] | null): Promise<Session[]> {
+  async findAll(allowedSessions?: string[] | null, opts: ListOptions = {}): Promise<Session[]> {
     // A session-restricted key only lists its own sessions; an unrestricted key (null/empty
     // allowlist) lists all — mirroring the ApiKeyGuard allowedSessions model so a scoped key
     // cannot enumerate every session through this aggregate route.
-    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' } };
+    const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' }, take: limit, skip: offset };
     if (allowedSessions && allowedSessions.length > 0) {
       options.where = { id: In(allowedSessions) };
     }
@@ -355,7 +384,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
 
       // DB removal is NOT best-effort: a genuine failure must surface (500) rather than be swallowed.
+      // messages and message_batches carry a sessionId but have no FK cascade to sessions (unlike
+      // webhooks/templates/baileys_stored_messages), so remove them explicitly in the same transaction
+      // — otherwise deleting a session leaves its full history orphaned forever.
       await this.dataSource.transaction(async manager => {
+        await manager.delete(Message, { sessionId: id });
+        await manager.delete(MessageBatch, { sessionId: id });
         await manager.remove(session);
       });
       this.logger.log(`Session deleted: ${session.name}`, {
@@ -366,6 +400,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.
       this.stoppingSessions.delete(id);
       this.lastDispatchedStatus.delete(id);
+      // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
+      // again, so leaving it would grow the map without bound across create/fail/delete churn.
+      this.sessionErrors.delete(id);
     }
   }
 
@@ -381,6 +418,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
     if (this.initializingSessions.has(id)) {
       throw new BadRequestException('Session is already starting');
+    }
+    const maxConcurrentSessions = resolveMaxConcurrentSessions(this.configService);
+    if (maxConcurrentSessions !== null) {
+      // Count each session once. A session mid-initialization is transiently in BOTH `engines` (set at
+      // the start of initializeEngine) and `initializingSessions` (until start()'s finally), so summing
+      // the two sizes would double-count it and falsely reject new starts at ~half the configured cap.
+      const activeCount = new Set<string>([...this.engines.keys(), ...this.initializingSessions]).size;
+      if (activeCount >= maxConcurrentSessions) {
+        throw new BadRequestException(`Maximum concurrent sessions reached (${maxConcurrentSessions})`);
+      }
     }
     this.initializingSessions.add(id);
 
@@ -403,12 +450,29 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
 
-      await this.initializeEngine(id, session);
+      try {
+        await this.initializeEngine(id, session);
+      } catch (err) {
+        // engine.initialize() failed AFTER the engine was registered (initializeEngine sets it before
+        // initializing). Evict + tear it down so the session doesn't wedge at "already started" with a
+        // leaked Chromium/socket permanently holding a concurrency slot. initializingSessions serializes
+        // start(), so the engine in the map here is the one this start just created.
+        const orphan = this.engines.get(id);
+        if (orphan) {
+          this.engines.delete(id);
+          this.sessionErrors.set(id, err instanceof Error ? err.message : String(err));
+          await this.destroyEngineSafely(id, orphan);
+          await this.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
+        }
+        throw err;
+      }
 
       // A stop()/delete() may have landed while we awaited engine.initialize() — if so, tear down the
       // engine we just registered so the session isn't resurrected to READY (mirrors the post-init
       // guard in executeReconnect; initialize()'s callbacks can also fire async after this returns).
-      if (this.stoppingSessions.has(id)) {
+      // delete() clears its teardown mark before this slow init resolves, so re-check the session row
+      // exists, not just the mark; the findOne below then surfaces a deleted session as NotFound.
+      if (await this.isSessionRetired(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
@@ -467,6 +531,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           const metadata: Record<string, unknown> = {};
           if (m.media) metadata.media = m.media;
           if (m.quotedMessage) metadata.quotedMessage = m.quotedMessage;
+          if (m.call) metadata.call = m.call;
           const row = this.messageRepository.create({
             sessionId: id,
             waMessageId: m.id,
@@ -599,6 +664,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (message.isStatusBroadcast) {
           return;
         }
+        // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
+        // A message is ephemeral when its chat has a disappearing-messages timer (ephemeralDuration > 0).
+        if (
+          process.env.STORE_EPHEMERAL_MESSAGES === 'false' &&
+          message.ephemeralDuration &&
+          message.ephemeralDuration > 0
+        ) {
+          this.logger.debug('Skipping ephemeral message', {
+            sessionId: id,
+            messageId: message.id,
+            chatId: message.chatId,
+            ephemeralDuration: message.ephemeralDuration,
+          });
+          return;
+        }
         this.logger.debug(`Message received from ${message.from}`, {
           sessionId: id,
           messageId: message.id,
@@ -639,11 +719,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             if (incoming.quotedMessage) {
               metadata.quotedMessage = incoming.quotedMessage;
             }
+            if (incoming.call) {
+              metadata.call = incoming.call;
+            }
+
+            const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
 
             const dbMessage = this.messageRepository.create({
               sessionId: id,
               waMessageId: incoming.id,
               chatId: incoming.chatId,
+              chatName,
               from: incoming.from,
               to: incoming.to,
               body: incoming.body,
@@ -653,6 +739,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               status: MessageStatus.SENT,
               metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
             });
+
+            // The hook chain above is async; a delete()/teardown can retire this engine while it
+            // awaits. Re-check liveness so a late continuation can't persist an orphan messages row
+            // (the row has no FK, so a session-delete cleanup would never reap it) or dispatch for a
+            // session that no longer exists. Mirrors the synchronous isLiveEngine gate at entry.
+            if (!this.isLiveEngine(id, engine)) return;
 
             // De-duplicate at the source: the engine can re-fire `message` for one inbound message
             // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
@@ -834,10 +926,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Flag the stored message as revoked (best-effort; the message may not be in the
         // DB). The dashboard renders the localized "message deleted" text, so no display
         // string is persisted here.
+        //
+        // Match on `revokedId` (the ORIGINAL deleted message's id) when present: on wwebjs
+        // `message.id` is the revocation notification, which never matches a stored row.
+        // `revokedId` falls back to `id` (Baileys, where the two are the same).
+        const revokedWaMessageId = message.revokedId ?? message.id;
         void this.messageRepository
-          .update({ sessionId: id, waMessageId: message.id }, { body: '', type: 'revoked' })
+          .update({ sessionId: id, waMessageId: revokedWaMessageId }, { body: '', type: 'revoked' })
           .catch(err => {
-            this.logger.error(`Failed to update revoked message: ${message.id}`, String(err));
+            this.logger.error(`Failed to update revoked message: ${revokedWaMessageId}`, String(err));
           });
 
         // Notify consumers regardless of whether the row existed: webhook (message.revoked
@@ -1013,6 +1110,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }, delay);
   }
 
+  /**
+   * True once a session must stay down: it is explicitly marked tearing-down, or it was deleted
+   * outright while a slow engine.initialize() was in flight. delete() clears its `stoppingSessions`
+   * mark in its finally (ms) and removes the session row well before a Chromium launch resolves, so
+   * the mark alone can't catch a delete that raced a (re)connect — the session row is the source of
+   * truth a post-init guard must re-check before keeping the engine it just created.
+   */
+  private async isSessionRetired(id: string): Promise<boolean> {
+    if (this.stoppingSessions.has(id)) {
+      return true;
+    }
+    return (await this.sessionRepository.findOne({ where: { id } })) == null;
+  }
+
   private async executeReconnect(id: string, session: Session, state: ReconnectState): Promise<void> {
     // The session may have been stopped/deleted before this fired — don't resurrect it.
     if (this.stoppingSessions.has(id)) {
@@ -1032,9 +1143,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Re-initialize
       await this.initializeEngine(id, session);
 
-      // A stop()/delete() may have run while we awaited init — if so, tear down the engine we
-      // just registered so it isn't orphaned (the session is meant to be down).
-      if (this.stoppingSessions.has(id)) {
+      // A stop()/delete() may have run while we awaited init — if so, tear down the engine we just
+      // registered so it isn't orphaned (the session is meant to be down). delete() clears its
+      // teardown mark before this slow init resolves, so re-check the session row exists, not just
+      // the mark — otherwise a delete that raced the reconnect leaks a live Chromium/socket.
+      if (await this.isSessionRetired(id)) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
@@ -1185,6 +1298,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       }
     }
     this.lidPhoneCache.set(key, phone);
+    // Persist a real @lid -> phone resolution so the read-path can bridge this contact's `@lid` and
+    // `@c.us` rows even when the operator never sent to them (#583 R3 Phase 2). Reuses the resolution
+    // above — no extra network call — and is fire-and-forget so dispatch never blocks/fails on it.
+    if (phone) {
+      void this.lidMappingStore?.remember(userPart(contactId), phone, sessionId)?.catch(() => {});
+    }
     return phone;
   }
 
@@ -1273,13 +1392,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       status,
       action: 'status_update',
     });
-    // Emit real-time event to connected WebSocket clients
-    this.eventsGateway.emitSessionStatus(id, status);
-    // Mirror the status change to subscribed webhooks. Some engines signal one transition via both
-    // onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which would POST the same
-    // status twice — dispatch only when the status actually changed from the last one we sent.
+    // Mirror the status change to WS clients AND subscribed webhooks — both de-duped. Some engines signal
+    // one transition via both onStateChanged AND a dedicated callback (onQRCode/onDisconnected), which
+    // would otherwise emit/POST the same status twice; only act when it actually changed from the last one.
     if (this.lastDispatchedStatus.get(id) !== status) {
       this.lastDispatchedStatus.set(id, status);
+      this.eventsGateway.emitSessionStatus(id, status);
       void this.webhookService.dispatch(id, 'session.status', { sessionId: id, status });
     }
   }
@@ -1298,17 +1416,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Scope to the caller's allowedSessions so a session-restricted key cannot enumerate the count /
     // status distribution of sessions it has no rights to (matches the scoped GET /sessions route).
     const scope = allowedSessions && allowedSessions.length > 0 ? allowedSessions : null;
-    const sessions = await this.findAll(scope);
-    const byStatus: Record<string, number> = {};
+    // Aggregate status counts in the database instead of loading every row. findAll() is bounded by
+    // DEFAULT_LIST_LIMIT for the HTTP routes, so reusing it here would silently undercount `total` and
+    // `byStatus` on deployments with more sessions than that cap. A grouped COUNT is correct at any
+    // scale and cheaper (no entity hydration).
+    const qb = this.sessionRepository
+      .createQueryBuilder('session')
+      .select('session.status', 'status')
+      .addSelect('COUNT(session.id)', 'count');
+    if (scope) {
+      qb.where('session.id IN (:...scope)', { scope });
+    }
+    const rows = await qb.groupBy('session.status').getRawMany<{ status: string; count: string }>();
 
-    for (const session of sessions) {
-      byStatus[session.status] = (byStatus[session.status] || 0) + 1;
+    const byStatus: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      const count = Number(row.count) || 0;
+      byStatus[row.status] = count;
+      total += count;
     }
 
     const memory = process.memoryUsage();
 
     return {
-      total: sessions.length,
+      total,
       // engines is keyed by session id; a scoped key sees only its own running engines, not the global count.
       active: scope ? [...this.engines.keys()].filter(id => scope.includes(id)).length : this.engines.size,
       ready: byStatus[SessionStatus.READY] || 0,

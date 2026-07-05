@@ -53,7 +53,8 @@
     "logout": "Disconnetti",
     "refresh": "Aggiorna",
     "errorGeneric": "Si è verificato un errore",
-    "unknownError": "Errore sconosciuto"
+    "unknownError": "Errore sconosciuto",
+    "retry": "Riprova"
   },
   "theme": {
     "light": "Chiaro",
@@ -71,12 +72,21 @@
     "webhooks": "Webhook",
     "templates": "Modelli",
     "apiKeys": "Chiavi API",
-    "messageTester": "Tester Messaggi",
+    "messageTester": "Messaggio di prova",
     "infrastructure": "Infrastruttura",
     "plugins": "Plugin",
     "logs": "Log"
   },
   "chats": {
+    "media": {
+      "location": "Posizione",
+      "call": "Chiamata",
+      "callMissed": "Chiamata persa",
+      "callVideo": "Videochiamata",
+      "callVideoMissed": "Videochiamata persa",
+      "omitted": "Media",
+      "image": "Immagine"
+    },
     "subtitle": "Invia e rispondi ai messaggi WhatsApp in tempo reale",
     "noSessionsTitle": "Nessuna sessione connessa",
     "noSessionsDesc": "Per utilizzare la funzione chat, connetti prima una sessione WhatsApp dal menu <1>Sessioni</1>.",
@@ -108,6 +118,7 @@
     "placeholderDesc": "Seleziona una chat attiva dalla barra laterale a sinistra per iniziare a leggere e inviare messaggi WhatsApp.",
     "deleteConfirm": "Eliminare questo messaggio per tutti?",
     "messageDeleted": "🚫 Questo messaggio è stato eliminato",
+    "messageMasked": "🔒 Nascosto da WhatsApp sui dispositivi collegati — controlla sul telefono principale",
     "errors": {
       "loadSessions": "Impossibile caricare le sessioni",
       "loadChats": "Impossibile caricare le chat",
@@ -116,7 +127,8 @@
       "send": "Impossibile inviare il messaggio",
       "react": "Impossibile reagire al messaggio",
       "delete": "Impossibile eliminare il messaggio"
-    }
+    },
+    "loadMessagesError": "Impossibile caricare i messaggi. Controlla i log del server."
   },
   "errorBoundary": {
     "title": "Qualcosa è andato storto",
@@ -173,7 +185,8 @@
       "sent": "Inviati",
       "received": "Ricevuti",
       "messages": "Messaggi",
-      "empty": "Nessuna attività di messaggi in questo periodo."
+      "empty": "Nessuna attività di messaggi in questo periodo.",
+      "error": "Impossibile caricare le analisi dei messaggi. Controlla i log del server."
     }
   },
   "sessionStatus": {
@@ -277,6 +290,24 @@
       "success": "La sessione è stata terminata forzatamente. Puoi riavviarla ora.",
       "failedTitle": "Terminazione forzata non riuscita",
       "failed": "Impossibile terminare forzatamente la sessione."
+    },
+    "pairing": {
+      "tabQr": "Codice QR",
+      "tabPhone": "Collega con numero di telefono",
+      "phoneLabel": "Numero di Telefono",
+      "phonePlaceholder": "es., 919876543210",
+      "phoneHint": "Solo cifre (senza +, spazi o trattini) in formato internazionale (prefisso del paese + numero).",
+      "invalidPhone": "Inserisci un numero di telefono valido: 6–15 cifre, prefisso del paese per primo, senza simboli.",
+      "generateButton": "Genera codice di abbinamento",
+      "generating": "Generazione del codice di abbinamento in corso...",
+      "codeLabel": "Il tuo codice di abbinamento",
+      "changeNumber": "Cambia numero / Richiedi nuovo codice",
+      "instructions": "Istruzioni per l'abbinamento",
+      "step1": "<strong>1.</strong> Apri WhatsApp sul tuo telefono",
+      "step2": "<strong>2.</strong> Tocca <strong>Menu</strong> o <strong>Impostazioni</strong> e seleziona <strong>Dispositivi collegati</strong>",
+      "step3": "<strong>3.</strong> Tocca <strong>Collega un dispositivo</strong>, poi tocca <strong>Collega con numero di telefono</strong>",
+      "step4": "<strong>4.</strong> Inserisci sul tuo telefono il codice di 8 caratteri mostrato sopra",
+      "waitingConnection": "In attesa del collegamento del tuo telefono…"
     }
   },
   "webhooks": {
@@ -477,7 +508,7 @@
     }
   },
   "messageTester": {
-    "title": "Tester Messaggi",
+    "title": "Messaggio di prova",
     "subtitle": "Invia messaggi di prova tramite le API",
     "compose": "Invia Messaggio di Prova",
     "responseTitle": "Risposta API",
@@ -577,7 +608,14 @@
       "sessionDataPath": "Percorso dati sessione",
       "browserArgs": "Argomenti del browser",
       "noBrowser": "Questo motore si connette tramite WebSocket: non ha un browser, quindi non ci sono impostazioni per la modalità headless o gli argomenti del browser. Il motore attivo viene applicato dopo un riavvio.",
-      "restartNote": "Il cambio di motore ha effetto dopo il riavvio del server."
+      "restartNote": "Il cambio di motore ha effetto dopo il riavvio del server.",
+      "webVersion": "Build di WhatsApp Web",
+      "webVersionNative": "automatico (predefinito di whatsapp-web.js)",
+      "webVersionSource": {
+        "pinned": "fissato tramite WWEBJS_WEB_VERSION",
+        "auto": "risolto automaticamente, build attuale verificata e funzionante",
+        "native": "selezione automatica nativa di whatsapp-web.js"
+      }
     },
     "redis": {
       "title": "Redis",
@@ -588,16 +626,16 @@
       "queueTitle": "Abilita Sistema di Code BullMQ",
       "queueDesc": "Usa le code di messaggi per una consegna affidabile di messaggi e webhook",
       "statsTitle": "Statistiche delle Code",
-      "messageQueue": "Coda Messaggi",
       "webhookQueue": "Coda Webhook",
       "pending": "In attesa",
       "completed": "Completati",
       "failed": "Falliti",
-      "clearFailed": "Cancella Processi Falliti",
       "viewBullMq": "Visualizza Dashboard BullMQ",
       "disabledTitle": "Redis è Disabilitato",
       "disabledDesc": "Abilita Redis per la cache, lo storage delle sessioni e le code di messaggi BullMQ.",
-      "passwordOptional": "(opzionale)"
+      "passwordOptional": "(opzionale)",
+      "bullMqUrlCopied": "URL della dashboard Bull MQ copiato",
+      "bullMqUrlHint": "Aprilo con una chiave API ADMIN: una scheda del browser non può autenticarsi."
     },
     "storage": {
       "title": "Configurazione di Archiviazione",
@@ -613,7 +651,8 @@
       "accessKey": "Access Key",
       "secretKey": "Secret Key",
       "endpoint": "Endpoint Personalizzato (opzionale)",
-      "endpointHint": "Per MinIO o altri servizi compatibili con S3"
+      "endpointHint": "Per MinIO o altri servizi compatibili con S3",
+      "s3Unreachable": "S3 (non raggiungibile)"
     },
     "statusLabels": {
       "connected": "Connesso",
@@ -638,7 +677,25 @@
     },
     "toasts": {
       "saveFailed": "Salvataggio Fallito"
-    }
+    },
+    "envPinNote": "Fissato da una variabile d'ambiente: questo è il valore in esecuzione; le modifiche dalla dashboard non avranno effetto finché la variabile non viene rimossa.",
+    "migration": {
+      "title": "Attenzione: questa operazione cambia il backend dei dati",
+      "dbWarning": "Il nuovo database parte vuoto. Scarica ora un backup dei tuoi dati attuali (mentre sei ancora sul vecchio database), poi ripristinalo dopo il riavvio.",
+      "storageWarning": "I file multimediali esistenti non vengono spostati automaticamente sul nuovo backend di archiviazione; rimarranno nella posizione precedente.",
+      "downloadBackup": "Scarica prima il backup",
+      "backupTitle": "Backup e ripristino dei dati",
+      "backupHint": "Esporta tutti i dati come JSON prima di cambiare database, poi importali dopo il cambio. Il backup contiene i segreti dei webhook e le credenziali del proxy in chiaro: conservalo in modo sicuro ed eliminalo dopo il ripristino.",
+      "export": "Esporta dati",
+      "import": "Importa dati",
+      "exportFailed": "Impossibile esportare i dati",
+      "importFailed": "Impossibile importare i dati",
+      "importOk": "Dati importati",
+      "importConfirm": "L'importazione SOSTITUIRÀ tutti i dati attuali con il backup ({{rows}} righe). Questa operazione non può essere annullata. Continuare?",
+      "invalidFile": "Questo file non è un backup dati valido di OpenWA.",
+      "importTooLarge": "Il backup supera il limite della richiesta. Aumenta BODY_SIZE_LIMIT sul server e riprova."
+    },
+    "statusLoadError": "Impossibile caricare lo stato attuale dell'infrastruttura. Aggiorna per riprovare."
   },
   "plugins": {
     "title": "Plugin",
@@ -718,6 +775,65 @@
       "selectSession": "Seleziona una sessione…",
       "saveOverride": "Salva override",
       "clearOverride": "Rimuovi override"
+    },
+    "instances": {
+      "title": "Istanze",
+      "description": "Effettua il provisioning di istanze per account per questa integrazione. Ogni istanza ha il proprio segreto di firma e URL di ingresso.",
+      "create": "Crea istanza",
+      "empty": "Nessuna istanza ancora. Creane una per ottenere un URL di ingresso e un segreto.",
+      "loadError": "Impossibile caricare le istanze.",
+      "allSessions": "Tutte le sessioni",
+      "enabled": "Abilitata",
+      "disabled": "Disabilitata",
+      "form": {
+        "instanceId": "ID istanza",
+        "instanceIdPlaceholder": "es. acme-support",
+        "instanceIdHint": "Lettere, numeri, trattini e underscore (max 64).",
+        "sessionScope": "Ambito sessione (opzionale)",
+        "sessionScopePlaceholder": "Lascia vuoto per tutte le sessioni",
+        "verifyToken": "Token di verifica (opzionale)",
+        "verifyTokenPlaceholder": "Token che il provider restituisce durante la verifica",
+        "config": "Configurazione (JSON opzionale)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Istanza creata",
+        "hint": "Copia subito il segreto — viene mostrato solo una volta.",
+        "secret": "Segreto di firma",
+        "ingressUrls": "URL di ingresso"
+      },
+      "regenerate": {
+        "title": "Rigenera segreto",
+        "confirm": "Rigenerare il segreto di firma per {{id}}? Il segreto attuale smetterà di funzionare immediatamente.",
+        "action": "Rigenera"
+      },
+      "edit": { "title": "Modifica {{id}}" },
+      "delete": {
+        "title": "Elimina istanza",
+        "confirm": "Eliminare l'istanza {{id}}? Il relativo URL di ingresso e segreto smetteranno di funzionare immediatamente.",
+        "action": "Elimina"
+      },
+      "actions": {
+        "regenerate": "Rigenera segreto",
+        "edit": "Modifica",
+        "delete": "Elimina",
+        "copy": "Copia",
+        "save": "Salva",
+        "enable": "Abilita",
+        "disable": "Disabilita"
+      },
+      "errors": {
+        "invalidId": "L'ID istanza deve contenere lettere, numeri, trattini o underscore (max 64).",
+        "invalidJson": "La configurazione deve essere un JSON valido.",
+        "duplicateId": "Esiste già un'istanza con questo ID."
+      },
+      "toasts": {
+        "created": "Istanza creata",
+        "updated": "Istanza aggiornata",
+        "deleted": "Istanza eliminata",
+        "secretRegenerated": "Segreto rigenerato",
+        "actionFailed": "Azione non riuscita"
+      }
     }
   }
 }

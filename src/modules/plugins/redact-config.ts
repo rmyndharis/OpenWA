@@ -48,7 +48,15 @@ export function redactSecretConfig(
   schema?: PluginConfigSchema,
 ): Record<string, unknown> {
   const out = { ...(config ?? {}) };
-  if (!schema?.properties) return out;
+  // Fail CLOSED when the schema is unavailable (plugin unloaded / failed to load): we can't tell which
+  // fields are secret, so mask every meaningful value rather than leak a credential. Returning the
+  // config unchanged here would expose runtime-stored secrets on GET /plugins.
+  if (!schema?.properties) {
+    for (const key of Object.keys(out)) {
+      if (isMeaningful(out[key])) out[key] = SECRET_SENTINEL;
+    }
+    return out;
+  }
   return redactObject(out, schema.properties);
 }
 
@@ -121,13 +129,21 @@ function restoreValue(
       value: incoming
         .map((item, i) => {
           const s = elementSignature(item, itemField);
-          // Prefer an unambiguous content match — a row keeps its secret across reorder / insert /
-          // removal. When the signature can't disambiguate (scalar-secret elements all mask to the
-          // sentinel; duplicate rows; or a row whose NON-secret field was edited), fall back to the
-          // same index, but only when the array length is unchanged: a same-length round-trip is an
-          // in-place edit (position i is the same logical row), whereas a length change is a true
-          // insert/removal where positional binding could graft a stored secret onto a new row.
-          const match = sigCount.get(s) === 1 ? sigFirst.get(s) : sameLength ? existingArr[i] : undefined;
+          // Resolution order: (1) an unambiguous content match keeps a row's secret across
+          // reorder/insert/removal; (2) on an unchanged length, fall back to the positional twin (an
+          // in-place edit — position i is the same logical row, incl. a non-secret-field rename); (3) on a
+          // length change, bind the positional twin ONLY when its masked signature still equals this
+          // element's, so an append/removal keeps each surviving sentinel's stored secret while a
+          // genuinely-new or signature-changed row at that position is never grafted with a stored secret.
+          const twin = existingArr[i];
+          const match =
+            sigCount.get(s) === 1
+              ? sigFirst.get(s)
+              : sameLength
+                ? twin
+                : twin !== undefined && elementSignature(twin, itemField) === s
+                  ? twin
+                  : undefined;
           return restoreValue(item, match, itemField);
         })
         // Honor keep:false like restoreObject does (drop the element) rather than emitting `.value`
@@ -164,6 +180,19 @@ export function restoreSecretConfig(
   existing: Record<string, unknown> | undefined,
   schema?: PluginConfigSchema,
 ): Record<string, unknown> {
-  if (!schema?.properties) return { ...incoming };
+  // Symmetric fail-closed restore for the schemaless case: redactSecretConfig masks EVERY value to the
+  // sentinel, so on write treat any sentinel value as "keep existing" (restore the stored value, or drop
+  // the key when nothing is stored). Returning `incoming` as-is would persist the sentinel and corrupt
+  // the stored config. Non-sentinel values (genuinely edited) are kept verbatim.
+  if (!schema?.properties) {
+    const out = { ...incoming };
+    const ex = existing ?? {};
+    for (const key of Object.keys(out)) {
+      if (out[key] !== SECRET_SENTINEL) continue;
+      if (isMeaningful(ex[key])) out[key] = ex[key];
+      else delete out[key];
+    }
+    return out;
+  }
   return restoreObject(incoming, existing, schema.properties);
 }

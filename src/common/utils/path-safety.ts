@@ -31,3 +31,14 @@ export function isSafeStorageKey(key: string): boolean {
   if (path.isAbsolute(key)) return false;
   return !key.split(/[/\\]/).includes('..');
 }
+
+/**
+ * Returns true if `name` is a safe engine session name — the same conservative charset the
+ * CreateSessionDto enforces (letters, digits, hyphen). A session name becomes the engine auth-directory
+ * key (`path.join(authDir, name)` / `session-${name}`), so a '.', '/', or '\\' could traverse outside it
+ * (arbitrary write, and `rm -rf` on teardown). This is the sink-side guard for every path that reaches
+ * the auth dir — normal creation validates via the DTO, but data import / seed can carry a raw name.
+ */
+export function isSafeSessionName(name: unknown): name is string {
+  return typeof name === 'string' && /^[a-zA-Z0-9-]+$/.test(name);
+}

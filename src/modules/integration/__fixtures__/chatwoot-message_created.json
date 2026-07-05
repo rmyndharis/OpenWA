@@ -1,0 +1,8 @@
+{
+  "event": "message_created",
+  "message_type": "outgoing",
+  "private": false,
+  "content": "Hello from a human agent",
+  "conversation": { "id": 42 },
+  "account": { "id": 1 }
+}
