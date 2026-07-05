@@ -19,6 +19,9 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const typeAheadBuffer = useRef('');
+  const typeAheadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const selectedOption = options.find(opt => opt.value === value);
   const selectedLabel = selectedOption?.label ?? '';
@@ -26,6 +29,7 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
   const close = useCallback(() => {
     setIsOpen(false);
     setFocusedIndex(-1);
+    triggerRef.current?.focus();
   }, []);
 
   const toggle = useCallback(() => {
@@ -69,6 +73,14 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
           e.preventDefault();
           setFocusedIndex(prev => (prev > 0 ? prev - 1 : options.length - 1));
           break;
+        case 'Home':
+          e.preventDefault();
+          setFocusedIndex(0);
+          break;
+        case 'End':
+          e.preventDefault();
+          setFocusedIndex(options.length - 1);
+          break;
         case 'Enter':
         case ' ':
           e.preventDefault();
@@ -78,6 +90,17 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
           break;
         case 'Tab':
           close();
+          break;
+        default:
+          if (e.key.length === 1) {
+            typeAheadBuffer.current += e.key.toLowerCase();
+            clearTimeout(typeAheadTimer.current);
+            typeAheadTimer.current = setTimeout(() => { typeAheadBuffer.current = ''; }, 500);
+            const match = options.findIndex(opt =>
+              opt.label.toLowerCase().startsWith(typeAheadBuffer.current),
+            );
+            if (match >= 0) setFocusedIndex(match);
+          }
           break;
       }
     },
@@ -104,16 +127,20 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
     }
   }, [isOpen, focusedIndex]);
 
+  useEffect(() => {
+    return () => clearTimeout(typeAheadTimer.current);
+  }, []);
+
   return (
     <div className="custom-select" ref={containerRef} onKeyDown={handleKeyDown}>
       <button
+        ref={triggerRef}
         type="button"
         className="custom-select-trigger"
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-label={ariaLabel}
-        aria-activedescendant={focusedIndex >= 0 ? `option-${options[focusedIndex]?.value}` : undefined}
       >
         <span className="custom-select-label">{selectedLabel}</span>
         <ChevronDown size={16} className={`custom-select-chevron ${isOpen ? 'open' : ''}`} />
