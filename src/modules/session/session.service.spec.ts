@@ -80,6 +80,7 @@ describe('SessionService', () => {
     mockEngine = {
       initialize: jest.fn().mockResolvedValue(undefined),
       destroy: jest.fn().mockResolvedValue(undefined),
+      forceDestroy: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn().mockResolvedValue(undefined),
       getQRCode: jest.fn().mockReturnValue(null),
       getGroups: jest.fn().mockResolvedValue([]),
@@ -375,7 +376,12 @@ describe('SessionService', () => {
 
       const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
       expect(engines.has('sess-uuid-1')).toBe(false); // not left orphaned → session can be started again
-      expect(mockEngine.destroy).toHaveBeenCalled(); // half-built engine torn down
+      // forceDestroy(), not destroy(): initialize() failing usually means the browser/CDP
+      // connection is already broken, so only a direct SIGKILL (forceDestroy) reliably reaps the
+      // OS-level Chromium process — a graceful destroy() has nothing live to talk to and can only
+      // time out, leaving the process orphaned (the actual bug this test now guards against).
+      expect(mockEngine.forceDestroy).toHaveBeenCalled();
+      expect(mockEngine.destroy).not.toHaveBeenCalled();
     });
 
     it('allows a fresh start after the previous one completed (reservation is cleared)', async () => {
