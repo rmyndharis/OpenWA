@@ -72,12 +72,11 @@ export interface MessageWithReactions extends Omit<Message, 'hasReaction' | 'get
  */
 export interface BusinessClient extends Omit<
   Client,
-  'subscribeToChannel' | 'unsubscribeFromChannel' | 'getLabels' | 'getLabelById' | 'getChannels' | 'getChannelById'
+  'subscribeToChannel' | 'unsubscribeFromChannel' | 'getLabels' | 'getLabelById' | 'getChannels'
 > {
   getLabels(): Promise<Array<{ id: string; name: string; hexColor: string }>>;
   getLabelById(id: string): Promise<{ id: string; name: string; hexColor: string } | null>;
   getChannels(): Promise<WwjsChannelData[]>;
-  getChannelById(id: string): Promise<WwjsChannelData | null>;
   subscribeToChannel(inviteCode: string): Promise<WwjsChannelData>;
   unsubscribeFromChannel(id: string): Promise<void>;
 }

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A session whose `engine.initialize()` fails no longer orphans its browser process.** The crash-recovery path in `SessionService.start()` was tearing down the half-built engine with a graceful `destroy()`, but a failed `initialize()` usually means the underlying browser/CDP connection is already broken (e.g. a `TargetCloseError: Target closed` mid-injection) — `destroy()` has nothing live to talk to, so it could only time out after 10s via `teardownEngineSafely`'s race, leaving the Chromium process alive and orphaned. Every such crash left one more orphaned process behind, eventually starving the host of memory. It now uses `forceDestroy()` (the same SIGKILL-the-process recovery `POST /:id/force-kill` uses), since a failed initialize is the same "possibly-unreachable engine" state that exists for.
+- **`GET /api/sessions/:sessionId/channels/:channelId/messages` always returned an empty array** on the whatsapp-web.js engine (#625). The adapter called `client.getChannelById()`, which does not exist in whatsapp-web.js 1.34.x, so every call threw and the error was swallowed into `[]`. Channel messages are now read from the subscribed `Channel` instance (via `getChannels()`), and an unknown/unsubscribed channel returns a `404` (`ChannelNotFoundError`) instead of a silent empty `200` — matching `GET /channels/:channelId`. Thanks @Header9968.
 
 ## [0.8.7] - 2026-07-03
 
