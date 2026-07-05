@@ -103,6 +103,36 @@ export function isSupportedProxyUrl(url: string): boolean {
   }
 }
 
+export interface ProxyLaunchConfig {
+  /** Credential-less `--proxy-server` value — Chromium ignores credentials embedded in this flag. */
+  serverArg: string;
+  /** Username/password for whatsapp-web.js's `proxyAuthentication` (→ `page.authenticate`, HTTP/HTTPS only). */
+  proxyAuthentication?: { username: string; password: string };
+  /** The URL carries credentials for a SOCKS proxy, which Chromium cannot authenticate at all. */
+  socksAuthUnsupported: boolean;
+}
+
+/**
+ * Split a proxy URL into a credential-less `--proxy-server` value plus, for an HTTP/HTTPS proxy, the
+ * username/password to hand to whatsapp-web.js's `proxyAuthentication` (which calls `page.authenticate`
+ * — the only way Chromium authenticates a proxy). Credentials embedded in `--proxy-server` are ignored
+ * by Chromium, and SOCKS proxies cannot be authenticated at all, so SOCKS credentials are surfaced via
+ * `socksAuthUnsupported` for the caller to warn about instead of failing with an opaque nav timeout (#628).
+ * Call only with a URL that already passed {@link isSupportedProxyUrl}.
+ */
+export function buildProxyLaunchConfig(url: string): ProxyLaunchConfig {
+  const parsed = new URL(url);
+  const serverArg = `${parsed.protocol}//${parsed.host}`;
+  const username = decodeURIComponent(parsed.username);
+  const password = decodeURIComponent(parsed.password);
+  const hasCredentials = username !== '' || password !== '';
+  const isSocks = parsed.protocol === 'socks4:' || parsed.protocol === 'socks5:';
+  if (hasCredentials && !isSocks) {
+    return { serverArg, proxyAuthentication: { username, password }, socksAuthUnsupported: false };
+  }
+  return { serverArg, socksAuthUnsupported: hasCredentials && isSocks };
+}
+
 /**
  * Whether a MediaInput's string `data` is an http(s) URL (to be fetched through the SSRF-guarded
  * loadRemoteMedia) rather than base64. Case-insensitive, matching the Baileys adapter — a mixed-case
@@ -323,12 +353,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
       // Add proxy configuration if provided — but only when the URL parses to a supported scheme, so
       // a malformed/stored proxy value can't break the Chromium launch or smuggle a non-proxy scheme.
+      let proxyAuthentication: { username: string; password: string } | undefined;
       if (this.config.proxy) {
         if (isSupportedProxyUrl(this.config.proxy.url)) {
-          puppeteerArgs.push(`--proxy-server=${this.config.proxy.url}`);
-          this.logger.log(
-            `Using proxy: ${this.config.proxy.type}://${this.config.proxy.url.replace(/:[^:@]*@/, ':***@')}`,
-          );
+          // Chromium ignores credentials in --proxy-server; pass a credential-less server and hand the
+          // username/password to wwjs's proxyAuthentication (page.authenticate) for HTTP/HTTPS proxies (#628).
+          const proxyLaunch = buildProxyLaunchConfig(this.config.proxy.url);
+          puppeteerArgs.push(`--proxy-server=${proxyLaunch.serverArg}`);
+          proxyAuthentication = proxyLaunch.proxyAuthentication;
+          if (proxyLaunch.socksAuthUnsupported) {
+            this.logger.warn(
+              `Proxy for session ${this.config.sessionId} has credentials on a SOCKS proxy, but Chromium ` +
+                `cannot authenticate SOCKS proxies. Use an IP-authorized proxy or an HTTP/HTTPS proxy instead.`,
+            );
+          }
+          this.logger.log(`Using proxy: ${proxyLaunch.serverArg}`);
         } else {
           this.logger.warn(`Ignoring invalid proxy URL for session ${this.config.sessionId}`);
         }
@@ -361,6 +400,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
         },
         ...(authTimeoutMs !== undefined ? { authTimeoutMs } : {}),
+        ...(proxyAuthentication ? { proxyAuthentication } : {}),
         ...(versionPin ?? {}),
       });
 

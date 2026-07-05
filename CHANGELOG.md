@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`GET /api/sessions/:sessionId/channels/:channelId/messages` always returned an empty array** on the whatsapp-web.js engine (#625). The adapter called `client.getChannelById()`, which does not exist in whatsapp-web.js 1.34.x, so every call threw and the error was swallowed into `[]`. Channel messages are now read from the subscribed `Channel` instance (via `getChannels()`), and an unknown/unsubscribed channel returns a `404` (`ChannelNotFoundError`) instead of a silent empty `200` — matching `GET /channels/:channelId`. Thanks @Header9968.
+- **Authenticated HTTP/HTTPS proxies now work** on the whatsapp-web.js engine (#628). Credentials were passed inside `--proxy-server`, which Chromium ignores, so a proxy with a username/password never authenticated (only IP-authorized proxies worked). The username/password are now handed to whatsapp-web.js's `proxyAuthentication` (which drives Chromium's `page.authenticate`) while `--proxy-server` gets a credential-less URL. SOCKS proxies still cannot be authenticated — Chromium does not support SOCKS proxy authentication at all — so a SOCKS proxy carrying credentials now logs a clear warning instead of failing with an opaque navigation timeout. Thanks @gudge25.
 
 ## [0.8.7] - 2026-07-03
 
