@@ -5,6 +5,7 @@ import {
   extractLinkedParentJID,
   isHttpUrl,
   isSupportedProxyUrl,
+  buildProxyLaunchConfig,
   loadRemoteMedia,
   resolveAuthTimeoutMs,
   wwebjsAckToDeliveryStatus,
@@ -78,6 +79,36 @@ describe('isSupportedProxyUrl', () => {
 
   it.each(['not a url', 'ftp://proxy:21', 'proxy:8080', ''])('rejects %s', url => {
     expect(isSupportedProxyUrl(url)).toBe(false);
+  });
+});
+
+describe('buildProxyLaunchConfig (#628 — proxy credentials must not go into --proxy-server)', () => {
+  it('strips credentials from an HTTP proxy and returns them as proxyAuthentication', () => {
+    expect(buildProxyLaunchConfig('http://user:pass@proxy.example.com:8080')).toEqual({
+      serverArg: 'http://proxy.example.com:8080',
+      proxyAuthentication: { username: 'user', password: 'pass' },
+      socksAuthUnsupported: false,
+    });
+  });
+
+  it('URL-decodes credentials', () => {
+    const cfg = buildProxyLaunchConfig('https://us%40er:p%40ss@proxy:8443');
+    expect(cfg.serverArg).toBe('https://proxy:8443');
+    expect(cfg.proxyAuthentication).toEqual({ username: 'us@er', password: 'p@ss' });
+  });
+
+  it('flags SOCKS credentials as unsupported (Chromium cannot authenticate SOCKS) and does NOT set proxyAuthentication', () => {
+    const cfg = buildProxyLaunchConfig('socks5://user:pass@p.webshare.io:80');
+    expect(cfg.serverArg).toBe('socks5://p.webshare.io:80');
+    expect(cfg.proxyAuthentication).toBeUndefined();
+    expect(cfg.socksAuthUnsupported).toBe(true);
+  });
+
+  it('leaves a credential-less proxy untouched', () => {
+    expect(buildProxyLaunchConfig('socks5://p.webshare.io:1080')).toEqual({
+      serverArg: 'socks5://p.webshare.io:1080',
+      socksAuthUnsupported: false,
+    });
   });
 });
 
