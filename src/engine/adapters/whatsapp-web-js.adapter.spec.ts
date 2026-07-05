@@ -16,6 +16,7 @@ import * as qrcode from 'qrcode';
 import { UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { fetch as undiciFetch } from 'undici';
@@ -362,6 +363,61 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
 
     expect(forward).toHaveBeenCalledWith('dest@c.us');
     expect(result.id).toBe('');
+  });
+});
+
+describe('WhatsAppWebJsAdapter channels (#625 — wwebjs Client has no getChannelById)', () => {
+  const CHANNEL = '120363401234567890@newsletter';
+
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('getChannelMessages fetches via the subscribed Channel (getChannels), not the non-existent getChannelById', async () => {
+    const fetchMessages = jest
+      .fn()
+      .mockResolvedValue([{ id: { _serialized: 'M1' }, body: 'hello', timestamp: 1700000000, hasMedia: false }]);
+    const getChannels = jest.fn().mockResolvedValue([{ id: { _serialized: CHANNEL }, name: 'News', fetchMessages }]);
+
+    const result = await readyAdapter({ getChannels }).getChannelMessages(CHANNEL, 10);
+
+    expect(getChannels).toHaveBeenCalled();
+    expect(fetchMessages).toHaveBeenCalledWith({ limit: 10 });
+    expect(result).toEqual([{ id: 'M1', body: 'hello', timestamp: 1700000000, hasMedia: false, mediaUrl: undefined }]);
+  });
+
+  it('getChannelMessages surfaces a not-found channel as ChannelNotFoundError (→ 404), not a silent []', async () => {
+    const getChannels = jest
+      .fn()
+      .mockResolvedValue([{ id: { _serialized: 'other@newsletter' }, fetchMessages: jest.fn() }]);
+    // Typed NotFoundException subclass so it maps to 404, not a plain Error → generic 500.
+    await expect(readyAdapter({ getChannels }).getChannelMessages(CHANNEL)).rejects.toBeInstanceOf(
+      ChannelNotFoundError,
+    );
+  });
+
+  it('getChannelMessages returns [] for a channel with no messages (empty is not an error)', async () => {
+    const fetchMessages = jest.fn().mockResolvedValue([]);
+    const getChannels = jest.fn().mockResolvedValue([{ id: { _serialized: CHANNEL }, name: 'News', fetchMessages }]);
+    await expect(readyAdapter({ getChannels }).getChannelMessages(CHANNEL)).resolves.toEqual([]);
+  });
+
+  it('getChannelById resolves from the subscribed-channel list (no getChannelById call)', async () => {
+    const getChannels = jest
+      .fn()
+      .mockResolvedValue([
+        { id: { _serialized: CHANNEL }, name: 'News', description: 'desc', subscriberCount: 5, verified: true },
+      ]);
+    const ch = await readyAdapter({ getChannels }).getChannelById(CHANNEL);
+    expect(ch).toMatchObject({ id: CHANNEL, name: 'News', description: 'desc', subscriberCount: 5, verified: true });
+  });
+
+  it('getChannelById returns null for a channel not in the subscribed list (service maps null → 404)', async () => {
+    const getChannels = jest.fn().mockResolvedValue([{ id: { _serialized: 'other@newsletter' }, name: 'Other' }]);
+    await expect(readyAdapter({ getChannels }).getChannelById(CHANNEL)).resolves.toBeNull();
   });
 });
 

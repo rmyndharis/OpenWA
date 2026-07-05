@@ -42,6 +42,7 @@ import { createLogger } from '../../common/services/logger.service';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
+import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   GroupChat,
@@ -1463,23 +1464,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getChannelById(channelId: string): Promise<Channel | null> {
     this.ensureReady();
-    try {
-      const ch = await (this.client as unknown as BusinessClient).getChannelById(channelId);
-      if (!ch) {
-        return null;
-      }
-      return {
-        id: String(typeof ch.id === 'object' ? ch.id._serialized : ch.id),
-        name: String(ch.name || ''),
-        description: ch.description ? String(ch.description) : undefined,
-        inviteCode: ch.inviteCode ? String(ch.inviteCode) : undefined,
-        subscriberCount: ch.subscriberCount ? Number(ch.subscriberCount) : undefined,
-        verified: ch.verified ? Boolean(ch.verified) : undefined,
-      };
-    } catch (error) {
-      this.logger.warn(`Failed to get channel: ${channelId}`, String(error));
-      return null;
-    }
+    // wwebjs 1.34.x exposes no client.getChannelById; resolve from the subscribed-channel list (#625).
+    const channels = await this.getSubscribedChannels();
+    return channels.find(c => c.id === channelId) ?? null;
   }
 
   async subscribeToChannel(inviteCode: string): Promise<Channel> {
@@ -1501,26 +1488,24 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getChannelMessages(channelId: string, limit: number = 50): Promise<ChannelMessage[]> {
     this.ensureReady();
-    try {
-      const ch = await (this.client as unknown as BusinessClient).getChannelById(channelId);
-      if (!ch) {
-        throw new Error(`Channel ${channelId} not found`);
-      }
-      const messages = await ch.fetchMessages({ limit });
-      if (!messages) {
-        return [];
-      }
-      return messages.map(msg => ({
-        id: String(typeof msg.id === 'object' ? msg.id._serialized : msg.id),
-        body: String(msg.body || ''),
-        timestamp: Number(msg.timestamp),
-        hasMedia: Boolean(msg.hasMedia),
-        mediaUrl: msg.mediaUrl ? String(msg.mediaUrl) : undefined,
-      }));
-    } catch (error) {
-      this.logger.error(`Failed to get channel messages: ${String(error)}`);
-      return [];
+    // wwebjs 1.34.x has no client.getChannelById (calling it threw and the error was swallowed into an
+    // empty list, #625). The subscribed Channel instances returned by getChannels() carry fetchMessages(),
+    // so resolve the channel from that list and read its messages. A missing channel surfaces as a
+    // ChannelNotFoundError (→ 404, like getChannelById) so callers can tell "no messages" apart from
+    // "wrong/unsubscribed channel" instead of getting a silent [].
+    const channels = await (this.client as unknown as BusinessClient).getChannels();
+    const channel = channels?.find(c => (typeof c.id === 'object' ? c.id._serialized : c.id) === channelId);
+    if (!channel) {
+      throw new ChannelNotFoundError(channelId);
     }
+    const messages = await channel.fetchMessages({ limit });
+    return (messages ?? []).map(msg => ({
+      id: String(typeof msg.id === 'object' ? msg.id._serialized : msg.id),
+      body: String(msg.body || ''),
+      timestamp: Number(msg.timestamp),
+      hasMedia: Boolean(msg.hasMedia),
+      mediaUrl: msg.mediaUrl ? String(msg.mediaUrl) : undefined,
+    }));
   }
 
   // ========== Gap Quick Wins Implementation ==========
