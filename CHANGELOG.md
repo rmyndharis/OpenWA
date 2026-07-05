@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Native WhatsApp polls** via `POST /api/sessions/:sessionId/messages/send-poll`: question, 2–12 options and an optional `allowMultipleAnswers` flag (default single choice), implemented on both engines (whatsapp-web.js `Poll`, Baileys `poll` content with `selectableCount` 1/0). The message history stores the poll question as the body so the log stays readable. Polls are a first-class `poll` message type end to end — both engines map incoming poll messages to it, so the websocket/webhook events, persisted rows, and dashboard all report `poll` consistently. Thanks @alejo117.
 
+### Fixed
+
+- **A session whose `engine.initialize()` fails no longer orphans its browser process.** The crash-recovery path in `SessionService.start()` was tearing down the half-built engine with a graceful `destroy()`, but a failed `initialize()` usually means the underlying browser/CDP connection is already broken (e.g. a `TargetCloseError: Target closed` mid-injection) — `destroy()` has nothing live to talk to, so it could only time out after 10s via `teardownEngineSafely`'s race, leaving the Chromium process alive and orphaned. Every such crash left one more orphaned process behind, eventually starving the host of memory. It now uses `forceDestroy()` (the same SIGKILL-the-process recovery `POST /:id/force-kill` uses), since a failed initialize is the same "possibly-unreachable engine" state that exists for.
+
 ## [0.8.7] - 2026-07-03
 
 ### Added

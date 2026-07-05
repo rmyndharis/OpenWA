@@ -457,11 +457,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // initializing). Evict + tear it down so the session doesn't wedge at "already started" with a
         // leaked Chromium/socket permanently holding a concurrency slot. initializingSessions serializes
         // start(), so the engine in the map here is the one this start just created.
+        //
+        // Use forceDestroy(), not destroy(): initialize() failing usually means the underlying
+        // browser/CDP connection is already broken (e.g. a "Target closed" crash mid-injection), so
+        // a graceful destroy() has nothing live to talk to — it can only time out via
+        // teardownEngineSafely's race, after which the orphaned Chromium process is never actually
+        // killed. forceDestroy() SIGKILLs the OS process directly, the same recovery force-kill uses
+        // for a wedged engine, which is exactly the state this catch block is handling.
         const orphan = this.engines.get(id);
         if (orphan) {
           this.engines.delete(id);
           this.sessionErrors.set(id, err instanceof Error ? err.message : String(err));
-          await this.destroyEngineSafely(id, orphan);
+          await this.teardownEngineSafely(id, orphan, e => e.forceDestroy(), 'force-destroy');
           await this.updateStatus(id, SessionStatus.FAILED).catch(() => undefined);
         }
         throw err;
