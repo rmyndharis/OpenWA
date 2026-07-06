@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The **"Install a plugin" modal is wider on desktop** (480px → 680px) to give the plugin catalog list more room, while still collapsing to a full-width bottom sheet on small screens.
+
+### Fixed
+
+- **The dark theme now covers every dashboard surface.** A number of components used hardcoded colors instead of the theme's CSS variables, so several surfaces stayed light in dark mode — most visibly the Infrastructure "Database Migrations" card, plus status/severity badges, toasts, danger-hover states, and toggle tracks across most pages. They now use the theme tokens (and translucent semantic fills) so they follow the active theme in both light and dark. A new `--info` token themes the blue badges (permission, SQLite, info logs, qr-ready pill) that previously had no theme-aware color, and the root `<html>` background no longer stays white when the dark theme is selected on a light-OS device (visible on overscroll).
+
 ## [0.8.8] - 2026-07-05
 
 ### Added

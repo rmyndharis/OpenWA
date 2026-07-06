@@ -190,6 +190,14 @@ select:disabled {
   overflow: hidden;
 }
 
+/* The install-plugin modal holds the catalog list — a bit wider on desktop for comfortable reading.
+   The responsive rules below (<=768px: 95% width; <=480px: full-width bottom sheet) still apply, so
+   it stays responsive on small screens. Lives here (global modal styles) rather than in a page CSS
+   so it isn't subject to the page-root scoping rule. */
+.modal.install-modal {
+  max-width: 680px;
+}
+
 @keyframes slideUp {
   from {
     opacity: 0;
