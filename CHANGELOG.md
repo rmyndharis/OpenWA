@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A terminally-failed or un-reinitializable session no longer strands its browser process or wedges at "already started".** When an engine reports a terminal error, and when a reconnect attempt's re-initialization throws, the dead or half-built engine is now evicted from the session registry and its Chromium process is force-killed instead of being left in place — previously it kept holding a concurrency slot and caused a later start to be rejected as already running. Deleting a session likewise force-kills its browser (rather than a graceful close that could hang on a wedged Chromium and orphan the process).
 - **The dark theme now covers every dashboard surface.** A number of components used hardcoded colors instead of the theme's CSS variables, so several surfaces stayed light in dark mode — most visibly the Infrastructure "Database Migrations" card, plus status/severity badges, toasts, danger-hover states, and toggle tracks across most pages. They now use the theme tokens (and translucent semantic fills) so they follow the active theme in both light and dark. A new `--info` token themes the blue badges (permission, SQLite, info logs, qr-ready pill) that previously had no theme-aware color, and the root `<html>` background no longer stays white when the dark theme is selected on a light-OS device (visible on overscroll).
 
 ## [0.8.8] - 2026-07-05

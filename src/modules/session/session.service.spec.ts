@@ -176,14 +176,14 @@ describe('SessionService', () => {
     const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
     const stoppingOf = () => (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
 
-    it('delete() completes when engine.destroy() rejects — map reconciled, row removed, stop-mark cleared', async () => {
+    it('delete() completes when engine.forceDestroy() rejects — map reconciled, row removed, stop-mark cleared', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-      const engine = { destroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
+      const engine = { forceDestroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
       enginesOf().set('sess-uuid-1', engine);
 
       await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
 
-      expect(engine.destroy).toHaveBeenCalledTimes(1);
+      expect(engine.forceDestroy).toHaveBeenCalledTimes(1);
       expect(enginesOf().has('sess-uuid-1')).toBe(false); // Map reconciled despite the failure
       expect(stoppingOf().has('sess-uuid-1')).toBe(false); // stop-mark cleared (no wedge)
       expect(hookManager.execute).toHaveBeenCalledWith('session:deleted', expect.anything(), expect.anything());
@@ -205,7 +205,7 @@ describe('SessionService', () => {
     it('delete() still surfaces a real DB-removal failure (engine teardown is best-effort, DB is not)', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (dataSource.transaction as jest.Mock).mockRejectedValueOnce(new Error('db down'));
-      enginesOf().set('sess-uuid-1', { destroy: jest.fn().mockResolvedValue(undefined) });
+      enginesOf().set('sess-uuid-1', { forceDestroy: jest.fn().mockResolvedValue(undefined) });
 
       await expect(service.delete('sess-uuid-1')).rejects.toThrow('db down');
       expect(stoppingOf().has('sess-uuid-1')).toBe(false); // mark still cleared on failure
@@ -480,7 +480,8 @@ describe('SessionService', () => {
       // Now delete
       await service.delete('sess-uuid-1');
 
-      expect(mockEngine.destroy).toHaveBeenCalled();
+      // delete() reaps permanently, so it force-destroys (SIGKILL) rather than a graceful destroy().
+      expect(mockEngine.forceDestroy).toHaveBeenCalled();
     });
 
     it('removes the session messages and bulk batches in the same transaction (no orphaned rows)', async () => {
@@ -569,6 +570,48 @@ describe('SessionService', () => {
   });
 
   // ── engine onError / lastError surfacing (#219) ───────────────────
+
+  describe('terminal-failure engine eviction', () => {
+    interface I {
+      initializeEngine: (id: string, s: Session) => Promise<void>;
+      executeReconnect: (id: string, s: Session, st: unknown) => Promise<void>;
+      engines: Map<string, unknown>;
+    }
+    const intern = () => service as unknown as I;
+    const flush = () => new Promise(resolve => setImmediate(resolve));
+
+    it('onError evicts the failed engine and force-destroys it, so the slot frees and a restart is not blocked', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await intern().initializeEngine('sess-uuid-1', createMockSession());
+      expect(intern().engines.get('sess-uuid-1')).toBe(mockEngine);
+
+      const callbacks = (mockEngine.initialize.mock.calls[0] as [EngineEventCallbacks])[0];
+      callbacks.onError?.('net::ERR_INVALID_AUTH_CREDENTIALS');
+      await flush();
+
+      expect(intern().engines.has('sess-uuid-1')).toBe(false);
+      expect(mockEngine.forceDestroy).toHaveBeenCalledTimes(1);
+    });
+
+    it('executeReconnect evicts and force-destroys the half-initialized engine when re-init fails (no orphan on reconnect-exhaustion)', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      // initializeEngine registers the engine, then engine.initialize() rejects — the half-built engine
+      // must not be left in the map for the next start() to trip over as "already started".
+      mockEngine.initialize.mockRejectedValueOnce(new Error('chromium launch failed'));
+      // Suppress the real reconnect timer scheduled by the catch block.
+      jest
+        .spyOn(service as unknown as { scheduleReconnect: () => void }, 'scheduleReconnect')
+        .mockImplementation(() => undefined);
+      const state = { attempts: 1, timer: null, maxAttempts: 5, baseDelay: 5000 };
+
+      await intern().executeReconnect('sess-uuid-1', createMockSession(), state);
+      await flush();
+
+      expect(intern().engines.has('sess-uuid-1')).toBe(false);
+      expect(mockEngine.forceDestroy).toHaveBeenCalled();
+    });
+  });
 
   describe('reconnect/stop race', () => {
     interface Internals {
@@ -743,6 +786,12 @@ describe('SessionService', () => {
         // …then a terminal failure arrives. It must cancel the pending reconnect so the timer
         // can't resurrect a session the operator has to manually restart.
         callbacks.onError?.('fatal browser crash');
+        // onError also evicts the engine; teardownEngineSafely schedules a transient timeout that is
+        // cleared once forceDestroy settles. Flush microtasks so only the reconnect-cancellation (the
+        // property under test) remains — the resurrection timer must be gone.
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
         expect(jest.getTimerCount()).toBe(0);
       } finally {
         jest.clearAllTimers();

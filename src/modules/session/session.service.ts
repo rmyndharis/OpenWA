@@ -266,6 +266,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
   }
 
+  /**
+   * Evict a terminally-failed or abandoned engine from the map and SIGKILL its browser process
+   * (best-effort, time-bounded via teardownEngineSafely). An engine left in the map keeps holding a
+   * concurrency slot and makes a later start() see the session as "already started"; forceDestroy()
+   * (not the graceful destroy()) is used because such an engine's browser/CDP connection is typically
+   * already broken, so a graceful close would only time out before the process is reaped.
+   */
+  private evictAndForceDestroy(id: string, engine: IWhatsAppEngine): void {
+    this.engines.delete(id);
+    void this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
+  }
+
   async create(dto: CreateSessionDto): Promise<Session> {
     // Check if session with same name exists
     const existing = await this.sessionRepository.findOne({
@@ -360,11 +372,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.cancelReconnect(id);
 
     try {
-      // Stop engine if running — time-bounded + isolated so a stuck Chromium destroy() can't wedge
-      // the delete; the Map is reconciled and the DB removal proceeds regardless of the outcome.
+      // Stop engine if running — time-bounded + isolated so a stuck Chromium can't wedge the delete;
+      // the Map is reconciled and the DB removal proceeds regardless of the outcome. Use forceDestroy()
+      // (SIGKILL) rather than a graceful destroy(): the session is being removed permanently, so there is
+      // no session state worth saving, and a wedged Chromium must be reaped, not left to time out.
       const engine = this.engines.get(id);
       if (engine) {
-        await this.teardownEngineSafely(id, engine, e => e.destroy(), 'destroy');
+        await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
         this.engines.delete(id);
       }
 
@@ -1040,6 +1054,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         );
 
         void this.updateStatus(id, SessionStatus.FAILED);
+
+        // onError is terminal (no reconnect is scheduled — re-scan is required). Evict the dead engine
+        // and SIGKILL its process: leaving it in the map would hold a concurrency slot indefinitely and
+        // make the next start() reject the session as "already started" instead of re-initializing it.
+        this.evictAndForceDestroy(id, engine);
       },
     });
   }
@@ -1168,6 +1187,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         sessionId: id,
         action: 'reconnect_error',
       });
+      // initializeEngine registers the engine in the map BEFORE engine.initialize() runs, so a rejected
+      // re-init leaves a half-built engine behind. Evict + reap it: otherwise a reconnect that later
+      // exhausts its attempts strands an orphaned Chromium holding a concurrency slot, and the next
+      // start() sees the session as "already started".
+      const halfBuilt = this.engines.get(id);
+      if (halfBuilt) {
+        this.evictAndForceDestroy(id, halfBuilt);
+      }
       // Schedule another attempt
       this.scheduleReconnect(id, session);
     }
