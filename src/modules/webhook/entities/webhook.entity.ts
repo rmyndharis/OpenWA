@@ -1,6 +1,7 @@
 import {
   Entity,
   Column,
+  Index,
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
@@ -19,6 +20,9 @@ export class Webhook {
 
   // varchar (not uuid) to match the authoritative migration DDL and sessions.id; the data connection
   // runs synchronize:false, so a 'uuid' decorator here would only mislead schema diffs / a stray sync.
+  // Indexed: the dispatch path filters webhooks by sessionId on every emitted event (see the
+  // AddWebhooksSessionIdIndex migration, which creates the index on migration-managed DBs).
+  @Index('IDX_webhooks_sessionId')
   @Column({ type: 'varchar' })
   sessionId: string;
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Indexed `webhooks.sessionId`.** The webhook dispatch path looks up a session's active webhooks by `sessionId` on every emitted event, so on a busy session this was a full table scan of the `webhooks` table per event (the foreign-key column carried no index). A cross-dialect index migration — plus the matching entity index — makes the lookup index-backed.
+
 ## [0.8.9] - 2026-07-06
 
 ### Changed
