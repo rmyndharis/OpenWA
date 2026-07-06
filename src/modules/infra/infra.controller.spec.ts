@@ -26,7 +26,7 @@ jest.mock('fs', () => {
   };
 });
 
-import { DataSource } from 'typeorm';
+import { DataSource, QueryFailedError } from 'typeorm';
 import { InfraController } from './infra.controller';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -526,6 +526,66 @@ describe('InfraController.importData round-trips export-data (no silent message/
     expect(res.warnings.length).toBeGreaterThan(0);
     expect(await ds.getRepository(Session).count()).toBe(1);
     expect(await ds.getRepository(Message).count()).toBe(1);
+  });
+
+  it('propagates a genuine clear-table failure (lock/IO) instead of committing a merged restore', async () => {
+    // Pre-existing data that must survive if a clear step fails.
+    await seedSession('s1');
+    await ds.getRepository(Message).save(
+      ds.getRepository(Message).create({
+        id: 'm1',
+        sessionId: 's1',
+        chatId: 'c1',
+        from: 'a',
+        to: 'b',
+        body: 'keep me',
+        type: 'text',
+        direction: MessageDirection.INCOMING,
+        status: MessageStatus.DELIVERED,
+      }),
+    );
+
+    expect(await ds.getRepository(Message).count()).toBe(1); // sanity: seeded
+
+    // Make ONLY `DELETE FROM messages` fail with a genuine (non-missing-table) error. Previously a
+    // blind `.catch(() => {})` swallowed this and let a disjoint-id backup COMMIT a merged (not
+    // replaced) restore on SQLite; scoping the swallow to missing-table means the failure must now
+    // SURFACE (reaching the existing rollback-and-rethrow catch). A Proxy over the runner the
+    // controller creates intercepts just that one statement — no spy on `query`, so TypeORM's own
+    // internal `this.query` transaction control (BEGIN/ROLLBACK) is untouched.
+    const lockErr = new QueryFailedError(
+      'DELETE FROM messages',
+      [],
+      Object.assign(new Error('SQLITE_BUSY: database is locked'), { code: 'SQLITE_BUSY' }),
+    );
+    let rolledBack = false;
+    const origCreate = ds.createQueryRunner.bind(ds);
+    jest.spyOn(ds, 'createQueryRunner').mockImplementation(() => {
+      const real = origCreate();
+      return new Proxy(real, {
+        get(target, prop) {
+          if (prop === 'query') {
+            return (sql: string, params?: unknown[]) =>
+              sql === 'DELETE FROM messages'
+                ? Promise.reject(lockErr)
+                : (target.query as (q: string, p?: unknown[]) => Promise<unknown>).call(target, sql, params);
+          }
+          if (prop === 'rollbackTransaction') {
+            return async () => {
+              rolledBack = true;
+              return target.rollbackTransaction.call(target);
+            };
+          }
+          const val = (target as unknown as Record<string, unknown>)[prop as string];
+          return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val;
+        },
+      });
+    });
+
+    await expect(controller.importData({ tables: { messages: [] } })).rejects.toThrow(/database is locked/);
+    expect(rolledBack).toBe(true);
+
+    jest.restoreAllMocks();
   });
 });
 

@@ -725,6 +725,58 @@ describe('SessionService', () => {
     });
   });
 
+  describe('scheduleReconnect during shutdown', () => {
+    type ReconnectInternals = {
+      reconnectStates: Map<
+        string,
+        { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }
+      >;
+      scheduleReconnect: (id: string, s: Session) => void;
+      executeReconnect: (...args: unknown[]) => Promise<void>;
+      shutdownService?: { isShuttingDown: () => boolean };
+    };
+
+    it('does not spawn a fresh engine while the process is draining', () => {
+      jest.useFakeTimers();
+      try {
+        const i = service as unknown as ReconnectInternals;
+        i.reconnectStates.set('sess-uuid-1', { attempts: 0, timer: null, maxAttempts: 5, baseDelay: 5000 });
+        // Drain in progress: a disconnect during the shutdown window must NOT schedule a reconnect that
+        // would launch a fresh Chromium racing onModuleDestroy's teardown.
+        i.shutdownService = { isShuttingDown: () => true };
+        const exec = jest.spyOn(i, 'executeReconnect').mockResolvedValue(undefined);
+
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+        jest.advanceTimersByTime(120000);
+
+        expect(exec).not.toHaveBeenCalled();
+        expect(jest.getTimerCount()).toBe(0);
+        expect(i.reconnectStates.get('sess-uuid-1')!.attempts).toBe(0); // no attempt consumed
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('schedules a reconnect normally when not shutting down', () => {
+      jest.useFakeTimers();
+      try {
+        const i = service as unknown as ReconnectInternals;
+        i.reconnectStates.set('sess-uuid-2', { attempts: 0, timer: null, maxAttempts: 5, baseDelay: 5000 });
+        i.shutdownService = { isShuttingDown: () => false };
+        const exec = jest.spyOn(i, 'executeReconnect').mockResolvedValue(undefined);
+
+        i.scheduleReconnect('sess-uuid-2', createMockSession());
+        expect(i.reconnectStates.get('sess-uuid-2')!.attempts).toBe(1); // an attempt was scheduled
+        jest.advanceTimersByTime(120000);
+        expect(exec).toHaveBeenCalled();
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('engine onError', () => {
     type EngineCallbacks = { onError?: (reason: string) => void; onReady?: (phone: string, name: string) => void };
 

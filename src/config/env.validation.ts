@@ -116,6 +116,28 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     checkPositiveInt(key);
   }
 
+  // Boolean feature flags read at module-eval time (app.module.ts) with a bare `=== 'true'` /
+  // `!== 'false'` comparison: a typo (`True`, `1`, `yes`) or trailing whitespace/CR silently
+  // (dis)ables the feature. Validate the RAW value — NOT a trimmed one — so `'true '` / `'true\r'`
+  // (a Windows-edited env file forwarded verbatim by `docker run --env-file`) is rejected too rather
+  // than passing validation while every read site reads it as false. Blank (a compose `${KEY:-}`
+  // forward) stays legal: it behaves as unset at every read site.
+  const checkBool = (key: string): void => {
+    const raw = config[key];
+    if (raw === undefined) return;
+    if (typeof raw !== 'string') {
+      errors.push(`${key} must be "true" or "false"`);
+      return;
+    }
+    if (raw.trim() === '') return;
+    if (raw !== 'true' && raw !== 'false') {
+      errors.push(`${key} must be "true" or "false" (got ${JSON.stringify(raw)})`);
+    }
+  };
+  for (const key of ['QUEUE_ENABLED', 'MCP_ENABLED', 'SERVE_DASHBOARD']) {
+    checkBool(key);
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid environment configuration:\n  - ${errors.join('\n  - ')}`);
   }

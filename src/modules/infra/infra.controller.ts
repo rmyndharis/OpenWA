@@ -17,6 +17,7 @@ import { CacheService } from '../../common/cache/cache.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
+import { isMissingTableError } from '../../common/utils/db-errors';
 import { ImportStorageDto } from './dto/import-storage.dto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -890,15 +891,26 @@ export class InfraController {
       // Clear existing data (in correct order due to foreign keys). templates and
       // baileys_stored_messages FK sessions ON DELETE CASCADE, so the sessions DELETE would clear
       // them too; clearing them explicitly first keeps the order correct on engines where the
-      // cascade is not enforced, and is a no-op when the table doesn't exist.
+      // cascade is not enforced. Tolerate a genuinely-absent table (isMissingTableError) but let any
+      // OTHER failure (lock, I/O, aborted tx) propagate to the transaction rollback below — a blind
+      // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
+      // SQLite, violating the endpoint's "replaces existing data" contract.
+      const clearTable = async (table: string): Promise<void> => {
+        try {
+          await queryRunner.query(`DELETE FROM ${table}`);
+        } catch (err) {
+          if (!isMissingTableError(err)) throw err;
+          this.logger.debug('Skipped clearing a table that does not exist during import', { table });
+        }
+      };
       await queryRunner.query('DELETE FROM webhooks');
-      await queryRunner.query('DELETE FROM messages').catch(() => {});
-      await queryRunner.query('DELETE FROM message_batches').catch(() => {});
-      await queryRunner.query('DELETE FROM templates').catch(() => {});
-      await queryRunner.query('DELETE FROM baileys_stored_messages').catch(() => {});
+      await clearTable('messages');
+      await clearTable('message_batches');
+      await clearTable('templates');
+      await clearTable('baileys_stored_messages');
       // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
       // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
-      await queryRunner.query('DELETE FROM lid_mappings').catch(() => {});
+      await clearTable('lid_mappings');
       await queryRunner.query('DELETE FROM sessions');
 
       // Import sessions first
