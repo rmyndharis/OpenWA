@@ -66,6 +66,50 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
+  test-postgres:
+    name: Test (PostgreSQL migrations)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openwa
+          POSTGRES_PASSWORD: openwa
+          POSTGRES_DB: openwa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openwa"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (compiles the data migrations to dist/)
+        run: npm run build
+
+      # Applies the full data-migration chain to a real Postgres and asserts every generated-uuid PK
+      # has a DB DEFAULT — the dialect gap SQLite-only tests can't see.
+      - name: Migrate + uuid-default smoke against PostgreSQL
+        run: npm run test:pg-smoke
+        env:
+          DATABASE_TYPE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USERNAME: openwa
+          DATABASE_PASSWORD: openwa
+          DATABASE_NAME: openwa
+
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest

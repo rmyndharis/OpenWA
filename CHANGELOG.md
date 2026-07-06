@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Integration Fabric now works on PostgreSQL.** `conversation_mappings` and `integration_delivery_failures` declared `@PrimaryGeneratedColumn('uuid')` ids but their columns were created without a Postgres `DEFAULT gen_random_uuid()`, so on PostgreSQL every first insert failed with a `NOT NULL` violation on `id` — breaking the plugin conversation-mapping upsert (e.g. the Chatwoot handover) and the ingress dead-letter write. SQLite was unaffected because its driver mints the uuid client-side, which is why it went unnoticed. A forward-only migration adds the default (no-op on SQLite). A new CI job now applies the full migration chain against a real PostgreSQL and asserts every generated-uuid primary key has a database default, so this dialect gap can't recur.
+
 ## [0.8.9] - 2026-07-06
 
 ### Changed

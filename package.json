@@ -28,6 +28,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:pg-smoke": "node scripts/pg-uuid-smoke.js",
     "typeorm": "typeorm-ts-node-commonjs",
     "typeorm:prod": "typeorm",
     "migration:create": "npm run typeorm -- migration:create src/database/migrations/$npm_config_name",
