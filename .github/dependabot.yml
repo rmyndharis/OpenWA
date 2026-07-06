@@ -46,3 +46,16 @@ updates:
       interval: monthly
     labels:
       - ci
+
+  # Base images (Dockerfile) + the compose stack's pinned images (socket-proxy, postgres,
+  # redis, minio). Keeps the security-critical docker-socket-proxy pin and the datastore
+  # images moving instead of drifting on a stale tag.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker

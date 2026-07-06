@@ -31,6 +31,7 @@ import {
   ReactionEvent,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
@@ -150,6 +151,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // an inbound-only migrated contact's `@lid` and `@c.us` rows bridge in the read-path (#583 R3 Ph2).
     @Optional()
     private readonly lidMappingStore?: LidMappingStoreService,
+    // Draining flag (set on a termination signal or an admin restart). Used to suppress a mid-shutdown
+    // reconnect that would launch a fresh Chromium racing onModuleDestroy's teardown. @Optional so the
+    // service degrades to today's behaviour if it is ever constructed without the (global) LoggerModule.
+    @Optional()
+    private readonly shutdownService?: ShutdownService,
   ) {}
 
   /**
@@ -1101,6 +1107,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   private scheduleReconnect(id: string, session: Session): void {
+    // Don't launch a fresh engine (Chromium) mid-shutdown: a disconnect during the drain window would
+    // otherwise schedule a reconnect that races onModuleDestroy's teardown and could orphan a browser.
+    // Leaving the session DISCONNECTED is the correct end state — a later start()/auto-restore
+    // re-initializes it cleanly.
+    if (this.shutdownService?.isShuttingDown()) {
+      this.logger.log(`Skipping reconnect during shutdown for session: ${session.name}`, { sessionId: id });
+      return;
+    }
+
     const state = this.reconnectStates.get(id);
     if (!state) return;
 

@@ -5,6 +5,12 @@
   "author": "Yudhi Armyndharis & OpenWA Contributors",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scarfSettings": {
+    "enabled": false
+  },
   "scripts": {
     "build": "nest build",
     "build:all": "nest build && npm run dashboard:build",
@@ -82,7 +88,6 @@
     "tar-stream": "^3.2.0",
     "typeorm": "^0.3.29",
     "undici": "^8.7.0",
-    "uuid": "^14.0.1",
     "whatsapp-web.js": "^1.34.7",
     "zod": "^4.4.3"
   },
@@ -102,7 +107,6 @@
     "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.2",
     "@types/tar-stream": "^3.1.4",
-    "@types/uuid": "^11.0.0",
     "concurrently": "^10.0.3",
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.0.1",
