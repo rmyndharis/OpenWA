@@ -4,7 +4,7 @@
 services:
   # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
   docker-proxy:
-    image: tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: openwa-docker-proxy
     restart: unless-stopped
     # Only on the isolated internal network — reachable solely by openwa-api, NOT the
@@ -34,6 +34,11 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
+    # Give the graceful drain room to complete before Docker SIGKILLs the container: the shutdown
+    # grace (SHUTDOWN_DELAY_MS, default 3s) plus the worst-case per-engine teardown bound (~10s) can
+    # exceed Docker's 10s default, which would otherwise kill Chromium mid-teardown and orphan a
+    # session profile. Tune down if you raise neither SHUTDOWN_DELAY_MS nor run many sessions.
+    stop_grace_period: 45s
     # App network for datastores + the isolated network to reach
     # docker-proxy (DOCKER_HOST). createService() in docker.service.ts attaches
     # orchestrated containers to the literal `openwa-network`, so its name is fixed.
@@ -229,7 +234,7 @@ services:
 
   # ===== OPTIONAL: Built-in MinIO (S3-compatible) =====
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: openwa-minio
     profiles: ['minio', 'full']
     restart: unless-stopped

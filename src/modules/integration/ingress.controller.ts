@@ -1,4 +1,5 @@
 import { All, Controller, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../auth/decorators/auth.decorators';
 import { IngressService } from './ingress.service';
@@ -9,6 +10,7 @@ import { InstanceThrottlerGuard } from './instance-throttler.guard';
 // The provider body is read as RAW bytes from req.rawBody (stashed by the json() verify callback in
 // main.ts) — it is intentionally NOT DTO-bound, so the global ValidationPipe never 400s on the
 // provider's unknown keys, and the exact signed bytes reach the HMAC verifier.
+@ApiTags('integration')
 @Public()
 @Controller('ingress')
 export class IngressController {

@@ -10,8 +10,8 @@ Security fixes land on the latest minor release. Please upgrade older deployment
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2   | :x:                |
+| 0.8.x   | :white_check_mark: |
+| < 0.8   | :x:                |
 
 ## Reporting a vulnerability
 

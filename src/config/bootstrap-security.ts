@@ -45,6 +45,19 @@ export function isSwaggerEnabled(enableSwaggerEnv?: string, nodeEnv?: string): b
 }
 
 /**
+ * Whether the global ValidationPipe should EXPOSE field-level validation error messages. Hidden by
+ * default in production (a 400 there returns a generic message so the DTO shape isn't reflected back)
+ * and shown outside production. `VALIDATION_ERROR_DETAIL=true` forces detail on — useful for debugging
+ * an SDK/integration against a production instance without flipping NODE_ENV — and `=false` forces it
+ * off everywhere. Mirrors isSwaggerEnabled's exact-string, production-default-off contract.
+ */
+export function isValidationErrorDetailEnabled(validationDetailEnv?: string, nodeEnv?: string): boolean {
+  if (validationDetailEnv === 'true') return true;
+  if (validationDetailEnv === 'false') return false;
+  return nodeEnv !== 'production';
+}
+
+/**
  * Whether to emit the CSP `upgrade-insecure-requests` directive (browsers auto-upgrade HTTP→HTTPS).
  * An explicit CSP_UPGRADE_INSECURE_REQUESTS wins ('true'/'false'). When unset it keeps the legacy
  * behaviour — ON in production only (the secure default for Internet-facing TLS deployments), OFF

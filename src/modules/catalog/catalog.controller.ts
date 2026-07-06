@@ -5,7 +5,7 @@ import { SendProductDto, SendCatalogDto, ProductQueryDto } from './dto/send-prod
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
-@ApiTags('Catalog')
+@ApiTags('catalog')
 @Controller('sessions/:sessionId')
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}

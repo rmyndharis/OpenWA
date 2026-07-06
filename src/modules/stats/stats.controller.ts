@@ -5,7 +5,7 @@ import { StatsQueryDto } from './dto/stats-query.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
-@ApiTags('Statistics')
+@ApiTags('statistics')
 @Controller('stats')
 export class StatsController {
   constructor(private readonly statsService: StatsService) {}
