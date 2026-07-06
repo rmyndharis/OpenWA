@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in `VALIDATION_ERROR_DETAIL`** exposes field-level validation error messages on `400` responses (hidden by default in production, where a bad request otherwise returns a generic message so the DTO shape isn't reflected back). Set it to `true` to debug an SDK/integration against a production instance without flipping `NODE_ENV`, or `false` to force it off everywhere.
+
+### Changed
+
+- **OpenAPI/Swagger tag hygiene.** Every controller tag is now declared in the API document (ten were used but undeclared), the three Integration Fabric controllers gained `@ApiTags`, and the tag casing is uniform — so `/api/docs` groups every endpoint under a described tag instead of leaving some ungrouped.
+
 ## [0.8.9] - 2026-07-06
 
 ### Changed

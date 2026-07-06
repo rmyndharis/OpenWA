@@ -20,10 +20,12 @@ import { InstanceExistsError, PluginInstanceService } from './plugin-instance.se
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { buildIngressUrls } from './ingress-url';
 import { CreateInstanceDto, InstanceView, UpdateInstanceDto } from './dto/instance.dto';
+import { ApiTags } from '@nestjs/swagger';
 
 // ADMIN-only provisioning surface for per-plugin instances (e.g. one Chatwoot account). Only plugins
 // that declare an ingress route AND the webhook:ingress permission can have instances; everything
 // else is rejected before touching persistence.
+@ApiTags('integration')
 @Controller('integration/plugins/:pluginId/instances')
 @RequireRole(ApiKeyRole.ADMIN)
 export class IntegrationInstanceController {
