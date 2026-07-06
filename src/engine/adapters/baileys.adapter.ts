@@ -483,6 +483,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
           error: err instanceof Error ? err.message : String(err),
         }),
       );
+      // Parity with the wwjs engine's message_create → message.sent (see emitOwnSendEcho).
+      void this.emitOwnSendEcho(sent);
     }
     return {
       id: sent?.key?.id ?? '',
@@ -1073,7 +1075,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () => stream?.destroy?.());
   }
 
-  private async mapMessage(msg: WAMessage, contentType: string | undefined): Promise<IncomingMessage> {
+  private async mapMessage(
+    msg: WAMessage,
+    contentType: string | undefined,
+    opts?: { skipMediaDownload?: boolean },
+  ): Promise<IncomingMessage> {
     const b = await this.loadLib();
     const content = msg.message ?? {};
     // Read body/isPtt off the NORMALIZED content: a disappearing message (ephemeralMessage), a captioned
@@ -1112,7 +1118,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
       contentType === 'documentWithCaptionMessage' ||
       contentType === 'stickerMessage';
     if (isMediaType) {
-      if (!isMediaDownloadEnabled()) {
+      // The outbound "sent" echo passes skipMediaDownload: the sender already holds the media, and for
+      // parity with the wwjs message.sent (which carries no media buffer) we emit only the marker here.
+      if (opts?.skipMediaDownload || !isMediaDownloadEnabled()) {
         // Emit the omitted marker so the media field is present (webhook/n8n/dashboard contract).
         // mimetype is available pre-download from the message content.
         const normalizedContent = b.normalizeMessageContent(content) ?? content;
@@ -1419,8 +1427,36 @@ export class BaileysAdapter implements IWhatsAppEngine {
           error: err instanceof Error ? err.message : String(err),
         }),
       );
+      // wwjs fires `message_create` for its own API sends, which SessionService turns into `message.sent`.
+      // Baileys' own socket-sends echo back only as a `type:'append'` upsert (skipped as history sync), so
+      // that event never fired for API sends. Emit the outbound "created" callback here for parity —
+      // best-effort and off the response path, with no media re-download (matching the wwjs payload).
+      void this.emitOwnSendEcho(sent);
     }
     return { id: sent?.key?.id ?? '', timestamp: this.toUnixSeconds(sent?.messageTimestamp) };
+  }
+
+  /**
+   * Emit the engine-neutral "message created" callback for a message this session just sent via the API,
+   * so downstream `message.sent` webhook/WS/hook delivery matches the whatsapp-web.js engine. Best-effort:
+   * a mapping failure must never fail the send that already succeeded.
+   */
+  private async emitOwnSendEcho(sent: WAMessage): Promise<void> {
+    if (!this.callbacks.onMessageCreate) return;
+    try {
+      const b = await this.loadLib();
+      if (!sent.message || !sent.key?.remoteJid) return;
+      const normalizedRoot = b.normalizeMessageContent(sent.message) ?? sent.message;
+      const contentType = b.getContentType(normalizedRoot);
+      // protocol / reaction / empty own messages carry no neutral "sent" content.
+      if (!contentType || contentType === 'protocolMessage' || contentType === 'reactionMessage') return;
+      const neutral = await this.mapMessage(sent, contentType, { skipMediaDownload: true });
+      this.callbacks.onMessageCreate(neutral);
+    } catch (err) {
+      this.logger.warn('Failed to emit own-send echo', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Resolve a previously-seen message from the store, or throw a clear not-found error. */

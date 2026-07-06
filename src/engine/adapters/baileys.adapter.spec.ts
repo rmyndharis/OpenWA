@@ -581,6 +581,35 @@ describe('BaileysAdapter messaging', () => {
     expect(res).toEqual({ id: 'OUT1', timestamp: 1700000001 });
   });
 
+  it('emits onMessageCreate for the own send so message.sent fires (parity with the wwjs engine)', async () => {
+    const onMessageCreate = jest.fn();
+    // A realistic own-send return: fromMe + remoteJid + content, which the API-send echo path maps.
+    fakeSock.sendMessage.mockResolvedValue({
+      key: { id: 'OUT1', fromMe: true, remoteJid: '628111@s.whatsapp.net' },
+      message: { conversation: 'hello' },
+      messageTimestamp: 1700000001,
+    });
+    const adapter = await readyAdapter({ onMessageCreate });
+    await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
+    // The echo is emitted off the response path via an async mapMessage chain; let it settle.
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    expect(onMessageCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'OUT1', fromMe: true, body: 'hello', type: 'text' }),
+    );
+  });
+
+  it('skips the own-send echo when the returned message carries no neutral content (best-effort)', async () => {
+    const onMessageCreate = jest.fn();
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    const adapter = await readyAdapter({ onMessageCreate });
+    await adapter.sendTextMessage('628111@s.whatsapp.net', 'hi');
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
   it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
     fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
     const adapter = await readyAdapter();
