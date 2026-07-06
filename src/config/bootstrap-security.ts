@@ -57,10 +57,16 @@ export function isUpgradeInsecureRequestsEnabled(cspEnv?: string, nodeEnv?: stri
   return nodeEnv === 'production';
 }
 
-/** Request body-size cap (DoS hardening). Default is media-aware (base64 sends ride in the JSON body). */
+/**
+ * Request body-size cap (DoS hardening). Default is media-aware (base64 sends ride in the JSON body).
+ * A value the body-size parser can't understand (e.g. 'unlimited', 'none', a typo) resolves to a null
+ * limit downstream, which SILENTLY DISABLES the cap — so an unparseable value falls back to the default
+ * instead. Accepts a positive number with an optional bytes unit (b/kb/mb/gb/tb/pb).
+ */
+const BODY_LIMIT_PATTERN = /^\d+(\.\d+)?\s?(b|kb|mb|gb|tb|pb)?$/i;
 export function resolveBodyLimit(bodySizeEnv?: string): string {
   const trimmed = bodySizeEnv?.trim();
-  return trimmed ? trimmed : '25mb';
+  return trimmed && BODY_LIMIT_PATTERN.test(trimmed) ? trimmed : '25mb';
 }
 
 /** Known weak/default/placeholder secret values that must never reach production. */

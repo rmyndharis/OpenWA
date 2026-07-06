@@ -712,7 +712,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private async clearLocalAuth(): Promise<void> {
     const dir = path.join(path.resolve(this.config.sessionDataPath), `session-${this.config.sessionId}`);
     await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
-      this.logger.warn(`Could not clear stale auth at ${dir}`, String(error));
+      this.logger.warn(`Could not clear stale auth at ${dir}`, { error: String(error) });
     });
   }
 
@@ -763,7 +763,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // This allows reconnecting without needing to scan QR again
       await client.destroy();
     } catch (error) {
-      this.logger.warn('Destroy client failed:', String(error));
+      this.logger.warn('Destroy client failed:', { error: String(error) });
       // Already destroyed or not initialized - ignore
     } finally {
       this.finishClientTeardown(client);
@@ -778,12 +778,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // Logout clears session data - user will need to scan QR again
       await client.logout();
     } catch (error) {
-      this.logger.warn('Logout failed:', String(error));
+      this.logger.warn('Logout failed:', { error: String(error) });
       // Fall back to destroy if logout fails
       try {
         await client.destroy();
       } catch (destroyError) {
-        this.logger.warn('Client destroy also failed during logout fallback', String(destroyError));
+        this.logger.warn('Client destroy also failed during logout fallback', { error: String(destroyError) });
       }
     } finally {
       this.finishClientTeardown(client);
@@ -1023,7 +1023,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         isBlocked: contact.isBlocked,
       };
     } catch (error) {
-      this.logger.warn(`Failed to get contact: ${contactId}`, String(error));
+      this.logger.warn(`Failed to get contact: ${contactId}`, { error: String(error) });
       return null;
     }
   }
@@ -1260,7 +1260,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
       };
     } catch (error) {
-      this.logger.warn(`Failed to get group: ${groupId}`, String(error));
+      this.logger.warn(`Failed to get group: ${groupId}`, { error: String(error) });
       return null;
     }
   }
@@ -1845,7 +1845,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // Presence is best-effort and already swallowed here — it never breaks the surrounding send —
       // so log at WARN, not ERROR: a migrated contact routinely yields `No LID for user` on the
       // presence path and an ERROR line reads as a fault when nothing actually failed (#582).
-      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, String(error));
+      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, { error: String(error) });
     }
   }
 

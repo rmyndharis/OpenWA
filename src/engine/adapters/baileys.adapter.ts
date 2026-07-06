@@ -515,7 +515,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // Presence is best-effort — a failure here must never surface as a 500 on the direct typing
       // endpoint or MCP tool (mirrors the whatsapp-web.js adapter; #583 R4). A migrated contact can
       // yield `No LID for user` on the presence path even when the actual send succeeds.
-      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, String(error));
+      this.logger.warn(`Could not set chat state '${state}' for ${chatId} (best-effort)`, { error: String(error) });
     }
   }
 

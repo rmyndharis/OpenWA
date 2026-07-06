@@ -90,6 +90,16 @@ describe('resolveBodyLimit', () => {
   it('honors an explicit limit', () => {
     expect(resolveBodyLimit('5mb')).toBe('5mb');
   });
+  it('falls back to the default for a value the body-size parser cannot understand (which would silently disable the cap)', () => {
+    expect(resolveBodyLimit('unlimited')).toBe('25mb');
+    expect(resolveBodyLimit('none')).toBe('25mb');
+    expect(resolveBodyLimit('abc')).toBe('25mb');
+  });
+  it('still honors valid numeric/unit limits, preserving case and unit', () => {
+    expect(resolveBodyLimit('10MB')).toBe('10MB');
+    expect(resolveBodyLimit('1024')).toBe('1024');
+    expect(resolveBodyLimit('1.5gb')).toBe('1.5gb');
+  });
 });
 
 describe('assertNoDefaultSecretsInProduction', () => {

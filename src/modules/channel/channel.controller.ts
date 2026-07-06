@@ -49,7 +49,10 @@ export class ChannelController {
     @Param('channelId') channelId: string,
     @Query('limit') limit?: string,
   ) {
-    return this.channelService.getChannelMessages(sessionId, channelId, limit ? parseInt(limit, 10) : undefined);
+    // A non-empty non-numeric ?limit (e.g. `?limit=abc`) is truthy, so a bare `parseInt` would forward
+    // NaN to the engine (wwjs then returns an unpredictable/empty set). Fall back to the engine default.
+    const parsed = limit !== undefined ? parseInt(limit, 10) : NaN;
+    return this.channelService.getChannelMessages(sessionId, channelId, Number.isNaN(parsed) ? undefined : parsed);
   }
 
   @Post('subscribe')
