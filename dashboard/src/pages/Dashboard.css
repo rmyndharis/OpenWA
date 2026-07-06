@@ -104,7 +104,7 @@
 }
 
 .dashboard .stat-trend.down{
-  color: #ef4444;
+  color: var(--error);
 }
 
 .dashboard .sessions-section{
@@ -209,12 +209,12 @@
 }
 
 .dashboard .status-pill.connecting{
-  background: #fef3c7;
-  color: #d97706;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
 }
 
 .dashboard .status-pill.disconnected{
-  background: #f3f4f6;
+  background: var(--bg-light);
   color: var(--text-muted);
 }
 
@@ -247,13 +247,13 @@
 }
 
 .dashboard .btn-sm.danger{
-  color: #dc2626;
-  border-color: #fecaca;
-  background: #fef2f2;
+  color: var(--error);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.12);
 }
 
 .dashboard .btn-sm.danger:hover{
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.18);
 }
 
 @media (max-width: 1200px) {

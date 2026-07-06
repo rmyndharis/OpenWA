@@ -84,7 +84,7 @@
 }
 
 .api-keys-page .keys-table tbody tr.table-row:nth-child(even){
-  background: rgba(0, 0, 0, 0.02);
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .api-keys-page .keys-table tbody tr.table-row:nth-child(even):hover{
@@ -136,8 +136,8 @@
 .api-keys-page .permission-badge{
   font-size: 0.6875rem;
   padding: 0.25rem 0.5rem;
-  background: #e0f2fe;
-  color: #0369a1;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--info);
   border-radius: 4px;
   font-weight: 500;
   white-space: nowrap;
@@ -178,9 +178,9 @@
 }
 
 .api-keys-page .icon-btn.danger:hover{
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .api-keys-page .permissions-reference{
@@ -267,7 +267,7 @@
 }
 
 .api-keys-page .confirm-warning-icon{
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .api-keys-page .confirm-message{
@@ -284,7 +284,7 @@
 
 .api-keys-page .btn-danger{
   padding: 0.75rem 1.25rem;
-  background: #dc2626;
+  background: var(--error);
   color: white;
   border: none;
   border-radius: 8px;
@@ -413,8 +413,8 @@
   }
 
   .api-keys-page .status-badge.inactive{
-    background: #fee2e2;
-    color: #dc2626;
+    background: rgba(239, 68, 68, 0.12);
+    color: var(--error);
   }
 
   /* Actions cell - bottom with separator */

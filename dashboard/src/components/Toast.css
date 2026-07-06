@@ -14,7 +14,7 @@
   align-items: flex-start;
   gap: 0.75rem;
   padding: 1rem 1.25rem;
-  background: white;
+  background: var(--bg-card);
   border-radius: 12px;
   box-shadow:
     0 10px 40px rgba(0, 0, 0, 0.12),
@@ -79,13 +79,13 @@
 .toast-title {
   font-weight: 600;
   font-size: 0.9375rem;
-  color: #1e293b;
+  color: var(--text-primary);
   line-height: 1.4;
 }
 
 .toast-message {
   font-size: 0.8125rem;
-  color: #64748b;
+  color: var(--text-secondary);
   margin-top: 0.25rem;
   line-height: 1.5;
 }
@@ -100,12 +100,12 @@
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .toast-close:hover {
-  background: #f1f5f9;
-  color: #475569;
+  background: var(--bg-light);
+  color: var(--text-secondary);
 }

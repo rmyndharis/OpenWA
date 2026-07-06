@@ -76,20 +76,20 @@
 }
 
 .infrastructure-page .status-indicator.disconnected{
-  background: #fee2e2;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .infrastructure-page .status-indicator.sqlite{
-  background: #e0f2fe;
-  color: #0369a1;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--info);
 }
 
 .infrastructure-page .warning-badge{
   font-size: 0.75rem;
   padding: 0.375rem 0.75rem;
-  background: #fef3c7;
-  color: #d97706;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
   border-radius: 6px;
 }
 
@@ -231,7 +231,7 @@
 .infrastructure-page .toggle-info small{
   font-size: 0.75rem;
   font-weight: 400;
-  color: #64748b; /* Slate 500 */
+  color: var(--text-muted); /* Slate 500 */
   opacity: 0.85;
 }
 
@@ -254,7 +254,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: #e5e7eb;
+  background: var(--border);
   border-radius: 26px;
   transition: all 0.2s;
 }
@@ -393,10 +393,10 @@
 }
 
 .infrastructure-page .stat-item.pending .value{
-  color: #d97706;
+  color: var(--warning);
 }
 .infrastructure-page .stat-item.pending .label{
-  color: #d97706;
+  color: var(--warning);
 }
 .infrastructure-page .stat-item.completed .value{
   color: var(--primary);
@@ -405,10 +405,10 @@
   color: var(--primary);
 }
 .infrastructure-page .stat-item.failed .value{
-  color: #dc2626;
+  color: var(--error);
 }
 .infrastructure-page .stat-item.failed .label{
-  color: #dc2626;
+  color: var(--error);
 }
 
 .infrastructure-page .queue-actions{
@@ -466,8 +466,8 @@
   gap: 0.5rem;
   padding: 0.625rem 1rem;
   background: transparent;
-  color: #dc2626;
-  border: 1px solid #dc2626;
+  color: var(--error);
+  border: 1px solid var(--error);
   border-radius: var(--radius);
   font-size: 0.875rem;
   font-weight: 500;
@@ -476,7 +476,7 @@
 }
 
 .infrastructure-page .btn-danger-outline:hover{
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.12);
 }
 
 /* Footer */

@@ -435,7 +435,7 @@
   border: 1px solid rgba(251, 191, 36, 0.3);
   border-radius: 8px;
   margin-bottom: 1.5rem;
-  color: #d97706;
+  color: var(--warning);
   font-size: 0.875rem;
 }
 
@@ -637,7 +637,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: #cbd5e1;
+  background-color: var(--border);
   transition: 0.3s;
   border-radius: 26px;
 }
@@ -1135,4 +1135,11 @@
   gap: 6px;
   color: var(--text-secondary, #6b7280);
   font-size: 0.85rem;
+}
+
+/* The install modal holds the plugin catalog list — give it more room on desktop for comfortable
+   reading. The shared .modal responsive rules still apply below it (<=768px: 95% width;
+   <=480px: full-width bottom sheet), so it stays responsive on small screens. */
+.modal.install-modal {
+  max-width: 680px;
 }

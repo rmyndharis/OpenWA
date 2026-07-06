@@ -102,7 +102,7 @@
 }
 
 .chats-page .chats-list::-webkit-scrollbar-thumb, .chats-page .room-messages::-webkit-scrollbar-thumb{
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--border);
   border-radius: 3px;
 }
 
@@ -641,8 +641,8 @@
 }
 
 .chats-page .btn-remove-attachment:hover{
-  background: #fee2e2;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .chats-page .chats-emoji-picker{
@@ -846,8 +846,8 @@
 }
 
 .chats-page .action-btn.delete-btn:hover{
-  color: #dc2626;
-  background: #fee2e2;
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.12);
 }
 
 /* Reaction Quick Popover */

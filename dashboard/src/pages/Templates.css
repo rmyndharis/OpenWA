@@ -362,9 +362,9 @@
 }
 
 .templates-page .icon-btn.danger:hover{
-  border-color: #fecaca;
-  background: #fee2e2;
-  color: #dc2626;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .templates-page .btn-danger{
@@ -374,7 +374,7 @@
   padding: 0.75rem 1.25rem;
   border: none;
   border-radius: var(--radius);
-  background: #dc2626;
+  background: var(--error);
   color: white;
   font-size: 0.9375rem;
   font-weight: 600;
@@ -400,15 +400,15 @@
 }
 
 .templates-page .toast.success{
-  border: 1px solid #a7f3d0;
-  background: #ecfdf5;
-  color: #047857;
+  border: 1px solid rgba(37, 211, 102, 0.3);
+  background: rgba(37, 211, 102, 0.12);
+  color: var(--success);
 }
 
 .templates-page .toast.error{
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .templates-page .toast-close{

@@ -225,12 +225,12 @@
 }
 
 .sessions-page .btn-action.danger {
-  color: #dc2626;
+  color: var(--error);
 }
 
 .sessions-page .btn-action.danger:hover {
-  background: #fee2e2;
-  border-color: #fecaca;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 @media (max-width: 1400px) {
@@ -424,7 +424,7 @@
 .sessions-page .input-error {
   margin: 0.5rem 0 0;
   font-size: 0.75rem;
-  color: #dc2626;
+  color: var(--error);
   font-weight: 500;
 }
 
@@ -546,17 +546,17 @@
 
 .sessions-page .status-badge.connected {
   background: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
+  color: var(--success);
 }
 
 .sessions-page .status-badge.disconnected {
   background: rgba(107, 114, 128, 0.1);
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .sessions-page .status-badge.connecting {
   background: rgba(234, 179, 8, 0.1);
-  color: #ca8a04;
+  color: var(--warning);
 }
 
 .sessions-page .status-badge::before {
@@ -625,13 +625,13 @@
 }
 
 .sessions-page .btn-close:hover {
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .sessions-page .btn-close:hover svg {
-  stroke: #dc2626;
+  stroke: var(--error);
 }
 
 /* QR Modal Specific */
@@ -699,28 +699,28 @@
 .sessions-page .status-pill.created,
 .sessions-page .status-pill.idle {
   background: rgba(107, 114, 128, 0.1);
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .sessions-page .status-pill.initializing,
 .sessions-page .status-pill.connecting {
   background: rgba(234, 179, 8, 0.1);
-  color: #ca8a04;
+  color: var(--warning);
 }
 
 .sessions-page .status-pill.qr_ready {
   background: rgba(59, 130, 246, 0.1);
-  color: #2563eb;
+  color: var(--info);
 }
 
 .sessions-page .status-pill.ready {
   background: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
+  color: var(--success);
 }
 
 .sessions-page .status-pill.disconnected {
   background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
+  color: var(--error);
 }
 
 /* Small Button for QR Placeholder */

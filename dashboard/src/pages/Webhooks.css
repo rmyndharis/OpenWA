@@ -345,9 +345,9 @@
 }
 
 .webhooks-page .icon-btn.danger:hover{
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .webhooks-page .events-reference{
@@ -544,15 +544,15 @@
 }
 
 .webhooks-page .toast.success{
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  color: #047857;
+  background: rgba(37, 211, 102, 0.12);
+  border: 1px solid rgba(37, 211, 102, 0.3);
+  color: var(--success);
 }
 
 .webhooks-page .toast.error{
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .webhooks-page .toast-close{
@@ -574,7 +574,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1.25rem;
-  background: #dc2626;
+  background: var(--error);
   color: white;
   border: none;
   border-radius: var(--radius);
@@ -649,7 +649,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: #cbd5e1;
+  background-color: var(--border);
   transition: 0.3s;
   border-radius: 26px;
 }

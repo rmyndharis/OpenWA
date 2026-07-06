@@ -189,18 +189,18 @@
 }
 
 .logs-page .severity-badge.info{
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--info);
 }
 
 .logs-page .severity-badge.warn{
-  background: #fef3c7;
-  color: #d97706;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
 }
 
 .logs-page .severity-badge.error{
-  background: #fee2e2;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .logs-page .pagination{

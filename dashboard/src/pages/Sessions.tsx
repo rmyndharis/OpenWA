@@ -366,10 +366,10 @@ export function Sessions() {
       {error && (
         <div
           style={{
-            background: '#FEE2E2',
+            background: 'rgba(239, 68, 68, 0.12)',
             padding: '1rem',
             borderRadius: '8px',
-            color: '#DC2626',
+            color: 'var(--error)',
             marginBottom: '1rem',
           }}
         >
@@ -445,7 +445,7 @@ export function Sessions() {
                 <span className="session-name">{qrData.sessionName}</span>
               </div>
               <button className="btn-close" onClick={handleCloseQRModal} aria-label={t('common.close')}>
-                <X size={20} color="#64748b" />
+                <X size={20} color="var(--text-muted)" />
               </button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center' }}>

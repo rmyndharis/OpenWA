@@ -92,15 +92,23 @@ button:focus:not(:focus-visible) {
   outline: none;
 }
 
+html {
+  /* Root/overscroll background follows the app theme token, so an explicit dark theme on a
+     light-OS device doesn't reveal a white <html> background above/below the body (overscroll). */
+  background-color: var(--bg-light);
+}
+
 @media (prefers-color-scheme: light) {
-  :root {
+  /* Guarded with :not([data-theme='dark']): when the OS prefers light but the user explicitly
+     picked the dark theme, the app's own choice must win (otherwise the root is force-whitened). */
+  :root:not([data-theme='dark']) {
     color: #213547;
     background-color: #ffffff;
   }
   a:hover {
     color: #747bff;
   }
-  button {
+  :root:not([data-theme='dark']) button {
     background-color: #f9f9f9;
   }
 }
@@ -291,13 +299,13 @@ select:disabled {
 }
 
 .btn-icon:hover {
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .btn-icon:hover svg {
-  stroke: #dc2626;
+  stroke: var(--error);
 }
 
 /* Secondary Button */

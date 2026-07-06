@@ -146,8 +146,8 @@
 }
 
 .message-tester .response-status.error{
-  background: #FEE2E2;
-  color: #DC2626;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
 }
 
 .message-tester .response-details{

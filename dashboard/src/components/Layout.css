@@ -453,9 +453,9 @@
 }
 
 .logout-btn:hover {
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 /* ==================== Main Content ==================== */
