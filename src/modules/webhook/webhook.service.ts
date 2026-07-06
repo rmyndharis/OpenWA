@@ -1,6 +1,13 @@
-import { Injectable, NotFoundException, Optional, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  Optional,
+  BadRequestException,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindManyOptions, In, Repository } from 'typeorm';
+import { FindManyOptions, In, LessThan, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -46,9 +53,10 @@ export interface WebhookJobData {
 }
 
 @Injectable()
-export class WebhookService {
+export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
   private readonly queueEnabled: boolean;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -64,6 +72,49 @@ export class WebhookService {
     private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
+  }
+
+  /**
+   * Periodically prune webhook_delivery_failures older than WEBHOOK_FAILURE_RETENTION_DAYS
+   * (default 90; set <= 0 to disable). Runs once at startup, then daily. The table is an append-only
+   * log written on every terminally-failed delivery, so without this it grows without bound under a
+   * receiver outage. (Mirrors AuditService's audit-log retention.)
+   */
+  onModuleInit(): void {
+    const parsed = Number.parseInt(process.env.WEBHOOK_FAILURE_RETENTION_DAYS ?? '', 10);
+    const retentionDays = Number.isInteger(parsed) ? Math.max(0, parsed) : 90;
+    if (retentionDays <= 0) {
+      this.logger.log('Webhook delivery-failure retention disabled (WEBHOOK_FAILURE_RETENTION_DAYS <= 0)');
+      return;
+    }
+    const runPrune = (): void => {
+      this.pruneDeliveryFailures(retentionDays)
+        .then(n => {
+          if (n > 0) this.logger.log(`Pruned ${n} webhook delivery-failure(s) older than ${retentionDays} day(s)`);
+        })
+        .catch(err =>
+          this.logger.error('Webhook delivery-failure cleanup failed', err instanceof Error ? err.stack : String(err)),
+        );
+    };
+    runPrune(); // prune once at startup
+    this.cleanupTimer = setInterval(runPrune, 24 * 60 * 60 * 1000);
+    this.cleanupTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+    }
+  }
+
+  /**
+   * Delete delivery-failure rows older than the retention window. Returns the number removed.
+   */
+  async pruneDeliveryFailures(olderThanDays: number): Promise<number> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - olderThanDays);
+    const result = await this.failureRepository.delete({ createdAt: LessThan(cutoff) });
+    return result.affected || 0;
   }
 
   /**

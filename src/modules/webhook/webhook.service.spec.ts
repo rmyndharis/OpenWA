@@ -68,6 +68,7 @@ describe('WebhookService', () => {
     failureRepository = {
       insert: jest.fn().mockResolvedValue({}),
       find: jest.fn().mockResolvedValue([]),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
     };
 
     configService = {
@@ -266,6 +267,40 @@ describe('WebhookService', () => {
   });
 
   // ── dispatch (direct mode — queue disabled) ───────────────────────
+
+  describe('delivery-failure retention', () => {
+    afterEach(() => service.onModuleDestroy());
+
+    it('pruneDeliveryFailures deletes rows older than the retention window and returns the count', async () => {
+      (failureRepository.delete as jest.Mock).mockResolvedValue({ affected: 3 });
+      await expect(service.pruneDeliveryFailures(90)).resolves.toBe(3);
+      expect(failureRepository.delete).toHaveBeenCalledTimes(1);
+    });
+
+    it('onModuleInit skips scheduling when WEBHOOK_FAILURE_RETENTION_DAYS <= 0 (retention disabled)', () => {
+      const prev = process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
+      process.env.WEBHOOK_FAILURE_RETENTION_DAYS = '0';
+      try {
+        service.onModuleInit();
+        expect(failureRepository.delete).not.toHaveBeenCalled();
+      } finally {
+        if (prev === undefined) delete process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
+        else process.env.WEBHOOK_FAILURE_RETENTION_DAYS = prev;
+      }
+    });
+
+    it('onModuleInit prunes once at startup when retention is enabled', () => {
+      const prev = process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
+      process.env.WEBHOOK_FAILURE_RETENTION_DAYS = '30';
+      try {
+        service.onModuleInit();
+        expect(failureRepository.delete).toHaveBeenCalledTimes(1);
+      } finally {
+        if (prev === undefined) delete process.env.WEBHOOK_FAILURE_RETENTION_DAYS;
+        else process.env.WEBHOOK_FAILURE_RETENTION_DAYS = prev;
+      }
+    });
+  });
 
   describe('dispatch (direct mode)', () => {
     const mockFetch = undiciFetch as jest.Mock;
