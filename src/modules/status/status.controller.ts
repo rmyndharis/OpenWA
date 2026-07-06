@@ -6,7 +6,7 @@ import { SendImageStatusDto, SendVideoStatusDto } from './dto/send-media-status.
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
-@ApiTags('Status')
+@ApiTags('status')
 @Controller('sessions/:sessionId/status')
 export class StatusController {
   constructor(private readonly statusService: StatusService) {}

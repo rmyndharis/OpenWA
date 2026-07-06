@@ -103,7 +103,8 @@ export interface PluginManifest {
   sdkVersion?: string;
 
   // Inbound webhook routes this plugin claims (requires the `webhook:ingress` permission). Validated
-  // by validateIngressManifest; not yet wired into the loader (see that function's doc comment).
+  // by validateIngressManifest, which the loader calls on every external plugin load (loadPlugin).
+  // (Built-in registration declares no ingress and bypasses that validation.)
   ingress?: PluginIngressRoute[];
 }
 
@@ -229,7 +230,7 @@ export const SUPPORTED_SDK_MAJOR = 1;
  * Validates a manifest's `ingress` declarations: SDK major compatibility, the `webhook:ingress`
  * permission, route uniqueness, and that a declared `toleranceSec` is usable (> 0 — a replay window
  * of zero or less would make the tolerance check a no-op). A manifest with no `ingress` entries is a
- * no-op. Pure validation — not yet called from the plugin loader (wiring lands in a later task).
+ * no-op. Called from PluginLoaderService.loadPlugin, so a malformed declaration is rejected at load time.
  */
 export function validateIngressManifest(manifest: PluginManifest): void {
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate

@@ -1,6 +1,7 @@
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
+  isValidationErrorDetailEnabled,
   isUpgradeInsecureRequestsEnabled,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
@@ -79,6 +80,18 @@ describe('isSwaggerEnabled', () => {
     expect(isSwaggerEnabled('false', 'production')).toBe(false);
     // non-production is unchanged (default on)
     expect(isSwaggerEnabled(undefined, 'development')).toBe(true);
+  });
+});
+
+describe('isValidationErrorDetailEnabled', () => {
+  it('shows detail outside production but hides it in production by default (unchanged default)', () => {
+    expect(isValidationErrorDetailEnabled(undefined, 'development')).toBe(true);
+    expect(isValidationErrorDetailEnabled(undefined, 'production')).toBe(false);
+    expect(isValidationErrorDetailEnabled('', 'production')).toBe(false);
+  });
+  it('honors an explicit opt-in/out regardless of env', () => {
+    expect(isValidationErrorDetailEnabled('true', 'production')).toBe(true); // debug an SDK against prod
+    expect(isValidationErrorDetailEnabled('false', 'development')).toBe(false);
   });
 });
 

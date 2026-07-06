@@ -395,6 +395,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
+          // Do NOT let Puppeteer install its own process signal handlers. By default it handles
+          // SIGINT (→ synchronous process.exit(130), which would skip the graceful drain entirely)
+          // and SIGTERM/SIGHUP (→ kills Chromium at signal time, defeating the drain window). We own
+          // signal handling in main.ts. Puppeteer's unconditional `exit` hook still SIGKILLs this
+          // browser when the process actually exits, so nothing is orphaned.
+          handleSIGINT: false,
+          handleSIGTERM: false,
+          handleSIGHUP: false,
           // Only override the executable when explicitly configured; otherwise let
           // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
           ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
