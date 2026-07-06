@@ -684,6 +684,22 @@ describe('SessionService', () => {
       }
     });
 
+    it('keeps a freshly-reconnected healthy engine when the post-init retirement check errors (transient DB)', async () => {
+      const i = internals();
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      // Re-init succeeds and registers a live engine; the retirement DB read then fails transiently.
+      // It must NOT be misread as a reconnect failure that reaps the healthy engine we just recovered.
+      jest
+        .spyOn(service as unknown as { isSessionRetired: () => Promise<boolean> }, 'isSessionRetired')
+        .mockRejectedValue(new Error('transient db blip'));
+
+      await i.executeReconnect('sess-uuid-1', createMockSession(), reconnectState);
+
+      expect(mockEngine.forceDestroy).not.toHaveBeenCalled();
+      expect(mockEngine.destroy).not.toHaveBeenCalled();
+      expect(i.engines.has('sess-uuid-1')).toBe(true);
+    });
+
     it('does not stack reconnect timers when scheduled twice back-to-back', () => {
       jest.useFakeTimers();
       try {

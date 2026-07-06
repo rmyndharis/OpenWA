@@ -450,7 +450,7 @@ export function Sessions() {
                 <span className="session-name">{qrData.sessionName}</span>
               </div>
               <button className="btn-close" onClick={handleCloseQRModal} aria-label={t('common.close')}>
-                <X size={20} color="var(--text-muted)" />
+                <X size={20} style={{ color: 'var(--text-muted)' }} />
               </button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center' }}>

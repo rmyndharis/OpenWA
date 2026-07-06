@@ -1180,7 +1180,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // registered so it isn't orphaned (the session is meant to be down). delete() clears its
       // teardown mark before this slow init resolves, so re-check the session row exists, not just
       // the mark — otherwise a delete that raced the reconnect leaks a live Chromium/socket.
-      if (await this.isSessionRetired(id)) {
+      // Guard the retirement DB read itself: a transient findOne failure must NOT fall through to the
+      // catch below, which would misread the freshly-built, HEALTHY engine as a half-built one and
+      // force-kill the session we just recovered. On a read error, assume not-retired and keep it.
+      let retired: boolean;
+      try {
+        retired = await this.isSessionRetired(id);
+      } catch {
+        retired = false;
+      }
+      if (retired) {
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
