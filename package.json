@@ -149,10 +149,10 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "branches": 30,
-        "functions": 30,
-        "lines": 33,
-        "statements": 33
+        "branches": 58,
+        "functions": 58,
+        "lines": 66,
+        "statements": 65
       },
       "./src/common/security/": {
         "branches": 85,
@@ -161,10 +161,22 @@
         "statements": 90
       },
       "./src/modules/auth/": {
-        "branches": 30,
-        "functions": 50,
-        "lines": 45,
-        "statements": 45
+        "branches": 62,
+        "functions": 70,
+        "lines": 72,
+        "statements": 72
+      },
+      "./src/engine/adapters/": {
+        "branches": 63,
+        "functions": 63,
+        "lines": 70,
+        "statements": 70
+      },
+      "./src/modules/integration/": {
+        "branches": 67,
+        "functions": 68,
+        "lines": 77,
+        "statements": 77
       }
     },
     "testEnvironment": "node"
