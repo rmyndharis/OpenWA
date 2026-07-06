@@ -24,6 +24,12 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ PORT: '2785' })).not.toThrow();
   });
 
+  it('rejects a non-numeric database timeout knob (a typo would become NaN and break the pg pool)', () => {
+    expect(() => validateEnv({ DATABASE_STATEMENT_TIMEOUT_MS: 'abc' })).toThrow(/DATABASE_STATEMENT_TIMEOUT_MS/);
+    expect(() => validateEnv({ DATABASE_IDLE_TIMEOUT_MS: '30s' })).toThrow(/DATABASE_IDLE_TIMEOUT_MS/);
+    expect(() => validateEnv({ DATABASE_CONNECTION_TIMEOUT_MS: '10000' })).not.toThrow();
+  });
+
   it('rejects an ENGINE_TYPE typo instead of silently falling back to whatsapp-web.js', () => {
     expect(() => validateEnv({ ENGINE_TYPE: 'bailys' })).toThrow(/ENGINE_TYPE/);
     expect(() => validateEnv({ ENGINE_TYPE: 'whatsapp-web.js' })).not.toThrow();

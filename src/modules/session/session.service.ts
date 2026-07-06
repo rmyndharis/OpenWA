@@ -670,13 +670,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         }
         this.sessionErrors.delete(id);
 
-        void this.sessionRepository.update(id, {
-          status: SessionStatus.READY,
-          phone,
-          pushName,
-          connectedAt: new Date(),
-          lastActiveAt: new Date(),
-        });
+        void this.sessionRepository
+          .update(id, {
+            status: SessionStatus.READY,
+            phone,
+            pushName,
+            connectedAt: new Date(),
+            lastActiveAt: new Date(),
+          })
+          .catch(err =>
+            this.logger.warn('Failed to persist session ready state', {
+              sessionId: id,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
       },
       onMessage: (message): void => {
         if (!this.isLiveEngine(id, engine)) return;
@@ -707,7 +714,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'message_received',
         });
         // Update last active timestamp
-        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
+        void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
         // Convert IncomingMessage to plain object for dispatch
         const messageData = { ...message };
 
@@ -822,7 +829,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'message_sent',
         });
         // Update last active timestamp
-        void this.sessionRepository.update(id, { lastActiveAt: new Date() });
+        void this.sessionRepository.update(id, { lastActiveAt: new Date() }).catch(() => undefined);
         const messageData = { ...message };
 
         // Execute hook for message sent - plugins can modify or stop processing
