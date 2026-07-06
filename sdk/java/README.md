@@ -16,14 +16,14 @@ Java 17+, one runtime dependency ([Gson](https://github.com/google/gson)).
 <dependency>
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 
 **Gradle**
 
 ```groovy
-implementation 'com.rmyndharis:openwa:0.1.0'
+implementation 'com.rmyndharis:openwa:0.1.1'
 ```
 
 ## Quickstart

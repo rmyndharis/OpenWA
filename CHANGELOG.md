@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The bundled Docker Compose stack pins its `docker-socket-proxy` and `minio` images to explicit tags** (they were on `:latest`) for reproducible, non-drifting deploys, and a Dependabot `docker` ecosystem was added so base and stack images keep receiving update PRs. A Node `>=22` `engines` floor + `.nvmrc` were declared, and the transitive install-time Scarf telemetry (via `swagger-ui-dist`) is disabled.
+
+### Fixed
+
+- **Documentation & config accuracy.** `.env.example` now documents `PORT` (the port the app binds to on bare metal) distinctly from the Compose-only host-published `API_PORT`, and adds the `QUEUE_ENABLED`/`CACHE_ENABLED` toggles. `SECURITY.md`'s supported-versions table and the Java SDK install snippets are refreshed to the current releases. The unused `uuid`/`@types/uuid` dependency was removed, and stale "not yet wired" comments on the plugin ingress-manifest validation (which the loader has called since it shipped) were corrected.
+
 ## [0.8.9] - 2026-07-06
 
 ### Changed
