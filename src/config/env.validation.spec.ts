@@ -75,6 +75,24 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000' })).not.toThrow();
   });
 
+  it('rejects a non-canonical boolean feature flag instead of silently disabling the feature', () => {
+    // QUEUE_ENABLED / MCP_ENABLED / SERVE_DASHBOARD are read at module-eval with `=== 'true'` /
+    // `!== 'false'`, so a typo silently (dis)ables the feature with zero diagnostics. Boot must reject it.
+    expect(() => validateEnv({ QUEUE_ENABLED: 'True' })).toThrow(/QUEUE_ENABLED/);
+    expect(() => validateEnv({ QUEUE_ENABLED: '1' })).toThrow(/QUEUE_ENABLED/);
+    expect(() => validateEnv({ MCP_ENABLED: 'yes' })).toThrow(/MCP_ENABLED/);
+    expect(() => validateEnv({ SERVE_DASHBOARD: 'no' })).toThrow(/SERVE_DASHBOARD/);
+    // The raw value is checked, NOT a trimmed one: a trailing space / CR (Windows-edited env file
+    // forwarded verbatim by `docker run --env-file`) must still be rejected — otherwise the flag reads
+    // false at every `=== 'true'` site while validation passes, giving false assurance.
+    expect(() => validateEnv({ QUEUE_ENABLED: 'true ' })).toThrow(/QUEUE_ENABLED/);
+    expect(() => validateEnv({ MCP_ENABLED: 'true\r' })).toThrow(/MCP_ENABLED/);
+    // Canonical values, unset, and blank (a compose `${KEY:-}` forward renders '') all pass.
+    expect(() => validateEnv({ QUEUE_ENABLED: 'true', MCP_ENABLED: 'false', SERVE_DASHBOARD: 'true' })).not.toThrow();
+    expect(() => validateEnv({ QUEUE_ENABLED: '', SERVE_DASHBOARD: '' })).not.toThrow();
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
   it('rejects a sqlite data DB path that collides with the internal main database file', () => {
     // The 'main' (auth/audit) and 'data' connections must be separate SQLite files; sharing one
     // file means two migration ledgers + synchronize policies on the same tables.

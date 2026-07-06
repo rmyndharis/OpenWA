@@ -34,6 +34,11 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
+    # Give the graceful drain room to complete before Docker SIGKILLs the container: the shutdown
+    # grace (SHUTDOWN_DELAY_MS, default 3s) plus the worst-case per-engine teardown bound (~10s) can
+    # exceed Docker's 10s default, which would otherwise kill Chromium mid-teardown and orphan a
+    # session profile. Tune down if you raise neither SHUTDOWN_DELAY_MS nor run many sessions.
+    stop_grace_period: 45s
     # App network for datastores + the isolated network to reach
     # docker-proxy (DOCKER_HOST). createService() in docker.service.ts attaches
     # orchestrated containers to the literal `openwa-network`, so its name is fixed.

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Graceful shutdown now drains on `SIGTERM`/`SIGINT`** (rolling deploys, `docker stop`, Ctrl+C), not just on the admin restart endpoint. On a termination signal the app flips readiness to `503` immediately so a load balancer/orchestrator stops routing, keeps serving in-flight requests for a bounded grace window, then tears down and exits deterministically. ⚠️ **Behavior change:** a `docker stop` / redeploy now takes up to the grace window (`SHUTDOWN_DELAY_MS`, default **3s** in production, **0** in dev) plus teardown instead of tearing down instantly, and the process now exits `0` on a clean signal. In Docker set `stop_grace_period` ≥ `SHUTDOWN_DELAY_MS` + your worst-case teardown (the bundled compose now sets `45s`); for Kubernetes set `terminationGracePeriodSeconds` accordingly. A second signal during the drain forces an immediate exit. The whatsapp-web.js engine no longer lets Puppeteer install its own signal handlers (which previously killed Chromium at signal time / `exit(130)` before the drain could run).
+
+### Fixed
+
+- **Boot now rejects a non-canonical boolean feature flag instead of silently disabling the feature.** `QUEUE_ENABLED`, `MCP_ENABLED`, and `SERVE_DASHBOARD` are read with an exact `=== 'true'` / `!== 'false'` comparison, so a typo (`True`, `1`, `yes`) or a stray trailing space/CR (a Windows-edited env file forwarded verbatim by `docker run --env-file`) silently (dis)abled the feature with zero diagnostics. These are now validated at startup and boot fails fast naming the offending key. ⚠️ **Behavior change:** a deployment currently booting with such a value (e.g. `QUEUE_ENABLED=1`) will now refuse to start until corrected to `true`/`false`/unset — including `SERVE_DASHBOARD=0`/`no`, which was silently serving the dashboard and will now correctly disable it once set to `false`.
+- **A fatal uncaught exception is now written to the structured log** (with its stack and origin) before the process exits, instead of only a raw stack on stderr that the log pipeline missed. This is observe-only: the crash-and-restart posture is unchanged (the container restart policy still fires and the process never continues on corrupted post-exception state).
+- **`POST /infra/import-data` no longer swallows a genuine database error while clearing tables.** The table-clearing step tolerated only a genuinely-absent table but previously used a blanket catch, so an I/O/lock error (or an aborted transaction) could let a restore commit a *merged* rather than *replaced* dataset on SQLite. Such errors now surface and roll the whole import back (a real fault returns a `500` carrying the actual cause); the intended tolerance for a missing table is preserved.
+- **A session no longer schedules a reconnect while the process is shutting down** — a disconnect during the drain window would otherwise launch a fresh Chromium racing the shutdown teardown. The session is left `DISCONNECTED` (a later start / auto-restore re-initializes it cleanly).
+
 ## [0.8.9] - 2026-07-06
 
 ### Changed
