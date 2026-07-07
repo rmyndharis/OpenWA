@@ -65,7 +65,17 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    pids_limit: 512
+    # Per-container PID ceiling (writes the cgroup pids.max). A fork-bomb guard, NOT an allocation —
+    # the kernel only rejects new forks once the count is reached, so a higher limit is free for
+    # light containers. The old default (512, from the #243 hardening pass) was picked without
+    # accounting for Chromium's multi-process model: whatsapp-web.js runs a full Chromium instance
+    # per session (browser + renderer + GPU + zygote + utilities), and WhatsApp Web is process-heavy
+    # (service workers/iframes), so ~4 concurrent sessions already approach 512 and a new session's
+    # Chromium gets killed mid-spawn — surfacing in the API as `Code: null`. 2048 fits ~8-10 wwjs
+    # sessions with startup-spike headroom; Baileys is single-process (no Chromium) and uses far
+    # less, so the higher ceiling is a no-op there. Raise via OPENWA_PIDS_LIMIT for larger fleets;
+    # do NOT set -1 (unlimited) — that drops the fork-bomb guard. See #636.
+    pids_limit: ${OPENWA_PIDS_LIMIT:-2048}
     mem_limit: ${OPENWA_MEM_LIMIT:-2g} # tune up for many concurrent sessions
     ports:
       - '127.0.0.1:${API_PORT:-2785}:2785'

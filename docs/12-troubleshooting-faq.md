@@ -274,6 +274,69 @@ will exit at startup with a clear `FATAL:` message rather than crash-looping lat
 Do **not** work around this by dropping `--no-sandbox` security hardening or using `seccomp:unconfined`
 (confirmed not to help, and it widens the attack surface).
 
+### Issue: Session fails to launch with `Failed to launch the browser process: Code: null`
+
+> **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.
+
+**Symptoms:** The session fails within a few seconds of clicking **Start**; no QR code is ever produced. The
+session's `lastError` and the container log both show:
+
+```text
+Failed to launch the browser process:  Code: null
+```
+
+often accompanied by a wall of `ERROR:dbus/bus.cc` / `crashpad ... /sys/devices/system/cpu/...` lines.
+**Those dbus/crashpad lines are non-fatal noise** that headless Chromium always prints inside a container —
+ignore them. The actual signal is `Code: null`, which means the browser process was killed during startup
+before it could report an exit code. The cause is *not* in the log — it's a host/container resource limit,
+and there are three distinct ones. Diagnose which one before changing anything:
+
+**Cause A — per-container PID limit hit (most common under multi-session).**
+whatsapp-web.js runs a full Chromium instance per session, and Chromium is multi-process (browser + renderer
++ GPU + zygote + utilities); WhatsApp Web is itself process-heavy (service workers, iframes). A handful of
+concurrent sessions can approach the container's `pids_limit`, and the next session's Chromium gets killed
+mid-spawn when a `fork()` returns `EAGAIN`. This is silent in the log.
+
+*Diagnose:* watch the PIDS column while you click **Start**:
+
+```bash
+docker stats openwa-api   # watch the PIDS column — does it climb toward the limit right before the failure?
+```
+
+*Fix:* raise the ceiling. The bundled `docker-compose.yml` exposes it as `OPENWA_PIDS_LIMIT` (default `2048`,
+which fits ~8-10 sessions with startup-spike headroom):
+
+```bash
+OPENWA_PIDS_LIMIT=4096   # in your .env, then docker compose up -d
+```
+
+Do **not** set `-1` (unlimited) — the PID ceiling is a fork-bomb guard and should stay finite. Baileys
+(no Chromium) uses only a handful of PIDs regardless, so raising this is a no-op there.
+
+**Cause B — out-of-memory kill.**
+The container's `mem_limit` (or the host VM, e.g. Docker Desktop on macOS/Windows) ran out of RAM while
+Chromium was starting. The OOM killer sends `SIGKILL`, which Puppeteer reports as `Code: null`.
+
+*Diagnose:* check the host kernel log for an OOM kill:
+
+```bash
+dmesg -T | grep -i "killed process"          # Linux host
+# Docker Desktop: check the VM via the app, or nudge OPENWA_MEM_LIMIT up and retry
+```
+
+*Fix:* raise the ceiling (`OPENWA_MEM_LIMIT=4g` in your `.env`, or Docker Desktop → Settings → Resources →
+Memory for the VM).
+
+**Cause C — the XDG/crashpad home-dir crash.**
+If `Code: null` is accompanied by `chrome_crashpad_handler: --database is required`, that is a different,
+specific failure (Chromium can't resolve its home directory on a read-only rootfs) — see the entry
+immediately above this one for the fix. The bundled image already handles this; it only resurfaces on a
+custom container that drops the `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` setup or the writable `/tmp` tmpfs.
+
+**Quick triage:** run `docker stats openwa-api`, click **Start**, and watch which resource spikes toward its
+limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
+`--database` line, it's C.
+
 ### Issue: Frequent Disconnections
 
 **Symptoms:**

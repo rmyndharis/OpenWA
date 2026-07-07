@@ -29,7 +29,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    pids_limit: 512
+    # Per-container PID ceiling (cgroup pids.max). 2048 fits several whatsapp-web.js sessions, which
+    # each run a multi-process Chromium; Baileys (no Chromium) uses far fewer. A fork-bomb guard, not
+    # an allocation — raising it is free for light containers. Do NOT use -1 (drops the guard). #636
+    pids_limit: ${OPENWA_PIDS_LIMIT:-2048}
     mem_limit: ${OPENWA_MEM_LIMIT:-2g}
     ports:
       # Bind to localhost by default; set BIND_HOST=0.0.0.0 in .env to reach it from another host.
