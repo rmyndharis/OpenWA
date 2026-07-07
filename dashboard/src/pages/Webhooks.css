@@ -220,6 +220,9 @@
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .webhooks-page .modal-body .event-tag:hover{
@@ -228,6 +231,32 @@
 }
 
 .webhooks-page .modal-body .event-tag.selected{
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.webhooks-page .modal-body .event-tag .tag-check-icon {
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+/* Ensure modal event tags have proper unselected & selected styles in dark mode */
+.webhooks-page [data-theme='dark'] .modal-body .event-tag,
+:root:not([data-theme='light']) .webhooks-page .modal-body .event-tag {
+  background: var(--bg-light);
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+.webhooks-page [data-theme='dark'] .modal-body .event-tag:hover,
+:root:not([data-theme='light']) .webhooks-page .modal-body .event-tag:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.webhooks-page [data-theme='dark'] .modal-body .event-tag.selected,
+:root:not([data-theme='light']) .webhooks-page .modal-body .event-tag.selected {
   background: var(--primary);
   color: white;
   border-color: var(--primary);
