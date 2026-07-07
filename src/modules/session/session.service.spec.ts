@@ -97,6 +97,7 @@ describe('SessionService', () => {
 
     engineFactory = {
       create: jest.fn().mockReturnValue(mockEngine),
+      purgeSessionData: jest.fn().mockResolvedValue(undefined),
     };
 
     eventsGateway = {
@@ -191,6 +192,28 @@ describe('SessionService', () => {
       expect(stoppingOf().has('sess-uuid-1')).toBe(false); // stop-mark cleared (no wedge)
       expect(hookManager.execute).toHaveBeenCalledWith('session:deleted', expect.anything(), expect.anything());
       expect(dataSource.transaction).toHaveBeenCalled(); // DB removal still ran
+    });
+
+    it('delete() purges the engine on-disk auth dir (keyed by session NAME) so a same-name recreate starts clean', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ id: 'sess-uuid-1', name: 'test-session' }),
+      );
+      enginesOf().set('sess-uuid-1', { forceDestroy: jest.fn().mockResolvedValue(undefined) });
+
+      await service.delete('sess-uuid-1');
+
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('test-session');
+    });
+
+    it('delete() purges even when no engine is loaded (a stopped session has none)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ id: 'sess-uuid-1', name: 'test-session' }),
+      );
+      // No engine in the map — the common delete case.
+
+      await service.delete('sess-uuid-1');
+
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('test-session');
     });
 
     it('stop() completes when engine.disconnect() rejects — map reconciled, status updated', async () => {

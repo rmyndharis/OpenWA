@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { IWhatsAppEngine } from './interfaces/whatsapp-engine.interface';
@@ -118,6 +120,54 @@ export class EngineFactory implements OnModuleInit {
     });
 
     return this.createFallbackEngine(options);
+  }
+
+  /**
+   * Remove a session's persistent on-disk auth/store directory for the active engine, so deleting a
+   * session fully purges its footprint. The dir is keyed by session NAME — the same key {@link create}
+   * uses (`path.join(authDir, name)` for baileys, `session-${name}` under sessionDataPath for
+   * whatsapp-web.js) — and survives independently of any engine instance. On delete the engine is
+   * frequently not even loaded (a stopped session has none), so the path is derived from config here
+   * rather than from a live adapter; otherwise recreating a session under the same name would reload a
+   * stale store. Best-effort: an unsafe name or an rm failure is logged, never thrown, so it can't turn
+   * a successful delete into a 500.
+   */
+  async purgeSessionData(sessionName: string): Promise<void> {
+    if (!isSafeSessionName(sessionName)) {
+      // Same guard as create(): never let a name with '.', '/' or '\\' reach an rm -rf sink.
+      this.logger.warn('Refusing to purge session data for an unsafe session name', {
+        action: 'engine_purge_unsafe',
+        sessionName: JSON.stringify(sessionName),
+      });
+      return;
+    }
+    const dir = this.sessionAuthDir(sessionName);
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+      this.logger.log('Purged session auth directory', { action: 'engine_purge', sessionName, dir });
+    } catch (error) {
+      this.logger.warn('Failed to purge session auth directory', {
+        action: 'engine_purge_failed',
+        sessionName,
+        dir,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * The on-disk auth directory the active engine keeps for `sessionName`, matching exactly what each
+   * adapter constructs: baileys uses `path.join(authDir, name)` (authDir left unresolved, as the
+   * adapter does); whatsapp-web.js resolves sessionDataPath and appends `session-${name}` (mirrors
+   * WhatsAppWebJsAdapter.clearLocalAuth).
+   */
+  private sessionAuthDir(sessionName: string): string {
+    if (this.engineType === 'baileys') {
+      const authDir = this.configService.get<string>('engine.baileys.authDir') ?? './data/baileys';
+      return path.join(authDir, sessionName);
+    }
+    const sessionDataPath = this.configService.get<string>('engine.sessionDataPath') ?? './data/sessions';
+    return path.join(path.resolve(sessionDataPath), `session-${sessionName}`);
   }
 
   private isEnginePlugin(instance: unknown): instance is IEnginePlugin {

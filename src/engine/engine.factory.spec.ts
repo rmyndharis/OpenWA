@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { EngineFactory } from './engine.factory';
 import { ConfigService } from '@nestjs/config';
 import { PluginLoaderService, PluginType } from '../core/plugins';
@@ -117,5 +120,78 @@ describe('EngineFactory', () => {
       buildLidStore(),
     );
     expect(() => factory.create({ sessionId: 'sess-b' })).toThrow(/baileys/i);
+  });
+
+  describe('purgeSessionData (delete fully removes on-disk auth, keyed by session name)', () => {
+    const noPluginLoader = () => ({ getPlugin: jest.fn() }) as unknown as PluginLoaderService;
+    let tmpRoot: string;
+
+    beforeEach(() => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-purge-'));
+    });
+    afterEach(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('removes the whatsapp-web.js LocalAuth dir (session-<name> under sessionDataPath)', async () => {
+      const sessionDataPath = path.join(tmpRoot, 'sessions');
+      const dir = path.join(sessionDataPath, 'session-alice');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'creds.json'), '{}');
+
+      const factory = new EngineFactory(
+        buildConfigService({ 'engine.type': 'whatsapp-web.js', 'engine.sessionDataPath': sessionDataPath }),
+        noPluginLoader(),
+        buildMessageStore(),
+        buildLidStore(),
+      );
+      await factory.purgeSessionData('alice');
+
+      expect(fs.existsSync(dir)).toBe(false);
+    });
+
+    it('removes the baileys auth dir (<authDir>/<name>) when the active engine is baileys', async () => {
+      const authDir = path.join(tmpRoot, 'baileys');
+      const dir = path.join(authDir, 'bob');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'creds.json'), '{}');
+
+      const factory = new EngineFactory(
+        buildConfigService({ 'engine.type': 'baileys', 'engine.baileys.authDir': authDir }),
+        noPluginLoader(),
+        buildMessageStore(),
+        buildLidStore(),
+      );
+      await factory.purgeSessionData('bob');
+
+      expect(fs.existsSync(dir)).toBe(false);
+    });
+
+    it('is a no-op (no throw) when the auth dir does not exist', async () => {
+      const factory = new EngineFactory(
+        buildConfigService({ 'engine.type': 'baileys', 'engine.baileys.authDir': path.join(tmpRoot, 'baileys') }),
+        noPluginLoader(),
+        buildMessageStore(),
+        buildLidStore(),
+      );
+      await expect(factory.purgeSessionData('never-linked')).resolves.toBeUndefined();
+    });
+
+    it('refuses to purge an unsafe session name (no rm on a traversal path)', async () => {
+      const authDir = path.join(tmpRoot, 'baileys');
+      // A sibling that a '../' name would resolve to — it must survive the refused purge.
+      const sibling = path.join(tmpRoot, 'baileys-evil');
+      fs.mkdirSync(sibling, { recursive: true });
+
+      const factory = new EngineFactory(
+        buildConfigService({ 'engine.type': 'baileys', 'engine.baileys.authDir': authDir }),
+        noPluginLoader(),
+        buildMessageStore(),
+        buildLidStore(),
+      );
+      await factory.purgeSessionData('../baileys-evil');
+
+      expect(fs.existsSync(sibling)).toBe(true);
+    });
   });
 });
