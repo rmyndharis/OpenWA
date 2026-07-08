@@ -131,3 +131,56 @@ describe('AddMessagesFts migration (sqlite)', () => {
     expect(calls[0]).toContain('sqlite_compileoption_used');
   });
 });
+
+/**
+ * Dual-DB safety (Task 12): the migration must tolerate repeated up()/down() cycling without leaving
+ * partial state. Idempotency on a populated schema is covered above; this block adds the down→up
+ * round-trip and asserts the FTS5 probe reports enabled on the actual test SQLite build (so the
+ * absent-FTS5 branch is known to be the ONLY thing producing a 0 from that probe).
+ */
+describe('AddMessagesFts — dual-DB safety', () => {
+  let ds: DataSource;
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [Session, Message],
+      synchronize: true,
+      migrations: [],
+    });
+    await ds.initialize();
+  });
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  it('down() then up() round-trips cleanly (schema re-creatable after teardown)', async () => {
+    const qr = ds.createQueryRunner();
+    const m = new AddMessagesFts();
+    await m.up(qr);
+    await m.down(qr);
+    await m.up(qr);
+
+    const tables = (await qr.query(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'`,
+    )) as Array<{ name: string }>;
+    expect(tables).toHaveLength(1);
+    for (const trig of ['messages_fts_ai', 'messages_fts_ad', 'messages_fts_au']) {
+      const triggers = (await qr.query(`SELECT name FROM sqlite_master WHERE type='trigger' AND name=?`, [
+        trig,
+      ])) as Array<{ name: string }>;
+      expect(triggers).toHaveLength(1);
+    }
+    await qr.release();
+  });
+
+  it('the FTS5 probe reports enabled on the test SQLite build', async () => {
+    // The npm sqlite drivers ship with ENABLE_FTS5; this pins that assumption so the absent-FTS5 branch
+    // (probe returns 0) is known to be the only path that produces a 0 here — not a stale assumption.
+    const rows: Array<{ enabled: number }> = await ds.query(
+      `SELECT sqlite_compileoption_used('ENABLE_FTS5') AS enabled`,
+    );
+    expect(Number(rows[0].enabled)).toBe(1);
+  });
+});

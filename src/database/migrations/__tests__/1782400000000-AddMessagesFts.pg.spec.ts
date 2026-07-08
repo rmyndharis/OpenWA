@@ -101,4 +101,26 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
   it('reports healthy', async () => {
     expect((await provider.health()).ok).toBe(true);
   });
+
+  // Task 12 PG carry-forward: prove the generated `body_ts` tsvector re-derives across the clear+re-
+  // insert path that POST /infra/import-data performs (companion to the SQLite round-trip in
+  // providers/search-dual-db.spec.ts). A STORED generated column is recomputed on every INSERT, so
+  // re-inserted rows must re-enter the index with no stale or duplicate FTS entries.
+  it('keeps FTS correct after a clear+re-insert (the import path), repeatedly', async () => {
+    const insert = (id: string, sessionId: string, body: string) =>
+      ds.query(
+        `INSERT INTO "messages" ("id","sessionId","chatId","from","to","body","type","direction","timestamp") ` +
+          `VALUES ($1,$2,$3,$4,$5,$6,'text','outgoing',$7)`,
+        [id, sessionId, `${sessionId}-chat`, `${sessionId}-from`, 'dest@c.us', body, Date.now()],
+      );
+    for (let cycle = 0; cycle < 3; cycle++) {
+      await ds.query(`DELETE FROM "messages"`);
+      await insert(`m-alpha-${cycle}`, 's1', 'alpha beta');
+      await insert(`m-gamma-${cycle}`, 's1', 'gamma delta');
+      await insert(`m-alpha2-${cycle}`, 's1', 'alpha gamma');
+      const res = await provider.search({ q: 'alpha', limit: 10 });
+      expect(res.hits).toHaveLength(2); // 'alpha beta' + 'alpha gamma', never stale 'gamma delta'
+      expect(res.total).toBe(2);
+    }
+  });
 });

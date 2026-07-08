@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotImplementedException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -44,7 +44,48 @@ export class BuiltInFtsProvider implements SearchProvider {
   // never the default/`main` one. The bare `DataSource` type alone is ambiguous with two connections.
   constructor(@InjectDataSource('data') private readonly dataSource: DataSource) {}
 
+  /**
+   * Whether the DB-native FTS schema this provider queries is present. Cached per instance after the
+   * first probe. The migration (1782400000000-AddMessagesFts) is what creates it; on a non-FTS5 SQLite
+   * build the migration probes + skips, leaving the schema absent — in that state the provider must
+   * 501 cleanly (see ensureFts) instead of crashing on a missing table / column.
+   */
+  private ftsAvailable: boolean | null = null;
+
+  /**
+   * Probes the FTS schema once per instance and caches the result. SQLite: look for the `messages_fts`
+   * virtual table in sqlite_master. Postgres: look for the generated `body_ts` column in
+   * information_schema. Safe to call repeatedly; only the first call hits the DB.
+   */
+  private async probeFts(): Promise<boolean> {
+    if (this.ftsAvailable !== null) return this.ftsAvailable;
+    if (this.dataSource.options.type === 'postgres') {
+      const rows: unknown[] = await this.dataSource.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='body_ts'`,
+      );
+      this.ftsAvailable = Array.isArray(rows) && rows.length === 1;
+    } else {
+      const rows: unknown[] = await this.dataSource.query(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'`,
+      );
+      this.ftsAvailable = Array.isArray(rows) && rows.length === 1;
+    }
+    return this.ftsAvailable;
+  }
+
+  /**
+   * Guards search(): if the FTS schema is absent (non-FTS5 SQLite build or a partial state), throw
+   * NotImplementedException so the route surfaces 501 — never let a raw missing-table error escape.
+   */
+  private async ensureFts(): Promise<void> {
+    const ok = await this.probeFts();
+    if (!ok) {
+      throw new NotImplementedException('Search is unavailable: the database has no full-text index.');
+    }
+  }
+
   async search(query: SearchQuery): Promise<SearchResults> {
+    await this.ensureFts();
     const start = Date.now();
     const isPostgres = this.dataSource.options.type === 'postgres';
     const limit = Math.max(1, Math.min(query.limit ?? 50, LIMIT_CAP));
@@ -62,9 +103,11 @@ export class BuiltInFtsProvider implements SearchProvider {
   }
 
   async health(): Promise<{ ok: boolean; detail?: string }> {
+    // Reflects FTS availability (not just raw connectivity): a non-FTS5 build reports unhealthy here
+    // so /health and the registry surface the true state. DB errors still map to { ok: false }.
     try {
-      await this.dataSource.query('SELECT 1');
-      return { ok: true };
+      const ok = await this.probeFts();
+      return { ok, detail: ok ? undefined : 'full-text index absent' };
     } catch (e) {
       return { ok: false, detail: e instanceof Error ? e.message : String(e) };
     }
