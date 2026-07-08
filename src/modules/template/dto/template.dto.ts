@@ -88,10 +88,10 @@ export class TemplateResponseDto {
   @ApiProperty()
   body: string;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true })
   header?: string | null;
 
-  @ApiPropertyOptional({ nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true })
   footer?: string | null;
 
   @ApiProperty()

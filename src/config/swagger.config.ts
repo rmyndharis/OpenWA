@@ -6,6 +6,38 @@ import { DocumentBuilder, OpenAPIObject } from '@nestjs/swagger';
  */
 export const API_KEY_SECURITY_SCHEME = 'X-API-Key';
 
+// Routes whose controllers are @Public() — the ApiKeyGuard skips them at runtime, but the
+// global X-API-Key requirement applied below would otherwise make the spec claim they need a
+// key. Mirror the @Public() decorators: add a path here when you add one there.
+export const PUBLIC_PATHS = [
+  '/api/health',
+  '/api/health/live',
+  '/api/health/ready',
+  '/api/infra/health',
+  '/api/ingress/{pluginId}/{instanceId}/{path}',
+];
+
+const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace', 'search'] as const;
+
+type PathItem = Record<string, { security?: unknown } | undefined>;
+
+/**
+ * Set `security: []` on every operation of a @Public route so the published spec reflects
+ * that no API key is required (an empty `security` array overrides the document's global
+ * X-API-Key requirement per OpenAPI 3). Mutates and returns the document.
+ */
+export function exemptPublicOperations(document: OpenAPIObject): OpenAPIObject {
+  for (const path of PUBLIC_PATHS) {
+    const item = document.paths?.[path] as PathItem | undefined;
+    if (!item) continue;
+    for (const method of HTTP_METHODS) {
+      const op = item[method];
+      if (op) op.security = [];
+    }
+  }
+  return document;
+}
+
 /**
  * Builds the OpenAPI document configuration for the OpenWA API.
  */
@@ -22,6 +54,7 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       // Apply the scheme globally so Swagger UI sends the key with every request
       // (mirrors the global ApiKeyGuard). Without this, "Authorize" is cosmetic.
       .addSecurityRequirements(API_KEY_SECURITY_SCHEME)
+      .setContact('OpenWA', 'https://github.com/rmyndharis/OpenWA', 'yudhi@rmyndharis.com')
       .addTag('sessions', 'WhatsApp session management')
       .addTag('messages', 'Send and manage messages')
       .addTag('webhooks', 'Webhook configuration')

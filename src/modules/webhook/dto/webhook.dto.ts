@@ -61,7 +61,10 @@ export class CreateWebhookDto {
   @ApiPropertyOptional({
     description: "Event types to subscribe to. '*' subscribes to all events.",
     example: ['message.received', 'session.status'],
-    enum: WEBHOOK_EVENTS,
+    enum: [...WEBHOOK_EVENTS, '*'],
+    type: String,
+    isArray: true,
+    minItems: 1,
   })
   @IsOptional()
   @IsArray()
@@ -111,7 +114,13 @@ export class UpdateWebhookDto {
   @IsUrl({ require_tld: false })
   url?: string;
 
-  @ApiPropertyOptional({ description: "Event types to subscribe to. '*' subscribes to all events." })
+  @ApiPropertyOptional({
+    description: "Event types to subscribe to. '*' subscribes to all events.",
+    enum: [...WEBHOOK_EVENTS, '*'],
+    type: String,
+    isArray: true,
+    minItems: 1,
+  })
   @IsOptional()
   @IsArray()
   @ArrayMinSize(1)

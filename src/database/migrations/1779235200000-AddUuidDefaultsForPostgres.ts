@@ -38,7 +38,8 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
     // non-erroring catalog query (never a caught SQL exception, which would poison the migration tx)
     // and only touch pgcrypto on PG <= 12.
     const versionRows = (await queryRunner.query(`SELECT current_setting('server_version_num')::int AS num`)) as
-      { num: number | string }[] | undefined;
+      | { num: number | string }[]
+      | undefined;
     const versionNum = Number(versionRows?.[0]?.num ?? 0);
 
     if (versionNum > 0 && versionNum < 130000) {
@@ -46,7 +47,8 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
       // only attempt CREATE EXTENSION when it is genuinely missing, and if the role can't create it,
       // fail with a clear, actionable error rather than a raw permission-denied crash-loop.
       const installed = (await queryRunner.query(`SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'`)) as
-        unknown[] | undefined;
+        | unknown[]
+        | undefined;
       if (!installed?.length) {
         try {
           await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);

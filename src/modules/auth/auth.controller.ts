@@ -67,7 +67,11 @@ export class AuthController {
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List all API keys (admin only)' })
-  @ApiResponse({ status: 200, type: [ApiKeyResponseDto] })
+  @ApiResponse({
+    status: 200,
+    description: 'All API keys (the plaintext key is never returned; only the keyPrefix).',
+    type: [ApiKeyResponseDto],
+  })
   async findAll(): Promise<ApiKeyResponseDto[]> {
     const keys = await this.authService.findAll();
     return keys.map(k => ({
@@ -88,7 +92,11 @@ export class AuthController {
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get API key details (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'The API key (plaintext never returned; only the keyPrefix).',
+    type: ApiKeyResponseDto,
+  })
   async findOne(@Param('id') id: string): Promise<ApiKeyResponseDto> {
     const k = await this.authService.findOne(id);
     return {
@@ -109,7 +117,7 @@ export class AuthController {
   @Put(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Update API key (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
+  @ApiResponse({ status: 200, description: 'The updated API key.', type: ApiKeyResponseDto })
   async update(@Param('id') id: string, @Body() dto: UpdateApiKeyDto): Promise<ApiKeyResponseDto> {
     const k = await this.authService.update(id, dto);
     return {
@@ -144,7 +152,7 @@ export class AuthController {
   @Post(':id/revoke')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Revoke API key (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
+  @ApiResponse({ status: 200, description: 'The revoked API key (isActive now false).', type: ApiKeyResponseDto })
   async revoke(
     @Param('id') id: string,
     @Req() req: Request,

@@ -10,7 +10,7 @@ import helmet from 'helmet';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
-import { createSwaggerConfig } from './config/swagger.config';
+import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
 import {
   resolveCorsPolicy,
@@ -222,6 +222,7 @@ async function bootstrap() {
   if (swaggerEnabled) {
     const config = createSwaggerConfig();
     const document = SwaggerModule.createDocument(app, config);
+    exemptPublicOperations(document);
     SwaggerModule.setup('api/docs', app, document);
   }
 

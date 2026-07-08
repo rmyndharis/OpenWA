@@ -12,16 +12,16 @@ export class SessionResponseDto {
   @ApiProperty({ enum: SessionStatus, example: SessionStatus.READY })
   status: SessionStatus;
 
-  @ApiPropertyOptional({ example: '628123456789' })
+  @ApiPropertyOptional({ type: String, example: '628123456789', nullable: true })
   phone?: string | null;
 
-  @ApiPropertyOptional({ example: 'John Doe' })
+  @ApiPropertyOptional({ type: String, example: 'John Doe', nullable: true })
   pushName?: string | null;
 
-  @ApiPropertyOptional({ example: '2025-02-02T10:00:00Z' })
+  @ApiPropertyOptional({ type: String, format: 'date-time', example: '2025-02-02T10:00:00Z', nullable: true })
   connectedAt?: Date | null;
 
-  @ApiPropertyOptional({ example: '2025-02-02T10:30:00Z' })
+  @ApiPropertyOptional({ type: String, format: 'date-time', example: '2025-02-02T10:30:00Z', nullable: true })
   lastActive?: Date | null;
 
   @ApiProperty({ example: '2025-02-02T09:00:00Z' })
@@ -31,8 +31,10 @@ export class SessionResponseDto {
   updatedAt: Date;
 
   @ApiPropertyOptional({
+    type: String,
     description: 'Human-readable reason for the most recent terminal engine failure (only set when status is FAILED).',
     example: 'Failed to launch the browser process: spawn /usr/bin/chromium ENOENT',
+    nullable: true,
   })
   lastError?: string | null;
 

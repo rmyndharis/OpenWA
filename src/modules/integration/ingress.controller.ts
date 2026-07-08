@@ -1,5 +1,5 @@
 import { All, Controller, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags, ApiOkResponse, ApiResponse } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Public } from '../auth/decorators/auth.decorators';
 import { IngressService } from './ingress.service';
@@ -28,6 +28,19 @@ export class IngressController {
   // InstanceThrottlerGuard's onModuleInit for how it keeps its tier fully independent.
   @UseGuards(InstanceThrottlerGuard)
   @All(':pluginId/:instanceId/*path')
+  @ApiOkResponse({
+    description:
+      'GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202.',
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'Webhook accepted and queued for async plugin processing (the primary success path).',
+  })
+  @ApiResponse({ status: 401, description: 'Signature verification failed (missing, stale, or wrong secret).' })
+  @ApiResponse({ status: 403, description: 'GET verification challenge failed (verifyToken mismatch).' })
+  @ApiResponse({ status: 404, description: 'Unknown pluginId/instanceId, or no route claimed by the plugin.' })
+  @ApiResponse({ status: 413, description: 'Request body exceeds the route maxBodyBytes limit.' })
+  @ApiResponse({ status: 429, description: 'Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT).' })
   async receive(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,

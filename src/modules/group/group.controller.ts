@@ -1,31 +1,18 @@
-import { Controller, Get, Post, Put, Delete, Param, Query, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Post, Put, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { GroupService } from './group.service';
 import { CreateGroupDto, ParticipantsDto, GroupSubjectDto, GroupDescriptionDto } from './dto/group.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
+// NOTE: the session→groups LIST lives on the SessionController at GET /sessions/:id/groups (it
+// registered first and owns the canonical narrow projection). A bare @Get() here would collide on
+// the same path pattern (/sessions/{x}/groups) and be shadowed, so this controller owns only the
+// group sub-resource routes (:groupId/...) under the same mount.
 @ApiTags('groups')
 @Controller('sessions/:sessionId/groups')
 export class GroupController {
   constructor(private readonly groupService: GroupService) {}
-
-  @Get()
-  @ApiOperation({ summary: 'Get all groups for a session' })
-  @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'List of groups' })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max groups to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
-  async findAll(
-    @Param('sessionId') sessionId: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-  ) {
-    return this.groupService.getGroups(sessionId, {
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
-    });
-  }
 
   @Get(':groupId')
   @ApiOperation({ summary: 'Get detailed group info' })

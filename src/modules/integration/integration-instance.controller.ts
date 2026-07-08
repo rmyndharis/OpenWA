@@ -21,7 +21,7 @@ import { ScopeBindingService } from './scope-binding.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { buildIngressUrls } from './ingress-url';
 import { CreateInstanceDto, InstanceView, UpdateInstanceDto } from './dto/instance.dto';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 // ADMIN-only provisioning surface for per-plugin instances (e.g. one Chatwoot account). Only plugins
 // that declare an ingress route AND the webhook:ingress permission can have instances; everything
@@ -39,6 +39,12 @@ export class IntegrationInstanceController {
 
   @Post()
   @HttpCode(201)
+  @ApiResponse({
+    status: 201,
+    description:
+      'Instance created. The plaintext ingress secret and verifyToken are revealed once in this response — store them immediately (both masked on every later read).',
+    type: InstanceView,
+  })
   async create(@Param('pluginId') pluginId: string, @Body() dto: CreateInstanceDto): Promise<InstanceView> {
     const routes = this.assertIngressCapable(pluginId);
     try {
@@ -60,6 +66,7 @@ export class IntegrationInstanceController {
   }
 
   @Get()
+  @ApiResponse({ status: 200, description: 'Instances for the plugin (secrets masked).', type: [InstanceView] })
   async list(@Param('pluginId') pluginId: string): Promise<InstanceView[]> {
     const routes = this.pluginRoutes(pluginId);
     const rows = await this.instances.list(pluginId);
@@ -67,6 +74,7 @@ export class IntegrationInstanceController {
   }
 
   @Get(':instanceId')
+  @ApiResponse({ status: 200, description: 'The instance (secret masked).', type: InstanceView })
   async getOne(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<InstanceView> {
     const inst = await this.instances.resolve(pluginId, instanceId);
     if (!inst) throw new NotFoundException('instance not found');
@@ -75,6 +83,12 @@ export class IntegrationInstanceController {
 
   @Post(':instanceId/regenerate-secret')
   @HttpCode(200)
+  @ApiResponse({
+    status: 200,
+    description:
+      'Secret regenerated. The new plaintext secret is revealed once in this response; the verifyToken is also shown (unchanged).',
+    type: InstanceView,
+  })
   async regenerate(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
@@ -88,6 +102,7 @@ export class IntegrationInstanceController {
   }
 
   @Patch(':instanceId')
+  @ApiResponse({ status: 200, description: 'Instance updated (secret masked).', type: InstanceView })
   async patch(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
@@ -118,6 +133,7 @@ export class IntegrationInstanceController {
 
   @Delete(':instanceId')
   @HttpCode(204)
+  @ApiResponse({ status: 204, description: 'Instance deleted and its session scope torn down.' })
   async remove(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<void> {
     const inst = await this.instances.resolve(pluginId, instanceId);
     if (!inst) throw new NotFoundException('instance not found');

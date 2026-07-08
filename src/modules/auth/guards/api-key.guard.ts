@@ -66,7 +66,8 @@ export class ApiKeyGuard implements CanActivate {
       context.getClass(),
     ]);
     const sessionId = (request.params['sessionId'] || (sessionScoped ? request.params['id'] : undefined)) as
-      string | undefined;
+      | string
+      | undefined;
     const clientIp = this.getClientIp(request);
 
     // Validate API key

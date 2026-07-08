@@ -1,0 +1,56 @@
+// Generates the committed OpenAPI snapshot by bootstrapping the Nest app WITHOUT listening,
+// then calling SwaggerModule.createDocument(). The script pins a hermetic environment below
+// (in-memory SQLite, queue/MCP off) so it is safe to run anywhere: no DB files are created or
+// touched, no Redis connection is opened, no engines start, no sessions run. The version is
+// sourced from package.json via swagger.config.ts, so the snapshot tracks releases automatically.
+//
+// Usage: npx ts-node scripts/export-openapi.ts <output-path>
+import '../src/config/load-env';
+import { NestFactory } from '@nestjs/core';
+import { SwaggerModule } from '@nestjs/swagger';
+import { writeFileSync } from 'node:fs';
+import { createSwaggerConfig, exemptPublicOperations } from '../src/config/swagger.config';
+
+// Pin a hermetic env BEFORE AppModule is imported. AppModule reads QUEUE_ENABLED / MCP_ENABLED at
+// module top-level (its conditional module mounts) and TypeORM reads the DB settings during
+// NestFactory.create() below — so these pins must win over whatever the loader applied above. That
+// is why AppModule is imported dynamically inside main(), after these assignments. (NestFactory.create
+// never calls init(), so onModuleInit / onApplicationBootstrap hooks — session autostart, the
+// PROCESSING-batch and message-type backfills — do not fire regardless; the pins are belt-and-braces.)
+process.env.QUEUE_ENABLED = 'false';
+process.env.MCP_ENABLED = 'false';
+process.env.AUTO_START_SESSIONS = 'false';
+process.env.DATABASE_TYPE = 'sqlite';
+process.env.DATABASE_NAME = ':memory:';
+process.env.MAIN_DATABASE_NAME = ':memory:';
+
+async function main() {
+  const out = process.argv[2];
+  if (!out) {
+    console.error('Usage: npx ts-node scripts/export-openapi.ts <output-path>');
+    process.exit(1);
+  }
+  // Imported after the env pins above so AppModule's top-level reads the hermetic values. Uses
+  // require() (not a dynamic import()) so ts-node's CommonJS hook resolves the .ts directly — a
+  // native import() would fail with ERR_MODULE_NOT_FOUND under ts-node CJS.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { AppModule } = require('../src/app.module');
+  // Bootstrap the full DI graph so every controller/DTO is discovered, but never listen.
+  // Errors/warns only — bootstrap is chatty and we only need the document.
+  const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'] });
+  // Mirror main.ts: the global /api prefix is part of the real route paths the docs publish.
+  app.setGlobalPrefix('api');
+  try {
+    const doc = SwaggerModule.createDocument(app, createSwaggerConfig());
+    exemptPublicOperations(doc);
+    writeFileSync(out, JSON.stringify(doc, null, 2) + '\n');
+    console.log(`✓ OpenAPI snapshot written to ${out} (version ${doc.info.version}, ${Object.keys(doc.paths).length} paths)`);
+  } finally {
+    await app.close();
+  }
+}
+
+void main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

@@ -98,7 +98,11 @@ export interface WSPongResponse {
 
 // Union type for all server messages
 export type WSServerMessage =
-  WSSubscribedResponse | WSUnsubscribedResponse | WSEventMessage | WSErrorResponse | WSPongResponse;
+  | WSSubscribedResponse
+  | WSUnsubscribedResponse
+  | WSEventMessage
+  | WSErrorResponse
+  | WSPongResponse;
 
 // Room name builder
 export function buildRoomName(sessionId: string, event: string): string {
