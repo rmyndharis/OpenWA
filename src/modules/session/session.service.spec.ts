@@ -63,9 +63,19 @@ describe('SessionService', () => {
     messageRepository = {
       find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue(null),
-      create: jest.fn(),
+      // `create()` in TypeORM just builds the entity instance; it does NOT populate @PrimaryGeneratedColumn
+      // or @CreateDateColumn. Mirror that: return the input as-is (no id/createdAt) so tests see the same
+      // shape the production code does before the `insert()` generated-maps merge.
+      create: jest.fn().mockImplementation((data: Partial<Message>) => ({ ...data }) as Message),
       save: jest.fn().mockResolvedValue(undefined),
-      insert: jest.fn().mockResolvedValue(undefined),
+      // `insert()` returns an InsertResult; `identifiers[0]` carries the PK on both SQLite + Postgres.
+      // `generatedMaps[0]` carries createdAt (Postgres yes; SQLite historically no — left absent here to
+      // match the local SQLite default DB).
+      insert: jest.fn().mockResolvedValue({
+        identifiers: [{ id: 'gen-uuid-1' }],
+        generatedMaps: [],
+        raw: undefined,
+      }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
@@ -1433,6 +1443,47 @@ describe('SessionService', () => {
 
       expect(messageRepository.insert).toHaveBeenCalled();
       expect(dispatchedEvents('message.received')).toHaveLength(1);
+    });
+
+    it('emits message:persisted with a non-empty message.id on inbound (insert generated PK merged)', async () => {
+      // Asymmetry guard: the inbound path uses `insert()` (the dedup oracle), which — unlike `save()` —
+      // does NOT merge @PrimaryGeneratedColumn/@CreateDateColumn back onto the entity. Without the
+      // identifiers/generatedMaps merge, `dbMessage.id` is undefined here, while the outbound path
+      // (MessageService.saveOutgoingMessage) emits a real id via `save()`. A plugin subscribing to
+      // `message:persisted` would see id=undefined on inbound but a real id on outbound. This pins the
+      // inbound payload to carry the DB-generated id, mirroring the outbound emit test.
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage!(makeMessage({ id: 'wa-in-1', fromMe: false }));
+      await flush();
+
+      const persistedCalls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      ) as unknown[][];
+      expect(persistedCalls).toHaveLength(1);
+      const payload = persistedCalls[0][1] as { sessionId: string; message: { id?: string } };
+      expect(payload.sessionId).toBe('sess-uuid-1');
+      expect(payload.message.id).toBeTruthy(); // the DB-generated id, not undefined
+      expect(payload.message.id).toBe('gen-uuid-1'); // merged from InsertResult.identifiers[0]
+      expect(persistedCalls[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', source: 'SessionService' });
+    });
+
+    it('does not emit message:persisted on a duplicate re-fire (loses the dedup insert race)', async () => {
+      // The emit lives AFTER the dedup gate. A re-fire that hits the UNIQUE(sessionId, waMessageId)
+      // constraint must not emit message:persisted — no row was durably stored on this attempt.
+      const callbacks = await startAndCaptureCallbacks();
+      // Emulate the SQLite UNIQUE-violation phrasing that `isUniqueConstraintError` matches via regex.
+      (messageRepository.insert as jest.Mock).mockRejectedValueOnce(
+        new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'),
+      );
+
+      callbacks.onMessage!(makeMessage({ id: 'wa-dup-1', fromMe: false }));
+      await flush();
+
+      const persistedCalls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      );
+      expect(persistedCalls).toHaveLength(0);
     });
 
     it('does not persist (no orphan row) when the session is deleted mid hook chain', async () => {

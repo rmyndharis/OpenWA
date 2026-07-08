@@ -804,7 +804,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // message is never dropped by a transient DB failure.
             let isNewMessage = true;
             try {
-              await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
+              // `insert()` (not `save()`) is load-bearing: the UNIQUE(sessionId, waMessageId) constraint
+              // makes a duplicate insert throw, which is the atomic dedup oracle for #464 re-fires.
+              // Unlike `save()`, `insert()` does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
+              // @CreateDateColumn) back onto the entity instance — so merge them explicitly here, before
+              // the `message:persisted` emit. `identifiers[0]` always carries the PK on both SQLite and
+              // Postgres; `generatedMaps[0]` adds createdAt where the driver returns it (Postgres yes;
+              // SQLite historically does not — acceptable; the PK is the load-bearing field for plugins).
+              const result = await this.messageRepository.insert(
+                dbMessage as unknown as QueryDeepPartialEntity<Message>,
+              );
+              Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
             } catch (err) {
               if (isUniqueConstraintError(err)) {
                 isNewMessage = false;
