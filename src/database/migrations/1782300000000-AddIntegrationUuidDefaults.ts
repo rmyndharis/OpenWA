@@ -30,14 +30,12 @@ export class AddIntegrationUuidDefaults1782300000000 implements MigrationInterfa
     // migration transaction). Only touch pgcrypto on PG <= 12; on 13+ gen_random_uuid() is core and
     // CREATE EXTENSION — a privilege managed Postgres often withholds — is avoided entirely.
     const versionRows = (await queryRunner.query(`SELECT current_setting('server_version_num')::int AS num`)) as
-      | { num: number | string }[]
-      | undefined;
+      { num: number | string }[] | undefined;
     const versionNum = Number(versionRows?.[0]?.num ?? 0);
 
     if (versionNum > 0 && versionNum < 130000) {
       const installed = (await queryRunner.query(`SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto'`)) as
-        | unknown[]
-        | undefined;
+        unknown[] | undefined;
       if (!installed?.length) {
         try {
           await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);

@@ -179,8 +179,7 @@ describe('PluginWorkerHost', () => {
 
       expect(dispatcher).toHaveBeenCalledTimes(1); // the over-limit cap is rejected before dispatch
       const rejected = ch.sent.find(m => m.kind === 'cap-result' && m.id === 2) as
-        | { ok: boolean; error?: string }
-        | undefined;
+        { ok: boolean; error?: string } | undefined;
       expect(rejected?.ok).toBe(false);
       expect(rejected?.error).toMatch(/too many concurrent/);
 
