@@ -110,6 +110,19 @@ jobs:
           DATABASE_PASSWORD: openwa
           DATABASE_NAME: openwa
 
+      # Runtime-proves BuiltInFtsProvider on Postgres (websearch_to_tsquery + ts_headline against the
+      # STORED body_ts tsvector). The spec self-skips unless DATABASE_TYPE=postgres, so it is a no-op
+      # in the default test job and only executes here against the postgres:16 service.
+      - name: Postgres FTS provider spec
+        run: npx jest src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts
+        env:
+          DATABASE_TYPE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USERNAME: openwa
+          DATABASE_PASSWORD: openwa
+          DATABASE_NAME: openwa
+
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest
