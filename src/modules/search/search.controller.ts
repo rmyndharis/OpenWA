@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { SearchService } from './search.service';
-import type { SearchQuery, SearchResults } from './search.types';
+import { SearchQueryDto } from './dto/search-query.dto';
+import type { SearchResults } from './search.types';
 
 @ApiTags('search')
 @Controller('search')
@@ -26,14 +27,15 @@ export class SearchController {
   @ApiQuery({ name: 'dateTo', required: false, description: 'Epoch-ms upper bound (inclusive)' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max hits to return' })
   @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Pagination offset' })
-  async search(@Query() query: SearchQuery, @CurrentApiKey() apiKey?: ApiKey): Promise<SearchResults> {
-    if (!query.q || !query.q.trim()) {
+  async search(@Query() dto: SearchQueryDto, @CurrentApiKey() apiKey?: ApiKey): Promise<SearchResults> {
+    if (!dto.q || !dto.q.trim()) {
       throw new BadRequestException('Query parameter "q" is required and must be non-empty.');
     }
     // callerSessionIds comes ONLY from the authenticated key's allowedSessions — never from the
     // query/body — so a scoped key cannot broaden its reach. A null/empty allowlist (e.g. ADMIN)
-    // resolves to undefined → searches all sessions, mirroring GET /webhooks. SearchService makes
-    // this authoritative by overwriting any smuggled query.sessionIds at the provider boundary.
-    return this.searchService.search(query, apiKey?.allowedSessions ?? undefined);
+    // resolves to undefined → searches all sessions, mirroring GET /webhooks. The DTO carries no
+    // `sessionIds` field (the global ValidationPipe's forbidNonWhitelisted would reject it anyway),
+    // and SearchService makes scope authoritative by overwriting sessionIds at the provider boundary.
+    return this.searchService.search(dto, apiKey?.allowedSessions ?? undefined);
   }
 }

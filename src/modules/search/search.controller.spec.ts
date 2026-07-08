@@ -1,8 +1,9 @@
 import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { SearchController } from './search.controller';
 import { SearchService } from './search.service';
+import { SearchQueryDto } from './dto/search-query.dto';
 import type { ApiKey } from '../auth/entities/api-key.entity';
-import type { SearchQuery, SearchResults } from './search.types';
+import type { SearchResults } from './search.types';
 
 describe('SearchController', () => {
   const search = jest.fn();
@@ -15,20 +16,24 @@ describe('SearchController', () => {
   });
 
   it('throws 400 when q is empty', async () => {
-    await expect(ctrl.search({ q: '' }, undefined)).rejects.toBeInstanceOf(BadRequestException);
+    const dto: SearchQueryDto = { q: '' };
+    await expect(ctrl.search(dto, undefined)).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('throws 400 when q is only whitespace', async () => {
-    await expect(ctrl.search({ q: '   ' }, undefined)).rejects.toBeInstanceOf(BadRequestException);
+    // @IsNotEmpty() on the DTO passes for '   ' (non-empty), so the controller's own trim guard is
+    // what rejects whitespace-only q — this test pins that guard in place.
+    const dto: SearchQueryDto = { q: '   ' };
+    await expect(ctrl.search(dto, undefined)).rejects.toBeInstanceOf(BadRequestException);
     expect(search).not.toHaveBeenCalled();
   });
 
   it('returns results and forwards the key allowedSessions as callerSessionIds', async () => {
     search.mockResolvedValue(ok);
     const apiKey = { allowedSessions: ['s1', 's2'] } as unknown as ApiKey;
-    const query: SearchQuery = { q: 'hello', limit: 5 };
-    const res = await ctrl.search(query, apiKey);
-    expect(search).toHaveBeenCalledWith(query, ['s1', 's2']);
+    const dto: SearchQueryDto = { q: 'hello', limit: 5 };
+    const res = await ctrl.search(dto, apiKey);
+    expect(search).toHaveBeenCalledWith(dto, ['s1', 's2']);
     expect(res).toBe(ok);
   });
 
@@ -36,19 +41,20 @@ describe('SearchController', () => {
     search.mockResolvedValue(ok);
     // A null/empty allowlist (e.g. ADMIN) sees all sessions — mirrors GET /webhooks behavior.
     const apiKey = { allowedSessions: null } as unknown as ApiKey;
-    const query: SearchQuery = { q: 'hello' };
-    await ctrl.search(query, apiKey);
-    expect(search).toHaveBeenCalledWith(query, undefined);
+    const dto: SearchQueryDto = { q: 'hello' };
+    await ctrl.search(dto, apiKey);
+    expect(search).toHaveBeenCalledWith(dto, undefined);
   });
 
-  it('derives callerSessionIds only from the key, never from the query body (anti-smuggling)', async () => {
+  it('derives callerSessionIds only from the key, never from the query (anti-smuggling)', async () => {
     search.mockResolvedValue(ok);
-    // A caller tries to spoof scope via the query — the controller must ignore it and pass the key's
-    // allowlist (here: no key → undefined) as the sole scope source. SearchService additionally
-    // clobbers any query.sessionIds at the provider boundary.
-    const query: SearchQuery = { q: 'hello', sessionIds: ['sneaky'] };
-    await ctrl.search(query, undefined);
-    expect(search).toHaveBeenCalledWith(query, undefined);
+    // `sessionIds` is not a field on SearchQueryDto, so it cannot be expressed in the query at all;
+    // the global ValidationPipe (forbidNonWhitelisted) would reject it, and SearchService clobbers
+    // any sessionIds at the provider boundary. The controller itself derives scope solely from the
+    // key — here there is no key → undefined.
+    const dto: SearchQueryDto = { q: 'hello' };
+    await ctrl.search(dto, undefined);
+    expect(search).toHaveBeenCalledWith(dto, undefined);
   });
 
   it('propagates 501 (NotImplementedException) from the service when no provider is active', async () => {
