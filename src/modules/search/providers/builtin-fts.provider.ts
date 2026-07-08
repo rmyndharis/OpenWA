@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { MessageDirection } from '../../message/entities/message.entity';
@@ -38,7 +39,10 @@ export class BuiltInFtsProvider implements SearchProvider {
   readonly id = 'builtin-fts';
   readonly label = 'Built-in database full-text search';
 
-  constructor(private readonly dataSource: DataSource) {}
+  // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
+  // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
+  // never the default/`main` one. The bare `DataSource` type alone is ambiguous with two connections.
+  constructor(@InjectDataSource('data') private readonly dataSource: DataSource) {}
 
   async search(query: SearchQuery): Promise<SearchResults> {
     const start = Date.now();
