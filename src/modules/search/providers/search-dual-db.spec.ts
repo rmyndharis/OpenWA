@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
-import { AddMessagesFts } from '../../../database/migrations/1782400000000-AddMessagesFts';
+import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
 
 /**
@@ -24,7 +24,7 @@ async function boot(): Promise<{ ds: DataSource; provider: BuiltInFtsProvider }>
     synchronize: true,
   });
   await ds.initialize();
-  await new AddMessagesFts().up(ds.createQueryRunner());
+  await new AddMessagesFts1782400000000().up(ds.createQueryRunner());
   return { ds, provider: new BuiltInFtsProvider(ds) };
 }
 

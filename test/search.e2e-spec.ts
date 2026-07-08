@@ -14,7 +14,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { Message, MessageDirection } from '../src/modules/message/entities/message.entity';
-import { AddMessagesFts } from '../src/database/migrations/1782400000000-AddMessagesFts';
+import { AddMessagesFts1782400000000 } from '../src/database/migrations/1782400000000-AddMessagesFts';
 import { SearchController } from '../src/modules/search/search.controller';
 import { SearchService } from '../src/modules/search/search.service';
 import { SearchProviderRegistry } from '../src/modules/search/search-provider.registry';
@@ -46,7 +46,7 @@ describe('GET /api/search (e2e)', () => {
     // it manually here against the 'data' connection that owns `messages`. This is the same shape the
     // provider's own spec uses, and proves the e2e path queries a real FTS index, not a stand-in.
     const dataSource = app.get<DataSource>(getDataSourceToken('data'));
-    await new AddMessagesFts().up(dataSource.createQueryRunner());
+    await new AddMessagesFts1782400000000().up(dataSource.createQueryRunner());
 
     messageRepo = app.get<Repository<Message>>(getRepositoryToken(Message, 'data'));
     await messageRepo.insert([

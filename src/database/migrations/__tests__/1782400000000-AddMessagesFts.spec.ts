@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { DataSource, QueryRunner } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
-import { AddMessagesFts } from '../1782400000000-AddMessagesFts';
+import { AddMessagesFts1782400000000 } from '../1782400000000-AddMessagesFts';
 
 /**
  * SQLite in-memory coverage for the AddMessagesFts migration:
@@ -33,7 +33,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
 
   it('creates messages_fts + triggers, keeps them in sync on insert, and drops rows on body clear', async () => {
     const runner = ds.createQueryRunner();
-    await new AddMessagesFts().up(runner);
+    await new AddMessagesFts1782400000000().up(runner);
 
     const repo = ds.getRepository(Message);
     await repo.insert({
@@ -76,7 +76,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
 
   it('is idempotent: re-running up() is a no-op and leaves exactly one messages_fts table', async () => {
     const runner = ds.createQueryRunner();
-    const migration = new AddMessagesFts();
+    const migration = new AddMessagesFts1782400000000();
     await migration.up(runner);
     await expect(migration.up(runner)).resolves.toBeUndefined();
 
@@ -95,7 +95,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
 
   it('down() drops the virtual table and all three sync triggers', async () => {
     const runner = ds.createQueryRunner();
-    const migration = new AddMessagesFts();
+    const migration = new AddMessagesFts1782400000000();
     await migration.up(runner);
     await migration.down(runner);
 
@@ -125,7 +125,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
       }),
     } as unknown as QueryRunner;
 
-    await expect(new AddMessagesFts().up(stub)).resolves.toBeUndefined();
+    await expect(new AddMessagesFts1782400000000().up(stub)).resolves.toBeUndefined();
     // Only the probe should have been issued — no CREATE VIRTUAL TABLE / INSERT / trigger DDL.
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('sqlite_compileoption_used');
@@ -157,7 +157,7 @@ describe('AddMessagesFts — dual-DB safety', () => {
 
   it('down() then up() round-trips cleanly (schema re-creatable after teardown)', async () => {
     const qr = ds.createQueryRunner();
-    const m = new AddMessagesFts();
+    const m = new AddMessagesFts1782400000000();
     await m.up(qr);
     await m.down(qr);
     await m.up(qr);

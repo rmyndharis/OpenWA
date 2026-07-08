@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import { AddMessagesFts } from '../../database/migrations/1782400000000-AddMessagesFts';
+import { AddMessagesFts1782400000000 } from '../../database/migrations/1782400000000-AddMessagesFts';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { Session } from '../session/entities/session.entity';
 import { BuiltInFtsProvider } from './providers/builtin-fts.provider';
@@ -91,7 +91,7 @@ describe('BuiltInFtsProvider satisfies the SearchProvider contract', () => {
       synchronize: true,
     });
     await ds.initialize();
-    await new AddMessagesFts().up(ds.createQueryRunner());
+    await new AddMessagesFts1782400000000().up(ds.createQueryRunner());
     const provider = new BuiltInFtsProvider(ds);
     const seed = async (messages: ContractSeedMessage[]): Promise<void> => {
       await ds.getRepository(Message).insert(

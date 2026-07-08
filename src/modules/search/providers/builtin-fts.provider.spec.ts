@@ -4,7 +4,7 @@ import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
-import { AddMessagesFts } from '../../../database/migrations/1782400000000-AddMessagesFts';
+import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
 
 describe('BuiltInFtsProvider (sqlite)', () => {
   let ds: DataSource;
@@ -13,7 +13,7 @@ describe('BuiltInFtsProvider (sqlite)', () => {
   beforeEach(async () => {
     ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [Session, Message], synchronize: true });
     await ds.initialize();
-    await new AddMessagesFts().up(ds.createQueryRunner());
+    await new AddMessagesFts1782400000000().up(ds.createQueryRunner());
     provider = new BuiltInFtsProvider(ds);
     const repo = ds.getRepository(Message);
     await repo.insert([

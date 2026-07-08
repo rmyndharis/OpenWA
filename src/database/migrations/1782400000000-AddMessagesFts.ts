@@ -10,8 +10,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Non-CONCURRENTLY on PG (one-time blocking build). For very large `messages` tables, run the
  * upgrade during a maintenance window; set SEARCH_ENABLED=false to skip wiring (the migration still runs).
  */
-export class AddMessagesFts implements MigrationInterface {
-  name = '1782400000000-AddMessagesFts';
+export class AddMessagesFts1782400000000 implements MigrationInterface {
+  name = 'AddMessagesFts1782400000000';
 
   async up(qr: QueryRunner): Promise<void> {
     const isPostgres = qr.connection.options.type === 'postgres';
