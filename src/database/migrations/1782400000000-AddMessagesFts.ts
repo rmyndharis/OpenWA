@@ -16,6 +16,13 @@ export class AddMessagesFts implements MigrationInterface {
   async up(qr: QueryRunner): Promise<void> {
     const isPostgres = qr.connection.options.type === 'postgres';
     if (isPostgres) {
+      // Lift the runtime statement_timeout (30000ms on the data pool — see app.module.ts) for this
+      // migration transaction: the STORED generated column is a full-table rewrite, and the GIN index
+      // build that follows is the heaviest boot migration. Without this, a large `messages` table can
+      // exceed 30s and be aborted → boot crash. SET LOCAL is transaction-scoped (auto-reverts) and is
+      // guarded by the dialect since SQLite rejects it syntactically. Mirrors 1781100000000 /
+      // 1781300000000 / 1782200000000.
+      await qr.query('SET LOCAL statement_timeout = 0');
       await qr.query(
         `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "body_ts" tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(body, ''))) STORED`,
       );
@@ -46,7 +53,12 @@ export class AddMessagesFts implements MigrationInterface {
       INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
     END`);
     await qr.query(`DROP TRIGGER IF EXISTS messages_fts_au`);
-    await qr.query(`CREATE TRIGGER messages_fts_au AFTER UPDATE ON "messages" BEGIN
+    // The WHEN clause limits re-indexing to body changes: without it every ack (SENT→DELIVERED→READ),
+    // reaction, and status update does a redundant FTS delete+insert on the busiest message path for
+    // zero search benefit (body didn't change). NULL-safe via `IS NOT` (SQLite's NULL-safe not-equal):
+    // a NULL↔non-NULL body transition still fires, while ack-only updates skip. The INSERT and DELETE
+    // triggers above are unchanged — only UPDATE gains the guard.
+    await qr.query(`CREATE TRIGGER messages_fts_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
       INSERT INTO "messages_fts"("messages_fts", "rowid", "body") VALUES ('delete', old."rowid", old."body");
       INSERT INTO "messages_fts"("rowid", "body") VALUES (new."rowid", new."body");
     END`);

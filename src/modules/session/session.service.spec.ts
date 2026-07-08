@@ -1486,6 +1486,28 @@ describe('SessionService', () => {
       expect(persistedCalls).toHaveLength(0);
     });
 
+    it('does not emit message:persisted when insert throws a transient (non-unique) error', async () => {
+      // Fail-open on transient DB errors (SQLITE_BUSY, lock-timeout, connection drop) is correct for
+      // webhook/WS dispatch — a real inbound message must never be dropped. But the row was never
+      // stored and dbMessage.id is undefined, so the message:persisted hook must NOT fire (it would
+      // hand plugins an id-less payload for a row that isn't in the DB). The hook is gated on a
+      // `persisted` flag set only after the generated-maps merge succeeds. Webhook/WS still dispatch.
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+
+      callbacks.onMessage!(makeMessage({ id: 'wa-busy-1', fromMe: false }));
+      await flush();
+
+      const persistedCalls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      );
+      expect(persistedCalls).toHaveLength(0);
+      // Fail-open: webhook still dispatched so the inbound message is not silently dropped. (The
+      // payload is `{}` here because the hook mock returns `data: {}`; the point is that dispatch
+      // fired at all on a transient DB error — only the message:persisted hook is gated on `persisted`.)
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'message.received', expect.anything());
+    });
+
     it('does not persist (no orphan row) when the session is deleted mid hook chain', async () => {
       // onMessage gates on isLiveEngine synchronously at entry, then awaits the message:received hook
       // chain before inserting. If delete() completes during that await (the engine leaves the live

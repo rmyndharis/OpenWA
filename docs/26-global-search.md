@@ -108,6 +108,13 @@ want to drop the index entirely, run the migration `down` against the data conne
 > `/search` returns `501` (no FTS schema) until you run `npm run migration:run` once to install the FTS
 > virtual table / generated column. Prod defaults to `synchronize=false` + `migrationsRun=true`, so this
 > is dev-only.
+>
+> **Postgres caveat — do not combine `DATABASE_TYPE=postgres` with `DATABASE_SYNCHRONIZE=true`.** The
+> Postgres data connection hardcodes `migrationsRun=true` (unlike SQLite, where it is `!synchronize`),
+> so on Postgres both run every boot: the migration adds the generated `body_ts` column, then
+> `synchronize` immediately drops it (the `Message` entity does not declare `body_ts`). The result is
+> `/search` returning `501` silently on every restart. Use migrations (`DATABASE_SYNCHRONIZE=false`, the
+> prod default) for Postgres. SQLite is unaffected (its `migrationsRun` is `!synchronize`).
 
 ## 26.6 The HTTP endpoint
 

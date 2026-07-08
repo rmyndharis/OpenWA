@@ -218,13 +218,17 @@ export class BuiltInFtsProvider implements SearchProvider {
       where.push(`${prefix}"type" IN (${placeholders})`);
       params.push(...types);
     }
+    // The public contract (DTO + docs) is epoch-ms, but messages.timestamp stores epoch-seconds
+    // (WhatsApp messageTimestamp — see the inbound mappers in the engine adapters). Bind ms→seconds
+    // at the boundary, otherwise `seconds >= ms` is false for every modern row and dateFrom/dateTo
+    // silently exclude all results.
     if (q.dateFrom) {
       where.push(`${prefix}"timestamp" >= ${ph()}`);
-      params.push(q.dateFrom);
+      params.push(Math.floor(q.dateFrom / 1000));
     }
     if (q.dateTo) {
       where.push(`${prefix}"timestamp" <= ${ph()}`);
-      params.push(q.dateTo);
+      params.push(Math.floor(q.dateTo / 1000));
     }
   }
 

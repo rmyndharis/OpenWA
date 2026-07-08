@@ -803,6 +803,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
             // message is never dropped by a transient DB failure.
             let isNewMessage = true;
+            let persisted = false;
             try {
               // `insert()` (not `save()`) is load-bearing: the UNIQUE(sessionId, waMessageId) constraint
               // makes a duplicate insert throw, which is the atomic dedup oracle for #464 re-fires.
@@ -815,6 +816,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
                 dbMessage as unknown as QueryDeepPartialEntity<Message>,
               );
               Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
+              persisted = true;
             } catch (err) {
               if (isUniqueConstraintError(err)) {
                 isNewMessage = false;
@@ -830,13 +832,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // (wwjs `message` and Baileys `upsert`) converge on this persist, so one emit covers inbound.
             // The built-in FTS search provider is DB-synced and does NOT consume this; it exists for
             // plugin providers (Spec 2) + general use.
-            void this.hookManager
-              .execute(
-                'message:persisted',
-                { sessionId: id, message: dbMessage },
-                { sessionId: id, source: 'SessionService' },
-              )
-              .catch(() => undefined);
+            // Gate ONLY the hook on `persisted`: on a non-unique insert error (transient SQLITE_BUSY /
+            // lock-timeout / connection drop) the row was never stored and `dbMessage.id` is undefined,
+            // so emitting `message:persisted` would hand plugins an id-less payload for a row that isn't
+            // in the DB. The webhook/WS dispatch below stays fail-open — a real inbound message must
+            // never be dropped on a transient DB failure; only the hook requires a durable row.
+            if (persisted) {
+              void this.hookManager
+                .execute(
+                  'message:persisted',
+                  { sessionId: id, message: dbMessage },
+                  { sessionId: id, source: 'SessionService' },
+                )
+                .catch(() => undefined);
+            }
 
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);

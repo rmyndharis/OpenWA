@@ -84,4 +84,54 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     await expect(provider.search({ q: '*foo' })).rejects.toThrow(BadRequestException);
     await expect(provider.search({ q: '(test' })).rejects.toThrow(BadRequestException);
   });
+
+  it('treats dateFrom/dateTo as epoch-ms against a seconds timestamp column', async () => {
+    // Contract (DTO + docs) is epoch-ms, but messages.timestamp stores epoch-seconds (WhatsApp
+    // messageTimestamp). Seed a row at a known seconds value and assert: a dateFrom in ms that
+    // covers it includes the hit, while a dateFrom one second later (also in ms) excludes it. This
+    // pins the ms→seconds conversion at the bind boundary — without it `seconds >= ms` is false for
+    // every modern row and dateFrom silently excludes all results.
+    const repo = ds.getRepository(Message);
+    const tsSeconds = 1_700_000_000;
+    await repo.insert({
+      sessionId: 's1',
+      chatId: 'c1',
+      from: 'a@c.us',
+      to: 'dest@c.us',
+      body: 'datefilter probe term',
+      type: 'text',
+      direction: MessageDirection.OUTGOING,
+      timestamp: tsSeconds,
+    });
+
+    const included = await provider.search({ q: 'datefilter', dateFrom: tsSeconds * 1000 });
+    expect(included.hits.map(h => h.body)).toContain('datefilter probe term');
+
+    const excluded = await provider.search({ q: 'datefilter', dateFrom: (tsSeconds + 1) * 1000 });
+    expect(excluded.hits).toEqual([]);
+  });
+
+  it('the FTS UPDATE trigger carries a WHEN body-change guard (not fire on ack-only updates)', async () => {
+    // The messages_fts_au trigger must be guarded so it only re-indexes when body actually changes.
+    // Without the WHEN clause every ack (SENT→DELIVERED→READ) and reaction does a redundant FTS
+    // delete+insert on the busiest message path. Assert the definition in sqlite_master includes the
+    // WHEN guard so a future regression that drops it is caught here, not just in production write
+    // amplification. The body-change re-index path itself is covered by the revoke test below.
+    const rows: unknown[] = await ds.query(
+      `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_au'`,
+    );
+    expect(String((rows[0] as { sql?: string })?.sql ?? '')).toMatch(/WHEN\s+OLD\.body\s+IS\s+NOT\s+NEW\.body/i);
+  });
+
+  it('re-indexes on a body UPDATE (revoke path: body changes, FTS reflects the new value)', async () => {
+    // A body UPDATE must still re-index — the WHEN guard must not suppress legitimate body changes.
+    // The revoke flow sets body to empty; assert the FTS index reflects the new body and no longer
+    // matches the old term, while a new search for a freshly-written body still hits.
+    const repo = ds.getRepository(Message);
+    await repo.update({ body: 'hello world' }, { body: 'goodbye updated' });
+    const oldTerm = await provider.search({ q: 'hello' });
+    expect(oldTerm.hits.map(h => h.body)).not.toContain('hello world');
+    const newTerm = await provider.search({ q: 'goodbye' });
+    expect(newTerm.hits.map(h => h.body)).toContain('goodbye updated');
+  });
 });
