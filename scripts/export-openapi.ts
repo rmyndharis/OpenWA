@@ -25,6 +25,10 @@ process.env.DATABASE_NAME = ':memory:';
 process.env.MAIN_DATABASE_NAME = ':memory:';
 
 async function main() {
+  // Operator-supplied CLI path — this is a local dev/CI tool, not a network service, so there is
+  // no trust boundary to enforce (the caller already has full filesystem access). No path
+  // validation is applied by design; restricting writes to cwd would break legitimate out-of-tree
+  // snapshot writes, which the documented usage explicitly allows.
   const out = process.argv[2];
   if (!out) {
     console.error('Usage: npx ts-node scripts/export-openapi.ts <output-path>');
