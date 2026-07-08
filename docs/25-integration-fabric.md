@@ -145,7 +145,7 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 ## 25.7 Scale and durability
 
 Persist-before-acknowledge; at-least-once collapsed to exactly-once via deduplication and the queue job
-id; per-conversation FIFO ordering via an advisory lock (P1); per-instance fairness via a token bucket
+id; best-effort per-conversation ordering via an advisory lock (P1) — strict FIFO is not preserved across a queue retry or a redrive (inbound arrives over unordered HTTP and is a reconcile trigger, not an ordered source of truth); per-instance fairness via a token bucket
 that sheds a noisy tenant at the edge (P1); a dead-letter record with a redrive endpoint (P1). All shared
 state lives in Redis and PostgreSQL rather than in per-plugin files or the in-memory hook bus, so the
 design can scale to multiple nodes later without re-plumbing (the initial implementation runs on a single
