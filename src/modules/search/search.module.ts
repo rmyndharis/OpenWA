@@ -7,15 +7,34 @@ import { BuiltInFtsProvider } from './providers/builtin-fts.provider';
 
 /**
  * Wires the global search feature: the route (SearchController), the service layer (SearchService),
- * the provider registry, and the built-in DB-native FTS provider. A `SEARCH_BOOTSTRAP` factory runs
- * at DI time to register `builtin-fts` and make it the active provider (the registry's register()
- * also auto-promotes the first provider to active, so the explicit setActive is belt-and-braces —
- * pinning the built-in even when SEARCH_PROVIDER is `builtin-fts` rather than `auto`).
+ * the provider registry, and the built-in DB-native FTS provider. The `SEARCH_BOOTSTRAP` factory runs
+ * at DI time via `bootstrapSearchProviders` to register `builtin-fts` and make it the active provider.
  *
- * The module is imported by AppModule only when `SEARCH_ENABLED !== 'false'`, so the route + provider
- * are entirely absent when disabled (zero footprint — no 501 risk, no DI wiring). Plugin providers
+ * `SEARCH_PROVIDER=none` is honored by leaving the registry empty: the module (and route) stay loaded
+ * but `SearchService.search()` throws NotImplementedException → /search returns 501. This is distinct
+ * from `SEARCH_ENABLED=false`, which omits the module entirely (route 404).
+ *
+ * The module is imported by AppModule only when `SEARCH_ENABLED !== 'false'`. Plugin providers
  * (Spec 2) will register themselves the same way and `auto` will select a healthy plugin over builtin.
  */
+export function bootstrapSearchProviders(
+  registry: SearchProviderRegistry,
+  builtin: BuiltInFtsProvider,
+  cfg: ConfigService,
+): SearchProviderRegistry {
+  const provider = cfg.get<string>('search.provider', 'auto');
+  // `none` keeps the route mounted but registers no provider, so registry.active() is null and
+  // SearchService.search() throws NotImplementedException → /search returns 501 (not live results).
+  if (provider === 'none') return registry;
+  registry.register(builtin);
+  // register() auto-promotes the first provider to active; the explicit setActive is belt-and-braces
+  // for `builtin-fts` (a no-op for `auto`, which register() already activated).
+  if (provider === 'builtin-fts') {
+    registry.setActive('builtin-fts');
+  }
+  return registry;
+}
+
 @Module({
   imports: [ConfigModule],
   controllers: [SearchController],
@@ -26,16 +45,7 @@ import { BuiltInFtsProvider } from './providers/builtin-fts.provider';
     {
       provide: 'SEARCH_BOOTSTRAP',
       inject: [SearchProviderRegistry, BuiltInFtsProvider, ConfigService],
-      useFactory: (registry: SearchProviderRegistry, builtin: BuiltInFtsProvider, cfg: ConfigService) => {
-        const provider = cfg.get<string>('search.provider', 'auto');
-        registry.register(builtin);
-        // register() already makes the first provider active; pin it explicitly when configured to,
-        // so `auto` and `builtin-fts` both resolve to a working /search (not 501).
-        if (provider === 'builtin-fts' || provider === 'auto') {
-          registry.setActive('builtin-fts');
-        }
-        return registry;
-      },
+      useFactory: bootstrapSearchProviders,
     },
   ],
 })
