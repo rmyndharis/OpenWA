@@ -26,6 +26,9 @@ interface CountRow {
   n: number | string;
 }
 
+/** Returns the next placeholder token (`?` for SQLite, `$n` for Postgres). */
+type PlaceholderFn = () => string;
+
 /**
  * Built-in, DB-native full-text provider. Index sync is DB-level (generated tsvector / FTS5 triggers),
  * so this class ONLY queries — it never writes the index. See migration 1782400000000-AddMessagesFts.
@@ -79,62 +82,85 @@ export class BuiltInFtsProvider implements SearchProvider {
     };
   }
 
+  /**
+   * Dialect-aware placeholder generator. SQLite binds `?` positionally by param-array order
+   * (so we emit `?` regardless of slot). Postgres binds `$n` positional by the order tokens
+   * APPEAR in the final SQL string — so each call returns the next `$n`, and callers MUST
+   * invoke it in SQL-appearance order while pushing the matching param in the same step.
+   */
+  private static sqlitePlaceholder: PlaceholderFn = () => '?';
+  private pgPlaceholder(): PlaceholderFn {
+    let n = 0;
+    return () => `$${++n}`;
+  }
+
   // --- SQLite FTS5 -----------------------------------------------------------
+  // SQL appearance order: MATCH term -> filters -> LIMIT -> OFFSET. Params pushed in that order.
   private buildSqlite(q: SearchQuery, limit: number, offset: number) {
-    const where: string[] = [`messages_fts MATCH ?`];
-    const params: unknown[] = [q.q];
-    this.applyFilters(where, params, q, 'm.');
+    const ph = BuiltInFtsProvider.sqlitePlaceholder;
+    const params: unknown[] = [];
+    const where: string[] = [`messages_fts MATCH ${ph()}`];
+    params.push(q.q);
+    this.applyFilters(where, params, q, 'm.', ph);
     const cols = `m."id", m."waMessageId" AS wa_message_id, m."sessionId" AS session_id, m."chatId" AS chat_id, m."from" AS "from", m."body", m."timestamp", m."type", m."direction", snippet(messages_fts, 0, '<mark>', '</mark>', '…', ${MAX_SNIPPET_WORDS}) AS snippet, rank AS score`;
-    const sql = `SELECT ${cols} FROM messages_fts JOIN messages m ON m."rowid" = messages_fts."rowid" WHERE ${where.join(' AND ')} ORDER BY rank, m."timestamp" DESC LIMIT ? OFFSET ?`;
+    const sql = `SELECT ${cols} FROM messages_fts JOIN messages m ON m."rowid" = messages_fts."rowid" WHERE ${where.join(' AND ')} ORDER BY rank, m."timestamp" DESC LIMIT ${ph()} OFFSET ${ph()}`;
     params.push(limit, offset);
     return { sql, params };
   }
 
   // --- Postgres tsvector -----------------------------------------------------
+  // SQL appearance order: FTS term (in FROM clause) -> filters (in WHERE) -> LIMIT -> OFFSET.
+  // The FTS term lives in `FROM messages m, websearch_to_tsquery('simple', $1) AS q(query)`,
+  // which renders BEFORE the WHERE filters — so it must be `$1`, filters `$2..`, LIMIT/OFFSET last.
+  // Params are pushed in the same order so the Nth param maps to `$N`.
   private buildPostgres(q: SearchQuery, limit: number, offset: number) {
-    const where: string[] = [`m.body_ts @@ q.query`];
+    const ph = this.pgPlaceholder();
     const params: unknown[] = [];
-    this.applyFilters(where, params, q, 'm.');
+    const ftsTerm = `websearch_to_tsquery('simple', ${ph()}) AS q(query)`;
+    params.push(q.q);
+    const where: string[] = [`m.body_ts @@ q.query`];
+    this.applyFilters(where, params, q, 'm.', ph);
     const cols = `m."id", m."waMessageId" AS wa_message_id, m."sessionId" AS session_id, m."chatId" AS chat_id, m."from", m."body", m."timestamp", m."type", m."direction", ts_headline('simple', m."body", q.query, 'MaxFragments=1, MaxWords=${MAX_SNIPPET_WORDS}') AS snippet, ts_rank(m.body_ts, q.query) AS score`;
-    const sql = `SELECT ${cols} FROM messages m, websearch_to_tsquery('simple', $${params.length + 1}) AS q(query) WHERE ${where.join(' AND ')} ORDER BY score DESC, m."timestamp" DESC LIMIT $${params.length + 2} OFFSET $${params.length + 3}`;
-    params.push(q.q, limit, offset);
+    const sql = `SELECT ${cols} FROM messages m, ${ftsTerm} WHERE ${where.join(' AND ')} ORDER BY score DESC, m."timestamp" DESC LIMIT ${ph()} OFFSET ${ph()}`;
+    params.push(limit, offset);
     return { sql, params };
   }
 
-  private applyFilters(where: string[], params: unknown[], q: SearchQuery, prefix: string): void {
+  /** Emits dialect-correct placeholders. For PG, MUST be called in SQL-appearance order. */
+  private applyFilters(where: string[], params: unknown[], q: SearchQuery, prefix: string, ph: PlaceholderFn): void {
     if (q.sessionIds && q.sessionIds.length) {
-      const ph = `(${q.sessionIds.map(() => '?').join(',')})`;
-      where.push(`${prefix}"sessionId" IN ${ph}`);
+      const placeholders = q.sessionIds.map(() => ph()).join(',');
+      where.push(`${prefix}"sessionId" IN (${placeholders})`);
       params.push(...q.sessionIds);
     }
     if (q.sessionId) {
-      where.push(`${prefix}"sessionId" = ?`);
+      where.push(`${prefix}"sessionId" = ${ph()}`);
       params.push(q.sessionId);
     }
     if (q.chatId) {
-      where.push(`${prefix}"chatId" = ?`);
+      where.push(`${prefix}"chatId" = ${ph()}`);
       params.push(q.chatId);
     }
     if (q.from) {
-      where.push(`${prefix}"from" = ?`);
+      where.push(`${prefix}"from" = ${ph()}`);
       params.push(q.from);
     }
     if (q.direction) {
-      where.push(`${prefix}"direction" = ?`);
+      where.push(`${prefix}"direction" = ${ph()}`);
       params.push(q.direction);
     }
     if (q.type) {
       const types = Array.isArray(q.type) ? q.type : [q.type];
-      const ph = `(${types.map(() => '?').join(',')})`;
-      where.push(`${prefix}"type" IN ${ph}`);
+      const placeholders = types.map(() => ph()).join(',');
+      where.push(`${prefix}"type" IN (${placeholders})`);
       params.push(...types);
     }
     if (q.dateFrom) {
-      where.push(`${prefix}"timestamp" >= ?`);
+      where.push(`${prefix}"timestamp" >= ${ph()}`);
       params.push(q.dateFrom);
     }
     if (q.dateTo) {
-      where.push(`${prefix}"timestamp" <= ?`);
+      where.push(`${prefix}"timestamp" <= ${ph()}`);
       params.push(q.dateTo);
     }
   }
@@ -143,17 +169,21 @@ export class BuiltInFtsProvider implements SearchProvider {
     const where: string[] = [];
     const params: unknown[] = [];
     if (isPostgres) {
+      const ph = this.pgPlaceholder();
+      const ftsTerm = `websearch_to_tsquery('simple', ${ph()}) AS q(query)`;
+      params.push(q.q);
       where.push(`m.body_ts @@ q.query`);
-      this.applyFilters(where, params, q, 'm.');
-      const sql = `SELECT count(*)::int AS n FROM messages m, websearch_to_tsquery('simple', $1) AS q(query)`;
-      const rows = await this.dataSource.query<CountRow[]>(`${sql} WHERE ${where.join(' AND ')}`, [q.q, ...params]);
+      this.applyFilters(where, params, q, 'm.', ph);
+      const sql = `SELECT count(*)::int AS n FROM messages m, ${ftsTerm} WHERE ${where.join(' AND ')}`;
+      const rows = await this.dataSource.query<CountRow[]>(sql, params);
       return Number(rows[0]?.n ?? 0);
     }
-    where.push(`messages_fts MATCH ?`);
+    const ph = BuiltInFtsProvider.sqlitePlaceholder;
+    where.push(`messages_fts MATCH ${ph()}`);
     params.push(q.q);
-    this.applyFilters(where, params, q, 'm.');
-    const sql = `SELECT count(*) AS n FROM messages_fts JOIN messages m ON m."rowid" = messages_fts."rowid"`;
-    const rows = await this.dataSource.query<CountRow[]>(`${sql} WHERE ${where.join(' AND ')}`, params);
+    this.applyFilters(where, params, q, 'm.', ph);
+    const sql = `SELECT count(*) AS n FROM messages_fts JOIN messages m ON m."rowid" = messages_fts."rowid" WHERE ${where.join(' AND ')}`;
+    const rows = await this.dataSource.query<CountRow[]>(sql, params);
     return Number(rows[0]?.n ?? 0);
   }
 }
