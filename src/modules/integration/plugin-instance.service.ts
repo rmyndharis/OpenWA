@@ -88,6 +88,11 @@ export class PluginInstanceService {
     return this.repo.find({ where: { pluginId } });
   }
 
+  /** Every persisted instance across all plugins — used by the boot-time scope-binding reconciliation. */
+  listAll(): Promise<PluginInstance[]> {
+    return this.repo.find();
+  }
+
   async regenerateSecret(pluginId: string, instanceId: string): Promise<PluginInstance> {
     const inst = await this.resolve(pluginId, instanceId);
     if (!inst) throw new Error(`instance ${instanceId} not found for plugin ${pluginId}`);

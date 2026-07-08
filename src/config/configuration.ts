@@ -1,5 +1,11 @@
+import { computeFeatureFlags } from './feature-flags';
+
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
+
+  // Runtime feature flags. Single source of truth: src/config/feature-flags.ts. Exposed here so the
+  // full set is discoverable via ConfigService (`features.*`) instead of scattered process.env reads.
+  features: computeFeatureFlags(),
 
   // Redis configuration
   redis: {

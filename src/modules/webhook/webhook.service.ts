@@ -17,6 +17,7 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { recordWebhookDeliveryFailure, statusCodeFromError } from './utils/record-delivery-failure';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-delivery-metrics';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { generateIdempotencyKey, generateDeliveryId } from './utils/idempotency.util';
@@ -46,7 +47,6 @@ export interface WebhookJobData {
   url: string;
   event: string;
   payload: WebhookPayload;
-  signature: string;
   headers: Record<string, string>;
   attempt: number;
   maxRetries: number;
@@ -294,11 +294,11 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
     );
 
-    // Generate idempotency key (same for all webhooks receiving this event). occurredAt is captured
-    // once here and reused for every retry of this dispatch, so recurring lifecycle events get a
-    // distinct-per-occurrence key while retries of the same event stay stable.
+    // Base idempotency key for this event occurrence. occurredAt is captured once here and reused for
+    // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key
+    // while retries of the same event stay stable. It is salted PER WEBHOOK below.
     const occurredAt = new Date().toISOString();
-    const idempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
+    const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
     // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
     // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
@@ -306,6 +306,12 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const tasks = matchingWebhooks.map(async webhook => {
       // Generate unique delivery ID for each webhook
       const deliveryId = generateDeliveryId();
+
+      // Salt the base key with webhook.id so two DISTINCT webhooks subscribed to the same event (e.g.
+      // duplicate URLs) get DISTINCT idempotency keys — otherwise a receiver dedup'ing purely on the
+      // header would drop the sibling delivery as a replay. webhook.id is constant across retries of
+      // THIS webhook (incl. the queue-add→direct fallback), so its key stays stable.
+      const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
 
       const payload: WebhookPayload = {
         event,
@@ -373,7 +379,6 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
             url: webhook.url,
             event,
             payload: finalPayload,
-            signature,
             headers,
             attempt: 1,
             maxRetries: webhook.retryCount,
@@ -559,6 +564,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
         lastStatusCode: statusCodeFromError(errMessage),
         lastError: errMessage,
       });
+      incrementWebhookDeliveryFailures();
       throw error;
     }
   }

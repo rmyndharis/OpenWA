@@ -15,6 +15,7 @@ import { json, urlencoded, Request } from 'express';
 import { AppModule } from './../src/app.module';
 import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service';
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
+import { IntegrationDeliveryFailure } from './../src/modules/integration/entities/integration-delivery-failure.entity';
 
 /**
  * Byte-exact HTTP coverage for the Integration SDK v1 ingress contract, over the seam the
@@ -148,5 +149,33 @@ describe('Integration Fabric ingress (e2e)', () => {
 
     expect(res.status).toBe(401);
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
+  });
+
+  it('persists a redrivable dead-letter row (still 202) when inline dispatch fails', async () => {
+    const failureRepo = app.get<Repository<IntegrationDeliveryFailure>>(
+      getRepositoryToken(IntegrationDeliveryFailure, 'data'),
+    );
+    // The plugin handler throws — the inline-dispatch fallback fails and is swallowed. Without a
+    // dead-letter row the event would be stranded: handle() still 202s, and RedriveService only scans
+    // this table (never ingress_events). The live-ingress wiring must therefore persist the failure here.
+    dispatchWebhookForInstance.mockRejectedValueOnce(new Error('sandbox handler 5xx'));
+
+    const res = await request(app.getHttpServer())
+      .post(INGRESS_PATH)
+      .set('X-Chatwoot-Signature', sig)
+      .set('X-Chatwoot-Delivery', 'delivery-dlq-1')
+      .set('Content-Type', 'application/json')
+      .send(raw);
+
+    // Provider still gets its 202 (at-least-once) — the failure is captured durably, not surfaced as 5xx.
+    expect(res.status).toBe(202);
+    const rows = await failureRepo.find({ where: { deliveryId: 'delivery-dlq-1', direction: 'inbound' } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      pluginId: 'chatwoot',
+      instanceId: 'acct1',
+      redriven: false,
+      lastError: 'sandbox handler 5xx',
+    });
   });
 });

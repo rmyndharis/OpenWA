@@ -12,6 +12,7 @@ import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-
 import { recordWebhookDeliveryFailure, statusCodeFromError } from '../../webhook/utils/record-delivery-failure';
 import { HookManager } from '../../../core/hooks';
 import { withSafeFetch, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
+import { incrementWebhookDeliveryFailures } from '../../../common/metrics/webhook-delivery-metrics';
 
 export interface WebhookJobResult {
   statusCode: number;
@@ -158,6 +159,7 @@ export class WebhookProcessor extends WorkerHost {
           lastStatusCode: statusCodeFromError(errorMessage),
           lastError: errorMessage,
         });
+        incrementWebhookDeliveryFailures();
       }
 
       // Re-throw to trigger BullMQ retry

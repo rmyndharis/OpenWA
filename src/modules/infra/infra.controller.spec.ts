@@ -91,12 +91,42 @@ describe('InfraController.importStorage filePath validation (Vuln 3)', () => {
   });
 });
 
-describe('InfraController.getStatus queue job counts (F-18)', () => {
+describe('InfraController.getStatus DB health (active SELECT 1 probe, not just isInitialized)', () => {
+  const build = (query: jest.Mock) => {
+    // engine.type=baileys skips the wa-web-version registry fetch (no network in unit tests).
+    const config = { get: (k: string, def?: unknown) => (k === 'engine.type' ? 'baileys' : def) };
+    const ds = { isInitialized: true, query };
+    const cache = { isAvailable: jest.fn().mockResolvedValue(false), refreshS3Availability: jest.fn() };
+    return new InfraController(
+      config as never,
+      ds as never,
+      ds as never,
+      { create: jest.fn() } as never,
+      { isDockerAvailable: () => false, getRunningBuiltinServices: jest.fn() } as never,
+      cache as never,
+      { refreshS3Availability: jest.fn() } as never,
+      {} as never,
+      undefined as never,
+    );
+  };
+
+  it('reports connected:true when SELECT 1 succeeds', async () => {
+    const status = await build(jest.fn().mockResolvedValue([{ '1': 1 }])).getStatus();
+    expect(status.database.connected).toBe(true);
+  });
+
+  it('reports connected:false when the DB is initialized but SELECT 1 fails (backend died post-init)', async () => {
+    const status = await build(jest.fn().mockRejectedValue(new Error('ECONNRESET'))).getStatus();
+    expect(status.database.connected).toBe(false);
+  });
+});
+
+describe('InfraController.getStatus queue job counts', () => {
   function buildStatusController(opts: { queueEnabled: boolean; queue?: { getJobCounts: jest.Mock } }) {
     const configService = {
       get: (key: string, def?: unknown) => (key === 'queue.enabled' ? opts.queueEnabled : def),
     };
-    const dataSource = { isInitialized: true } as unknown;
+    const dataSource = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) } as unknown;
     const engineFactory = { create: jest.fn() };
     const dockerService = { isDockerAvailable: () => false, getRunningBuiltinServices: jest.fn() };
     const cacheService = { isAvailable: jest.fn().mockResolvedValue(false), refreshS3Availability: jest.fn() };
@@ -359,9 +389,9 @@ describe('InfraController.saveConfig rejects values that would inject extra env 
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.writeFileSync as jest.Mock).mockClear();
 
-    const result = newController().saveConfig({ engine: { browserArgs: malicious } });
-
-    expect(result.saved).toBe(false);
+    // A newline-injected value is rejected outright with a 4xx (BadRequestException), not masked as a
+    // {saved:false} 200 — and nothing is written.
+    expect(() => newController().saveConfig({ engine: { browserArgs: malicious } })).toThrow(BadRequestException);
     expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
   });
 
@@ -416,9 +446,8 @@ describe('InfraController.saveConfig engine selection (persist ENGINE_TYPE — I
 
   it('rejects an unknown engine type and writes nothing', () => {
     (fs.writeFileSync as jest.Mock).mockClear();
-    const res = newController().saveConfig({ engine: { type: 'bogus' } });
-    expect(res.saved).toBe(false);
-    expect(res.message).toMatch(/unknown engine/i);
+    // Rejected as a 4xx (BadRequestException naming the bad engine), not a {saved:false} 200.
+    expect(() => newController().saveConfig({ engine: { type: 'bogus' } })).toThrow(/unknown engine/i);
     expect(fs.writeFileSync as jest.Mock).not.toHaveBeenCalled();
   });
 });
@@ -799,7 +828,7 @@ describe('InfraController.getConfig (#226)', () => {
   });
 });
 
-describe('InfraController.getStatus engine (F7 — reads the real engine.puppeteer.* keys)', () => {
+describe('InfraController.getStatus engine (reads the real engine.puppeteer.* keys)', () => {
   // Pin the WA-Web version so getStatus does not fire the wa-version registry fetch (no network in tests).
   const savedWebVer = process.env.WWEBJS_WEB_VERSION;
   beforeAll(() => (process.env.WWEBJS_WEB_VERSION = 'off'));
@@ -817,7 +846,7 @@ describe('InfraController.getStatus engine (F7 — reads the real engine.puppete
     };
     const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
     const cache = { isAvailable: () => Promise.resolve(false) };
-    const ds = { isInitialized: true };
+    const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
     const controller = new InfraController(
       config as never,
       ds as never,
@@ -848,7 +877,7 @@ describe('InfraController.getStatus storage (reads the real storage.localPath ke
   const buildController = (map: Record<string, unknown>) => {
     const config = { get: (key: string, def?: unknown) => (key in map ? map[key] : def) };
     const cache = { isAvailable: () => Promise.resolve(false) };
-    const ds = { isInitialized: true };
+    const ds = { isInitialized: true, query: jest.fn().mockResolvedValue([{ '1': 1 }]) };
     return new InfraController(
       config as never,
       ds as never,

@@ -147,7 +147,15 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       errors.push(`${key} must be "true" or "false" (got ${JSON.stringify(raw)})`);
     }
   };
-  for (const key of ['QUEUE_ENABLED', 'MCP_ENABLED', 'SERVE_DASHBOARD']) {
+  for (const key of [
+    'QUEUE_ENABLED',
+    'MCP_ENABLED',
+    'SERVE_DASHBOARD',
+    'AUTO_START_SESSIONS',
+    'STORE_EPHEMERAL_MESSAGES',
+    'RESOLVE_LID_TO_PHONE',
+    'SIMULATE_TYPING',
+  ]) {
     checkBool(key);
   }
 

@@ -2,6 +2,7 @@ import { IntegrationInstanceController } from './integration-instance.controller
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { AuditService } from '../audit/audit.service';
+import { ScopeBindingService } from './scope-binding.service';
 
 // The provisioning bridge is what makes a minted instance's config reach the ingress worker: on
 // create/patch it mirrors the instance config into the plugin's per-session config and activates the
@@ -40,7 +41,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
         updatedAt: new Date(0),
       }),
     } as unknown as PluginInstanceService;
-    const controller = new IntegrationInstanceController(instances, loader, audit);
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
 
     await controller.create('chatwoot-adapter', {
       instanceId: 'acct1',
@@ -70,7 +76,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       update: jest.fn(),
       maskedView: (i: unknown) => i,
     } as unknown as PluginInstanceService;
-    const controller = new IntegrationInstanceController(instances, loader, audit);
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
 
     await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
 
@@ -93,7 +104,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       list: jest.fn().mockResolvedValue([{ ...base, enabled: false }]), // only this one, now disabled
       maskedView: (i: unknown) => i,
     } as unknown as PluginInstanceService;
-    const controller = new IntegrationInstanceController(instances, loader, audit);
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
 
     await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
 
@@ -118,7 +134,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       ]),
       maskedView: (i: unknown) => i,
     } as unknown as PluginInstanceService;
-    const controller = new IntegrationInstanceController(instances, loader, audit);
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
 
     await controller.patch('chatwoot-adapter', 'acct1', { enabled: false });
 
@@ -150,7 +171,12 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       }),
       maskedView: (i: unknown) => i,
     } as unknown as PluginInstanceService;
-    const controller = new IntegrationInstanceController(instances, loader, audit);
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
 
     await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: 'sess-2' });
 

@@ -13,6 +13,7 @@ import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
+import { HookManager } from '../../core/hooks';
 import { assertBase64WithinMediaCap } from './media-cap.util';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderTemplate } from '../../common/utils/template-render';
@@ -81,6 +82,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     private readonly batchRepository: Repository<MessageBatch>,
     private readonly sessionService: SessionService,
     private readonly messageService: MessageService,
+    private readonly hookManager: HookManager,
   ) {}
 
   /**
@@ -259,9 +261,30 @@ export class BulkMessageService implements OnApplicationBootstrap {
         status: BatchMessageStatus.PENDING,
       };
 
+      // Hoisted so the failure hook below can report the exact (variable-applied / plugin-modified)
+      // content that was attempted, even when applyVariables or the send throws.
+      let content: BulkMessageContent = msg.content;
+      // Set when the message:sending gate blocked this item, so the catch treats it as a moderation
+      // decision (not a delivery failure) and skips message:failed — matching the single-send path,
+      // where a block is a 400 with no failure hook.
+      let blockedByPlugin = false;
       try {
         // Apply template variables
-        const content: BulkMessageContent = this.applyVariables(msg.content, msg.variables);
+        content = this.applyVariables(msg.content, msg.variables);
+
+        // Per-message moderation gate — the SAME message:sending hook single sends use, so a
+        // compliance/moderation plugin sees bulk traffic too (bulk previously bypassed it entirely).
+        // A block fails just THIS message (honouring stopOnError below); a plugin may also rewrite it.
+        const gate = await this.hookManager.execute(
+          'message:sending',
+          { sessionId: batch.sessionId, input: content, type: msg.type },
+          { sessionId: batch.sessionId, source: 'BulkMessageService' },
+        );
+        if (!gate.continue) {
+          blockedByPlugin = true;
+          throw new BadRequestException('Message sending blocked by plugin');
+        }
+        content = (gate.data as { input: BulkMessageContent }).input;
 
         // Send message based on type
         const messageResult = await this.sendMessage(engine, msg.chatId, msg.type, content);
@@ -285,6 +308,17 @@ export class BulkMessageService implements OnApplicationBootstrap {
         result.error = sanitized;
         batch.progress.failed++;
         batch.progress.pending--;
+
+        // Fire message:failed so alerting/analytics plugins observe bulk failures too (previously
+        // none) — but NOT for a plugin gate-block, which is a moderation decision, not a delivery
+        // failure (matches single send, where a block is a 400 with no message:failed).
+        if (!blockedByPlugin) {
+          await this.hookManager.execute(
+            'message:failed',
+            { sessionId: batch.sessionId, error: sanitized.message, input: content, type: msg.type },
+            { sessionId: batch.sessionId, source: 'BulkMessageService' },
+          );
+        }
 
         this.logger.warn(`Batch ${batch.batchId}: Failed message ${i + 1} to ${msg.chatId}: ${sanitized.message}`);
 

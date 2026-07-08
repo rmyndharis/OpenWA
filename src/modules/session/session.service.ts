@@ -15,12 +15,16 @@ import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
+import { Webhook } from '../webhook/entities/webhook.entity';
+import { Template } from '../template/entities/template.entity';
+import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { userPart } from '../../engine/identity/wa-id';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
+import { resolveFeatureFlags } from '../../config/feature-flags';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -184,7 +188,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   async onApplicationBootstrap(): Promise<void> {
-    if (process.env.AUTO_START_SESSIONS !== 'true') return;
+    if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
 
     const sessions = await this.sessionRepository.find({
       where: { phone: Not(IsNull()), status: SessionStatus.DISCONNECTED },
@@ -404,12 +408,19 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
 
       // DB removal is NOT best-effort: a genuine failure must surface (500) rather than be swallowed.
-      // messages and message_batches carry a sessionId but have no FK cascade to sessions (unlike
-      // webhooks/templates/baileys_stored_messages), so remove them explicitly in the same transaction
-      // — otherwise deleting a session leaves its full history orphaned forever.
+      // Delete every child row explicitly, in one transaction, children before the parent. messages/
+      // message_batches carry a plain sessionId with no FK. webhooks/templates/baileys_stored_messages
+      // DO declare an ON DELETE CASCADE FK, but the default `data` engine (SQLite) runs with
+      // foreign_keys OFF, so that cascade never fires there — a session delete would otherwise orphan
+      // them forever (webhooks in particular retain the signing secret + custom headers). Deleting them
+      // explicitly is engine-agnostic (redundant-but-harmless on Postgres, where the cascade finds
+      // nothing left) and mirrors the restore path's explicit-clear ordering.
       await this.dataSource.transaction(async manager => {
         await manager.delete(Message, { sessionId: id });
         await manager.delete(MessageBatch, { sessionId: id });
+        await manager.delete(Webhook, { sessionId: id });
+        await manager.delete(Template, { sessionId: id });
+        await manager.delete(BaileysStoredMessage, { sessionId: id });
         await manager.remove(session);
       });
       this.logger.log(`Session deleted: ${session.name}`, {
@@ -701,7 +712,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
         // A message is ephemeral when its chat has a disappearing-messages timer (ephemeralDuration > 0).
         if (
-          process.env.STORE_EPHEMERAL_MESSAGES === 'false' &&
+          !resolveFeatureFlags(this.configService).storeEphemeralMessages &&
           message.ephemeralDuration &&
           message.ephemeralDuration > 0
         ) {
@@ -742,7 +753,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // Inline @lid -> phone resolution (#263), opt-in via RESOLVE_LID_TO_PHONE. Best-effort:
             // attaches senderPhone (digits or null) before persist/dispatch so webhook/ws consumers
             // get it in a single pass. Only for privacy-id senders, so no lookup for normal numbers.
-            if (process.env.RESOLVE_LID_TO_PHONE === 'true' && incoming.isLidSender && !incoming.fromMe) {
+            if (resolveFeatureFlags(this.configService).resolveLidToPhone && incoming.isLidSender && !incoming.fromMe) {
               incoming.senderPhone = await this.resolveSenderPhone(id, incoming.author ?? incoming.from);
             }
 
@@ -1094,8 +1105,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         reactions[event.senderId] = event.reaction;
       }
       metadata.reactions = reactions;
-      msg.metadata = metadata;
-      await this.messageRepository.save(msg);
+      // Scoped update of ONLY the metadata column. A full-row save(msg) would re-persist the `status`
+      // read at findOne time, clobbering a concurrent ack UPDATE (SENT→DELIVERED/READ) that committed in
+      // the window between this findOne and the write — reactionChains serializes reaction-vs-reaction
+      // but NOT reaction-vs-ack, so scoping the write to metadata is what keeps delivery state monotonic
+      // (#220). Other metadata fields are carried through untouched (they were read into `metadata`).
+      await this.messageRepository.update({ sessionId: id, waMessageId: event.messageId }, {
+        metadata,
+      } as QueryDeepPartialEntity<Message>);
 
       this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
       // Webhook parity with the WebSocket broadcast: same payload (event + post-apply snapshot), so a
@@ -1127,7 +1144,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       });
       // Don't leave the session silently stuck DISCONNECTED — mark it terminally FAILED with a reason
       // so findOne/findAll surface it via `lastError` and the dashboard shows it needs a restart.
-      this.sessionErrors.set(id, `Reconnection failed after ${state.attempts} attempts — restart the session.`);
+      // maxAttempts:0 means auto-reconnect is disabled, not that N attempts were tried and failed — say
+      // so instead of the misleading "failed after 0 attempts".
+      this.sessionErrors.set(
+        id,
+        state.maxAttempts === 0
+          ? 'Auto-reconnect is disabled (max attempts set to 0); the session was left disconnected — restart it manually.'
+          : `Reconnection failed after ${state.attempts} attempts — restart the session.`,
+      );
       void this.updateStatus(id, SessionStatus.FAILED);
       return;
     }

@@ -26,6 +26,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { Session } from '../session/entities/session.entity';
+import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 
 function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
   return {
@@ -381,6 +382,28 @@ describe('WebhookService', () => {
 
       resolveSlow({ ok: true, status: 200 });
       await dispatchP;
+    });
+
+    it('salts each sibling webhook with a distinct idempotency key so one receiver cannot dedupe out another', async () => {
+      const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
+      const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([wA, wB]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+      await service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+
+      const keyByUrl = new Map<string, string>();
+      for (const call of mockFetch.mock.calls as [string, { headers: Record<string, string> }][]) {
+        keyByUrl.set(call[0], call[1].headers['X-OpenWA-Idempotency-Key']);
+      }
+      const keyA = keyByUrl.get('https://a.example/hook');
+      const keyB = keyByUrl.get('https://b.example/hook');
+      // Same event + payload, but two distinct endpoints must not collide on the dedupe header.
+      expect(keyA).toBeTruthy();
+      expect(keyB).toBeTruthy();
+      expect(keyA).not.toBe(keyB);
     });
 
     it('falls back to the original payload when a before-hook omits payload (no undefined body)', async () => {
@@ -944,6 +967,7 @@ describe('WebhookService', () => {
       const mockFetch = undiciFetch as jest.Mock;
       mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
 
+      const failuresBefore = getWebhookDeliveryFailuresTotal();
       await service.dispatch('sess-1', 'message.received', {});
 
       expect(failureRepository.insert).toHaveBeenCalledWith(
@@ -954,6 +978,8 @@ describe('WebhookService', () => {
           lastError: 'HTTP 500: Server Error',
         }),
       );
+      // The terminal failure also bumps the Prometheus counter exactly once.
+      expect(getWebhookDeliveryFailuresTotal()).toBe(failuresBefore + 1);
       mockFetch.mockReset();
     });
 

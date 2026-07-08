@@ -182,6 +182,24 @@
         "functions": 68,
         "lines": 77,
         "statements": 77
+      },
+      "./src/core/hooks/": {
+        "branches": 80,
+        "functions": 70,
+        "lines": 82,
+        "statements": 81
+      },
+      "./src/modules/session/": {
+        "branches": 50,
+        "functions": 63,
+        "lines": 74,
+        "statements": 72
+      },
+      "./src/modules/webhook/": {
+        "branches": 65,
+        "functions": 83,
+        "lines": 84,
+        "statements": 80
       }
     },
     "testEnvironment": "node"

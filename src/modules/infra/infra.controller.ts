@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Post, Body, BadRequestException, Optional } from '@nestjs/common';
+import { Controller, Get, Put, Post, Body, BadRequestException, HttpException, Optional } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -249,14 +249,44 @@ export class InfraController {
     private readonly webhookQueue?: Queue,
   ) {}
 
+  /** Bound the DB liveness probe so a hung connection can't stall the status read. */
+  private static readonly DB_PROBE_TIMEOUT_MS = 3000;
+
+  /**
+   * Active DB liveness probe: run `SELECT 1`, not just read `DataSource.isInitialized`. A backend
+   * (notably Postgres) that dies AFTER init keeps `isInitialized` true until an explicit `.destroy()`,
+   * so the old check reported the tile green while the DB was actually down. Bounded by a short
+   * timeout; any error or timeout resolves to `false`. Mirrors `/health/ready`'s authoritative probe.
+   */
+  private async probeDbConnected(ds: DataSource): Promise<boolean> {
+    if (!ds.isInitialized) return false;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        ds.query('SELECT 1'),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('db probe timeout')), InfraController.DB_PROBE_TIMEOUT_MS);
+        }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   @Get('status')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get infrastructure status' })
   @ApiResponse({ status: 200, description: 'Infrastructure status' })
   async getStatus(): Promise<InfraStatus> {
-    // Check both database connections
-    const mainDbConnected = this.mainDataSource.isInitialized;
-    const dataDbConnected = this.dataDataSource.isInitialized;
+    // Active DB liveness probe (SELECT 1) on both connections in parallel — not just isInitialized,
+    // which stays true after a Postgres backend dies until an explicit .destroy() (see probeDbConnected).
+    const [mainDbConnected, dataDbConnected] = await Promise.all([
+      this.probeDbConnected(this.mainDataSource),
+      this.probeDbConnected(this.dataDataSource),
+    ]);
     const dbConnected = mainDbConnected && dataDbConnected;
     const dbType = this.configService.get<string>('dataDatabase.type', 'sqlite');
     const dbHost = this.configService.get<string>('dataDatabase.host', 'localhost');
@@ -640,6 +670,14 @@ export class InfraController {
         profiles,
       };
     } catch (error) {
+      // A validation rejection (unknown engine type, or a newline-injected value) is a BadRequestException
+      // and MUST surface as its real 4xx status, not be masked as an HTTP 200 {saved:false} — a client
+      // branching on HTTP status alone would otherwise treat rejected input as success. Re-throw any
+      // HttpException so the Nest layer maps it. A non-HTTP failure (e.g. a writeSecretFile disk/permission
+      // error) stays a {saved:false} 200, preserving the dashboard's body.saved handling for I/O faults.
+      if (error instanceof HttpException) {
+        throw error;
+      }
       return {
         message: `Failed to save configuration: ${error instanceof Error ? error.message : 'Unknown error'}`,
         saved: false,

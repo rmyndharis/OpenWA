@@ -5,10 +5,16 @@ import { WorkerHookRegistry, WorkerHookHandler, hookConfigStore } from './worker
 import { WebhookRegistry, WebhookHandler } from './worker-webhooks';
 
 /**
- * Worker entry for an untrusted plugin. Loads the plugin module and drives its lifecycle in response
- * to host messages. This is the only code that runs alongside untrusted plugin code, so it keeps no
- * host references — its sole channel out is `parentPort`, and every capability call round-trips to
- * the host (which validates permission + session scope) via the capability client.
+ * Worker entry for a plugin. Loads the plugin module and drives its lifecycle in response to host
+ * messages, exposing the `ctx.*` capability surface, which round-trips every call to the host (which
+ * validates permission + session scope) via the capability client.
+ *
+ * SECURITY MODEL — read before relying on the sandbox: a `worker_thread` shares the host OS process,
+ * filesystem, and network credentials. It provides crash / heap-OOM CONTAINMENT, NOT a security
+ * boundary. Plugin code can `require('fs' | 'net' | 'child_process')` and reach the host's files and
+ * sockets directly — `parentPort` is NOT the worker's only channel out, and the capability permission
+ * model gates only the `ctx.*` verbs, not raw Node access. Load only trusted plugin code, or run
+ * OpenWA under an OS-level sandbox (container / seccomp) when untrusted plugins must be supported.
  */
 
 interface LifecyclePlugin {

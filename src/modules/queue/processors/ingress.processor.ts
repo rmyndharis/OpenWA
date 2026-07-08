@@ -23,9 +23,16 @@ export interface IngressJobData {
   payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
 }
 
-// Ordering within a conversation is guaranteed by the KeyedAsyncLock wrapping dispatch below, so the
-// worker no longer needs concurrency 1 to stay correct-by-default; raising it parallelizes unrelated
-// conversations instead of head-of-line-blocking every inbound event behind the slowest one.
+// The KeyedAsyncLock wrapping dispatch below guarantees no two dispatches for the SAME conversation
+// run concurrently (mutual exclusion + in-order START for events as they reach the worker), so the
+// worker no longer needs concurrency 1 — raising it parallelizes UNRELATED conversations instead of
+// head-of-line-blocking every inbound event behind the slowest one. Strict end-to-end order is NOT
+// preserved across a BullMQ retry: a retried job re-enters lock.run() after its backoff and chains at
+// the conversation's CURRENT tail, so it can overtake a same-conversation successor that dispatched
+// during the backoff window. This is a deliberate tradeoff — BullMQ retries release the worker slot
+// during backoff (better throughput under transient failure), where retrying inside the lock would
+// hold it — and is acceptable because ingress order is best-effort regardless: the provider delivers
+// over unordered HTTP. Order-strict plugins must not assume retry-involved events arrive in sequence.
 @Processor(QUEUE_NAMES.INGRESS, { connection: workerConnectionOptions(), concurrency: ingressWorkerConcurrency() })
 export class IngressProcessor extends WorkerHost {
   private readonly logger = createLogger('IngressProcessor');

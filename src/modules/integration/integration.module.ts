@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
@@ -7,11 +8,13 @@ import { PluginInstanceService } from './plugin-instance.service';
 import { IngressEventService } from './ingress-event.service';
 import { IngressService, IngressRouteDescriptor } from './ingress.service';
 import { IngressController } from './ingress.controller';
-import { IngressEnqueueService } from './ingress-enqueue.service';
+import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
 import { RedriveService } from './redrive.service';
 import { RedriveController } from './redrive.controller';
 import { IntegrationInstanceController } from './integration-instance.controller';
+import { ScopeBindingService } from './scope-binding.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { createLogger } from '../../common/services/logger.service';
 
 /**
  * Wires the @Public ingress HTTP surface: instance/event persistence services and the fast-ack
@@ -28,21 +31,49 @@ import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
     IngressEventService,
     IngressEnqueueService,
     RedriveService,
+    ScopeBindingService,
     {
       provide: IngressService,
-      inject: [PluginInstanceService, IngressEventService, PluginLoaderService, IngressEnqueueService],
+      inject: [
+        PluginInstanceService,
+        IngressEventService,
+        PluginLoaderService,
+        IngressEnqueueService,
+        getRepositoryToken(IntegrationDeliveryFailure, 'data'),
+      ],
       useFactory: (
         instances: PluginInstanceService,
         events: IngressEventService,
         loader: PluginLoaderService,
         ingressEnqueue: IngressEnqueueService,
+        failures: Repository<IntegrationDeliveryFailure>,
       ) => {
+        const dlqLogger = createLogger('IngressEnqueue');
         return new IngressService({
           instances: { resolve: (pluginId, instanceId) => instances.resolve(pluginId, instanceId) },
           manifestRoute: (pluginId, route): IngressRouteDescriptor | undefined =>
             loader.getPlugin(pluginId)?.manifest.ingress?.find(r => r.route === route),
           events: { recordOrSkip: input => events.recordOrSkip(input) },
-          enqueue: (data, jobId) => ingressEnqueue.enqueue(data, jobId),
+          // Live ingress delivery: on a swallowed inline-dispatch failure, persist a dead-letter row so
+          // RedriveService can replay it — IngressService.handle() ignores the outcome and always 202s, so
+          // nothing else would. RedriveService calls enqueue() directly (it is already replaying a DLQ
+          // row) so it never double-writes here. The DLQ save is itself best-effort: a failure must not
+          // 500 the ingress request (the delivery is already dedup-persisted, so the provider won't re-send).
+          enqueue: async (data, jobId) => {
+            const result = await ingressEnqueue.enqueue(data, jobId);
+            if (result.outcome === 'failed') {
+              try {
+                await failures.save(buildIngressDeadLetterRow(data, result.error));
+              } catch (err) {
+                dlqLogger.error(
+                  'Failed to persist ingress dead-letter row after inline dispatch failure',
+                  err instanceof Error ? err.message : String(err),
+                  { pluginId: data.pluginId, instanceId: data.instanceId, deliveryId: data.deliveryId },
+                );
+              }
+            }
+            return result;
+          },
           now: () => Date.now(),
         });
       },

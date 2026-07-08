@@ -7,6 +7,9 @@ import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
+import { Webhook } from '../webhook/entities/webhook.entity';
+import { Template } from '../template/entities/template.entity';
+import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -484,7 +487,7 @@ describe('SessionService', () => {
       expect(mockEngine.forceDestroy).toHaveBeenCalled();
     });
 
-    it('removes the session messages and bulk batches in the same transaction (no orphaned rows)', async () => {
+    it('removes the session and all its child rows explicitly in one transaction (SQLite cascade is off)', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
 
@@ -496,9 +499,14 @@ describe('SessionService', () => {
 
       await service.delete('sess-uuid-1');
 
-      // These tables carry sessionId but have no FK cascade, so delete() must clean them explicitly.
+      // messages/message_batches have no FK; webhooks/templates/baileys_stored_messages declare an
+      // ON DELETE CASCADE FK, but SQLite runs with foreign_keys OFF so it never fires — delete() must
+      // clear ALL of them explicitly or a session delete orphans them (webhooks retain the secret).
       expect(managerDelete).toHaveBeenCalledWith(Message, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(MessageBatch, { sessionId: 'sess-uuid-1' });
+      expect(managerDelete).toHaveBeenCalledWith(Webhook, { sessionId: 'sess-uuid-1' });
+      expect(managerDelete).toHaveBeenCalledWith(Template, { sessionId: 'sess-uuid-1' });
+      expect(managerDelete).toHaveBeenCalledWith(BaileysStoredMessage, { sessionId: 'sess-uuid-1' });
       expect(managerRemove).toHaveBeenCalledWith(session);
     });
   });
@@ -610,6 +618,24 @@ describe('SessionService', () => {
 
       expect(intern().engines.has('sess-uuid-1')).toBe(false);
       expect(mockEngine.forceDestroy).toHaveBeenCalled();
+    });
+  });
+
+  describe('scheduleReconnect (max attempts)', () => {
+    it('reports "auto-reconnect disabled" (not "failed after 0 attempts") when maxAttempts is 0', async () => {
+      const i = service as unknown as {
+        reconnectStates: Map<string, { attempts: number; timer: null; maxAttempts: number; baseDelay: number }>;
+        sessionErrors: Map<string, string>;
+        scheduleReconnect: (id: string, session: Session) => void;
+      };
+      i.reconnectStates.set('sess-uuid-1', { attempts: 0, timer: null, maxAttempts: 0, baseDelay: 5000 });
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      i.scheduleReconnect('sess-uuid-1', createMockSession());
+      await new Promise(resolve => setImmediate(resolve));
+
+      // maxAttempts:0 means auto-reconnect is OFF, not that 0 attempts were tried and failed.
+      expect(i.sessionErrors.get('sess-uuid-1')).toMatch(/auto-reconnect is disabled/i);
     });
   });
 
@@ -1216,16 +1242,16 @@ describe('SessionService', () => {
     it('serializes concurrent reactions on the same message so neither sender is clobbered', async () => {
       const callbacks = await startAndCaptureCallbacks();
 
-      // Simulate a real DB: each findOne returns a FRESH snapshot of the persisted row, and save
-      // writes it back. Without per-message serialization the two handlers read the same empty
-      // snapshot and the second save clobbers the first sender's reaction.
+      // Simulate a real DB: each findOne returns a FRESH snapshot of the persisted row, and the scoped
+      // update writes the new metadata back. Without per-message serialization the two handlers read the
+      // same empty snapshot and the second write clobbers the first sender's reaction.
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
       (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
-      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
-        stored = clone(m);
-        return Promise.resolve(m);
+      (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
+        stored = clone({ ...stored, ...patch });
+        return Promise.resolve({ affected: 1 });
       });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
@@ -1236,15 +1262,34 @@ describe('SessionService', () => {
       expect(stored.metadata?.reactions).toEqual({ alice: '👍', bob: '🎉' });
     });
 
+    it('persists a reaction via a scoped metadata update, never a full-row save (protects ack status)', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      // The row was already advanced to DELIVERED by a concurrent ack. A full-row save(msg) would
+      // re-persist the stale status read at findOne time and clobber it; the write must be scoped to
+      // the metadata column only, keyed by (sessionId, waMessageId).
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ status: 'delivered', metadata: {} });
+      (messageRepository.save as jest.Mock).mockClear();
+      (messageRepository.update as jest.Mock).mockClear().mockResolvedValue({ affected: 1 });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
+      for (let i = 0; i < 3; i++) await flush();
+
+      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        { sessionId: 'sess-uuid-1', waMessageId: 'wa-1' },
+        { metadata: { reactions: { alice: '👍' } } },
+      );
+    });
+
     it('removes a sender reaction on a cleared reaction event (delete branch)', async () => {
       const callbacks = await startAndCaptureCallbacks();
       type Row = { metadata?: Record<string, unknown> };
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: { reactions: { alice: '👍', bob: '🎉' } } };
       (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
-      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
-        stored = clone(m);
-        return Promise.resolve(m);
+      (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
+        stored = clone({ ...stored, ...patch });
+        return Promise.resolve({ affected: 1 });
       });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '' });
@@ -1260,11 +1305,11 @@ describe('SessionService', () => {
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
       (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
-      (messageRepository.save as jest.Mock)
+      (messageRepository.update as jest.Mock)
         .mockRejectedValueOnce(new Error('write blip')) // alice's write fails
-        .mockImplementation((m: Row) => {
-          stored = clone(m);
-          return Promise.resolve(m);
+        .mockImplementation((_c: unknown, patch: Row) => {
+          stored = clone({ ...stored, ...patch });
+          return Promise.resolve({ affected: 1 });
         });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
@@ -1278,7 +1323,7 @@ describe('SessionService', () => {
     it('cleans up the per-message serialization entry after the chain drains (no leak)', async () => {
       const callbacks = await startAndCaptureCallbacks();
       (messageRepository.findOne as jest.Mock).mockResolvedValue({ metadata: {} });
-      (messageRepository.save as jest.Mock).mockResolvedValue(undefined);
+      (messageRepository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });
 
@@ -1294,9 +1339,9 @@ describe('SessionService', () => {
       const clone = (r: Row): Row => JSON.parse(JSON.stringify(r)) as Row;
       let stored: Row = { metadata: {} };
       (messageRepository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(clone(stored)));
-      (messageRepository.save as jest.Mock).mockImplementation((m: Row) => {
-        stored = clone(m);
-        return Promise.resolve(m);
+      (messageRepository.update as jest.Mock).mockImplementation((_c: unknown, patch: Row) => {
+        stored = clone({ ...stored, ...patch });
+        return Promise.resolve({ affected: 1 });
       });
 
       callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice', reaction: '👍' });

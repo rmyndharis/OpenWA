@@ -44,7 +44,6 @@ describe('WebhookProcessor', () => {
           deliveryId: 'd',
           data: {},
         },
-        signature: '',
         headers: { 'Content-Type': 'application/json' },
         attempt: 1,
         maxRetries: 3,
