@@ -103,6 +103,12 @@ hop, no separate service, and no double-write. The cost is negligible (a `tsvect
 Postgres, a trigger-fire on SQLite — both in-process, both on columns already being written). If you
 want to drop the index entirely, run the migration `down` against the data connection.
 
+> **Dev note — `DATABASE_SYNCHRONIZE=true`.** With synchronize on (a common zero-config dev setting),
+> TypeORM creates the `messages` table from the entity, but the FTS migration does **not** run, so
+> `/search` returns `501` (no FTS schema) until you run `npm run migration:run` once to install the FTS
+> virtual table / generated column. Prod defaults to `synchronize=false` + `migrationsRun=true`, so this
+> is dev-only.
+
 ## 26.6 The HTTP endpoint
 
 See [06 - API Specification §6.4.12](./06-api-specification.md) for the full param/response reference.
@@ -125,8 +131,11 @@ GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<in|out>&type=<typ
   `direction`, `from`, and optional `score`. `total` is an exact count (bounded; computed lazily only
   when the page could be full). `tookMs` is the provider-side query time. `provider` names which
   backend answered (e.g. `builtin-fts`).
-- **Errors:** `400` empty/whitespace `q` or a non-numeric numeric param · `401`/`403` auth · `501` no
-  provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) · `503` provider unhealthy.
+- **Errors:** `400` empty/whitespace `q`, a non-numeric numeric param, or a malformed SQLite FTS5 query
+  (unbalanced quote/paren, bare operator) — Postgres is tolerant · `401`/`403` auth · `501` no
+  provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) · `503` provider unhealthy
+  (**reserved**: the built-in provider does not return it; it is the contract surface for a future
+  plugin provider whose `search()` throws `ServiceUnavailableException`).
 
 The endpoint requires at least `OPERATOR` role.
 
@@ -150,6 +159,13 @@ registers as a `SearchProvider`, indexes via the `message:persisted` plugin hook
 without coupling to the message/session services), and is selected by setting `SEARCH_PROVIDER` to its
 id. Because the route and the response shape are identical across providers, dashboard panels and SDKs
 keep working unchanged when you switch backends.
+
+> **Backfill is the plugin's responsibility.** The `message:persisted` hook fires only for **live**
+> traffic — outbound on send, inbound on receive — never for history-backfill persistence. So a plugin
+> provider installed on a deployment that already has message history must perform its own one-time
+> backfill (read `messages` and index) at enablement; its index will otherwise miss pre-installation
+> rows. The built-in DB-FTS provider is unaffected — its index is DB-synced via triggers on every
+> insert, including backfill.
 
 ## 26.8 Migration and backfill
 

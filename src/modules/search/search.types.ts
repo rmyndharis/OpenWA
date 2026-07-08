@@ -48,7 +48,8 @@ export interface SearchHit {
   sessionId: string;
   chatId: string;
   body: string;
-  /** Highlighted excerpt — already XSS-safe text (the dashboard renders it as text, never as HTML). */
+  /** Provider-generated excerpt with `<mark>` highlight markers; safe when rendered as text (the
+   *  dashboard renders it as text, never as HTML — do not `dangerouslySetInnerHTML`). */
   snippet: string;
   timestamp: number;
   type: MessageType;

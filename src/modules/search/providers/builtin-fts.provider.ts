@@ -1,4 +1,4 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotImplementedException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -95,7 +95,21 @@ export class BuiltInFtsProvider implements SearchProvider {
       ? this.buildPostgres(query, limit, offset)
       : this.buildSqlite(query, limit, offset);
 
-    const rows = await this.dataSource.query<FtsResultRow[]>(sql, params);
+    // SQLite FTS5 treats `"`, `(`, `)`, `*`, and bare OR/AND/NOT/NEAR as query syntax, so a malformed
+    // query (`?q="hello`, `?q=(test`, `?q=*foo`) raises one of three query-grammar errors at exec time
+    // (`fts5: syntax error`, `unterminated string`, `unknown special query`). Surface those as a 400 —
+    // matching Postgres's tolerant websearch_to_tsquery, which has no equivalent failure mode — never a
+    // raw 500. Generic DB errors (`no such column`, connection drops) are rethrown unchanged.
+    const fts5QueryError = /(fts5:\s*syntax\s*error|unterminated\s+string|unknown\s+special\s+query)/i;
+    let rows: FtsResultRow[];
+    try {
+      rows = await this.dataSource.query<FtsResultRow[]>(sql, params);
+    } catch (e) {
+      if (!isPostgres && fts5QueryError.test(String(e))) {
+        throw new BadRequestException('Malformed search query for SQLite full-text search.');
+      }
+      throw e;
+    }
     const hits: SearchHit[] = rows.map(r => this.mapRow(r));
     const total = rows.length < limit && offset === 0 ? rows.length : await this.count(query, isPostgres);
 

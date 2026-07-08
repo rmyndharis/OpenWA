@@ -4462,9 +4462,12 @@ Search messages across sessions (active search provider).
 - `score` is optional and provider-specific (rank ordering is stable within a provider; cross-provider
   scores are not comparable).
 
-**Errors:** `400` empty/whitespace `q`, or a non-numeric `dateFrom`/`dateTo`/`limit`/`offset` · `401`
-missing/invalid `X-API-Key` · `403` key role below `OPERATOR` · `501` no search provider configured
-(including a non-FTS5 SQLite build, where the provider is absent) · `503` active provider unhealthy.
+**Errors:** `400` empty/whitespace `q`, a non-numeric `dateFrom`/`dateTo`/`limit`/`offset`, or a malformed
+SQLite FTS5 query (unbalanced quote/paren, bare operator) — Postgres's `websearch_to_tsquery` is
+tolerant and has no equivalent · `401` missing/invalid `X-API-Key` · `403` key role below `OPERATOR` ·
+`501` no search provider configured (including a non-FTS5 SQLite build, where the provider is absent) ·
+`503` active provider unhealthy (**reserved**: the built-in provider does not return it; it is the
+contract surface for a future plugin provider whose `search()` throws `ServiceUnavailableException`).
 
 > Scoping is authoritative: a scoped API key's `allowedSessions` is applied server-side and cannot be
 > overridden via the query — there is no `sessionIds` query parameter, and `SearchService` overwrites

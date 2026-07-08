@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
@@ -73,5 +74,14 @@ describe('BuiltInFtsProvider (sqlite)', () => {
 
   it('reports healthy', async () => {
     expect((await provider.health()).ok).toBe(true);
+  });
+
+  it('maps an FTS5 syntax error to a 400 (not an unhandled 500)', async () => {
+    // SQLite FTS5 treats `"`, `(`, `*` as query grammar — an unbalanced quote is a syntax error,
+    // which must surface as BadRequestException (400), never a raw 500. Postgres's
+    // websearch_to_tsquery is tolerant and has no equivalent failure mode.
+    await expect(provider.search({ q: '"unbalanced' })).rejects.toThrow(BadRequestException);
+    await expect(provider.search({ q: '*foo' })).rejects.toThrow(BadRequestException);
+    await expect(provider.search({ q: '(test' })).rejects.toThrow(BadRequestException);
   });
 });
