@@ -155,8 +155,17 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'STORE_EPHEMERAL_MESSAGES',
     'RESOLVE_LID_TO_PHONE',
     'SIMULATE_TYPING',
+    'SEARCH_ENABLED',
   ]) {
     checkBool(key);
+  }
+
+  // SEARCH_PROVIDER enum: 'auto' selects the built-in DB full-text provider at runtime, 'builtin-fts'
+  // pins it explicitly, 'none' disables the /search route + module. Plugin ids become selectable
+  // once the provider registry lands. Reject a typo at boot rather than silently falling back to auto.
+  const provider = process.env.SEARCH_PROVIDER;
+  if (provider !== undefined && provider !== '' && !['auto', 'builtin-fts', 'none'].includes(provider)) {
+    errors.push(`SEARCH_PROVIDER must be one of: auto, builtin-fts, none (got ${JSON.stringify(provider)})`);
   }
 
   if (errors.length > 0) {

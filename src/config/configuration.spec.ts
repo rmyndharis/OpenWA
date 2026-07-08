@@ -111,3 +111,10 @@ describe('configuration — plugin download cap is fail-safe', () => {
     }
   });
 });
+
+describe('configuration search namespace', () => {
+  it('exposes search defaults', () => {
+    const cfg = configuration();
+    expect(cfg.search).toEqual({ enabled: true, provider: 'auto', limitMax: 100 });
+  });
+});
