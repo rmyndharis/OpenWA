@@ -42,21 +42,28 @@ export function runProviderContract(makeProvider: () => Promise<ContractEnv>): v
   });
 
   it('returns matching hits with a snippet, total, and provider id', async () => {
-    const res = await provider.search({ q: 'hello', limit: 10 });
+    const q = 'hello';
+    const res = await provider.search({ q, limit: 10 });
     expect(res.provider).toBe(provider.id);
     expect(res.hits.length).toBe(2);
-    expect(res.hits.every(h => h.snippet.length >= 0)).toBe(true);
+    // Snippet must actually reflect the query term — `length >= 0` is trivially true.
+    expect(res.hits.every(h => h.snippet.toLowerCase().includes(q.toLowerCase()))).toBe(true);
     expect(res.total).toBeGreaterThanOrEqual(2);
   });
 
   it('honors sessionIds scoping', async () => {
     const res = await provider.search({ q: 'hello', sessionIds: ['s2'] });
+    // The seed puts `hello other` in s2, so this MUST yield ≥1 hit — otherwise the `every`
+    // predicate below is vacuously true on an empty hit set (zero-hit escape hatch).
+    expect(res.hits.length).toBeGreaterThanOrEqual(1);
     expect(res.hits.every(h => h.sessionId === 's2')).toBe(true);
   });
 
   it('returns empty for no matches', async () => {
     const res = await provider.search({ q: 'zzzz' });
     expect(res.hits).toEqual([]);
+    // For pagination correctness, total === 0 when no hits is part of the contract.
+    expect(res.total).toBe(0);
   });
 
   it('reports health', async () => {
