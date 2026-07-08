@@ -163,7 +163,10 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   // SEARCH_PROVIDER enum: 'auto' selects the built-in DB full-text provider at runtime, 'builtin-fts'
   // pins it explicitly, 'none' disables the /search route + module. Plugin ids become selectable
   // once the provider registry lands. Reject a typo at boot rather than silently falling back to auto.
-  const provider = process.env.SEARCH_PROVIDER;
+  // Raw read (not `str(...)`) so an untrimmed bogus value like `'auto '` is rejected, matching the
+  // raw-value philosophy of `checkBool` above; also lets unit tests drive the check via the `config`
+  // object instead of reaching into `process.env`.
+  const provider = config['SEARCH_PROVIDER'] as string | undefined;
   if (provider !== undefined && provider !== '' && !['auto', 'builtin-fts', 'none'].includes(provider)) {
     errors.push(`SEARCH_PROVIDER must be one of: auto, builtin-fts, none (got ${JSON.stringify(provider)})`);
   }

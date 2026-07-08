@@ -112,6 +112,17 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
+  it('rejects a SEARCH_PROVIDER typo instead of silently falling back to auto', () => {
+    // A bogus / typo value must fail fast at boot rather than silently selecting the default provider.
+    expect(() => validateEnv({ SEARCH_PROVIDER: 'bogus' })).toThrow(/SEARCH_PROVIDER/);
+    // The three documented values are accepted.
+    expect(() => validateEnv({ SEARCH_PROVIDER: 'auto' })).not.toThrow();
+    expect(() => validateEnv({ SEARCH_PROVIDER: 'builtin-fts' })).not.toThrow();
+    expect(() => validateEnv({ SEARCH_PROVIDER: 'none' })).not.toThrow();
+    // Unset is accepted (the configuration default of 'auto' applies downstream).
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
   it('rejects a sqlite data DB path that collides with the internal main database file', () => {
     // The 'main' (auth/audit) and 'data' connections must be separate SQLite files; sharing one
     // file means two migration ledgers + synchronize policies on the same tables.
