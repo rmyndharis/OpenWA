@@ -304,6 +304,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           // Only override the executable when explicitly configured; otherwise let
           // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
           ...(this.config.puppeteer?.executablePath ? { executablePath: this.config.puppeteer.executablePath } : {}),
+          // Puppeteer's default (180000ms) lets a dead/OOM-killed Chromium's CDP calls (e.g.
+          // getChats/getGroups, observed as "Runtime.callFunctionOn timed out" in prod logs) hang
+          // 3 minutes before failing. Shortened to fail fast; session.service.ts's initializeEngine
+          // timeout (60s) is the primary guard against a wedged initial launch/navigation.
+          protocolTimeout: 60_000,
         },
         ...(authTimeoutMs !== undefined ? { authTimeoutMs } : {}),
         ...(versionPin ?? {}),

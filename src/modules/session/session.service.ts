@@ -529,7 +529,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // initializes, so writing INITIALIZING afterwards would clobber that progress.
     await this.updateStatus(id, SessionStatus.INITIALIZING);
 
-    await engine.initialize({
+    // engine.initialize() launches Chromium and navigates to WhatsApp Web with no internal
+    // timeout of its own (whatsapp-web.js disables Puppeteer's navigation timeout and its
+    // web-version-cache fetch has none either). If Chromium is killed mid-navigation (e.g. an
+    // OOM-kill under memory pressure — observed 2026-07-08, 3x same day) this await never
+    // resolves or rejects, wedging the session in INITIALIZING forever with no error logged.
+    // Race it against a timeout so a wedged init fails fast instead: executeReconnect()'s
+    // existing catch already retries on any thrown error here, and start()'s caller sees the
+    // rejection surfaced as an API error rather than a silently hung request.
+    const engineInitTimeoutMs = 60_000;
+    const initPromise = engine.initialize({
       onQRCode: (qr: string): void => {
         if (!this.isLiveEngine(id, engine)) return;
         this.logger.log('QR code generated', {
@@ -938,6 +947,36 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         void this.updateStatus(id, SessionStatus.FAILED);
       },
     });
+    // Mark the promise handled now in case it loses the race below and rejects later — otherwise
+    // that late rejection would be unhandled (Promise.race doesn't cancel the losing promise).
+    initPromise.catch(() => undefined);
+
+    let initTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        initPromise,
+        new Promise<never>((_, reject) => {
+          initTimer = setTimeout(
+            () => reject(new Error(`engine.initialize() timed out after ${engineInitTimeoutMs}ms`)),
+            engineInitTimeoutMs,
+          );
+        }),
+      ]);
+    } catch (err) {
+      this.logger.error(`Engine initialization failed for session ${session.name}`, String(err), {
+        sessionId: id,
+        action: 'engine_init_failed',
+      });
+      this.sessionErrors.set(id, err instanceof Error ? err.message : String(err));
+      // Best-effort: force-kill whatever got launched so a retry doesn't collide with an orphaned
+      // browser. teardownEngineSafely is itself time-bound, so this can't wedge a second time.
+      await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
+      this.engines.delete(id);
+      await this.updateStatus(id, SessionStatus.DISCONNECTED);
+      throw err;
+    } finally {
+      if (initTimer) clearTimeout(initTimer);
+    }
   }
 
   /**
