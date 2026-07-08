@@ -816,6 +816,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               return; // duplicate re-fire — the original already persisted and dispatched
             }
 
+            // Fire-and-forget: a plugin handler must never break the receive path. Both engine adapters
+            // (wwjs `message` and Baileys `upsert`) converge on this persist, so one emit covers inbound.
+            // The built-in FTS search provider is DB-synced and does NOT consume this; it exists for
+            // plugin providers (Spec 2) + general use.
+            void this.hookManager
+              .execute(
+                'message:persisted',
+                { sessionId: id, message: dbMessage },
+                { sessionId: id, source: 'SessionService' },
+              )
+              .catch(() => undefined);
+
             // Dispatch to webhooks with potentially modified message
             void this.webhookService.dispatch(id, 'message.received', finalMessage);
             // Emit real-time event to WebSocket clients

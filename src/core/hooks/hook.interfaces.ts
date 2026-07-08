@@ -18,6 +18,7 @@ export type HookEvent =
   | 'message:sent'
   | 'message:failed'
   | 'message:ack'
+  | 'message:persisted'
   // Webhook lifecycle
   | 'webhook:before'
   | 'webhook:queued' // After webhook job added to queue (queue mode only)
@@ -44,6 +45,7 @@ const HOOK_EVENT_REGISTRY: Record<HookEvent, true> = {
   'message:sent': true,
   'message:failed': true,
   'message:ack': true,
+  'message:persisted': true,
   'webhook:before': true,
   'webhook:queued': true,
   'webhook:delivered': true,

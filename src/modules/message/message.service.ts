@@ -520,7 +520,13 @@ export class MessageService {
       status: data.status ?? MessageStatus.PENDING,
       metadata: data.metadata,
     });
-    return this.messageRepository.save(message);
+    const saved = await this.messageRepository.save(message);
+    // Fire-and-forget: a plugin handler must never break the send path. The built-in FTS search provider
+    // is DB-synced and does NOT consume this; it exists for plugin providers (Spec 2) + general use.
+    void this.hookManager
+      .execute('message:persisted', { sessionId, message: saved }, { sessionId, source: 'MessageService' })
+      .catch(() => undefined);
+    return saved;
   }
 
   /**

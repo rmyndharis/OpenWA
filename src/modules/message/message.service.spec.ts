@@ -189,6 +189,17 @@ describe('MessageService', () => {
       expect(hookManager.execute).not.toHaveBeenCalledWith('message:sent', expect.anything(), expect.anything());
     });
 
+    it('emits message:persisted after saving an outbound message', async () => {
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hello' });
+
+      const calls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      ) as unknown[][];
+      expect(calls).toHaveLength(1);
+      expect(calls[0][1]).toMatchObject({ sessionId: 'sess-1', message: { chatId: '628123456789@c.us' } });
+      expect(calls[0][2]).toMatchObject({ sessionId: 'sess-1', source: 'MessageService' });
+    });
+
     it('should throw BadRequestException when plugin blocks sending', async () => {
       (hookManager.execute as jest.Mock).mockResolvedValueOnce({ continue: false, data: {} });
 
