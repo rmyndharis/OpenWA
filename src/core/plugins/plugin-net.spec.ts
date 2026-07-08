@@ -6,7 +6,9 @@ function fakeSafeFetch(response: Response, sink: { init?: RequestInit }): typeof
   return (<T>(_url: string, init: RequestInit, use: (r: Response) => Promise<T> | T): Promise<T> => {
     sink.init = init;
     return Promise.resolve(use(response));
-  }) as typeof withSafeFetch;
+    // withSafeFetch's real signature types `use`'s Response as undici's (which adds fields like
+    // `textStream` the DOM lib type lacks) — bridge through unknown for this intentional test double.
+  }) as unknown as typeof withSafeFetch;
 }
 
 function cannedResponse(body: string, headers: Record<string, string>, status = 200): Response {

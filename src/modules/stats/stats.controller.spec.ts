@@ -14,12 +14,15 @@ describe('StatsController access control', () => {
   const proto = StatsController.prototype as unknown as Record<string, object>;
 
   it.each(['getOverview', 'getMessageStats'] as const)('global stats route %s requires ADMIN', method => {
-    const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto[method]);
+    const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto[method] as unknown as Function);
     expect(role).toBe(ApiKeyRole.ADMIN);
   });
 
   it('per-session stats is not globally ADMIN-gated (scope-enforced by its :sessionId param)', () => {
-    const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.getSessionStats);
+    const role = reflector.get<ApiKeyRole | undefined>(
+      REQUIRED_ROLE_KEY,
+      proto.getSessionStats as unknown as Function,
+    );
     expect(role).toBeUndefined();
   });
 });

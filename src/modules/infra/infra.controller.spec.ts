@@ -60,7 +60,7 @@ describe('InfraController access control (Vuln 2)', () => {
 
   it.each(adminOnly)('%s requires the ADMIN role', method => {
     const handler = InfraController.prototype[method as keyof InfraController] as object;
-    const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, handler);
+    const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, handler as unknown as Function);
     expect(role).toBe(ApiKeyRole.ADMIN);
   });
 });

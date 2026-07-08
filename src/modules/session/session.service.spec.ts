@@ -1214,7 +1214,7 @@ describe('SessionService', () => {
           driverError: { code: 'SQLITE_CONSTRAINT_UNIQUE', message: 'UNIQUE constraint failed' },
         }); // re-fire
 
-      const msg = {
+      const msg: IncomingMessage = {
         id: 'wa-1',
         from: 'peer@c.us',
         to: 'me@c.us',

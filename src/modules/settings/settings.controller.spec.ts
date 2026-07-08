@@ -23,12 +23,12 @@ describe('SettingsController', () => {
   // read-only at runtime, so the write path must say so (501) rather than fake success.
   it('PUT /settings is read-only and throws 501 instead of a false-success 200', () => {
     const controller = new SettingsController(configStub);
-    expect(() => controller.update({})).toThrow(NotImplementedException);
+    expect(() => controller.update()).toThrow(NotImplementedException);
   });
 
   it('PUT /settings still requires the ADMIN role', () => {
     const proto = SettingsController.prototype as unknown as Record<string, object>;
-    const role = new Reflector().get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.update);
+    const role = new Reflector().get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.update as unknown as Function);
     expect(role).toBe(ApiKeyRole.ADMIN);
   });
 });
