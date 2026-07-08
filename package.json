@@ -200,6 +200,12 @@
         "functions": 83,
         "lines": 84,
         "statements": 80
+      },
+      "./src/modules/search/": {
+        "branches": 58,
+        "functions": 72,
+        "lines": 58,
+        "statements": 58
       }
     },
     "testEnvironment": "node"

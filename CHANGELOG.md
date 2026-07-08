@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Global message search across sessions.** `GET /api/search` finds messages across all sessions through an open `SearchProvider` contract, with a built-in database full-text provider (PostgreSQL `tsvector`/`GIN`, SQLite `FTS5`) as the zero-dependency default — no external service required. Search works out of the box on both SQLite and PostgreSQL and survives repeated dialect switching and export/import round-trips; a non-FTS5 SQLite build skips the index gracefully and the route returns `501` instead of crashing boot. Set `SEARCH_ENABLED=false` to disable the route and module entirely (the index is DB-maintained per-write regardless, at negligible in-process cost). Advanced backends (typo-tolerance, CJK word-segmentation, large-scale relevance) will be available as provider plugins.
+- **`message:persisted` plugin hook.** A new general extension point fired when a message is durably persisted — on outbound send (from `MessageService`) and on inbound receive (from `SessionService`, where both engine adapters converge on the single persist) — so plugins can react to persisted messages (e.g. an external search indexer) without coupling to the message/session services. The built-in FTS search provider is DB-synced and does not consume this hook; it exists for plugin providers and general use. Fire-and-forget: a handler error is swallowed and never breaks the send/receive path.
 - **Redis authentication via username.** Added support for `REDIS_USERNAME` to configure the Redis cache connection and BullMQ queue connections that require a username. Thanks @muhfalihr.
 
 ## [0.8.11] - 2026-07-08

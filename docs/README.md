@@ -59,6 +59,7 @@
 | 23-S| [Plugin Sandboxing](./23-plugin-sandboxing.md)                   | Worker isolation, capabilities, and plugin limits |
 | 24  | [MCP Integration](./24-mcp-integration.md)                       | Model Context Protocol tools and auth model       |
 | 25  | [Integration Fabric](./25-integration-fabric.md)                | Inbound webhook substrate for plugin integrations |
+| 26  | [Global Search](./26-global-search.md)                          | Cross-session message search and the provider model |
 
 **Examples**
 
