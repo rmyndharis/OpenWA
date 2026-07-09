@@ -9,6 +9,8 @@
  * (B2) and hook bridge (B3) add more message kinds later.
  */
 
+import type { SearchQuery, SearchResults } from '../../../modules/search/search.types';
+
 export type PluginLifecycleMethod = 'onLoad' | 'onEnable' | 'onDisable' | 'onUnload';
 
 /** Static context fields handed to a sandboxed plugin at load (serializable; no live references). */
@@ -61,7 +63,12 @@ export type HostToWorkerMessage =
       // Per-instance-resolved config for this delivery (like the `hook` message's config). The worker
       // exposes it as ctx.config for the duration of the handler via hookConfigStore.
       config?: Record<string, unknown>;
-    };
+    }
+  // Host→Worker: dispatch a search query to a plugin that registered as a SearchProvider. The worker
+  // runs the plugin's search handler and replies with `search-result` (same `id` correlation as
+  // hook/health-check/webhook). No per-session config: search is a global query; session scoping travels
+  // inside SearchQuery.sessionIds (scoped by SearchService from the caller's API-key).
+  | { kind: 'search'; id: number; query: SearchQuery };
 
 export type WorkerToHostMessage =
   | { kind: 'ready' }
@@ -90,6 +97,13 @@ export type WorkerToHostMessage =
       body?: string;
       error?: string;
     }
+  // The plugin called ctx.registerSearchProvider → the worker tells the host "I provide search." The host
+  // then creates a PluginSearchProvider wrapping this worker and registers it in SearchProviderRegistry.
+  | { kind: 'search-provider-register' }
+  // The worker's search-handler result for a host `search` request. ok:true carries SearchResults; ok:false
+  // carries the handler's error (handler threw / no handler / etc.).
+  | { kind: 'search-result'; id: number; ok: true; results: SearchResults }
+  | { kind: 'search-result'; id: number; ok: false; error: string }
   | { kind: 'error'; error: string };
 
 /**
