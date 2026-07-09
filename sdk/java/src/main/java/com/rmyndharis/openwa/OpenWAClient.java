@@ -18,6 +18,7 @@ import com.rmyndharis.openwa.resources.GroupsResource;
 import com.rmyndharis.openwa.resources.HealthResource;
 import com.rmyndharis.openwa.resources.LabelsResource;
 import com.rmyndharis.openwa.resources.MessagesResource;
+import com.rmyndharis.openwa.resources.SearchResource;
 import com.rmyndharis.openwa.resources.SessionsResource;
 import com.rmyndharis.openwa.resources.StatusResource;
 import com.rmyndharis.openwa.resources.TemplatesResource;
@@ -46,6 +47,7 @@ public final class OpenWAClient {
     // ── Resources ──────────────────────────────────────────────────────
     public final SessionsResource sessions = new SessionsResource(this);
     public final MessagesResource messages = new MessagesResource(this);
+    public final SearchResource search = new SearchResource(this);
     public final ContactsResource contacts = new ContactsResource(this);
     public final GroupsResource groups = new GroupsResource(this);
     public final WebhooksResource webhooks = new WebhooksResource(this);
