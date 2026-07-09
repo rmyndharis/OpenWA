@@ -52,7 +52,7 @@ services:
       - XDG_CACHE_HOME=/tmp/.cache
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
-      - DATABASE_NAME=${DATABASE_NAME:-/app/data/openwa.sqlite}
+      - DATABASE_NAME=${DATABASE_NAME:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-true}
       # Engine. Forwarded empty by default so the dashboard (Infrastructure > Engine) selects the
       # active engine via data/.env.generated (default whatsapp-web.js); main.ts treats a blank
