@@ -691,3 +691,57 @@ export interface SendCatalogRequest {
   /** Optional body/caption text. */
   body?: string;
 }
+
+// ── Search ────────────────────────────────────────────────────────
+
+/** Query parameters for `GET /search`. Only `q` is required; all filters are optional. */
+export interface SearchParams {
+  /** Search term (required, non-empty — the server rejects empty/whitespace with 400). */
+  q: string;
+  /** Restrict to a single session. */
+  sessionId?: string;
+  /** Restrict to a single chat id. */
+  chatId?: Jid;
+  /** Restrict to incoming or outgoing messages. */
+  direction?: MessageDirection;
+  /** Message type filter (compared against stored `messages.type`). */
+  type?: string;
+  /** Sender filter. */
+  from?: Jid;
+  /** Epoch-ms lower bound (inclusive). */
+  dateFrom?: number;
+  /** Epoch-ms upper bound (inclusive). */
+  dateTo?: number;
+  /** Max hits to return. */
+  limit?: number;
+  /** Pagination offset. */
+  offset?: number;
+}
+
+/** A single search hit returned by `GET /search`. */
+export interface SearchHit {
+  messageId: string;
+  waMessageId: string;
+  sessionId: string;
+  chatId: Jid;
+  body: string;
+  /** Provider-generated excerpt with `<mark>` highlight markers. Render as text, never as HTML. */
+  snippet: string;
+  /** Unix timestamp in seconds. */
+  timestamp: number;
+  type: string;
+  direction: MessageDirection;
+  from: Jid;
+  /** Relevance score (provider-specific; may be absent). */
+  score?: number;
+}
+
+/** Response from `GET /search`. */
+export interface SearchResults {
+  hits: SearchHit[];
+  /** Bounded exact count for pagination. */
+  total: number;
+  tookMs: number;
+  /** Which provider answered (id), e.g. `builtin-fts`. */
+  provider: string;
+}

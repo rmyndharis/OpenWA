@@ -170,3 +170,26 @@ describe('HealthResource + auth — exact paths', () => {
     expect(t.lastCall!.url).toBe('http://x/api/auth/validate');
   });
 });
+
+describe('SearchResource — exact path and query forwarding', () => {
+  it('forwards params as a query string to /api/search', async () => {
+    const t = new MockTransport().on('GET', /\/search$/, {
+      body: { hits: [], total: 0, tookMs: 1, provider: 'builtin-fts' },
+    });
+    const c = client(t);
+    const res = await c.search.search({ q: 'hello', sessionId: 's1', limit: 10, offset: 0 });
+    expect(t.lastCall!.method).toBe('GET');
+    expect(t.lastCall!.url).toBe('http://x/api/search?q=hello&sessionId=s1&limit=10&offset=0');
+    expect(res.provider).toBe('builtin-fts');
+    expect(res.total).toBe(0);
+  });
+
+  it('omits undefined optional filters from the query string', async () => {
+    const t = new MockTransport().on('GET', /\/search$/, {
+      body: { hits: [], total: 0, tookMs: 1, provider: 'builtin-fts' },
+    });
+    const c = client(t);
+    await c.search.search({ q: 'term', chatId: '628@c.us', direction: 'incoming' });
+    expect(t.lastCall!.url).toBe('http://x/api/search?q=term&chatId=628%40c.us&direction=incoming');
+  });
+});
