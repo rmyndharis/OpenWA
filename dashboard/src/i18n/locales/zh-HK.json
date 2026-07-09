@@ -839,12 +839,12 @@
     }
   },
   "search": {
-    "placeholder": "Search messages…",
-    "results": "{{count}} results",
-    "empty": "No messages found.",
-    "error": "Search failed. Try again.",
-    "unavailable": "Search is not configured.",
-    "scope": { "current": "This session" },
-    "loading": "Searching…"
+    "placeholder": "搜尋訊息…",
+    "results": "{{count}} 個結果",
+    "empty": "未找到訊息。",
+    "error": "搜尋失敗。請重試。",
+    "unavailable": "搜尋未設定。",
+    "scope": { "current": "目前工作階段" },
+    "loading": "搜尋中…"
   }
 }

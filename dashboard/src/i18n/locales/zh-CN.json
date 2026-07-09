@@ -839,12 +839,12 @@
     }
   },
   "search": {
-    "placeholder": "Search messages…",
-    "results": "{{count}} results",
-    "empty": "No messages found.",
-    "error": "Search failed. Try again.",
-    "unavailable": "Search is not configured.",
-    "scope": { "current": "This session" },
-    "loading": "Searching…"
+    "placeholder": "搜索消息…",
+    "results": "{{count}} 条结果",
+    "empty": "未找到消息。",
+    "error": "搜索失败。请重试。",
+    "unavailable": "搜索未配置。",
+    "scope": { "current": "当前会话" },
+    "loading": "搜索中…"
   }
 }

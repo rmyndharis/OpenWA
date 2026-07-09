@@ -839,12 +839,12 @@
     }
   },
   "search": {
-    "placeholder": "Search messages…",
-    "results": "{{count}} results",
-    "empty": "No messages found.",
-    "error": "Search failed. Try again.",
-    "unavailable": "Search is not configured.",
-    "scope": { "current": "This session" },
-    "loading": "Searching…"
+    "placeholder": "సందేశాలను శోధించండి…",
+    "results": "{{count}} ఫలితాలు",
+    "empty": "ఏ సందేశాలు కనుగొనబడలేదు.",
+    "error": "శోధన విఫలమైంది. మళ్ళీ ప్రయత్నించండి.",
+    "unavailable": "శోధన ఆకృతీకరించబడలేదు.",
+    "scope": { "current": "ఈ సెషన్" },
+    "loading": "శోధిస్తోంది…"
   }
 }

@@ -839,12 +839,12 @@
     }
   },
   "search": {
-    "placeholder": "Search messages…",
-    "results": "{{count}} results",
-    "empty": "No messages found.",
-    "error": "Search failed. Try again.",
-    "unavailable": "Search is not configured.",
-    "scope": { "current": "This session" },
-    "loading": "Searching…"
+    "placeholder": "Buscar mensajes…",
+    "results": "{{count}} resultados",
+    "empty": "No se encontraron mensajes.",
+    "error": "Error en la búsqueda. Inténtalo de nuevo.",
+    "unavailable": "La búsqueda no está configurada.",
+    "scope": { "current": "Esta sesión" },
+    "loading": "Buscando…"
   }
 }
