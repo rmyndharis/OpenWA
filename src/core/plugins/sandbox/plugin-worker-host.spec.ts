@@ -339,6 +339,84 @@ describe('PluginWorkerHost', () => {
     });
   });
 
+  describe('search bridge', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    it('calls onSearchProviderRegister when the worker declares itself a search provider', async () => {
+      const ch = new FakeChannel();
+      const onSearchProviderRegister = jest.fn();
+      // 8th positional arg (after maxInFlightCaps) is onSearchProviderRegister.
+      new PluginWorkerHost(
+        ch,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        onSearchProviderRegister,
+      );
+
+      ch.reply({ kind: 'search-provider-register' });
+      await flush();
+
+      expect(onSearchProviderRegister).toHaveBeenCalledTimes(1);
+    });
+
+    it('dispatchSearch posts a search and resolves ok:true on the matching search-result', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchSearch({ query: { q: 'hello' }, timeoutMs: 1000 });
+      const sent = ch.sent.find(m => m.kind === 'search') as Extract<HostToWorkerMessage, { kind: 'search' }>;
+      expect(sent).toMatchObject({ kind: 'search', query: { q: 'hello' } });
+
+      ch.reply({
+        kind: 'search-result',
+        id: sent.id,
+        ok: true,
+        results: { hits: [], total: 0, tookMs: 1, provider: 'plugin:p' },
+      });
+      await expect(pending).resolves.toMatchObject({ ok: true, results: { provider: 'plugin:p' } });
+    });
+
+    it('dispatchSearch resolves ok:false with the error on a failed search-result', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchSearch({ query: { q: 'x' }, timeoutMs: 1000 });
+      const sent = ch.sent.find(m => m.kind === 'search') as Extract<HostToWorkerMessage, { kind: 'search' }>;
+
+      ch.reply({ kind: 'search-result', id: sent.id, ok: false, error: 'backend down' });
+      await expect(pending).resolves.toEqual({ ok: false, error: 'backend down' });
+    });
+
+    it('dispatchSearch resolves ok:false on timeout so /search is not hung', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        const host = new PluginWorkerHost(ch);
+
+        const pending = host.dispatchSearch({ query: { q: 'x' }, timeoutMs: 100 });
+        jest.advanceTimersByTime(100);
+
+        await expect(pending).resolves.toMatchObject({ ok: false, error: /timed out/i });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('drains an in-flight search to ok:false on worker exit (no stall for the full timeout)', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchSearch({ query: { q: 'x' }, timeoutMs: 5000 });
+      ch.crash(1);
+
+      await expect(pending).resolves.toMatchObject({ ok: false, error: /exit/i });
+    });
+  });
+
   describe('lifecycle timeouts', () => {
     it('rejects load() when the worker never reports ready within the timeout', async () => {
       jest.useFakeTimers();
