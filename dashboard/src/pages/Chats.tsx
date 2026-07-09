@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -23,6 +23,7 @@ import {
   type Session,
   type Chat,
   type MessageType,
+  type SearchHit,
 } from '../services/api';
 import { mergeDeliveryStatus, type ChatMessageView } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -30,6 +31,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useToast } from '../components/Toast';
 import { PageHeader } from '../components/PageHeader';
+import { GlobalSearch } from '../components/GlobalSearch';
 import {
   useChatMessages,
   useChatMessagesActions,
@@ -450,6 +452,55 @@ export function Chats() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat?.id, markChatRead]);
 
+  // --- Global search: jump to a hit's chat (and best-effort scroll to the message) ---
+  // A cross-session hit switches session, which asynchronously reloads the chats list — so the
+  // target chat may not be available at click time. pendingHitRef carries the intent across that
+  // async gap: the chat-select effect picks it up once the list lands, and the scroll effect runs
+  // once the messages have rendered.
+  const pendingHitRef = useRef<{ chatId: string; waMessageId: string } | null>(null);
+
+  const handleSearchHit = useCallback(
+    (hit: SearchHit) => {
+      pendingHitRef.current = { chatId: hit.chatId, waMessageId: hit.waMessageId };
+      if (hit.sessionId !== selectedSessionId) {
+        // Switching session triggers loadChats; the effect below selects the chat once the list lands.
+        setSelectedSessionId(hit.sessionId);
+      } else {
+        const chat = chats.find(c => c.id === hit.chatId);
+        if (chat) setActiveChat(chat);
+      }
+    },
+    [selectedSessionId, chats],
+  );
+
+  // After a session switch the chats list reloads — pick up the pending chat once it appears.
+  useEffect(() => {
+    const pending = pendingHitRef.current;
+    if (!pending || activeChat?.id === pending.chatId) return;
+    const chat = chats.find(c => c.id === pending.chatId);
+    if (chat) setActiveChat(chat);
+  }, [chats, activeChat]);
+
+  // Best-effort scroll to the hit message. Runs as a layout effect (after useChatScrollPosition's
+  // own restore on the same commit) so it overrides the bottom/saved jump with no visible flash.
+  // Degrades silently to session+chat selection when the element isn't present — the message is
+  // still visible in the conversation.
+  useLayoutEffect(() => {
+    const pending = pendingHitRef.current;
+    if (!pending || !activeChat || activeChat.id !== pending.chatId) return;
+    if (loadingMessages || messages.length === 0) return;
+    const container = messagesContainerRef.current;
+    if (container) {
+      try {
+        const el = container.querySelector(`[data-wa-message-id="${pending.waMessageId}"]`);
+        if (el instanceof HTMLElement) el.scrollIntoView({ block: 'center' });
+      } catch {
+        // Unexpected chars in the id made the selector invalid — ignore.
+      }
+    }
+    pendingHitRef.current = null;
+  }, [activeChat, loadingMessages, messages, messagesContainerRef]);
+
   // 5. Handle file selection & base64 conversion
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -656,7 +707,15 @@ export function Chats() {
 
   return (
     <div className="chats-page">
-      <PageHeader title={t('nav.chats')} subtitle={t('chats.subtitle')} />
+      <PageHeader
+        title={t('nav.chats')}
+        subtitle={t('chats.subtitle')}
+        actions={
+          sessions.length > 0 && (
+            <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} />
+          )
+        }
+      />
 
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
           silently showing stale chats. */}
@@ -911,6 +970,7 @@ export function Chats() {
                         <div
                           key={msg.id}
                           className={`message-bubble-wrapper ${isMe ? 'outgoing' : 'incoming'}`}
+                          data-wa-message-id={msg.waMessageId}
                         >
                           <div className="message-bubble-container">
                             <div
