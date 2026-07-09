@@ -1,0 +1,125 @@
+.global-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.global-search-input {
+  flex: 1 1 auto;
+  min-width: 12rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  background: var(--bg-white);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.global-search-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.global-search-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.global-search-scope input {
+  margin: 0;
+}
+
+.global-search-results {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 24rem;
+  overflow-y: auto;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  box-shadow: var(--shadow-lg, var(--shadow-md));
+}
+
+.global-search-state {
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.global-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+}
+
+.global-search-hit:hover,
+.global-search-hit:focus-visible {
+  background: var(--bg-light);
+  outline: none;
+}
+
+.global-search-hit:last-child {
+  border-bottom: 0;
+}
+
+.global-search-hit-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.global-search-hit-snippet {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.global-search-hit-snippet mark {
+  background: var(--warning, #fde68a);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.global-search-more {
+  display: block;
+  width: 100%;
+  padding: 0.5rem;
+  background: var(--bg-light);
+  border: 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.global-search-more:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
