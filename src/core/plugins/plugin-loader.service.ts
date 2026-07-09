@@ -977,6 +977,10 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       await host.runLifecycle('onEnable', SANDBOX_LIFECYCLE_TIMEOUT_MS);
     } catch (error) {
       this.sandboxHosts.delete(pluginId);
+      // Drop a search provider registered mid-onEnable before the failure: without this, a plugin that
+      // registers then throws leaves a dead provider as the ACTIVE registry entry in auto mode, so every
+      // /search routes to a terminated worker → outage. Mirrors disablePlugin's cleanup.
+      unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
       await host.terminate().catch(() => undefined);
       throw error;
     }

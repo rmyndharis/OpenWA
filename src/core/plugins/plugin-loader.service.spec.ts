@@ -122,6 +122,9 @@ import { HookManager } from '../hooks';
 import { PluginStorageService } from './plugin-storage.service';
 import { IPlugin, PluginContext, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
+import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
+import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import { PluginLogLevel } from './sandbox/protocol';
 
 describe('PluginLoaderService.registerBuiltInPlugin config', () => {
   function makeLoader(): PluginLoaderService {
@@ -626,5 +629,80 @@ describe('PluginLoaderService — search-provider wiring', () => {
     await loader.disablePlugin('disable-test');
 
     expect(registry.list().map(p => p.id)).not.toContain('plugin:disable-test');
+  });
+});
+
+describe('PluginLoaderService — search-provider enable-failure cleanup', () => {
+  jest.setTimeout(30000);
+  let tmpDir: string;
+  const BOOTSTRAP = path.resolve(__dirname, 'sandbox/worker-bootstrap.ts');
+  const TS_NODE_OPTS = JSON.stringify({
+    module: 'commonjs',
+    moduleResolution: 'node',
+    resolvePackageJsonExports: false,
+  });
+
+  // Runs the REAL worker (ts-node) instead of the compiled dist bootstrap, so enableSandboxed
+  // exercises its true load/lifecycle/catch path with a live worker thread.
+  class RealWorkerLoader extends PluginLoaderService {
+    protected createSandboxHost(
+      capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+      onHookSubscribe?: (event: string, priority?: number) => void,
+      onWebhookSubscribe?: (route: string) => void,
+      onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+      runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+      onSearchProviderRegister?: () => void,
+    ): PluginWorkerHost {
+      return new PluginWorkerHost(
+        new WorkerThreadChannel({
+          workerEntry: BOOTSTRAP,
+          execArgv: ['-r', 'ts-node/register/transpile-only'],
+          env: { ...process.env, TS_NODE_COMPILER_OPTIONS: TS_NODE_OPTS },
+        }),
+        capDispatcher,
+        onHookSubscribe,
+        onWebhookSubscribe,
+        onLog,
+        runWithHookGuard,
+        undefined,
+        onSearchProviderRegister,
+      );
+    }
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-search-ef-'));
+    fs.mkdirSync(path.join(tmpDir, 'rt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'rt', 'manifest.json'),
+      JSON.stringify({ id: 'rt', name: 'RT', version: '1.0.0', type: 'EXTENSION', main: 'index.cjs' }),
+    );
+    // Fixture: register a search provider, THEN throw in onEnable — so the host has received
+    // search-provider-register (and activated the provider in auto mode) before enable fails.
+    fs.writeFileSync(
+      path.join(tmpDir, 'rt', 'index.cjs'),
+      "module.exports = class { async onEnable(ctx) { ctx.registerSearchProvider(async () => ({ hits: [], total: 0, tookMs: 1, provider: 'plugin:rt' })); throw new Error('onEnable failed'); } };",
+    );
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('unregisters the search provider when enable fails after registration (no dead active provider)', async () => {
+    const registry = new SearchProviderRegistry();
+    registry.register({ id: 'builtin-fts', label: 'b', search: jest.fn(), health: jest.fn() });
+    const config = {
+      get: (k: string) =>
+        k === 'search.provider' ? 'auto' : k === 'plugins.dir' || k === 'dataDir' ? tmpDir : undefined,
+    } as unknown as ConfigService;
+    const storage = new PluginStorageService(config);
+    const loader = new RealWorkerLoader(config, new HookManager(), storage, {
+      get: () => registry,
+    } as unknown as ModuleRef);
+
+    loader.loadPlugin(path.join(tmpDir, 'rt'));
+    await expect(loader.enablePlugin('rt')).rejects.toThrow('onEnable failed');
+
+    // Registered mid-onEnable, then onEnable threw → the catch must unregister the dead provider.
+    expect(registry.list().map(p => p.id)).not.toContain('plugin:rt');
+    expect(registry.active()?.id).toBe('builtin-fts');
   });
 });
