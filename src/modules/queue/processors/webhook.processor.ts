@@ -11,7 +11,7 @@ import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import { recordWebhookDeliveryFailure, statusCodeFromError } from '../../webhook/utils/record-delivery-failure';
 import { HookManager } from '../../../core/hooks';
-import { withSafeFetch, isSsrfProtectionEnabled } from '../../../common/security/ssrf-guard';
+import { withSafeFetch, isSsrfProtectionEnabled, redactSsrfError } from '../../../common/security/ssrf-guard';
 import { incrementWebhookDeliveryFailures } from '../../../common/metrics/webhook-delivery-metrics';
 
 export interface WebhookJobResult {
@@ -136,6 +136,10 @@ export class WebhookProcessor extends WorkerHost {
       // On final failure (all retries exhausted): fire the error hook AND persist a durable record so
       // the lost event is visible after the BullMQ failed-set / logs roll off.
       if (isFinalAttempt) {
+        // The hook payload and the durable row are surfaced to operators/plugins — redact SSRF detail
+        // (resolved internal IP) from the client-facing message. The full `errorMessage` is already
+        // logged server-side above; statusCodeFromError never matches an SSRF block (matches ^HTTP \d{3}).
+        const clientError = redactSsrfError(error);
         await this.hookManager.execute(
           'webhook:error',
           {
@@ -143,7 +147,7 @@ export class WebhookProcessor extends WorkerHost {
             event,
             webhookId,
             deliveryId: payload.deliveryId,
-            error: errorMessage,
+            error: clientError,
             attempt: job.attemptsMade + 1,
           },
           { sessionId, source: 'WebhookProcessor' },
@@ -157,7 +161,7 @@ export class WebhookProcessor extends WorkerHost {
           deliveryId: payload.deliveryId,
           attempts: job.attemptsMade + 1,
           lastStatusCode: statusCodeFromError(errorMessage),
-          lastError: errorMessage,
+          lastError: clientError,
         });
         incrementWebhookDeliveryFailures();
       }

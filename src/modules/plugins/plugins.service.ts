@@ -16,9 +16,18 @@ import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
 import { fetchSafeBuffer } from './plugin-download';
 import { annotateCatalog, CatalogEntry, CatalogPlugin } from './catalog';
+import { redactSsrfError } from '../../common/security/ssrf-guard';
+import { createLogger } from '../../common/services/logger.service';
 
 /** Cap on the catalog JSON download (the catalog is small; this bounds a hostile response). */
 const CATALOG_MAX_BYTES = 1 * 1024 * 1024;
+
+/**
+ * Module-level logger so the SSRF redactor can log the full blocked-address detail server-side before
+ * returning the generic message (the service has no `this.logger` and its methods are sync/void-returning
+ * around the download calls).
+ */
+const logger = createLogger('PluginsService');
 
 /** A plugin can host provisioned instances iff it declares an ingress route AND the webhook:ingress
  *  permission — mirrors IntegrationInstanceController.assertIngressCapable. */
@@ -332,7 +341,7 @@ export class PluginsService {
       buffer = await fetchSafeBuffer(url, { maxBytes });
     } catch (error) {
       throw new BadRequestException(
-        `Failed to download plugin from URL: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to download plugin from URL: ${redactSsrfError(error, logger, 'plugin download')}`,
       );
     }
     // Peek the id (the SSRF download stays outside the lock) so the install — which writes the plugin
@@ -354,7 +363,7 @@ export class PluginsService {
       raw = await fetchSafeBuffer(url, { maxBytes: CATALOG_MAX_BYTES });
     } catch (error) {
       throw new BadRequestException(
-        `Failed to fetch plugin catalog: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to fetch plugin catalog: ${redactSsrfError(error, logger, 'plugin catalog download')}`,
       );
     }
 
@@ -455,7 +464,7 @@ export class PluginsService {
       buffer = await fetchSafeBuffer(url, { maxBytes });
     } catch (error) {
       throw new BadRequestException(
-        `Failed to download plugin from URL: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to download plugin from URL: ${redactSsrfError(error, logger, 'plugin download')}`,
       );
     }
     return this.updatePackage(id, buffer);

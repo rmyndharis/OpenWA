@@ -30,6 +30,7 @@ import {
   isSsrfProtectionEnabled,
   SsrfBlockedError,
   SSRF_BLOCKED_CLIENT_MESSAGE,
+  redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 
@@ -266,7 +267,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: redactSsrfError(error, this.logger, 'webhook test'),
       };
     }
   }
@@ -552,7 +553,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       }
       // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
       // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
-      const errMessage = error instanceof Error ? error.message : String(error);
+      const errMessage = redactSsrfError(error);
       await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
         webhookId: webhook.id,
         sessionId: payload.sessionId,

@@ -497,6 +497,28 @@ describe('WebhookService', () => {
       timeoutSpy.mockRestore();
     });
 
+    // A literal link-local IP is rejected synchronously by the SSRF guard before any fetch/DNS, so this
+    // is fully offline. The raw SsrfBlockedError message names the resolved internal IP — an SSRF
+    // disclosure oracle — so the test() response must surface the generic constant instead.
+    it('test() does not leak the resolved internal IP when the SSRF guard blocks the URL', async () => {
+      const origProtect = process.env.WEBHOOK_SSRF_PROTECT;
+      delete process.env.WEBHOOK_SSRF_PROTECT; // default → on
+      try {
+        const webhook = createMockWebhook({ url: 'https://169.254.169.254/' });
+        (repository.findOne as jest.Mock).mockResolvedValue(webhook);
+
+        const result = await service.test('sess-1', webhook.id);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Destination address is not allowed');
+        expect(result.error).not.toMatch(/169\.254\.169\.254/);
+        expect(mockFetch).not.toHaveBeenCalled(); // blocked before any network
+      } finally {
+        if (origProtect === undefined) delete process.env.WEBHOOK_SSRF_PROTECT;
+        else process.env.WEBHOOK_SSRF_PROTECT = origProtect;
+      }
+    });
+
     it('should NOT dispatch to webhooks that do not match the event', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

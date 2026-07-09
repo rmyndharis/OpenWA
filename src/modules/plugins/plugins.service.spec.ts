@@ -145,6 +145,19 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     await Promise.all([p1, p2]);
     expect(calls).toBe(2);
   });
+
+  // A literal link-local IP is rejected synchronously by the SSRF guard before any fetch/DNS, so this
+  // is fully offline. The download path follows redirects, so the guard always runs (no opt-out flag);
+  // the rejected-IP detail must be redacted from the surfaced BadRequestException (recon oracle).
+  it('installFromUrl redacts the resolved internal IP when the SSRF guard blocks the URL', async () => {
+    const err = await service.installFromUrl('https://169.254.169.254/pkg.zip').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(BadRequestException);
+    const message = (err as BadRequestException).message;
+    expect(message).toMatch(/^Failed to download plugin from URL: /);
+    expect(message).not.toMatch(/169\.254\.169\.254/);
+    expect(message).toBe('Failed to download plugin from URL: Destination address is not allowed');
+  });
 });
 
 describe('PluginsService — getConfigUiHtml (sandboxed config editor)', () => {

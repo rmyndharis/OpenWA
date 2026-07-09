@@ -156,4 +156,26 @@ describe('WebhookProcessor', () => {
     expect(mockFetch).toHaveBeenCalledWith('https://8.8.8.8/hook', expect.objectContaining({ redirect: 'manual' }));
     expect(repo.update).not.toHaveBeenCalled(); // never treated as delivered
   });
+
+  // A literal link-local IP triggers the SSRF guard synchronously before any fetch/DNS, so this is
+  // fully offline. The webhook:error hook payload and the durable DLQ row must both carry the generic
+  // message — the resolved internal IP is a recon oracle. The server-side logger.error keeps full detail.
+  it('redacts the resolved internal IP from the webhook:error payload and DLQ row on an SSRF block', async () => {
+    process.env.WEBHOOK_SSRF_PROTECT = 'true';
+    // final attempt (attemptsMade=0, maxRetries=1 → 1 >= 1) so the hook + DLQ fire
+    await expect(processor.process(makeJob({ url: 'https://169.254.169.254/h', maxRetries: 1 }, 0))).rejects.toThrow();
+
+    expect(mockFetch).not.toHaveBeenCalled(); // blocked before any network
+
+    const hookCalls = hookManager.execute.mock.calls as unknown as Array<[string, { error: string }, unknown]>;
+    const errorHookCall = hookCalls.find(c => c[0] === 'webhook:error');
+    expect(errorHookCall).toBeDefined();
+    expect(errorHookCall![1].error).toBe('Destination address is not allowed');
+    expect(errorHookCall![1].error).not.toMatch(/169\.254\.169\.254/);
+
+    expect(failureRepo.insert).toHaveBeenCalledTimes(1);
+    const inserted = (failureRepo.insert.mock.calls[0] as unknown[])[0] as { lastError: string };
+    expect(inserted.lastError).toBe('Destination address is not allowed');
+    expect(inserted.lastError).not.toMatch(/169\.254\.169\.254/);
+  });
 });
