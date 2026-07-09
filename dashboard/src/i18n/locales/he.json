@@ -845,7 +845,7 @@
     "empty": "No messages found.",
     "error": "Search failed. Try again.",
     "unavailable": "Search is not configured.",
-    "scope": { "all": "All sessions", "current": "This session" },
+    "scope": { "current": "This session" },
     "loading": "Searching…"
   }
 }

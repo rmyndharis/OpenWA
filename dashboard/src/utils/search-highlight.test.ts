@@ -18,7 +18,7 @@ test('XSS-guard: a payload between markers is returned as inert text, never exec
   assert.equal(segs.length, 1);
   assert.equal(segs[0].marked, true);
   assert.equal(segs[0].text, '<img src=x onerror=alert(1)>'); // literal text, not HTML
-  assert.ok(!/<script/i.test(JSON.stringify(segs)) || true); // segments are data, not markup
+  assert.ok(!/<script/i.test(JSON.stringify(segs))); // segments are data, not markup
 });
 
 test('no markers → single unmarked segment', () => {

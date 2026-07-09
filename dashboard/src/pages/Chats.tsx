@@ -468,6 +468,7 @@ export function Chats() {
       } else {
         const chat = chats.find(c => c.id === hit.chatId);
         if (chat) setActiveChat(chat);
+        else pendingHitRef.current = null;
       }
     },
     [selectedSessionId, chats],

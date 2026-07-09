@@ -24,6 +24,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   const [scopeCurrent, setScopeCurrent] = useState(false);
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const run = useCallback(async (query: string, offset: number, append: boolean) => {
     const params = buildSearchParams(query, scopeCurrent && currentSessionId ? { sessionId: currentSessionId } : undefined, { limit: PAGE_SIZE, offset });
@@ -52,6 +53,11 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, [q, run]);
 
+  // Clear any pending blur timeout on unmount so it can't fire setState after teardown.
+  useEffect(() => {
+    return () => { if (blurTimer.current) clearTimeout(blurTimer.current); };
+  }, []);
+
   const loadMore = () => void run(q, hits.length, true);
 
   return (
@@ -63,7 +69,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => q.trim() && setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 150); }}
         aria-label={t('search.placeholder')}
       />
       {currentSessionId && (
