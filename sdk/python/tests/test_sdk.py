@@ -110,7 +110,7 @@ class TestClientCore:
 
     def test_exposes_all_resources(self):
         client = make_client(MockBackend())
-        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health"]:
+        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health", "search"]:
             assert hasattr(client, r)
 
 
@@ -502,5 +502,77 @@ class TestLabelsChannelsCatalog:
 
     def test_client_exposes_all_resources(self):
         client = make_client(MockBackend())
-        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health", "labels", "channels", "catalog", "templates"]:
+        for r in ["sessions", "messages", "contacts", "groups", "webhooks", "chats", "status", "health", "labels", "channels", "catalog", "templates", "search"]:
             assert hasattr(client, r)
+
+
+# ── Search ─────────────────────────────────────────────────────────
+
+
+class TestSearch:
+    def test_search_minimal_required_q(self):
+        backend = MockBackend().on("GET", "/api/search", body={
+            "hits": [], "total": 0, "tookMs": 3, "provider": "builtin-fts",
+        })
+        res = make_client(backend).search.search({"q": "hello"})
+        assert res["total"] == 0
+        assert res["provider"] == "builtin-fts"
+        assert backend.last_call.url == "http://localhost:2785/api/search?q=hello"
+
+    def test_search_forwards_all_optional_filters(self):
+        backend = MockBackend().on("GET", "/api/search", body={
+            "hits": [], "total": 0, "tookMs": 1, "provider": "builtin-fts",
+        })
+        make_client(backend).search.search({
+            "q": "invoice",
+            "sessionId": "s1",
+            "chatId": "628123@c.us",
+            "direction": "incoming",
+            "type": "chat",
+            "from": "628123456789@c.us",
+            "dateFrom": 1720000000000,
+            "dateTo": 1720100000000,
+            "limit": 20,
+            "offset": 40,
+        })
+        url = backend.last_call.url
+        assert url.startswith("http://localhost:2785/api/search?")
+        assert "q=invoice" in url
+        assert "sessionId=s1" in url
+        assert "chatId=628123%40c.us" in url  # @ percent-encoded in query
+        assert "direction=incoming" in url
+        assert "type=chat" in url
+        assert "from=628123456789%40c.us" in url
+        assert "dateFrom=1720000000000" in url
+        assert "dateTo=1720100000000" in url
+        assert "limit=20" in url
+        assert "offset=40" in url
+
+    def test_search_returns_hits_shape(self):
+        hit = {
+            "messageId": "m1", "waMessageId": "wam1", "sessionId": "s1",
+            "chatId": "628123@c.us", "body": "please send the invoice",
+            "snippet": "please send the <mark>invoice</mark>", "timestamp": 1720000000,
+            "type": "chat", "direction": "incoming", "from": "628123456789@c.us",
+            "score": 0.42,
+        }
+        backend = MockBackend().on("GET", "/api/search", body={
+            "hits": [hit], "total": 1, "tookMs": 7, "provider": "builtin-fts",
+        })
+        res = make_client(backend).search.search({"q": "invoice"})
+        assert res["total"] == 1
+        assert res["hits"][0]["messageId"] == "m1"
+        assert res["hits"][0]["snippet"] == "please send the <mark>invoice</mark>"
+        assert res["hits"][0]["score"] == 0.42
+        assert res["hits"][0]["direction"] == "incoming"
+
+    def test_search_none_values_skipped_in_query(self):
+        # None-typed optional filters must be omitted, never sent as the literal "None".
+        backend = MockBackend().on("GET", "/api/search", body={
+            "hits": [], "total": 0, "tookMs": 0, "provider": "builtin-fts",
+        })
+        make_client(backend).search.search({"q": "x", "sessionId": None, "limit": 5})
+        url = backend.last_call.url
+        assert "q=x" in url
+        assert "limit=5" in url
+        assert "sessionId" not in url

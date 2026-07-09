@@ -38,6 +38,7 @@ from .resources import (
     HealthResource,
     LabelsResource,
     MessagesResource,
+    SearchResource,
     SessionsResource,
     StatusResource,
     TemplatesResource,
@@ -117,6 +118,10 @@ class OpenWAClient:
     @property
     def templates(self) -> TemplatesResource:
         return TemplatesResource(self._http)
+
+    @property
+    def search(self) -> SearchResource:
+        return SearchResource(self._http)
 
     # ── Auth ─────────────────────────────────────────────────────────
 

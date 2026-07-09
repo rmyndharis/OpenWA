@@ -14,6 +14,7 @@ from .groups import GroupsResource
 from .health import HealthResource
 from .labels import LabelsResource
 from .messages import MessagesResource
+from .search import SearchResource
 from .sessions import SessionsResource
 from .status import StatusResource
 from .templates import TemplatesResource
@@ -28,6 +29,7 @@ __all__ = [
     "HealthResource",
     "LabelsResource",
     "MessagesResource",
+    "SearchResource",
     "SessionsResource",
     "StatusResource",
     "TemplatesResource",

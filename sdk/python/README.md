@@ -45,6 +45,20 @@ import httpx
 client = OpenWAClient(base_url="…", api_key="…", transport=httpx.MockTransport(handler))
 ```
 
+## Search
+
+`GET /search` is wrapped as `client.search.search(params)`. Only `q` is required;
+the rest (`sessionId`, `chatId`, `direction`, `type`, `from`, `dateFrom`,
+`dateTo`, `limit`, `offset`) are optional. `dateFrom` / `dateTo` are epoch-ms.
+The active search provider (built-in DB full-text, or a plugin) answers; if none
+is configured the server returns 501.
+
+```python
+res = client.search.search({"q": "invoice", "sessionId": "my-session", "limit": 20})
+for hit in res["hits"]:
+    print(hit["snippet"], hit["score"])
+```
+
 ## Messaging
 
 > Voice notes: pass `ptt=True` inside the body dict to `send_audio` to send a real WhatsApp voice note (PTT). Supply `audio/ogg; codecs=opus` audio for reliable playback; the server defaults the mimetype to that when `ptt` is set without one.

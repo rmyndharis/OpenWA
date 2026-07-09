@@ -679,3 +679,72 @@ class SendProductRequest(TypedDict, total=False):
 class SendCatalogRequest(TypedDict, total=False):
     chatId: Jid
     body: str
+
+
+# ── Search ────────────────────────────────────────────────────────
+
+# `q` is required; the remaining fields are optional. `from` is a Python
+# keyword, so the optional keys are declared via the functional TypedDict form
+# (mirrors ListMessagesQuery / MessageRecord). `dateFrom` / `dateTo` are
+# epoch-ms; the backend binds them against messages.timestamp (epoch-seconds),
+# dividing by 1000 internally.
+class _SearchQueryRequired(TypedDict):
+    q: str
+
+
+_SearchQueryOptional = TypedDict(
+    "_SearchQueryOptional",
+    {
+        "sessionId": str,
+        "chatId": Jid,
+        "direction": MessageDirection,
+        "type": str,
+        "from": Jid,
+        "dateFrom": int,
+        "dateTo": int,
+        "limit": int,
+        "offset": int,
+    },
+    total=False,
+)
+
+
+class SearchQueryParams(_SearchQueryRequired, _SearchQueryOptional):
+    """Query for ``GET /search``. ``q`` is required; every other field optional."""
+
+
+# `from` is a Python keyword → functional form for the required keys. The builtin
+# provider returns waMessageId/snippet as "" when absent (always str, never null);
+# `score` is provider-dependent (builtin always returns it) → optional.
+_SearchHitRequired = TypedDict(
+    "_SearchHitRequired",
+    {
+        "messageId": str,
+        "waMessageId": str,
+        "sessionId": str,
+        "chatId": Jid,
+        "body": str,
+        "snippet": str,
+        "timestamp": int,
+        "type": str,
+        "direction": MessageDirection,
+        "from": Jid,
+    },
+)
+
+
+class SearchHit(_SearchHitRequired, total=False):
+    score: float
+
+
+class SearchResults(TypedDict):
+    """Payload returned by ``GET /search``.
+
+    ``total`` is a bounded exact count for pagination; ``provider`` is the id of
+    the search provider that answered (e.g. ``builtin-fts``).
+    """
+
+    hits: list[SearchHit]
+    total: int
+    tookMs: int
+    provider: str
