@@ -15,6 +15,7 @@ use OpenWA\Resources\GroupsResource;
 use OpenWA\Resources\HealthResource;
 use OpenWA\Resources\LabelsResource;
 use OpenWA\Resources\MessagesResource;
+use OpenWA\Resources\SearchResource;
 use OpenWA\Resources\SessionsResource;
 use OpenWA\Resources\StatusResource;
 use OpenWA\Resources\TemplatesResource;
@@ -51,6 +52,7 @@ class Client
 
     public SessionsResource $sessions;
     public MessagesResource $messages;
+    public SearchResource $search;
     public ContactsResource $contacts;
     public GroupsResource $groups;
     public WebhooksResource $webhooks;
@@ -92,6 +94,7 @@ class Client
 
         $this->sessions = new SessionsResource($this->http);
         $this->messages = new MessagesResource($this->http);
+        $this->search = new SearchResource($this->http);
         $this->contacts = new ContactsResource($this->http);
         $this->groups = new GroupsResource($this->http);
         $this->webhooks = new WebhooksResource($this->http);
