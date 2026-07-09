@@ -3,6 +3,7 @@ import { HostToWorkerMessage, WorkerToHostMessage } from './protocol';
 import { WorkerCapabilityClient, buildSandboxContext } from './worker-capability';
 import { WorkerHookRegistry, WorkerHookHandler, hookConfigStore } from './worker-hooks';
 import { WebhookRegistry, WebhookHandler } from './worker-webhooks';
+import { WorkerSearchRegistry, WorkerSearchHandler } from './worker-search-registry';
 
 /**
  * Worker entry for a plugin. Loads the plugin module and drives its lifecycle in response to host
@@ -37,6 +38,7 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 const capClient = new WorkerCapabilityClient(send);
 const hookRegistry = new WorkerHookRegistry(send);
 const webhookRegistry = new WebhookRegistry(send);
+const searchRegistry = new WorkerSearchRegistry(send);
 
 // ctx.logger proxy: forwards to the host's per-plugin logger (the same one in-process plugins use).
 const logger = {
@@ -69,6 +71,10 @@ port.on('message', (message: HostToWorkerMessage) => {
     void webhookRegistry.handleWebhook(message);
     return;
   }
+  if (message.kind === 'search') {
+    void searchRegistry.handleSearch(message);
+    return;
+  }
   void handle(message);
 });
 
@@ -93,6 +99,7 @@ async function handle(message: HostToWorkerMessage): Promise<void> {
         registerHook: (event: string, handler: WorkerHookHandler, priority?: number) =>
           hookRegistry.register(event, handler, priority),
         registerWebhook: (route: string, handler: WebhookHandler) => webhookRegistry.register(route, handler),
+        registerSearchProvider: (handler: WorkerSearchHandler) => searchRegistry.register(handler),
       };
       send({ kind: 'ready' });
     } catch (error) {
