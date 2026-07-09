@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHealth } from '../search.types';
 
 /**
@@ -33,7 +34,7 @@ export class PluginSearchProvider implements SearchProvider {
 
   async search(query: SearchQuery): Promise<SearchResults> {
     const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
-    if (!reply.ok) throw new Error(reply.error);
+    if (!reply.ok) throw new ServiceUnavailableException(reply.error);
     return reply.results;
   }
 

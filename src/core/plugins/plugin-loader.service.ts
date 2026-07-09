@@ -777,6 +777,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     onSearchProviderRegister?: () => void,
+    onWorkerExit?: (code: number, intentional: boolean) => void,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');
     return new PluginWorkerHost(
@@ -793,6 +794,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       runWithHookGuard,
       SANDBOX_MAX_INFLIGHT_CAPS,
       onSearchProviderRegister,
+      onWorkerExit,
     );
   }
 
@@ -960,6 +962,24 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       });
     };
 
+    // A worker that crashes AFTER a successful enable is otherwise invisible to the loader (handleExit only
+    // drains in-flight calls). Drop the plugin's search-provider entry so the registry falls back to
+    // builtin-fts instead of routing every /search to a dead worker (auto mode would otherwise pin the dead
+    // provider ACTIVE). Mirrors the enable-failure cleanup. Broader crash-lifecycle cleanup (status, hooks)
+    // is a pre-existing gap for all bridges and out of scope here.
+    const onWorkerExit = (code: number, intentional: boolean): void => {
+      // Always release the search-provider slot so the registry can fall back to builtin-fts. On a crash
+      // this is the only cleanup; on a deliberate disable/enable-failure the explicit unregister already
+      // ran, making this a harmless no-op.
+      unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
+      if (intentional) return; // routine disable/enable-failure already logged and expected
+      this.logger.warn(`Sandboxed plugin ${pluginId} worker exited unexpectedly (code ${code})`, {
+        pluginId,
+        code,
+        action: 'sandbox_worker_exit',
+      });
+    };
+
     const host = this.createSandboxHost(
       (verb, args) => dispatchCapabilityVerb(context, verb, args),
       onHookSubscribe,
@@ -969,6 +989,7 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       // plugin that sends from within a send hook can't loop the event back into itself unboundedly.
       (events, run) => this.hookManager.runInFlight(events as HookEvent[], run),
       onSearchProviderRegister,
+      onWorkerExit,
     );
     this.sandboxHosts.set(pluginId, host);
     try {

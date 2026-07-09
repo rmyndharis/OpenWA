@@ -706,3 +706,86 @@ describe('PluginLoaderService — search-provider enable-failure cleanup', () =>
     expect(registry.active()?.id).toBe('builtin-fts');
   });
 });
+
+describe('PluginLoaderService — search-provider worker-crash fallback', () => {
+  jest.setTimeout(30000);
+  let tmpDir: string;
+  const BOOTSTRAP = path.resolve(__dirname, 'sandbox/worker-bootstrap.ts');
+  const TS_NODE_OPTS = JSON.stringify({
+    module: 'commonjs',
+    moduleResolution: 'node',
+    resolvePackageJsonExports: false,
+  });
+
+  // Real ts-node worker (so enableSandboxed runs its true path) that captures the host so the test can
+  // crash it.
+  class CapturingLoader extends PluginLoaderService {
+    lastHost?: PluginWorkerHost;
+    protected createSandboxHost(
+      capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
+      onHookSubscribe?: (event: string, priority?: number) => void,
+      onWebhookSubscribe?: (route: string) => void,
+      onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+      runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+      onSearchProviderRegister?: () => void,
+      onWorkerExit?: (code: number) => void,
+    ): PluginWorkerHost {
+      const host = new PluginWorkerHost(
+        new WorkerThreadChannel({
+          workerEntry: BOOTSTRAP,
+          execArgv: ['-r', 'ts-node/register/transpile-only'],
+          env: { ...process.env, TS_NODE_COMPILER_OPTIONS: TS_NODE_OPTS },
+        }),
+        capDispatcher,
+        onHookSubscribe,
+        onWebhookSubscribe,
+        onLog,
+        runWithHookGuard,
+        undefined,
+        onSearchProviderRegister,
+        onWorkerExit,
+      );
+      this.lastHost = host;
+      return host;
+    }
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-search-crash-'));
+    fs.mkdirSync(path.join(tmpDir, 'ok'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'ok', 'manifest.json'),
+      JSON.stringify({ id: 'ok', name: 'OK', version: '1.0.0', type: 'EXTENSION', main: 'index.cjs' }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'ok', 'index.cjs'),
+      "module.exports = class { async onEnable(ctx) { ctx.registerSearchProvider(async () => ({ hits: [], total: 0, tookMs: 1, provider: 'plugin:ok' })); } };",
+    );
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  it('falls back to builtin-fts when the plugin worker crashes after a successful enable', async () => {
+    const registry = new SearchProviderRegistry();
+    registry.register({ id: 'builtin-fts', label: 'b', search: jest.fn(), health: jest.fn() });
+    const config = {
+      get: (k: string) =>
+        k === 'search.provider' ? 'auto' : k === 'plugins.dir' || k === 'dataDir' ? tmpDir : undefined,
+    } as unknown as ConfigService;
+    const storage = new PluginStorageService(config);
+    const loader = new CapturingLoader(config, new HookManager(), storage, {
+      get: () => registry,
+    } as unknown as ModuleRef);
+
+    loader.loadPlugin(path.join(tmpDir, 'ok'));
+    await loader.enablePlugin('ok'); // registers + setActive -> active = plugin:ok
+    expect(registry.active()?.id).toBe('plugin:ok');
+
+    // Worker crashes (unexpected exit) — terminate() emits the worker 'exit' event -> handleExit -> onWorkerExit.
+    await loader.lastHost!.terminate();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(registry.list().map(p => p.id)).not.toContain('plugin:ok');
+    expect(registry.active()?.id).toBe('builtin-fts'); // fell back, not pinned to the dead plugin
+  });
+});

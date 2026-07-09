@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { PluginSearchProvider } from './plugin-search-provider';
 import type { PluginSearchTransport } from './plugin-search-provider';
 import type { SearchResults } from '../search.types';
@@ -27,13 +28,14 @@ describe('PluginSearchProvider', () => {
     expect(dispatchSearch).toHaveBeenCalledWith({ query: { q: 'hi' }, timeoutMs: 7000 });
   });
 
-  it('search throws when the transport reports ok:false', async () => {
+  it('search throws a 503 ServiceUnavailableException carrying the cause on ok:false', async () => {
     const transport = fakeTransport({
       dispatchSearch: jest.fn().mockResolvedValue({ ok: false, error: 'backend down' }),
     });
     const p = new PluginSearchProvider('p', 'P', transport, 1000);
 
-    await expect(p.search({ q: 'hi' })).rejects.toThrow('backend down');
+    await expect(p.search({ q: 'hi' })).rejects.toMatchObject({ status: 503, message: 'backend down' });
+    await expect(p.search({ q: 'hi' })).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('health maps healthy→ok and message→detail', async () => {

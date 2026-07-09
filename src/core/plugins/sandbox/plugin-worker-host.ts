@@ -64,6 +64,9 @@ export class PluginWorkerHost {
 
   // Worker-initiated capability calls currently running host-side, bounded by maxInFlightCaps.
   private inFlightCaps = 0;
+  // True once terminate() is called, so onExit can tell a deliberate kill (disable/enable-failure) from an
+  // unexpected worker crash — only the latter is logged as a warning.
+  private terminated = false;
 
   constructor(
     private readonly channel: PluginWorkerChannel,
@@ -91,6 +94,9 @@ export class PluginWorkerHost {
     // so the host can create a PluginSearchProvider and register it. Mirrors onHookSubscribe /
     // onWebhookSubscribe for the search bridge. Absent => the host ignores the declaration (e.g. tests).
     private readonly onSearchProviderRegister?: () => void,
+    // Called once after the worker exits (crash or terminate), after in-flight calls are drained, so the
+    // loader can release plugin-owned host resources (e.g. unregister a search provider the worker declared).
+    private readonly onExit?: (code: number, intentional: boolean) => void,
   ) {
     this.channel.onMessage(message => this.handleMessage(message));
     this.channel.onExit(code => this.handleExit(code));
@@ -290,6 +296,7 @@ export class PluginWorkerHost {
 
   /** Tear the worker down. */
   terminate(): Promise<void> {
+    this.terminated = true;
     return this.channel.terminate();
   }
 
@@ -455,6 +462,7 @@ export class PluginWorkerHost {
       resolve({ ok: false, error: 'plugin worker exited' });
     });
     this.searchPending.clear();
+    this.onExit?.(code, this.terminated);
   }
 
   private drain<T>(waiters: T[], fn: (w: T) => void): void {
