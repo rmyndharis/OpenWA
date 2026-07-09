@@ -305,6 +305,47 @@ export interface Settings {
   notifications: { emailEnabled: boolean; notificationEmail: string; webhookAlerts: boolean };
 }
 
+// Global message search (mirrors the backend GET /search contract from #664).
+// `timestamp` is epoch-seconds (the messages column is seconds, not ms); `dateFrom`/`dateTo`
+// are epoch-ms on the wire — see `dateFrom`/`dateTo` JSDoc below.
+export interface SearchParams {
+  q: string;
+  sessionId?: string;
+  chatId?: string;
+  direction?: string;
+  type?: string;
+  from?: string;
+  /** Epoch-ms lower bound (inclusive) — the backend binds against messages.timestamp (/1000). */
+  dateFrom?: number;
+  /** Epoch-ms upper bound (inclusive). */
+  dateTo?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SearchHit {
+  messageId: string;
+  waMessageId: string;
+  sessionId: string;
+  chatId: string;
+  body: string;
+  /** Provider-generated excerpt with `<mark>` highlight markers — render as text, never as HTML. */
+  snippet: string;
+  /** Epoch-seconds (mirrors the persisted messages.timestamp column). */
+  timestamp: number;
+  type: string;
+  direction: string;
+  from: string;
+  score?: number;
+}
+
+export interface SearchResults {
+  hits: SearchHit[];
+  total: number;
+  tookMs: number;
+  provider: string;
+}
+
 // =============================================================================
 // API Client
 // =============================================================================
@@ -600,6 +641,20 @@ export const messageApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+};
+
+// =============================================================================
+// Search API
+// =============================================================================
+
+export const searchApi = {
+  search: (params: SearchParams) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') query.set(key, String(value));
+    });
+    return request<SearchResults>(`/search?${query.toString()}`);
+  },
 };
 
 // =============================================================================
