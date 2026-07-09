@@ -147,6 +147,43 @@ describe('validateEnv', () => {
     ).not.toThrow();
   });
 
+  it('rejects DATABASE_SYNCHRONIZE=true with DATABASE_TYPE=postgres (drops body_ts → /search 501)', () => {
+    // The Postgres data connection hardcodes migrationsRun=true; an opted-in synchronize=true makes
+    // TypeORM re-sync from entities on every boot, dropping the migration-created `body_ts` generated
+    // tsvector column (not declared on the Message entity) → /search 501 every restart. The breaking
+    // combo must fail fast at boot.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db',
+        DATABASE_USERNAME: 'u',
+        DATABASE_PASSWORD: 'p',
+        DATABASE_SYNCHRONIZE: 'true',
+      }),
+    ).toThrow(/DATABASE_SYNCHRONIZE.*postgres|migrations/);
+    // The production default (synchronize=false / unset) is fine on Postgres.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db',
+        DATABASE_USERNAME: 'u',
+        DATABASE_PASSWORD: 'p',
+        DATABASE_SYNCHRONIZE: 'false',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db',
+        DATABASE_USERNAME: 'u',
+        DATABASE_PASSWORD: 'p',
+      }),
+    ).not.toThrow();
+    // SQLite is migration-managed only when synchronize is unset/false, but the combo is NOT breaking
+    // there (SQLite has no generated-column migration to drop), so it stays allowed.
+    expect(() => validateEnv({ DATABASE_TYPE: 'sqlite', DATABASE_SYNCHRONIZE: 'true' })).not.toThrow();
+  });
+
   it('rejects a bare SQLite DATABASE_NAME (PG-name leak) that has no path separator or file extension', () => {
     // Regression for #677: .env.example shipped `DATABASE_NAME=openwa` (a PostgreSQL db name).
     // In a SQLite run that bare name becomes the file PATH → SQLite opens a file named 'openwa'

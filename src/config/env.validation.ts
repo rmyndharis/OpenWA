@@ -45,6 +45,18 @@ export function validateEnv(config: EnvConfig): EnvConfig {
         errors.push(`${key} is required when DATABASE_TYPE=postgres`);
       }
     }
+    // The Postgres data connection always runs migrations (app.module.ts hardcodes migrationsRun=true).
+    // An opted-in DATABASE_SYNCHRONIZE=true makes TypeORM re-sync the schema from entities on every
+    // boot, which immediately DROPS the migration-created `body_ts` generated tsvector column (the
+    // Message entity doesn't declare it) → /search returns 501 on every restart. Prod default is
+    // synchronize=false; reject only the breaking combo. Read raw (no trim) to match the exact
+    // `=== 'true'` comparison at configuration.ts so the guard fires precisely when synchronize would
+    // actually be enabled downstream.
+    if (config['DATABASE_SYNCHRONIZE'] === 'true') {
+      errors.push(
+        'DATABASE_SYNCHRONIZE=true is not allowed with DATABASE_TYPE=postgres: the Postgres data connection always runs migrations, and synchronize would drop the migration-created body_ts tsvector column that /search depends on (returns 501 on every restart). Set DATABASE_SYNCHRONIZE=false (the production default) and manage the schema via migrations.',
+      );
+    }
     // POSTGRES_SCHEMA is optional (defaults to 'public' in configuration.ts). When set, validate it
     // is a legal, non-reserved Postgres identifier so a typo / injection-ish value fails fast at boot
     // rather than reaching CREATE TABLE "<schema>"."..." (or a search_path SET) at migration time.
