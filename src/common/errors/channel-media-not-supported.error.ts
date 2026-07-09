@@ -1,8 +1,8 @@
 import { NotImplementedException } from '@nestjs/common';
 
 /**
- * Thrown by the whatsapp-web.js engine adapter when a media send (image/video/audio/document) targets a
- * channel (`<id>@newsletter`). whatsapp-web.js constructs the channel message and calls `msg.avParams()`
+ * Thrown by the whatsapp-web.js engine adapter when a media send (image/video/audio/document/sticker)
+ * targets a channel (`<id>@newsletter`). whatsapp-web.js constructs the channel message and calls `msg.avParams()`
  * (Utils.js), a WhatsApp-Web-page method removed in a recent WA Web build, so the send crashes with
  * `TypeError: msg.avParams is not a function` (upstream wwebjs#201823, unresolved). Text→channel still
  * works; only media is affected.

@@ -1129,6 +1129,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.ensureReady();
+    // Sticker has its own send path (sendMediaAsSticker), not the sendMediaMessage funnel, but it
+    // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
+    // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
+    this.ensureNotChannelRecipient(chatId);
     let messageMedia: MessageMedia;
 
     if (typeof media.data === 'string') {

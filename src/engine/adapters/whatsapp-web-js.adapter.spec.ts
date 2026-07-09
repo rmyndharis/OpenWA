@@ -540,10 +540,11 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
     });
   });
 
-  describe('media sends (sendImageMessage/sendVideo/sendAudio/sendDocument)', () => {
+  describe('media sends (sendImageMessage/sendVideo/sendAudio/sendDocument/sendSticker)', () => {
     // whatsapp-web.js crashes building a channel media message: `msg.avParams is not a function`
-    // (upstream wwebjs#201823). All four media sends funnel through sendMediaMessage, so guarding
-    // it fail-fasts as a typed 501 instead of surfacing the raw TypeError as a 500 (#673).
+    // (upstream wwebjs#201823). image/video/audio/document funnel through sendMediaMessage; sticker
+    // has its own path but hits the same channel crash. Guarding both fail-fasts as a typed 501
+    // instead of surfacing the raw TypeError as a 500 (#673).
     it('rejects sendImageMessage on a newsletter JID with ChannelMediaNotSupportedError (→ 501)', async () => {
       const sendMessage = jest.fn();
       const err = await readyAdapter({ sendMessage })
@@ -552,6 +553,16 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
       expect(err).toBeInstanceOf(ChannelMediaNotSupportedError);
       // Pin the user-facing contract: this must surface as 501, not regress to a 500 (the raw
       // upstream crash) or drift if the base class ever changes.
+      expect((err as ChannelMediaNotSupportedError).getStatus()).toBe(501);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('rejects sendStickerMessage on a newsletter JID too (parity — sticker has its own path but same crash)', async () => {
+      const sendMessage = jest.fn();
+      const err = await readyAdapter({ sendMessage })
+        .sendStickerMessage(NEWSLETTER, { mimetype: 'image/webp', data: Buffer.from([1]).toString('base64') })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ChannelMediaNotSupportedError);
       expect((err as ChannelMediaNotSupportedError).getStatus()).toBe(501);
       expect(sendMessage).not.toHaveBeenCalled();
     });
