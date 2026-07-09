@@ -43,6 +43,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
+import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   GroupChat,
@@ -972,6 +973,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     extraOptions?: { sendAudioAsVoice?: boolean },
   ): Promise<MessageResult> {
     this.ensureReady();
+    this.ensureNotChannelRecipient(chatId);
 
     let messageMedia: MessageMedia;
 
@@ -1863,6 +1865,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // instead of a 500 when an engine op is attempted while the session is
       // disconnected / reconnecting / still initializing (#100).
       throw new EngineNotReadyError();
+    }
+  }
+
+  private ensureNotChannelRecipient(chatId: string): void {
+    // whatsapp-web.js crashes building a channel media message (`msg.avParams is not a function`,
+    // upstream wwebjs#201823 — WA Web removed Msg.avParams). Text→channel works; media does not.
+    // Fail fast with a typed 501 instead of surfacing the raw TypeError as a 500 (#673).
+    if (isChannelJid(chatId)) {
+      throw new ChannelMediaNotSupportedError();
     }
   }
 }

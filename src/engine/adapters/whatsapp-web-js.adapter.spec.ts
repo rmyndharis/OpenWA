@@ -18,6 +18,7 @@ import { UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
+import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { fetch as undiciFetch } from 'undici';
@@ -536,6 +537,34 @@ describe('WhatsAppWebJsAdapter channel-JID guard (#554 — wwebjs Channel lacks 
       await expect(readyAdapter({ getChatById }).getChatLabels(USER)).resolves.toEqual([
         { id: '1', name: 'VIP', hexColor: '#fff' },
       ]);
+    });
+  });
+
+  describe('media sends (sendImageMessage/sendVideo/sendAudio/sendDocument)', () => {
+    // whatsapp-web.js crashes building a channel media message: `msg.avParams is not a function`
+    // (upstream wwebjs#201823). All four media sends funnel through sendMediaMessage, so guarding
+    // it fail-fasts as a typed 501 instead of surfacing the raw TypeError as a 500 (#673).
+    it('rejects sendImageMessage on a newsletter JID with ChannelMediaNotSupportedError (→ 501)', async () => {
+      const sendMessage = jest.fn();
+      const err = await readyAdapter({ sendMessage })
+        .sendImageMessage(NEWSLETTER, { mimetype: 'image/jpeg', data: Buffer.from([1]).toString('base64') })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ChannelMediaNotSupportedError);
+      // Pin the user-facing contract: this must surface as 501, not regress to a 500 (the raw
+      // upstream crash) or drift if the base class ever changes.
+      expect((err as ChannelMediaNotSupportedError).getStatus()).toBe(501);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('still sends media on a user JID', async () => {
+      const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'M1' }, timestamp: 1 });
+      await expect(
+        readyAdapter({ sendMessage }).sendImageMessage(USER, {
+          mimetype: 'image/jpeg',
+          data: Buffer.from([1]).toString('base64'),
+        }),
+      ).resolves.toMatchObject({ id: 'M1' });
+      expect(sendMessage).toHaveBeenCalledWith(USER, expect.anything(), expect.anything());
     });
   });
 });
