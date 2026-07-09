@@ -35,7 +35,22 @@ export class PluginSearchProvider implements SearchProvider {
   async search(query: SearchQuery): Promise<SearchResults> {
     const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
     if (!reply.ok) throw new ServiceUnavailableException(reply.error);
-    return reply.results;
+    // Defense-in-depth: the plugin is expected to honor sessionIds, but re-filter host-side so a plugin
+    // bug or leak can never surface a hit outside the caller's allowed session scope — mirroring the
+    // SQL-enforced scoping the built-in provider gets for free. The guard mirrors the built-in
+    // provider's applyFilters condition (`sessionIds && sessionIds.length`) so the two providers never
+    // diverge for the same query (an empty array is a no-op on both paths). When no filtering is
+    // needed, return the results untouched. Adjust total to the filtered page count; tookMs/provider
+    // are passthrough metadata unrelated to scope.
+    if (!query.sessionIds || !query.sessionIds.length) return reply.results;
+    const allowed = new Set(query.sessionIds);
+    const scoped = reply.results.hits.filter(h => allowed.has(h.sessionId));
+    return {
+      hits: scoped,
+      total: scoped.length,
+      tookMs: reply.results.tookMs,
+      provider: reply.results.provider,
+    };
   }
 
   async health(): Promise<SearchHealth> {

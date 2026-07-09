@@ -4,8 +4,8 @@ import { DataSource } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHit } from '../search.types';
+import { SEARCH_LIMIT_MAX } from '../search.constants';
 
-const LIMIT_CAP = Number(process.env.SEARCH_LIMIT_MAX) || 100;
 const MAX_SNIPPET_WORDS = 24;
 
 /** Shape returned by the dialect-specific SELECT in buildSqlite / buildPostgres. */
@@ -88,7 +88,7 @@ export class BuiltInFtsProvider implements SearchProvider {
     await this.ensureFts();
     const start = Date.now();
     const isPostgres = this.dataSource.options.type === 'postgres';
-    const limit = Math.max(1, Math.min(query.limit ?? 50, LIMIT_CAP));
+    const limit = Math.max(1, Math.min(query.limit ?? 50, SEARCH_LIMIT_MAX));
     const offset = Math.max(0, query.offset ?? 0);
 
     const { sql, params } = isPostgres
