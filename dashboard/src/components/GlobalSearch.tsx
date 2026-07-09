@@ -31,7 +31,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     setLoading(true); setError(null);
     try {
       const res = await searchApi.search(params);
-      setHits(append ? [...hits, ...res.hits] : res.hits);
+      setHits(prev => append ? [...prev, ...res.hits] : res.hits);
       setTotal(res.total);
     } catch (e: unknown) {
       const status = (e as { status?: number }).status;
@@ -42,7 +42,7 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
     } finally {
       setLoading(false);
     }
-  }, [scopeCurrent, currentSessionId, hits, t]);
+  }, [scopeCurrent, currentSessionId, t]);
 
   // Debounce on input change.
   useEffect(() => {
