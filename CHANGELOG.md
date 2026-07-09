@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Plugin search providers (host→plugin search RPC).** A sandboxed plugin can now register as a `SearchProvider` by calling `ctx.registerSearchProvider(handler)` (e.g. `ctx.registerSearchProvider(async (query) => …)`) from its worker. The host routes `GET /api/search` queries to the plugin over a new correlated `search` / `search-result` wire protocol (mirroring the existing hook/webhook/health-check bridges), so a plugin owns all of its vendor-specific query logic (Meilisearch, Elasticsearch, Typesense, …) while the core stays backend-agnostic — adding a new backend is a plugin, with no core changes. When `SEARCH_PROVIDER=auto` (the default), an enabled plugin provider supersedes the built-in database full-text provider; `SEARCH_PROVIDER=builtin-fts` keeps the built-in active; `SEARCH_PROVIDER=none` disables search. Searches are bounded by a 10s timeout and fail fast rather than hanging, and a provider is dropped from the registry when its plugin is disabled. This is Part 1 of the plugin-search work (the query RPC + selection policy); the indexing side uses the existing `message:persisted` hook.
 
+### Fixed
+
+- **`base64` media now takes precedence over `url` when both are provided on a media send.** A `send-image`/`send-video`/etc. request carrying both fields previously sent the URL — and because `@ValidateIf` skipped `@IsUrl` validation on `url` whenever `base64` was present, a stale `url` (e.g. an example default left in the body, or a client such as the n8n community node that sends both) was fetched unvalidated and could 404, silently shadowing the supplied base64 image. `buildMediaInput` now prefers `base64`, aligning the send path with the already-base64-first persisted message metadata. Both engine adapters (whatsapp-web.js and Baileys) already guard the remote fetch behind an `isHttpUrl` check, so the change covers both. [#670]
+
 ## [0.8.13] - 2026-07-09
 
 ### Added

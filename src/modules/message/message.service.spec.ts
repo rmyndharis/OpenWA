@@ -855,6 +855,27 @@ describe('MessageService', () => {
         }),
       ).rejects.toThrow('mimetype is required when using base64 data');
     });
+
+    it('prefers base64 over url when both are provided (#670)', async () => {
+      // When both are sent, base64 is the explicit local payload and must win over `url` — otherwise
+      // a stale `url` is fetched and silently shadows the image. This aligns the send selection with
+      // the base64-first persisted metadata and the `@ValidateIf((o) => !o.base64)` intent on `url`.
+      await service.sendImage('sess-1', {
+        chatId: '628123456789@c.us',
+        url: 'https://example.com/img.jpg',
+        base64: 'iVBORw0KGgoAAAAN...',
+        mimetype: 'image/png',
+      });
+
+      expect(mockEngine.sendImageMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        expect.objectContaining({ data: 'iVBORw0KGgoAAAAN...' }),
+      );
+      expect(mockEngine.sendImageMessage).not.toHaveBeenCalledWith(
+        '628123456789@c.us',
+        expect.objectContaining({ data: 'https://example.com/img.jpg' }),
+      );
+    });
   });
 
   // ── reactToMessage / deleteMessage ────────────────────────────────

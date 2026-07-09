@@ -677,7 +677,11 @@ export class MessageService {
 
     return {
       mimetype: dto.mimetype || 'application/octet-stream',
-      data: dto.url || dto.base64!,
+      // base64 wins over url when both are present: it is the explicit local payload, and a stale
+      // `url` (e.g. a Swagger/example default left in the body) must not be fetched in its place.
+      // Aligns the send selection with the base64-first persisted metadata and the url field's
+      // `@ValidateIf((o) => !o.base64)` (which skips @IsUrl when base64 is present) — #670.
+      data: dto.base64 || dto.url!,
       filename: dto.filename,
       caption: dto.caption,
       mentions: dto.mentions,
