@@ -121,6 +121,7 @@ import { ModuleRef } from '@nestjs/core';
 import { HookManager } from '../hooks';
 import { PluginStorageService } from './plugin-storage.service';
 import { IPlugin, PluginContext, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
+import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
 
 describe('PluginLoaderService.registerBuiltInPlugin config', () => {
   function makeLoader(): PluginLoaderService {
@@ -570,5 +571,60 @@ describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () =>
     expect(dispatchWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ config: { baseUrl: 'https://tenant1', accountId: 1 } }),
     );
+  });
+});
+
+describe('PluginLoaderService — search-provider wiring', () => {
+  function makeLoader(moduleRefGet: jest.Mock): PluginLoaderService {
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = {
+      getPluginEntry: jest.fn().mockReturnValue(undefined),
+      setPluginEntry: jest.fn(),
+      setPluginStatus: jest.fn(),
+      getPluginConfig: jest.fn().mockReturnValue(null),
+      getPluginSessions: jest.fn().mockReturnValue(undefined),
+      getPluginSessionConfig: jest.fn().mockReturnValue(undefined),
+      createPluginStorage: jest
+        .fn()
+        .mockReturnValue({ get: jest.fn(), set: jest.fn(), delete: jest.fn(), list: jest.fn() }),
+    } as unknown as PluginStorageService;
+    return new PluginLoaderService(configService, new HookManager(), pluginStorage, {
+      get: moduleRefGet,
+    } as unknown as ModuleRef);
+  }
+
+  it('getSearchRegistry returns the registry when ModuleRef has it', () => {
+    const registry = new SearchProviderRegistry();
+    const loader = makeLoader(jest.fn().mockReturnValue(registry));
+    expect((loader as unknown as { getSearchRegistry: () => unknown }).getSearchRegistry()).toBe(registry);
+  });
+
+  it('getSearchRegistry returns undefined when ModuleRef has no registry (search disabled)', () => {
+    const loader = makeLoader(
+      jest.fn().mockImplementation(() => {
+        throw new Error('not found');
+      }),
+    );
+    expect((loader as unknown as { getSearchRegistry: () => unknown }).getSearchRegistry()).toBeUndefined();
+  });
+
+  it('disablePlugin unregisters the plugin’s search-provider entry', async () => {
+    const registry = new SearchProviderRegistry();
+    registry.register({ id: 'plugin:disable-test', label: 'p', search: jest.fn(), health: jest.fn() });
+    const loader = makeLoader(jest.fn().mockReturnValue(registry));
+    const manifest: PluginManifest = {
+      id: 'disable-test',
+      name: 'Disable Test',
+      version: '1.0.0',
+      type: PluginType.EXTENSION,
+      main: 'index.js',
+    };
+    loader.registerBuiltInPlugin(manifest, {});
+    await loader.enablePlugin('disable-test'); // builtIn → enableInProcess, status→ENABLED
+    expect(registry.list().map(p => p.id)).toContain('plugin:disable-test');
+
+    await loader.disablePlugin('disable-test');
+
+    expect(registry.list().map(p => p.id)).not.toContain('plugin:disable-test');
   });
 });
