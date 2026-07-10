@@ -21,7 +21,7 @@ class ClientTest extends TestCase
     public function testRequiresApiKey(): void
     {
         $this->expectException(\OpenWA\Exceptions\OpenWAException::class);
-        new \OpenWA\Client(['baseUrl' => 'http://x', 'apiKey' => '']);
+        new \OpenWA\Client(['baseUrl' => 'https://x', 'apiKey' => '']);
     }
 
     public function testSendsApiKeyHeader(): void
@@ -38,7 +38,7 @@ class ClientTest extends TestCase
     {
         $backend = (new MockBackend())->on(200, []);
         $client = new \OpenWA\Client([
-            'baseUrl' => 'http://x',
+            'baseUrl' => 'https://x',
             'apiKey' => 'REAL_KEY',
             'httpClient' => $backend->httpClient(),
             'defaultHeaders' => ['X-Trace' => 'keep', 'X-API-Key' => 'EVIL'],
