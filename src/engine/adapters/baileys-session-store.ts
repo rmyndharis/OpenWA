@@ -147,9 +147,11 @@ export class BaileysSessionStore {
    * Best-effort read of a message's disappearing timer (seconds). `WebMessageInfo.ephemeralDuration` is
    * populated on history-synced messages but is typically ABSENT on a live 1:1 `messages.upsert`, so fall
    * back to the per-message `contextInfo.expiration` WhatsApp stamps on every message in a disappearing
-   * chat — read after unwrapping the ephemeral / view-once / document-with-caption envelope.
+   * chat — read after unwrapping the ephemeral / view-once / document-with-caption envelope. Exposed so
+   * the history-backfill mapper can populate the same signal the live path uses, without duplicating the
+   * extraction.
    */
-  private extractEphemeralDuration(msg: WAMessage): number | undefined {
+  extractEphemeralDuration(msg: WAMessage): number | undefined {
     const fromInfo = msg.ephemeralDuration;
     if (typeof fromInfo === 'number' && fromInfo > 0) {
       return fromInfo;

@@ -547,12 +547,20 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * dispatch (it predates the live session). De-duplicated by `waMessageId` so re-syncs never duplicate.
    */
   private async persistHistoryMessages(id: string, messages: IncomingMessage[]): Promise<void> {
+    const storeEphemeralMessages = resolveFeatureFlags(this.configService).storeEphemeralMessages;
     const byId = new Map<string, IncomingMessage>();
     for (const m of messages) {
       // Need an id to de-dup; chatId/from/to are NOT NULL; status/story posts aren't chats.
-      if (m.id && !m.isStatusBroadcast && m.chatId && m.from && m.to) {
-        byId.set(m.id, m);
+      if (!m.id || m.isStatusBroadcast || !m.chatId || !m.from || !m.to) {
+        continue;
       }
+      // Mirror the live onMessage guard: skip disappearing messages when the operator opted out, so a
+      // history backfill can't bypass STORE_EPHEMERAL_MESSAGES=false. No-op when the flag is at its
+      // default (true); only a message with a positive timer is dropped, never a regular one.
+      if (!storeEphemeralMessages && (m.ephemeralDuration ?? 0) > 0) {
+        continue;
+      }
+      byId.set(m.id, m);
     }
     if (byId.size === 0) {
       return;

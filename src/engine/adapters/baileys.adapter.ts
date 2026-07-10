@@ -1360,6 +1360,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
         timestamp: this.toUnixSeconds(msg.messageTimestamp),
         pushName: msg.pushName ?? undefined,
         selfJid: this.normalizedSelfJid(),
+        // Populate the disappearing-messages timer using the same extraction the live path and the
+        // session-store cache share (`msg.ephemeralDuration` primary, `contextInfo.expiration` fallback),
+        // so the history sink can apply the STORE_EPHEMERAL_MESSAGES opt-out symmetrically with onMessage.
+        ephemeralDuration: this.sessionStore.extractEphemeralDuration(msg),
       },
       jid => this.sessionStore.toNeutralJid(jid),
     );
