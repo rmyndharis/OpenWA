@@ -11,8 +11,9 @@ import te from './locales/te.json';
 import fr from './locales/fr.json';
 import it from './locales/it.json';
 import ptBR from './locales/pt-BR.json';
+import ko from './locales/ko.json';
 
-export const supportedLanguages = ['en', 'es', 'he', 'zh-CN', 'zh-HK', 'ar', 'te', 'fr', 'it', 'pt-BR'] as const;
+export const supportedLanguages = ['en', 'es', 'he', 'zh-CN', 'zh-HK', 'ar', 'te', 'fr', 'it', 'pt-BR', 'ko'] as const;
 export type SupportedLanguage = (typeof supportedLanguages)[number];
 
 export const rtlLanguages: SupportedLanguage[] = ['he', 'ar'];
@@ -28,6 +29,7 @@ export const languageOptions: Array<{ value: SupportedLanguage; label: string; c
   { value: 'fr', label: 'Français', compactLabel: 'FR' },
   { value: 'it', label: 'Italiano', compactLabel: 'IT' },
   { value: 'pt-BR', label: 'Português (Brasil)', compactLabel: 'PT' },
+  { value: 'ko', label: '한국어', compactLabel: 'KO' },
 ];
 
 export function resolveSupportedLanguage(lang?: string): SupportedLanguage {
@@ -61,6 +63,7 @@ void i18n
       fr: { translation: fr },
       it: { translation: it },
       'pt-BR': { translation: ptBR },
+      ko: { translation: ko },
     },
     fallbackLng: 'en',
     supportedLngs: supportedLanguages as unknown as string[],
