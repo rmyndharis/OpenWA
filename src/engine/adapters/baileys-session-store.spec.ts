@@ -228,25 +228,25 @@ describe('BaileysSessionStore', () => {
   });
 
   describe('recordKeyLidMappings (#362)', () => {
-    it('learns a lid->pn mapping from an inbound message key (senderLid/senderPn)', () => {
-      store.recordKeyLidMappings({ senderLid: '111@lid', senderPn: '628999@s.whatsapp.net' });
+    it('learns a lid->pn mapping from an inbound message key (remoteJid/remoteJidAlt)', () => {
+      store.recordKeyLidMappings({ remoteJid: '111@lid', remoteJidAlt: '628999@s.whatsapp.net' });
       expect(store.resolvePhone('111@lid')).toBe('628999');
     });
 
-    it('learns a group participant lid->pn mapping (participantLid/participantPn)', () => {
-      store.recordKeyLidMappings({ participantLid: '222@lid', participantPn: '628222@s.whatsapp.net' });
+    it('learns a group participant lid->pn mapping (participant/participantAlt)', () => {
+      store.recordKeyLidMappings({ participant: '222@lid', participantAlt: '628222@s.whatsapp.net' });
       expect(store.resolvePhone('222@lid')).toBe('628222');
     });
 
     it('canonicalizes a @lid to <phone>@c.us once the key mapping is learned', () => {
       expect(store.toNeutralJid('111@lid')).toBe('111@lid'); // unknown yet
-      store.recordKeyLidMappings({ senderLid: '111@lid', senderPn: '628111@s.whatsapp.net' });
+      store.recordKeyLidMappings({ remoteJid: '111@lid', remoteJidAlt: '628111@s.whatsapp.net' });
       expect(store.toNeutralJid('111@lid')).toBe('628111@c.us');
     });
 
     it('ignores a key with no lid/pn pair', () => {
       store.recordKeyLidMappings({});
-      store.recordKeyLidMappings({ senderLid: '333@lid' }); // lid without pn
+      store.recordKeyLidMappings({ remoteJid: '333@lid' }); // lid without an Alt counterpart
       expect(store.resolvePhone('333@lid')).toBeNull();
     });
   });
@@ -315,8 +315,7 @@ describe('BaileysSessionStore', () => {
       const lidStore = makeFakeLidStore();
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       s.addLidMappings([{ lid: '111@lid', pn: '628999@s.whatsapp.net' }]);
-      // Baileys 6.7.23 carries the phone in `jid`; the WhatsApp Business shape uses `phoneNumber`.
-      s.upsertContacts([{ id: '222@lid', lid: '222@lid', jid: '628222@s.whatsapp.net' }]);
+      s.upsertContacts([{ id: '222@lid', lid: '222@lid', phoneNumber: '628222@s.whatsapp.net' }]);
       s.upsertContacts([{ id: '333@lid', lid: '333@lid', phoneNumber: '628333@s.whatsapp.net' }]);
       expect(lidStore.remember).toHaveBeenCalledWith('111', '628999', 'sess-1');
       expect(lidStore.remember).toHaveBeenCalledWith('222', '628222', 'sess-1');
@@ -328,7 +327,7 @@ describe('BaileysSessionStore', () => {
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       s.upsertContacts([{ id: 'c1', lid: '444@lid' }]); // lid first, no phone yet
       expect(lidStore.remember).not.toHaveBeenCalled();
-      s.upsertContacts([{ id: 'c1', jid: '628444@s.whatsapp.net' }]); // phone arrives later
+      s.upsertContacts([{ id: 'c1', phoneNumber: '628444@s.whatsapp.net' }]); // phone arrives later
       expect(lidStore.remember).toHaveBeenCalledWith('444', '628444', 'sess-1');
     });
 

@@ -57,6 +57,9 @@ jest.mock('@whiskeysockets/baileys', () => ({
   }),
   useMultiFileAuthState: jest.fn().mockResolvedValue({ state: { creds: {}, keys: {} }, saveCreds }),
   fetchLatestBaileysVersion: jest.fn().mockResolvedValue({ version: [2, 3000, 0] }),
+  // Identity passthrough — the adapter wraps state.keys with this for session-store caching; tests
+  // don't exercise the caching behavior itself, just need the real store object to flow through.
+  makeCacheableSignalKeyStore: jest.fn((store: unknown) => store),
   getContentType: jest.fn(() => 'conversation'),
   // The adapter now downloads via 'stream' mode, so resolve to an async-iterable of chunks (factory is
   // hoisted above imports, so this stays inline; tests override with the `streamOf` helper below).
@@ -866,8 +869,8 @@ describe('BaileysAdapter inbound fan-out', () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();
     await adapter.initialize({ onMessage });
-    // No history-sync mapping this time; the inbound key itself carries senderLid + senderPn,
-    // which is the only place a fresh @lid sender's number is revealed in baileys@6.7.23.
+    // No history-sync mapping this time; the inbound key itself carries remoteJid + remoteJidAlt,
+    // which is the only place a fresh @lid sender's number is revealed on the key in baileys v7.
     fakeSock.fire('messages.upsert', {
       type: 'notify',
       messages: [
@@ -876,8 +879,7 @@ describe('BaileysAdapter inbound fan-out', () => {
             remoteJid: '111@lid',
             fromMe: false,
             id: 'IN_LID_KEY',
-            senderLid: '111@lid',
-            senderPn: '628111@s.whatsapp.net',
+            remoteJidAlt: '628111@s.whatsapp.net',
           },
           message: { conversation: 'hi from lid' },
           messageTimestamp: 1700000005,
@@ -887,7 +889,7 @@ describe('BaileysAdapter inbound fan-out', () => {
     await new Promise(r => setImmediate(r));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     const msg = onMessage.mock.calls[0][0] as { from: string; isLidSender?: boolean };
-    expect(msg.from).toBe('628111@c.us'); // resolved from the key's senderPn, neutral dialect
+    expect(msg.from).toBe('628111@c.us'); // resolved from the key's remoteJidAlt, neutral dialect
     expect(msg.isLidSender).toBe(true);
   });
 
@@ -933,17 +935,69 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it('ignores append (history) upserts', async () => {
+  it('ignores an append upsert with no/old timestamp (real history backfill)', async () => {
     const onMessage = jest.fn();
     const adapter = newAdapter();
     await adapter.initialize({ onMessage });
+    fakeSock.fire('connection.update', { connection: 'open' }); // sets connectedAt
     fakeSock.fire('messages.upsert', {
       type: 'append',
       messages: [
-        { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'OLD' }, message: { conversation: 'old' } },
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'OLD' },
+          message: { conversation: 'old' },
+          messageTimestamp: Math.floor(Date.now() / 1000) - 3600, // an hour before connectedAt
+        },
       ],
     });
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it('still processes an append upsert timestamped after this connection opened (reconnect edge case, #703)', async () => {
+    // Baileys can tag a genuinely new message 'append' when it arrives in the same window as a
+    // reconnect's state-sync handshake; only the message's own timestamp vs. connectedAt should
+    // decide history vs. live, not the batch's type tag.
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('connection.update', { connection: 'open' }); // sets connectedAt
+    fakeSock.fire('messages.upsert', {
+      type: 'append',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'FRESH' },
+          message: { conversation: 'hi right after reconnect' },
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).toHaveBeenCalled();
+  });
+
+  it('does not double-fire onMessageCreate for a recent append echo of our own send', async () => {
+    // Baileys echoes our own just-sent messages back through messages.upsert tagged 'append' too.
+    // sendContent() already emits onMessageCreate for those via emitOwnSendEcho() (not exercised by
+    // this fakeSock harness) — the recency override must stay scoped to fromMe !== true so this
+    // path doesn't ALSO fire onMessageCreate a second time for the same send.
+    const onMessage = jest.fn();
+    const onMessageCreate = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage, onMessageCreate });
+    fakeSock.fire('connection.update', { connection: 'open' }); // sets connectedAt
+    fakeSock.fire('messages.upsert', {
+      type: 'append',
+      messages: [
+        {
+          key: { remoteJid: '628111@s.whatsapp.net', fromMe: true, id: 'OWN_ECHO' },
+          message: { conversation: 'sent by us' },
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        },
+      ],
+    });
+    await new Promise(r => setImmediate(r));
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageCreate).not.toHaveBeenCalled();
   });
 
   it('emits onMessageAck from messages.update with a neutral status', async () => {

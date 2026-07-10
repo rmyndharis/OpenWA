@@ -133,6 +133,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private callbacks: EngineEventCallbacks = {};
   private intentionalClose = false;
   private connecting = false;
+  /** Unix-seconds timestamp of the last 'open' connection.update, used to distinguish a genuinely
+   *  live message misfiled as 'append' (see handleMessagesUpsert) from real history backfill. */
+  private connectedAt = 0;
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
@@ -187,6 +190,21 @@ export class BaileysAdapter implements IWhatsAppEngine {
     const b = await this.loadLib();
     const { state, saveCreds } = await b.useMultiFileAuthState(this.authPath);
     const { version } = await b.fetchLatestBaileysVersion();
+    // BaileysLogger matches ILogger exactly; cast needed because the module resolves the type
+    // through a deep import path that TypeScript does not auto-unify here. Shared by the key
+    // store wrapper below and the socket itself, rather than constructing two instances.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const baileysLogger = createBaileysLogger() as unknown as ILogger;
+
+    // Wrap the raw file-backed signal key store with Baileys' own official caching layer.
+    // Without it, every session read/write hits disk directly with no protection against a
+    // write-then-immediate-read race — observed here as a freshly-established Signal session
+    // appearing "missing" moments later, forcing Baileys to discard it and start a brand new
+    // PreKey handshake on the very next send (visible as repeated "Closing session" log spam and
+    // the recipient stuck on "waiting for this message" until a slow WhatsApp-side retry rescues
+    // it). makeCacheableSignalKeyStore keeps the just-written state visible in memory immediately,
+    // regardless of disk I/O timing.
+    state.keys = b.makeCacheableSignalKeyStore(state.keys, baileysLogger);
 
     // C2: resurrect-after-stop guard — if disconnect/logout/destroy ran during the awaits above,
     // bail now so we don't create a live socket for a session that was intentionally stopped.
@@ -212,7 +230,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         previous.ev.removeAllListeners('chats.upsert');
         previous.ev.removeAllListeners('chats.update');
         previous.ev.removeAllListeners('messaging-history.set');
-        previous.ev.removeAllListeners('chats.phoneNumberShare');
+        previous.ev.removeAllListeners('lid-mapping.update');
         previous.end(undefined);
       } catch {
         // end() may already have run from Baileys' own close handler — a safe no-op.
@@ -232,10 +250,19 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // RECENT window + the full contact/app-state snapshot, not the entire message history.
       shouldSyncHistoryMessage: () => true,
       syncFullHistory: process.env.BAILEYS_SYNC_FULL_HISTORY === 'true',
-      // BaileysLogger matches ILogger exactly; cast needed because the module resolves
-      // the type through a deep import path that TypeScript does not auto-unify here.
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-      logger: createBaileysLogger() as unknown as ILogger,
+      // Baileys defaults this to `async () => undefined` (Defaults/index.js). Without a real
+      // implementation, WhatsApp's message-retry protocol — triggered whenever a recipient's client
+      // fails to decrypt on the first attempt — has nothing to resend, so the recipient is stuck on
+      // "waiting for this message" indefinitely instead of the retry resolving it within seconds.
+      // Backed by the same messageStore used for reply/forward/react/delete-by-id.
+      getMessage: async key => {
+        if (!key.id) {
+          return undefined;
+        }
+        const stored = await this.config.messageStore?.getMessage(this.config.sessionId, key.id);
+        return stored?.message ?? undefined;
+      },
+      logger: baileysLogger,
     });
     this.sock = sock;
 
@@ -266,16 +293,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
     sock.ev.on('messaging-history.set', history => {
       this.sessionStore.upsertContacts(history.contacts);
       this.sessionStore.upsertChats(history.chats);
-      // lidPnMappings is not in the installed @whiskeysockets/baileys@6.7.23 type definition but
-      // is present at runtime in later protocol versions; cast to access it safely.
-      const h = history as unknown as { lidPnMappings?: { lid: string; pn: string }[]; syncType?: unknown };
-      const lidPnMappings = h.lidPnMappings;
-      this.sessionStore.addLidMappings(lidPnMappings ?? []);
+      this.sessionStore.addLidMappings(history.lidPnMappings ?? []);
       void this.captureHistoryMessages(history.messages ?? []);
       this.logger.debug('History sync received', {
         action: 'baileys_history_set',
         sessionId: this.config.sessionId,
-        syncType: h.syncType,
+        syncType: history.syncType,
         isLatest: history.isLatest,
         progress: history.progress,
         chats: history.chats?.length ?? 0,
@@ -283,11 +306,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
         contacts: history.contacts?.length ?? 0,
         namedContacts: history.contacts?.filter(c => c.name || c.notify).length ?? 0,
         lidContacts: history.contacts?.filter(c => c.lid).length ?? 0,
-        lidPnMappings: lidPnMappings?.length ?? 0,
+        lidPnMappings: history.lidPnMappings?.length ?? 0,
       });
     });
-    // WhatsApp pushes this when a lid contact shares its phone number - a direct lid->phone pair.
-    sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => this.sessionStore.addLidMappings([{ lid, pn: jid }]));
+    // WhatsApp pushes this when a lid<->phone mapping is learned (renamed from the pre-v7
+    // 'chats.phoneNumberShare' event, whose { lid, jid } payload this shape directly replaces).
+    sock.ev.on('lid-mapping.update', ({ lid, pn }) => this.sessionStore.addLidMappings([{ lid, pn }]));
   }
 
   private handleConnectionUpdate(update: {
@@ -313,6 +337,10 @@ export class BaileysAdapter implements IWhatsAppEngine {
       this.pushName = this.sock?.user?.name ?? null;
       // I4: reset the reconnect counter on a successful connection.
       this.reconnectAttempts = 0;
+      // Small backward buffer for clock skew between this host and WhatsApp's server (messageTimestamp
+      // is WA's clock, Date.now() is ours) — without it, a message sent right at reconnect time could
+      // land a couple seconds "before" connectedAt and be misjudged as history.
+      this.connectedAt = Math.floor(Date.now() / 1000) - 10;
       this.setStatus(EngineStatus.READY);
       this.callbacks.onReady?.(this.phoneNumber ?? '', this.pushName ?? '');
       // Backfill names the initial sync skipped (see hydrateNames).
@@ -913,13 +941,28 @@ export class BaileysAdapter implements IWhatsAppEngine {
   // ----- Helpers -----
 
   private handleMessagesUpsert(event: { messages: WAMessage[]; type: string }): void {
-    // Only live messages ('notify'); 'append' is history sync, which this storeless slice skips.
-    if (event.type !== 'notify') {
-      return;
-    }
     for (const msg of event.messages) {
       if (!msg.message || !msg.key?.remoteJid) {
         continue; // protocol/empty messages carry no neutral content
+      }
+      if (event.type !== 'notify') {
+        // Baileys echoes back OUR OWN just-sent messages through this same 'append' path too, and
+        // sendContent() already emits onMessageCreate for those via emitOwnSendEcho() — always
+        // exclude fromMe here (unconditionally, regardless of timestamp) so that echo doesn't fire
+        // onMessageCreate a second time.
+        if (msg.key.fromMe === true) {
+          continue;
+        }
+        // For everyone else: gate on the message's own timestamp vs. this connection's open time,
+        // not the upsert batch's `type` tag. `type: 'append'` usually means real history-sync
+        // backfill, but Baileys can also tag a genuinely new CUSTOMER message 'append' when it
+        // arrives in the same window as a reconnect's state-sync handshake — a strict
+        // `type !== 'notify'` filter silently drops that message (observed as "the first message
+        // after a reconnect gets ignored"). A message sent AFTER this connection opened is live
+        // regardless of which tag the batch carries; true backfill always predates it.
+        if (this.toUnixSeconds(msg.messageTimestamp) < this.connectedAt) {
+          continue;
+        }
       }
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store

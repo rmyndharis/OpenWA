@@ -71,7 +71,7 @@
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.3",
     "@nestjs/websockets": "^11.1.27",
-    "@whiskeysockets/baileys": "6.7.23",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "adm-zip": "^0.5.18",
     "archiver": "^8.0.0",
     "bullmq": "^5.79.2",
