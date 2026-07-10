@@ -2,6 +2,7 @@ import { type DynamicModule, Module, type MiddlewareConsumer, type NestModule } 
 import { HttpAdapterHost } from '@nestjs/core';
 import { ToolRegistryService } from '../../core/agent-tools/tool-registry.service';
 import { AuthService } from '../auth/auth.service';
+import { AuditService } from '../audit/audit.service';
 import { KeyRateLimiter, readRateLimitConfig, readIpRateLimitConfig } from './mcp-rate-limit';
 import { mountMcpServer } from './mcp.server';
 
@@ -20,6 +21,8 @@ export class McpModule implements NestModule {
     private readonly registry: ToolRegistryService,
     private readonly authService: AuthService,
     private readonly httpAdapterHost: HttpAdapterHost,
+    // AuditModule is @Global(), so AuditService is injectable here without an explicit import.
+    private readonly auditService: AuditService,
   ) {}
 
   static forRoot(options: McpModuleOptions = {}): DynamicModule {
@@ -43,6 +46,14 @@ export class McpModule implements NestModule {
     const rateLimiter = new KeyRateLimiter(max, windowMs);
     const ipCfg = readIpRateLimitConfig();
     const ipRateLimiter = new KeyRateLimiter(ipCfg.max, ipCfg.windowMs);
-    mountMcpServer(httpAdapter, this.registry, this.authService, rateLimiter, ipRateLimiter, { basePath, serverInfo });
+    mountMcpServer(
+      httpAdapter,
+      this.registry,
+      this.authService,
+      rateLimiter,
+      ipRateLimiter,
+      { basePath, serverInfo },
+      this.auditService,
+    );
   }
 }

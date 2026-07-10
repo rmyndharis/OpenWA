@@ -1,4 +1,4 @@
-import { HttpException, Logger } from '@nestjs/common';
+import { ForbiddenException, HttpException, Logger, UnauthorizedException } from '@nestjs/common';
 import type { HttpAdapterHost } from '@nestjs/core';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -8,6 +8,8 @@ import express, { type Request, type RequestHandler, type Response } from 'expre
 import { invokeTool } from '../../core/agent-tools/tool-invoker';
 import type { ToolRegistryService } from '../../core/agent-tools/tool-registry.service';
 import type { AuthService } from '../auth/auth.service';
+import type { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import { handleToolError, jsonToolResult, smartToolResult } from './tool-result';
 import type { KeyRateLimiter } from './mcp-rate-limit';
 import { resolveClientIp } from '../../common/utils/ip';
@@ -16,6 +18,13 @@ const logger = new Logger('McpServer');
 
 type HttpAdapter = NonNullable<HttpAdapterHost['httpAdapter']>;
 type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
+/** Request-scoped context forwarded to the audit trail on an MCP auth failure (mirrors the REST guard). */
+export interface McpRequestContext {
+  ipAddress?: string;
+  method?: string;
+  path?: string;
+}
 
 /** Extract the raw API key from MCP request headers. Accepts X-Api-Key or Bearer token. */
 function extractApiKey(extra: ToolExtra): string | undefined {
@@ -33,6 +42,46 @@ function extractApiKey(extra: ToolExtra): string | undefined {
 }
 
 /**
+ * Mirror the REST ApiKeyGuard's auth-failure audit trail for MCP. The MCP mount is raw Express (outside
+ * the Nest guard pipeline), so without this a credential-probing flood against /mcp leaves no forensic
+ * record. Records a WARN `API_KEY_AUTH_FAILED` for rejected/denied authentication attempts (401/403 only);
+ * non-auth errors (e.g. a 400 from bad tool input) are NOT audited — parity with the REST guard, which
+ * only records Unauthorized/Forbidden. Fire-and-forget; best-effort (AuditService swallows insert errors).
+ */
+export function auditMcpAuthFailure(
+  auditService: Pick<AuditService, 'logWarn'> | undefined,
+  error: unknown,
+  reqContext: McpRequestContext,
+): void {
+  if (!auditService) return;
+  if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
+    void auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+      ipAddress: reqContext.ipAddress,
+      method: reqContext.method,
+      path: reqContext.path,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Read TRUSTED_PROXIES once as a list (shared by the pre-auth throttle and the audit IP resolver). */
+function readTrustedProxies(): string[] {
+  return (process.env.TRUSTED_PROXIES ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+/** Resolve the trusted-proxy-aware client IP + HTTP method/path for an audit record. */
+function resolveReqContext(req: Request): McpRequestContext {
+  return {
+    ipAddress: resolveClientIp(req, readTrustedProxies()),
+    method: req.method,
+    path: req.path,
+  };
+}
+
+/**
  * Build the MCP server ONCE and register all tools from the registry.
  * The SDK's `registerTool` accepts `AnySchema` (z4.$ZodType) directly, so we
  * pass `tool.inputSchema` verbatim — no `.shape` extraction needed.
@@ -43,6 +92,8 @@ function buildServer(
   rateLimiter: KeyRateLimiter,
   readOnly: boolean,
   serverInfo: { name: string; version: string },
+  auditService: AuditService | undefined,
+  reqContext: McpRequestContext,
 ): McpServer {
   const server = new McpServer(
     { name: serverInfo.name, version: serverInfo.version },
@@ -66,7 +117,18 @@ function buildServer(
       async (input: Record<string, unknown>, extra: ToolExtra) => {
         const rawKey = extractApiKey(extra);
         try {
-          const result = await invokeTool(tool, input, rawKey, authService, id => rateLimiter.check(id));
+          const result = await invokeTool(
+            tool,
+            input,
+            rawKey,
+            authService,
+            id => rateLimiter.check(id),
+            // onAuthFailure: mirror the REST ApiKeyGuard — record rejected/denied auth attempts (401/403
+            // only) at the auth boundary so the audit trail covers MCP credential probing. Fires inside
+            // invokeTool's auth phase (before the tool handler), so handler-thrown 403s are NOT mislabeled
+            // as auth failures. Best-effort; success and non-auth errors skip this.
+            error => auditMcpAuthFailure(auditService, error, reqContext),
+          );
           return tool.resultDisposition === 'json'
             ? jsonToolResult(result as object)
             : smartToolResult(result as object);
@@ -105,11 +167,7 @@ export interface MountMcpServerOptions {
  */
 export function createIpThrottle(ipRateLimiter: KeyRateLimiter): RequestHandler {
   return (req, res, next) => {
-    const trustedProxies = (process.env.TRUSTED_PROXIES ?? '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    const ip = resolveClientIp(req, trustedProxies);
+    const ip = resolveClientIp(req, readTrustedProxies());
     try {
       ipRateLimiter.check(ip);
       next();
@@ -141,6 +199,7 @@ export function mountMcpServer(
   rateLimiter: KeyRateLimiter,
   ipRateLimiter: KeyRateLimiter,
   options: MountMcpServerOptions = {},
+  auditService?: AuditService,
 ): void {
   const basePath = (options.basePath ?? '/mcp').replace(/\/$/, '') || '/mcp';
   const serverInfo = options.serverInfo ?? { name: 'openwa', version: '0.0.0' };
@@ -153,7 +212,15 @@ export function mountMcpServer(
   logger.log(`MCP server mounted at POST ${basePath} (${tools.length} tools)`);
 
   const handler: RequestHandler = async (req: Request, res: Response) => {
-    const server = buildServer(registry, authService, rateLimiter, readOnly, serverInfo);
+    const server = buildServer(
+      registry,
+      authService,
+      rateLimiter,
+      readOnly,
+      serverInfo,
+      auditService,
+      resolveReqContext(req),
+    );
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
       res.on('close', () => {
