@@ -6,6 +6,10 @@ export interface VerifyInput {
   headers: Record<string, string>; // lower-cased keys
   secret: string;
   now: number; // ms epoch (injected so replay tests are deterministic — never Date.now() in here)
+  // The integration instance id (from the request path). Substituted into `{id}` in the contentTemplate
+  // — a provider that mixes the webhook/instance id into its signature base string (e.g. `{id}.{timestamp}.{rawBody}`)
+  // would otherwise be silently 401'd. Always available at the runtime call site.
+  instanceId: string;
 }
 
 function header(headers: Record<string, string>, name?: string): string | undefined {
@@ -46,12 +50,13 @@ export function verifyIngressSignature(
   // replacement would (a) only replace the first occurrence and (b) interpret $&, $`, $', $$, $n in the
   // replacement (the attacker-controlled rawBody), so a body containing a `$`-sequence would diverge the
   // signed bytes from the provider's and reject a legitimately-signed delivery. The function form inserts
-  // each value literally and, because rawBody is substituted (not re-scanned), a `{timestamp}` embedded
-  // in the body is never re-interpreted.
+  // each value literally and, because rawBody is substituted (not re-scanned), a `{timestamp}` or `{id}`
+  // embedded in the body is never re-interpreted. `{id}` resolves to the integration instance id — the only
+  // identifier the host has at verify time for a provider that mixes the webhook/instance id into its sig.
   const template = spec.contentTemplate ?? '{rawBody}';
   const timestamp = header(input.headers, spec.timestampHeader) ?? '';
-  const signedContent = template.replace(/\{rawBody\}|\{timestamp\}/g, token =>
-    token === '{rawBody}' ? input.rawBody : timestamp,
+  const signedContent = template.replace(/\{rawBody\}|\{timestamp\}|\{id\}/g, token =>
+    token === '{rawBody}' ? input.rawBody : token === '{timestamp}' ? timestamp : input.instanceId,
   );
   const digest = createHmac('sha256', input.secret)
     .update(signedContent)

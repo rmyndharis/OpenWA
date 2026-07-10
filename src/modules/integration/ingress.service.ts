@@ -80,6 +80,7 @@ export class IngressService {
       headers: req.headers,
       secret: instance.secret,
       now: this.deps.now(),
+      instanceId: req.instanceId,
     });
     if (!verdict.ok) return { status: 401, body: verdict.reason ?? 'signature verification failed' };
 

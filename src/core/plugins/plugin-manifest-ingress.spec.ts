@@ -1,4 +1,4 @@
-import { validateIngressManifest, SUPPORTED_SDK_MAJOR } from './plugin.interfaces';
+import { validateIngressManifest, SUPPORTED_SDK_MAJOR, warnUnauthenticatedIngressRoutes } from './plugin.interfaces';
 
 const baseManifest = () => ({
   id: 'chatwoot',
@@ -53,5 +53,31 @@ describe('validateIngressManifest', () => {
     const m = baseManifest();
     m.ingress.push({ ...m.ingress[0] });
     expect(() => validateIngressManifest(m as never)).toThrow(/duplicate/i);
+  });
+});
+
+describe('warnUnauthenticatedIngressRoutes', () => {
+  it('warns once per scheme:none route, naming the plugin and route', () => {
+    const logger = { warn: jest.fn() };
+    const m = baseManifest();
+    (m.ingress[0].signature as { scheme: string }).scheme = 'none';
+    warnUnauthenticatedIngressRoutes(m as never, logger);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/UNAUTHENTICATED/i),
+      expect.objectContaining({ pluginId: 'chatwoot', route: 'chatwoot', action: 'ingress_unauthenticated_route' }),
+    );
+  });
+
+  it('does not warn for an authenticated scheme', () => {
+    const logger = { warn: jest.fn() };
+    warnUnauthenticatedIngressRoutes(baseManifest() as never, logger);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op for a manifest with no ingress routes', () => {
+    const logger = { warn: jest.fn() };
+    warnUnauthenticatedIngressRoutes({ id: 'x', name: 'X', version: '1.0.0', main: 'i.js' } as never, logger);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

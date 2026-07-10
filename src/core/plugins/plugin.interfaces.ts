@@ -259,6 +259,29 @@ export function validateIngressManifest(manifest: PluginManifest): void {
 }
 
 /**
+ * Warns about each ingress route declared with `scheme: 'none'` — a fully-unauthenticated public endpoint
+ * that anyone who can reach the host can use to trigger WhatsApp sends. Purely additive (a warning): a
+ * deployment that legitimately relies on scheme:'none' (a provider that offers no HMAC) still boots; the
+ * loud log surfaces the exposure so an operator can front the URL with a network/reverse-proxy guard.
+ * Called from PluginLoaderService.loadPlugin at boot and on dynamic install.
+ */
+export function warnUnauthenticatedIngressRoutes(
+  manifest: PluginManifest,
+  logger: { warn: (message: string, context?: Record<string, unknown>) => void },
+): void {
+  for (const r of manifest.ingress ?? []) {
+    if (r.signature.scheme === 'none') {
+      logger.warn(
+        `Ingress route '${r.route}' of plugin '${manifest.id}' uses signature scheme 'none' — it is an ` +
+          `UNAUTHENTICATED public endpoint that can trigger WhatsApp sends. Only keep this if the provider ` +
+          `offers no HMAC and the URL is guarded by a network/reverse-proxy ACL.`,
+        { pluginId: manifest.id, route: r.route, action: 'ingress_unauthenticated_route' },
+      );
+    }
+  }
+}
+
+/**
  * Thrown by a plugin capability when a call is rejected (missing permission, out-of-scope session,
  * unstarted session, etc.). Gives plugins a predictable failure instead of a raw TypeError.
  */

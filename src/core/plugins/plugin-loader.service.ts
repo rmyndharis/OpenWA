@@ -25,6 +25,7 @@ import {
   PluginType,
   PluginLogger,
   validateIngressManifest,
+  warnUnauthenticatedIngressRoutes,
 } from './plugin.interfaces';
 import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
@@ -248,6 +249,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // duplicate/empty routes, non-positive toleranceSec) at load time instead of letting it silently
     // load and become provisionable. No-op for plugins that declare no ingress.
     validateIngressManifest(manifest);
+
+    // Surface a loud warning for any ingress route that skips signature verification — a scheme:'none'
+    // route is a fully-unauthenticated public endpoint that can trigger WhatsApp sends. Additive (a
+    // warning, not a refusal) so a legit scheme:'none' deployment still boots.
+    warnUnauthenticatedIngressRoutes(manifest, this.logger);
 
     // Check if plugin already loaded
     if (this.plugins.has(manifest.id)) {
