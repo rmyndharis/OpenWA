@@ -213,6 +213,22 @@ describe('AuthService', () => {
 
       await expect(service.delete('nonexistent')).rejects.toThrow(NotFoundException);
     });
+
+    it('evicts active WebSocket sockets authenticated with the deleted key', async () => {
+      const evictApiKey = jest.fn();
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockReturnValue({ evictApiKey });
+
+      const key = createMockApiKey();
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.remove as jest.Mock).mockResolvedValue(key);
+
+      await service.delete('uuid-1');
+
+      expect(repository.remove).toHaveBeenCalledWith(key);
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+    });
   });
 
   describe('revoke', () => {
@@ -224,6 +240,38 @@ describe('AuthService', () => {
       const result = await service.revoke('uuid-1');
 
       expect(result.isActive).toBe(false);
+    });
+
+    it('evicts active WebSocket sockets authenticated with the revoked key', async () => {
+      const evictApiKey = jest.fn();
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockReturnValue({ evictApiKey });
+
+      const key = createMockApiKey({ isActive: true });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.revoke('uuid-1');
+
+      expect(key.isActive).toBe(false);
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('does not roll back the revoke if WebSocket eviction throws (best-effort)', async () => {
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockImplementation(() => {
+          throw new Error('gateway unavailable');
+        });
+
+      const key = createMockApiKey({ isActive: true });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      const result = await service.revoke('uuid-1');
+
+      expect(result.isActive).toBe(false); // revoke still succeeded
     });
   });
 

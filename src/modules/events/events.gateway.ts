@@ -14,6 +14,8 @@ import { AuthService } from '../auth/auth.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveCorsPolicy } from '../../config/bootstrap-security';
+import { resolveClientIp as resolveRequestClientIp, type RequestLike } from '../../common/utils/ip';
+import type { ApiKey } from '../auth/entities/api-key.entity';
 
 /**
  * WebSocket CORS origin: reuse the HTTP CORS policy instead of a hardcoded '*'.
@@ -23,6 +25,17 @@ import { resolveCorsPolicy } from '../../config/bootstrap-security';
 function resolveWsCorsOrigin(): boolean | string[] {
   const policy = resolveCorsPolicy(process.env.CORS_ORIGINS, process.env.NODE_ENV);
   return policy.allowAnyOrigin ? true : policy.origins;
+}
+
+/**
+ * Read TRUSTED_PROXIES once as a list — mirrors mcp.server.ts so the WS surface resolves the
+ * client IP with the same trusted-proxy-aware logic as the REST guard and the MCP mount.
+ */
+function readTrustedProxies(): string[] {
+  return (process.env.TRUSTED_PROXIES ?? '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 }
 import type {
   WSClientMessage,
@@ -66,6 +79,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   private logger = new Logger('EventsGateway');
 
+  /**
+   * Active sockets keyed by their validating API-key id, so a key revoked/disabled
+   * mid-connection can have its live subscriptions torn down immediately (otherwise
+   * an already-subscribed socket keeps receiving events until it happens to disconnect).
+   */
+  private readonly socketsByKeyId = new Map<string, Set<Socket>>();
+
   constructor(
     private readonly authService: AuthService,
     private readonly auditService: AuditService,
@@ -75,16 +95,72 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     this.logger.log('WebSocket Gateway initialized');
   }
 
+  /**
+   * Resolve the trusted-proxy-aware client IP for a socket, reusing the same shared
+   * `resolveClientIp` helper as the REST guard and MCP mount. X-Forwarded-For is only
+   * honored when the immediate peer is a configured trusted proxy, preventing IP-spoofing
+   * of the allowedIps allowlist over the WS surface.
+   */
+  private resolveClientIp(client: Socket): string {
+    const handshake = client.handshake;
+    const req: RequestLike = {
+      ip: handshake.address,
+      socket: { remoteAddress: handshake.address },
+      headers: handshake.headers ?? {},
+    };
+    return resolveRequestClientIp(req, readTrustedProxies());
+  }
+
+  private trackSocket(keyId: string, client: Socket): void {
+    let sockets = this.socketsByKeyId.get(keyId);
+    if (!sockets) {
+      sockets = new Set();
+      this.socketsByKeyId.set(keyId, sockets);
+    }
+    sockets.add(client);
+  }
+
+  private untrackSocket(client: Socket): void {
+    const keyId = (client.data as { apiKey?: Pick<ApiKey, 'id'> } | undefined)?.apiKey?.id;
+    if (!keyId) return;
+    const sockets = this.socketsByKeyId.get(keyId);
+    if (!sockets) return;
+    sockets.delete(client);
+    if (sockets.size === 0) {
+      this.socketsByKeyId.delete(keyId);
+    }
+  }
+
+  /**
+   * Tear down every active socket authenticated with `keyId`. Called by AuthService when a
+   * key is revoked or deleted so the key's already-subscribed sockets stop receiving events
+   * immediately instead of lingering until they disconnect on their own. Each socket gets a
+   * clean close (an `UNAUTHORIZED` reason) rather than a silent drop.
+   */
+  evictApiKey(keyId: string): void {
+    const sockets = this.socketsByKeyId.get(keyId);
+    if (!sockets || sockets.size === 0) return;
+    this.logger.log(`Evicting ${sockets.size} WebSocket connection(s) for revoked key ${keyId}`);
+    this.socketsByKeyId.delete(keyId);
+    for (const client of sockets) {
+      client.emit('message', this.createError('UNAUTHORIZED', 'API key has been revoked'));
+      client.disconnect(true);
+    }
+  }
+
   async handleConnection(client: Socket) {
     // Accept the key only via Socket.IO's `auth` field or the header — never the query string, which
     // leaks the credential into proxy/access logs. (The deprecated `?apiKey=` fallback was removed.)
     const handshakeAuth = client.handshake.auth as { apiKey?: string } | undefined;
     const apiKey = handshakeAuth?.apiKey || (client.handshake.headers['x-api-key'] as string);
+    // Resolve the client IP once here so both the validation and the audit trail use the same
+    // trusted-proxy-aware value (parity with the REST guard / MCP mount).
+    const clientIp = this.resolveClientIp(client);
 
     if (!apiKey) {
       this.logger.warn(`Client ${client.id} rejected: No API key provided`);
       void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-        ipAddress: client.handshake.address,
+        ipAddress: clientIp,
         metadata: { surface: 'websocket' },
         errorMessage: 'missing API key',
       });
@@ -95,13 +171,16 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
     try {
       // validateApiKey THROWS on any failure (it never resolves to a falsy value), so the rejection
-      // path is the catch below — a separate `if (!validKey)` branch here was dead code.
-      const validKey = await this.authService.validateApiKey(apiKey);
+      // path is the catch below — a separate `if (!validKey)` branch here was dead code. The clientIp
+      // is passed so an IP-restricted key (allowedIps set) is ENFORCED rather than blanket-rejected
+      // for "Client IP could not be determined".
+      const validKey = await this.authService.validateApiKey(apiKey, clientIp);
 
       // Store the validated key AND the raw key — the raw key lets handleSubscribe
       // RE-validate on each subscription so a key revoked mid-connection is caught.
       (client.data as { apiKey: unknown; rawApiKey: string }).apiKey = validKey;
       (client.data as { rawApiKey: string }).rawApiKey = apiKey;
+      this.trackSocket(validKey.id, client);
       this.logger.log(`Client connected: ${client.id} (key: ${validKey.name})`);
     } catch (error) {
       this.logger.warn(`Client ${client.id} rejected: Auth error`, {
@@ -110,7 +189,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // Audit the rejected credential like the REST guard does, so probing over the WS surface leaves
       // a forensic trail too. Fire-and-forget: audit logging must never affect the rejection path.
       void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
-        ipAddress: client.handshake.address,
+        ipAddress: clientIp,
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),
       });
@@ -120,6 +199,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   handleDisconnect(client: Socket) {
+    this.untrackSocket(client);
     this.logger.log(`Client disconnected: ${client.id}`);
   }
 
@@ -154,10 +234,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
     // Re-validate the API key on every subscribe: a long-lived socket whose key was
     // revoked/expired after connect must not be able to keep opening new subscriptions.
+    // The clientIp is re-resolved (trusted-proxy-aware) so an IP-restricted key is enforced
+    // here too, not just at connect.
     const rawApiKey = (client.data as { rawApiKey?: string }).rawApiKey;
+    const clientIp = this.resolveClientIp(client);
     let subscriberKey: { allowedSessions?: string[] | null } | null;
     try {
-      subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey) : null;
+      subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey, clientIp) : null;
     } catch {
       subscriberKey = null;
     }

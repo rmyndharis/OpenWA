@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
@@ -10,6 +11,7 @@ import { hashApiKey } from './api-key-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { EventsGateway } from '../events/events.gateway';
 
 const API_KEY_FILE = join(process.cwd(), 'data', '.api-key');
 
@@ -55,6 +57,7 @@ export class AuthService implements OnModuleInit {
   constructor(
     @InjectRepository(ApiKey, 'main')
     private readonly apiKeyRepository: Repository<ApiKey>,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -184,6 +187,7 @@ export class AuthService implements OnModuleInit {
     // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
     this.pendingUsage.delete(id);
     await this.apiKeyRepository.remove(apiKey);
+    this.evictActiveSockets(id);
     this.logger.log(`API key deleted: ${apiKey.name}`, {
       keyId: id,
       action: 'api_key_deleted',
@@ -196,7 +200,32 @@ export class AuthService implements OnModuleInit {
     // drop it here.
     this.pendingUsage.delete(id);
     apiKey.isActive = false;
-    return this.apiKeyRepository.save(apiKey);
+    const saved = await this.apiKeyRepository.save(apiKey);
+    // Kick any WebSocket connections already authenticated with this key: without this, a revoked
+    // key keeps receiving events on already-subscribed sockets until they happen to disconnect.
+    this.evictActiveSockets(id);
+    return saved;
+  }
+
+  /**
+   * Disconnect every WebSocket socket authenticated with the given key id. Resolved lazily via
+   * ModuleRef (not constructor injection) to avoid a static DI cycle between AuthModule and
+   * EventsModule. Best-effort: if the WS gateway isn't loaded (or has no sockets for the key),
+   * this is a silent no-op.
+   */
+  private evictActiveSockets(keyId: string): void {
+    try {
+      const gateway = this.moduleRef.get(EventsGateway, { strict: false });
+      if (gateway) {
+        gateway.evictApiKey(keyId);
+      }
+    } catch (error) {
+      // Eviction is best-effort: the key's DB state is already authoritative (validateApiKey
+      // rejects it), so a failure here must never roll back the revoke/delete.
+      this.logger.warn(`Failed to evict WebSocket sockets for key ${keyId}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async validateApiKey(rawKey: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
