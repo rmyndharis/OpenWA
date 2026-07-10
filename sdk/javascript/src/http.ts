@@ -130,3 +130,24 @@ export async function request<T>(
     return text as unknown as T;
   }
 }
+
+const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * Warn (NOT throw) when a URL is `http://` and the host is not localhost. The API key is sent as
+ * an `X-API-Key` header on every request — over plaintext http to a non-local host that's cleartext
+ * on the wire. Warning (not refusing) keeps local dev and TLS-terminating-proxy topologies working.
+ */
+export function warnIfInsecureHttpUrl(url: string, label = 'baseUrl'): void {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' && !LOCALHOST_HOSTS.has(parsed.hostname.toLowerCase())) {
+      console.warn(
+        `[OpenWA SDK] ${label} uses an insecure http:// URL (host: ${parsed.hostname}). ` +
+          'The API key will be sent in cleartext. Use https:// in production.',
+      );
+    }
+  } catch {
+    // Unparseable — the request will fail downstream with a clear error.
+  }
+}

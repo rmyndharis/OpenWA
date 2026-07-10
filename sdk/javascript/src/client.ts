@@ -23,7 +23,7 @@
  * @packageDocumentation
  */
 
-import { request, encodeSegment, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
+import { request, encodeSegment, warnIfInsecureHttpUrl, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
 import { CatalogResource } from './resources/catalog.js';
 import { ChannelsResource } from './resources/channels.js';
 import { ChatsResource } from './resources/chats.js';
@@ -66,6 +66,8 @@ export class OpenWAClient {
       defaultHeaders: options.defaultHeaders ?? {},
       fetch: options.fetch ?? globalThis.fetch,
     };
+
+    warnIfInsecureHttpUrl(options.baseUrl);
   }
 
   // ── Resources ────────────────────────────────────────────────────

@@ -29,6 +29,10 @@ interface S3Config {
 const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
 /** Max number of entries an import archive may contain. Bounds an entry-count DoS. */
 const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
+/** Max number of local files a single traversal enumerates. Bounds a count DoS on a huge media dir. */
+const DEFAULT_LIST_MAX_FILES = 100_000;
+/** Max directory depth a local traversal descends. Prevents a pathological tree from running unbounded. */
+const LOCAL_TRAVERSAL_MAX_DEPTH = 20;
 
 function positiveIntFromEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
@@ -357,23 +361,38 @@ export class StorageService {
   // Local Storage Operations
   // ============================================================================
 
-  private listLocalFiles(dir = ''): string[] {
-    const fullPath = path.join(this.localPath, dir);
+  /**
+   * Enumerate local files under the storage root. Async + iterative (a work queue, not recursion)
+   * so a deep/wide media tree can't block the event loop or stack-overflow. Bounded by a max file
+   * count and a max directory depth; a tree exceeding either is truncated rather than enumerated in
+   * full (these are defense-in-depth caps — a healthy media store stays well under both).
+   */
+  private async listLocalFiles(): Promise<string[]> {
+    const maxFiles = positiveIntFromEnv('STORAGE_LIST_MAX_FILES', DEFAULT_LIST_MAX_FILES);
     const files: string[] = [];
+    // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth.
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: '', depth: 0 }];
 
-    if (!fs.existsSync(fullPath)) {
-      return files;
-    }
+    while (queue.length > 0) {
+      const { dir, depth } = queue.shift()!;
+      if (depth >= LOCAL_TRAVERSAL_MAX_DEPTH) continue;
 
-    const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+      const fullPath = path.join(this.localPath, dir);
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(fullPath, { withFileTypes: true });
+      } catch {
+        continue; // dir vanished or unreadable — skip rather than abort the whole traversal
+      }
 
-    for (const entry of entries) {
-      const relativePath = dir ? path.join(dir, entry.name) : entry.name;
-
-      if (entry.isDirectory()) {
-        files.push(...this.listLocalFiles(relativePath));
-      } else if (entry.isFile()) {
-        files.push(relativePath);
+      for (const entry of entries) {
+        const relativePath = dir ? path.join(dir, entry.name) : entry.name;
+        if (entry.isDirectory()) {
+          queue.push({ dir: relativePath, depth: depth + 1 });
+        } else if (entry.isFile()) {
+          files.push(relativePath);
+          if (files.length >= maxFiles) return files; // cap reached — stop early
+        }
       }
     }
 

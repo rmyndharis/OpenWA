@@ -29,4 +29,4 @@ export type { OpenWAClientOptions } from './client.js';
 export * from './errors.js';
 export type * from './types.js';
 export type { ClientConfig, FetchLike, HttpMethod, RequestOptions } from './http.js';
-export { buildUrl } from './http.js';
+export { buildUrl, warnIfInsecureHttpUrl } from './http.js';

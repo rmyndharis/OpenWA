@@ -35,6 +35,7 @@ public final class ClientConfig {
         if (b.timeout != null && (b.timeout.isZero() || b.timeout.isNegative())) {
             throw new IllegalArgumentException("OpenWAClient: timeout must be positive");
         }
+        warnIfInsecureHttp(url);
         // baseUrl/apiKey are stripped so a trailing newline from a file/env var can't break the request.
         this.baseUrl = url;
         this.apiKey = key;
@@ -51,6 +52,30 @@ public final class ClientConfig {
             }
         }
         return false;
+    }
+
+    /**
+     * Warn (not throw) when baseUrl is {@code http://} and the host is not localhost. The API key
+     * is sent as an {@code X-API-Key} header on every request — over plaintext http to a non-local
+     * host that's cleartext on the wire. Warning (not refusing) keeps local dev and
+     * TLS-terminating-proxy topologies working.
+     */
+    private static void warnIfInsecureHttp(String url) {
+        try {
+            URI uri = new URI(url);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if ("http".equalsIgnoreCase(scheme) && host != null) {
+                String h = host.replaceAll("^\\[|\\]$", "").toLowerCase();
+                if (!h.equals("localhost") && !h.equals("127.0.0.1") && !h.equals("::1")) {
+                    System.err.println(
+                        "[OpenWA SDK] WARNING: baseUrl uses an insecure http:// URL (host: " + host + "). "
+                            + "The API key will be sent in cleartext. Use https:// in production.");
+                }
+            }
+        } catch (URISyntaxException e) {
+            // Already validated above — a repeat failure here is a no-op.
+        }
     }
 
     public static Builder builder() {

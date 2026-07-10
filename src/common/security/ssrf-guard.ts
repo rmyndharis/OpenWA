@@ -188,6 +188,20 @@ export function isBlockedAddress(ip: string): boolean {
       ) {
         return isBlockedAddress(hextetsToV4(hextets[6], hextets[7]));
       }
+      // Fully-expanded IPv4-mapped (::ffff:0:0/96 → 0:0:0:0:0:ffff:X:X): the compressed "::ffff:"
+      // form is caught by the prefix check above, but the fully-expanded literal bypasses it.
+      // Distinct from IPv4-compat (idx5 has no 0xffff) and RFC6052 (0xffff at idx4, not idx5).
+      // Classify by the embedded IPv4 (public stays allowed).
+      if (
+        hextets[0] === 0 &&
+        hextets[1] === 0 &&
+        hextets[2] === 0 &&
+        hextets[3] === 0 &&
+        hextets[4] === 0 &&
+        hextets[5] === 0xffff
+      ) {
+        return isBlockedAddress(hextetsToV4(hextets[6], hextets[7]));
+      }
     }
     return false;
   }

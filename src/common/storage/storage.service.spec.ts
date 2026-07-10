@@ -209,3 +209,36 @@ describe('StorageService import resource caps (decompression-bomb defense)', () 
     expect(count).toBe(1);
   });
 });
+
+describe('StorageService local traversal (async + bounded)', () => {
+  let baseDir: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    ({ service, baseDir } = makeLocalService());
+  });
+
+  afterEach(() => {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+    delete process.env.STORAGE_LIST_MAX_FILES;
+  });
+
+  it('lists files across nested subdirectories (async traversal)', async () => {
+    await service.putFile('a.txt', Buffer.from('a'));
+    await service.putFile('sub/b.txt', Buffer.from('b'));
+    await service.putFile('sub/deep/c.txt', Buffer.from('c'));
+
+    const files = await service.listFiles();
+    expect(files.sort()).toEqual(['a.txt', 'sub/b.txt', 'sub/deep/c.txt']);
+  });
+
+  it('stops at the STORAGE_LIST_MAX_FILES cap instead of enumerating a huge tree', async () => {
+    process.env.STORAGE_LIST_MAX_FILES = '5';
+    for (let i = 0; i < 20; i++) {
+      await service.putFile(`file${i}.txt`, Buffer.from('x'));
+    }
+
+    const files = await service.listFiles();
+    expect(files.length).toBe(5); // capped, not 20
+  });
+});

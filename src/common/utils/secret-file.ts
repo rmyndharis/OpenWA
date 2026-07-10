@@ -12,13 +12,16 @@ import { writeFileSync, chmodSync } from 'fs';
 export function writeSecretFile(filePath: string, content: string): void {
   try {
     chmodSync(filePath, 0o600);
-  } catch {
-    /* file not present yet, or unsupported — create-mode below covers a new file */
+  } catch (error) {
+    // file not present yet, or chmod unsupported — create-mode below covers a new file. Log the
+    // failure so a world-readable secret on a chmod-unsupported FS (or an unexpected error) is
+    // not silently left world-readable after a rewrite.
+    console.warn(`[OpenWA] pre-write chmod 0o600 failed for ${filePath}: ${(error as Error).message}`);
   }
   writeFileSync(filePath, content, { mode: 0o600 });
   try {
     chmodSync(filePath, 0o600);
-  } catch {
-    /* best-effort */
+  } catch (error) {
+    console.warn(`[OpenWA] post-write chmod 0o600 failed for ${filePath}: ${(error as Error).message}`);
   }
 }

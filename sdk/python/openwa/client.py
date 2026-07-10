@@ -23,8 +23,10 @@ monkey-patching required.
 
 from __future__ import annotations
 
+import warnings
 from types import TracebackType
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 import httpx
 
@@ -47,6 +49,29 @@ from .resources import (
 from .types import AuthValidateResponse
 
 
+_LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _warn_if_insecure_http(url: str) -> None:
+    """Warn (not raise) when base_url is http:// and the host is not localhost.
+
+    The API key is sent as an X-API-Key header on every request — over plaintext http
+    to a non-local host that's cleartext on the wire. Warning (not refusing) keeps local
+    dev and TLS-terminating-proxy topologies working.
+    """
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").strip("[]")
+        if parsed.scheme == "http" and host not in _LOCALHOST_HOSTS:
+            warnings.warn(
+                f"OpenWAClient: base_url uses an insecure http:// URL (host: {host}). "
+                "The API key will be sent in cleartext. Use https:// in production.",
+                stacklevel=3,
+            )
+    except Exception:
+        pass
+
+
 class OpenWAClient:
     def __init__(
         self,
@@ -61,6 +86,7 @@ class OpenWAClient:
             raise ValueError("OpenWAClient: base_url is required")
         if not api_key:
             raise ValueError("OpenWAClient: api_key is required")
+        _warn_if_insecure_http(base_url)
         self._http = HttpExecutor(
             base_url=base_url,
             api_key=api_key,

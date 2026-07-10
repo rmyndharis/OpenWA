@@ -1,6 +1,8 @@
 // API Service Layer for OpenWA Dashboard
 // Centralized API client with TypeScript types
 
+import { warnIfInsecureHttpUrl } from '../utils/urlSecurity';
+
 // Resolve the API base URL. By default this is the same-origin relative path '/api',
 // correct when the dashboard and API are served from the same origin (the default
 // single-container setup). For a split-origin deployment (dashboard hosted separately
@@ -10,7 +12,11 @@
 // same-origin '/api' and a split deployment failed with "Invalid API Key" (#91).
 // Exported so direct fetches (e.g. auth/validate in Login.tsx / App.tsx) honor VITE_API_URL
 // too — otherwise split-origin deployments break. Empty VITE_API_URL → '/api'.
-export const API_BASE_URL = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')}/api`;
+const API_ORIGIN = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
+export const API_BASE_URL = `${API_ORIGIN}/api`;
+// Warn (not refuse — would break dev + TLS-terminating-proxy) when the API origin is an
+// insecure http:// URL pointing at a non-localhost host (API keys sent in cleartext).
+if (API_ORIGIN) warnIfInsecureHttpUrl(API_ORIGIN, 'VITE_API_URL');
 
 // =============================================================================
 // Types

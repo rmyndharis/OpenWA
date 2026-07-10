@@ -20,9 +20,10 @@ loadCliEnv();
  */
 const mainDataSource = new DataSource({
   type: 'sqlite',
-  // Hardcoded to match the runtime main path (configuration.ts), so the CLI and the app never target
+  // Mirrors the runtime main path (configuration.ts) — MAIN_DATABASE_NAME overrides the default
+  // ./data/main.sqlite (e.g. e2e points it at a temp file), so the CLI and the app never target
   // different main databases.
-  database: './data/main.sqlite',
+  database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
   entities: [__dirname + '/../modules/auth/**/*.entity{.ts,.js}', __dirname + '/../modules/audit/**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/migrations-main/*{.ts,.js}'],
   synchronize: false,
