@@ -123,6 +123,7 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   if (declared > limits.maxTotalBytes) throw new BadRequestException('The archive contents exceed the size limit');
 
   const entries: { relPath: string; data: Buffer }[] = [];
+  let actualBytes = 0;
   for (const e of packaged) {
     const relPath = e.entryName.slice(prefix.length);
     if (!relPath) continue;
@@ -138,6 +139,15 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
       // lying size=0 entry that exceeds the cap — all must yield a clean 400, never an uncaught
       // decompression error (HTTP 500).
       throw new BadRequestException('Plugin package is corrupt or too large to extract');
+    }
+    // Aggregate actual-bytes bound: the declared-sum pre-check above uses header.size (which lying
+    // size=0 entries contribute as 0), and the per-entry cap only bounds each entry individually. A
+    // crafted archive with many lying-size=0 entries (each just under the per-entry cap) would pass
+    // both and accumulate unbounded in `entries` before the function returns. Abort as soon as the
+    // running total of decompressed bytes exceeds the cap.
+    actualBytes += data.length;
+    if (actualBytes > limits.maxTotalBytes) {
+      throw new BadRequestException('Plugin package is too large to extract');
     }
     entries.push({ relPath: norm, data });
   }

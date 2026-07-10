@@ -42,18 +42,18 @@ function zipWithCorruptEntry(target: string): Buffer {
  * only sets zlib `maxOutputLength` when the declared size is > 0, so without a bound this entry
  * inflates with no cap — the zip-bomb residual gap (a lying-header entry).
  */
-function zipWithLyingZeroSizeEntry(target: string, content: string): Buffer {
+function zipWithLyingZeroSizeEntries(targets: Record<string, string>): Buffer {
   const z = new AdmZip();
   z.addFile('manifest.json', Buffer.from(JSON.stringify(validManifest)));
   z.addFile('index.js', Buffer.from('module.exports=class{}'));
-  z.addFile(target, Buffer.from(content));
+  for (const [name, content] of Object.entries(targets)) z.addFile(name, Buffer.from(content));
   const buf = Buffer.from(z.toBuffer()); // writable copy
   const censig = Buffer.from([0x50, 0x4b, 0x01, 0x02]); // PK\x01\x02 central directory header signature
   let off = buf.indexOf(censig);
   while (off !== -1) {
     const nameLen = buf.readUInt16LE(off + 28);
     const name = buf.slice(off + 46, off + 46 + nameLen).toString();
-    if (name === target) {
+    if (name in targets) {
       const locoff = buf.readUInt32LE(off + 42); // CENOFF — local header offset
       buf.writeUInt32LE(0, off + 24); // CENLEN = 0 (declared uncompressed size, central)
       buf.writeUInt32LE(0, locoff + 22); // LOCLEN = 0 (declared uncompressed size, local)
@@ -61,6 +61,10 @@ function zipWithLyingZeroSizeEntry(target: string, content: string): Buffer {
     off = buf.indexOf(censig, off + 1);
   }
   return buf;
+}
+
+function zipWithLyingZeroSizeEntry(target: string, content: string): Buffer {
+  return zipWithLyingZeroSizeEntries({ [target]: content });
 }
 
 describe('parsePluginPackage', () => {
@@ -194,6 +198,21 @@ describe('parsePluginPackage', () => {
     const buf = zipWithLyingZeroSizeEntry('big.bin', 'A'.repeat(500));
     expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 200 })).toThrow(BadRequestException);
     expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 200 })).toThrow(/corrupt or too large/i);
+  });
+
+  it('rejects many lying size=0 entries whose aggregate exceeds the cap (multi-entry zip bomb)', () => {
+    // Each lying entry is individually under the per-entry cap (150B < 300B), and the declared sum
+    // is tiny (lying sizes are 0 + manifest + index), so both the declared pre-check and the per-entry
+    // bound pass. Without the running actual-bytes counter, these accumulate unbounded in `entries`
+    // before the function returns → OOM. The aggregate bound aborts as soon as the running total
+    // crosses the cap.
+    const buf = zipWithLyingZeroSizeEntries({
+      'big1.bin': 'A'.repeat(150),
+      'big2.bin': 'A'.repeat(150),
+      'big3.bin': 'A'.repeat(150),
+    });
+    expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 300 })).toThrow(BadRequestException);
+    expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 300 })).toThrow(/too large/i);
   });
 
   it('happy path unchanged: a normal small plugin installs identically (no regression)', () => {
