@@ -1,21 +1,20 @@
 import type { GroupMetadata } from '@whiskeysockets/baileys';
 import { mapBaileysGroup, mapBaileysGroupInfo } from './baileys-group-mapper';
 
-const meta = (over: Partial<GroupMetadata> = {}): GroupMetadata =>
-  ({
-    id: '123-456@g.us',
-    subject: 'My Group',
-    owner: '628999@s.whatsapp.net',
-    desc: 'a description',
-    creation: 1700000000,
-    announce: false,
-    participants: [
-      { id: '628999@s.whatsapp.net', admin: 'superadmin' },
-      { id: '628111@s.whatsapp.net', admin: null },
-      { id: '628222@s.whatsapp.net', admin: 'admin' },
-    ],
-    ...over,
-  }) as GroupMetadata;
+const meta = (over: Partial<GroupMetadata> = {}): GroupMetadata => ({
+  id: '123-456@g.us',
+  subject: 'My Group',
+  owner: '628999@s.whatsapp.net',
+  desc: 'a description',
+  creation: 1700000000,
+  announce: false,
+  participants: [
+    { id: '628999@s.whatsapp.net', admin: 'superadmin' },
+    { id: '628111@s.whatsapp.net', admin: null },
+    { id: '628222@s.whatsapp.net', admin: 'admin' },
+  ],
+  ...over,
+});
 
 describe('mapBaileysGroup', () => {
   it('maps the summary shape and flags self-admin', () => {
