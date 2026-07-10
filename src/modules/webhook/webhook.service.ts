@@ -445,7 +445,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
                 sessionId,
                 event,
                 webhookId: webhook.id,
-                error: `Queue fallback delivery failed: ${String(fallbackError)}`,
+                error: `Queue fallback delivery failed: ${redactSsrfError(fallbackError, this.logger, 'webhook fallback delivery')}`,
               },
               { sessionId, source: 'WebhookService' },
             );
@@ -478,7 +478,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           // Execute hook on error
           await this.hookManager.execute(
             'webhook:error',
-            { sessionId, event, webhookId: webhook.id, error: String(error) },
+            { sessionId, event, webhookId: webhook.id, error: redactSsrfError(error, this.logger, 'webhook delivery') },
             { sessionId, source: 'WebhookService' },
           );
 
