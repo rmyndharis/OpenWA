@@ -85,6 +85,20 @@ describe('PluginSearchProvider', () => {
     expect(res.provider).toBe('plugin:p');
   });
 
+  it('preserves the plugin total when all hits are in-scope (pagination must still work)', async () => {
+    // A well-behaved plugin returns a full page of in-scope hits with the true total spanning more pages.
+    // Overwriting total with the page hit count would make "Load More" (hits.length < total) never fire,
+    // stranding every result past page 1 for a scoped key.
+    const hits = [mkHit({ messageId: 'm1', sessionId: 's1' }), mkHit({ messageId: 'm2', sessionId: 's1' })];
+    const results: SearchResults = { hits, total: 500, tookMs: 3, provider: 'plugin:p' };
+    const dispatchSearch = jest.fn().mockResolvedValue({ ok: true, results });
+    const p = new PluginSearchProvider('p', 'P', fakeTransport({ dispatchSearch }), 1000);
+
+    const res = await p.search({ q: 'hi', sessionIds: ['s1'] });
+    expect(res.hits.map(h => h.sessionId)).toEqual(['s1', 's1']);
+    expect(res.total).toBe(500); // preserved — not overwritten to the page count (2)
+  });
+
   it('does not re-filter when sessionIds is unset (admin / unrestricted key)', async () => {
     const h1 = mkHit({ messageId: 'm1', sessionId: 's1' });
     const h2 = mkHit({ messageId: 'm2', sessionId: 'sX' });
