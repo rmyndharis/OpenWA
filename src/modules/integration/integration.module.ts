@@ -11,6 +11,7 @@ import { IngressController } from './ingress.controller';
 import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
 import { RedriveService } from './redrive.service';
 import { RedriveController } from './redrive.controller';
+import { IntegrationRetentionService } from './integration-retention.service';
 import { IntegrationInstanceController } from './integration-instance.controller';
 import { ScopeBindingService } from './scope-binding.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
@@ -32,6 +33,7 @@ import { createLogger } from '../../common/services/logger.service';
     IngressEnqueueService,
     RedriveService,
     ScopeBindingService,
+    IntegrationRetentionService,
     {
       provide: IngressService,
       inject: [
