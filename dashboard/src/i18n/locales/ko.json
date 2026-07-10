@@ -463,7 +463,7 @@
     },
     "statuses": {
       "active": "활성",
-      "revoked": "취소됨"
+      "revoked": "폐기됨"
     },
     "empty": {
       "title": "생성된 API 키가 없습니다",
@@ -471,15 +471,15 @@
     },
     "confirm": {
       "deleteTitle": "API 키 삭제",
-      "revokeTitle": "API 키 취소",
+      "revokeTitle": "API 키 폐기",
       "deleteMessage": "<strong>{{name}}</strong>을(를) 영구히 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
-      "revokeMessage": "<strong>{{name}}</strong>을(를) 취소할까요? 더 이상 사용할 수 없게 됩니다.",
+      "revokeMessage": "<strong>{{name}}</strong>을(를) 폐기할까요? 더 이상 사용할 수 없게 됩니다.",
       "delete": "삭제",
-      "revoke": "취소"
+      "revoke": "폐기"
     },
     "actions": {
       "copy": "복사",
-      "revoke": "취소",
+      "revoke": "폐기",
       "delete": "삭제"
     }
   },
