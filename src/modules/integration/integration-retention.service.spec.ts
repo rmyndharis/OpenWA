@@ -40,7 +40,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
           pluginId: 'p',
           providerDeliveryId: 'd1',
           route: 'r',
-          payload: '{}',
+          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
           createdAt: daysAgo(30),
         },
         {
@@ -49,7 +49,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
           pluginId: 'p',
           providerDeliveryId: 'd2',
           route: 'r',
-          payload: '{}',
+          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
           createdAt: daysAgo(15),
         },
         {
@@ -58,7 +58,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
           pluginId: 'p',
           providerDeliveryId: 'd3',
           route: 'r',
-          payload: '{}',
+          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
           createdAt: daysAgo(3),
         },
         {
@@ -67,7 +67,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
           pluginId: 'p',
           providerDeliveryId: 'd4',
           route: 'r',
-          payload: '{}',
+          payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
           createdAt: daysAgo(1),
         },
       ])

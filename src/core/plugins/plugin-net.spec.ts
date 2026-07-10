@@ -6,7 +6,7 @@ function fakeSafeFetch(response: Response, sink: { init?: RequestInit }): typeof
   return (<T>(_url: string, init: RequestInit, use: (r: Response) => Promise<T> | T): Promise<T> => {
     sink.init = init;
     return Promise.resolve(use(response));
-  }) as typeof withSafeFetch;
+  }) as unknown as typeof withSafeFetch;
 }
 
 function cannedResponse(body: string, headers: Record<string, string>, status = 200): Response {
@@ -102,7 +102,7 @@ describe('performPluginFetch', () => {
     let release!: () => void;
     const gate = new Promise<void>(r => (release = r));
     const blocking = (<T>(_url: string, _init: RequestInit, use: (r: Response) => Promise<T> | T): Promise<T> =>
-      gate.then(() => use(cannedResponse('{}', {})))) as typeof withSafeFetch;
+      gate.then(() => use(cannedResponse('{}', {})))) as unknown as typeof withSafeFetch;
 
     const inflight: Promise<unknown>[] = [];
     for (let i = 0; i < 16; i++) {

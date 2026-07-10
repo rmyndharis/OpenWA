@@ -32,6 +32,13 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      # `nest build` uses tsconfig.build.json which excludes **/*spec.ts, and ts-jest/eslint don't
+      # full-program type-check specs — so without this gate, type errors in spec files are invisible
+      # to CI. tsconfig.json already includes both `src` and `test`, so this is the cheapest full-program
+      # check covering specs (no separate tsconfig.spec.json needed).
+      - name: Type-check full program (including specs)
+        run: npx tsc --noEmit -p tsconfig.json
+
       - name: Check formatting
         run: npm run format -- --check
 

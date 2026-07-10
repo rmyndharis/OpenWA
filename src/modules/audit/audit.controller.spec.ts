@@ -10,7 +10,7 @@ describe('AuditController access control', () => {
   it('GET /audit requires the ADMIN role', () => {
     // Read the handler off the prototype as an opaque object so the lint unbound-method rule
     // (which guards against detached method `this`) doesn't fire on a metadata-only lookup.
-    const proto = AuditController.prototype as unknown as Record<string, object>;
+    const proto = AuditController.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
     const role = new Reflector().get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto.findAll);
     expect(role).toBe(ApiKeyRole.ADMIN);
   });

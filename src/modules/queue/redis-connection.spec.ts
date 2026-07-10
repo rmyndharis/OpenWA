@@ -11,7 +11,7 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
     // The producer sets enableOfflineQueue:false for fast-fail; the Worker must keep ioredis's default
     // (true). Asserting it is absent guards against the regression where the Worker inherited the
     // producer-only fast-fail from the shared connection and threw "Stream isn't writeable" on a blip.
-    const opts = workerConnectionOptions() as Record<string, unknown>;
+    const opts = workerConnectionOptions() as unknown as Record<string, unknown>;
     expect(opts.enableOfflineQueue).toBeUndefined();
   });
 

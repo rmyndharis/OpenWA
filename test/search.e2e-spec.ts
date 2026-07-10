@@ -135,42 +135,55 @@ describe('GET /api/search (e2e)', () => {
 });
 
 /**
- * The SEARCH_ENABLED=false gate (app.module.ts): when the opt-out env is set, the conditional that
- * builds the `searchModules` array omits SearchModule entirely, so the route, controller, service,
- * registry, and provider are never wired (zero footprint — no 501 surface, no DI registration). A true
- * route-404 e2e needs a separate process/env (jest.resetModules re-imports NestJS core, breaking DI
- * identity), so per the task brief this is asserted at the module-registration level: the same gate
- * expression AppModule uses, evaluated under both states, proving the opt-out excludes SearchModule.
+ * The SEARCH_ENABLED=false gate (src/app.module.ts): the top-level conditional only pushes
+ * SearchModule into `searchModules` (spread into AppModule's @Module imports) when the env is not
+ * 'false', so an opt-out deployment never imports SearchModule at all — no route, controller,
+ * service, registry, or provider (zero footprint, no 501 surface).
+ *
+ * Rather than re-implementing the gate branch locally (which would only assert a copy of the logic
+ * and miss a regression in the real one), this re-evaluates the REAL app.module.ts under each env
+ * (jest.isolateModules gives a fresh registry so the top-level conditional re-runs with the env we
+ * set) and reads the ACTUAL @Module({ imports }) metadata, asserting whether SearchModule is present.
+ * A full route-404 e2e would need a separately-booted app in a different process/env, which is why the
+ * main describe above boots only the default (ON) instance; this pins the real opt-out decision.
  */
-describe('SEARCH_ENABLED gate (module-registration level)', () => {
-  // Mirrors src/app.module.ts's conditional exactly: `searchModules` is pushed only when the env is
-  // not 'false'. Asserting both branches pins the gate that determines whether AppModule imports
-  // SearchModule — the route exists iff this array is non-empty.
-  const buildSearchImports = (): unknown[] => {
-    const imports: unknown[] = [];
-    if (process.env.SEARCH_ENABLED !== 'false') imports.push('SearchModule');
-    return imports;
+describe('SEARCH_ENABLED gate (real AppModule imports)', () => {
+  // Re-requires the REAL app.module.ts under a fresh module registry with SEARCH_ENABLED=`value`,
+  // then reports whether its actual @Module({ imports }) contains SearchModule. require() (not a
+  // dynamic import()) avoids the TS2835 extension requirement under moduleResolution:nodenext.
+  const searchModuleImportedWhen = (value: string | undefined): boolean => {
+    const previous = process.env.SEARCH_ENABLED;
+    if (value === undefined) delete process.env.SEARCH_ENABLED;
+    else process.env.SEARCH_ENABLED = value;
+    try {
+      let imported = false;
+      jest.isolateModules(() => {
+        /* eslint-disable @typescript-eslint/no-require-imports -- require() (not a dynamic import())
+           is the jest pattern for a fresh-evaluation read; the nodenext TS2835 extension rule only
+           applies to ES imports, and a dynamic import() would need a separate tsconfig for specs. */
+        const { AppModule } = require('../src/app.module') as typeof import('../src/app.module');
+        const { SearchModule } =
+          require('../src/modules/search/search.module') as typeof import('../src/modules/search/search.module');
+        /* eslint-enable @typescript-eslint/no-require-imports */
+        const imports: unknown[] = (Reflect.getMetadata('imports', AppModule) as unknown[]) ?? [];
+        imported = imports.includes(SearchModule);
+      });
+      return imported;
+    } finally {
+      if (previous === undefined) delete process.env.SEARCH_ENABLED;
+      else process.env.SEARCH_ENABLED = previous;
+    }
   };
 
-  const saved: string | undefined = process.env.SEARCH_ENABLED;
-
-  afterEach(() => {
-    if (saved === undefined) delete process.env.SEARCH_ENABLED;
-    else process.env.SEARCH_ENABLED = saved;
+  it('imports SearchModule by default (SEARCH_ENABLED unset)', () => {
+    expect(searchModuleImportedWhen(undefined)).toBe(true);
   });
 
-  it('includes SearchModule by default (SEARCH_ENABLED unset)', () => {
-    delete process.env.SEARCH_ENABLED;
-    expect(buildSearchImports()).toHaveLength(1);
+  it('imports SearchModule when explicitly enabled', () => {
+    expect(searchModuleImportedWhen('true')).toBe(true);
   });
 
-  it('includes SearchModule when explicitly enabled', () => {
-    process.env.SEARCH_ENABLED = 'true';
-    expect(buildSearchImports()).toHaveLength(1);
-  });
-
-  it('omits SearchModule entirely when SEARCH_ENABLED=false (zero footprint)', () => {
-    process.env.SEARCH_ENABLED = 'false';
-    expect(buildSearchImports()).toHaveLength(0);
+  it('omits SearchModule entirely when SEARCH_ENABLED=false (route cannot register)', () => {
+    expect(searchModuleImportedWhen('false')).toBe(false);
   });
 });

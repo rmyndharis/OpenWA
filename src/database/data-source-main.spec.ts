@@ -19,27 +19,33 @@ describe('main CLI DataSource', () => {
     expect(entities).toContain('audit');
   });
 
-  // jest.resetModules() + a typed dynamic import forces a fresh evaluation of the module with the
-  // env var we set, proving MAIN_DATABASE_NAME flows into the DataSource options (not just the
-  // cached top-level import, which was evaluated with whatever env existed at spec load).
-  it("defaults to './data/main.sqlite' when MAIN_DATABASE_NAME is unset", async () => {
+  // jest.resetModules() + a typed require forces a fresh evaluation of the module with the env var
+  // we set, proving MAIN_DATABASE_NAME flows into the DataSource options (not just the cached
+  // top-level import, which was evaluated with whatever env existed at spec load).
+  it("defaults to './data/main.sqlite' when MAIN_DATABASE_NAME is unset", () => {
     const previous = process.env.MAIN_DATABASE_NAME;
     delete process.env.MAIN_DATABASE_NAME;
     jest.resetModules();
     try {
-      const mod = (await import('./data-source-main')) as typeof import('./data-source-main');
+      // require() (not dynamic import()) — the relative specifier trips TS2835 under
+      // moduleResolution:nodenext; jest.resetModules() above still forces a fresh evaluation.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('./data-source-main') as typeof import('./data-source-main');
       expect(String(mod.default.options.database)).toBe('./data/main.sqlite');
     } finally {
       if (previous !== undefined) process.env.MAIN_DATABASE_NAME = previous;
     }
   });
 
-  it('honors MAIN_DATABASE_NAME when set (mirrors configuration.ts)', async () => {
+  it('honors MAIN_DATABASE_NAME when set (mirrors configuration.ts)', () => {
     const previous = process.env.MAIN_DATABASE_NAME;
     process.env.MAIN_DATABASE_NAME = '/tmp/test-main.sqlite';
     jest.resetModules();
     try {
-      const mod = (await import('./data-source-main')) as typeof import('./data-source-main');
+      // require() (not dynamic import()) — the relative specifier trips TS2835 under
+      // moduleResolution:nodenext; jest.resetModules() above still forces a fresh evaluation.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require('./data-source-main') as typeof import('./data-source-main');
       expect(String(mod.default.options.database)).toBe('/tmp/test-main.sqlite');
     } finally {
       if (previous !== undefined) process.env.MAIN_DATABASE_NAME = previous;

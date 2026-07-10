@@ -11,7 +11,7 @@ describe('StatsController access control', () => {
   const reflector = new Reflector();
   // Opaque-object view of the prototype so the lint unbound-method rule doesn't fire on a
   // metadata-only handler lookup.
-  const proto = StatsController.prototype as unknown as Record<string, object>;
+  const proto = StatsController.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
 
   it.each(['getOverview', 'getMessageStats'] as const)('global stats route %s requires ADMIN', method => {
     const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, proto[method]);

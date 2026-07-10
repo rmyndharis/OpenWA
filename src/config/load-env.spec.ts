@@ -25,9 +25,12 @@ describe('loadEnvironment', () => {
   // The loader runs as a side effect on import; resetModules forces a fresh evaluation each call so a
   // test's mocked cwd/env is in effect when it runs (the spec never imports it statically, so it never
   // runs against the real project tree).
-  const runLoader = async (): Promise<void> => {
+  // require() (not dynamic import()) so the relative specifier doesn't trip TS2835 under
+  // moduleResolution:nodenext; jest.resetModules() above still forces a fresh module evaluation.
+  const runLoader = (): void => {
     jest.resetModules();
-    await import('./load-env');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require('./load-env');
   };
 
   beforeEach(() => {
@@ -45,24 +48,24 @@ describe('loadEnvironment', () => {
     }
   });
 
-  it('loads REDIS_HOST from a .env file so it reaches the webhook worker connection', async () => {
+  it('loads REDIS_HOST from a .env file so it reaches the webhook worker connection', () => {
     delete process.env.REDIS_HOST;
     makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n', 'data/.env.generated': '' });
 
-    await runLoader();
+    runLoader();
 
     expect(process.env.REDIS_HOST).toBe('redis.internal');
     expect(workerConnectionOptions().host).toBe('redis.internal');
   });
 
-  it('lets a real process env value win over the .env file (precedence preserved)', async () => {
+  it('lets a real process env value win over the .env file (precedence preserved)', () => {
     process.env.REDIS_HOST = 'host-from-process-env';
     makeTempCwd({
       '.env': 'REDIS_HOST=host-from-dotenv\n',
       'data/.env.generated': 'REDIS_HOST=host-from-generated\n',
     });
 
-    await runLoader();
+    runLoader();
 
     expect(process.env.REDIS_HOST).toBe('host-from-process-env');
     expect(workerConnectionOptions().host).toBe('host-from-process-env');

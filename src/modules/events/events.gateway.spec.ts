@@ -322,7 +322,11 @@ const makeCapturingServer = () => {
 };
 
 describe('EventsGateway.emitToRooms fan-out', () => {
-  const gw = () => new EventsGateway({ validateApiKey: jest.fn() } as unknown as AuthService);
+  const gw = () =>
+    new EventsGateway(
+      { validateApiKey: jest.fn() } as unknown as AuthService,
+      { logWarn: jest.fn().mockResolvedValue(null) } as unknown as AuditService,
+    );
 
   it('delivers one event with a single broadcast across all four rooms (no per-room duplicate emit)', () => {
     const gateway = gw();
@@ -355,7 +359,10 @@ describe('event catalog ⇔ emitter invariants (drift guard)', () => {
   // method against a capturing server. Reflection-based so it cannot rot: a new emit*
   // method is auto-discovered; an advertised-but-unemitted event fails the equality.
   const deriveEmittedEvents = (): Set<string> => {
-    const gateway = new EventsGateway({ validateApiKey: jest.fn() } as unknown as AuthService);
+    const gateway = new EventsGateway(
+      { validateApiKey: jest.fn() } as unknown as AuthService,
+      { logWarn: jest.fn().mockResolvedValue(null) } as unknown as AuditService,
+    );
     const captured: string[] = [];
     const op: { to: () => unknown; emit: (ch: string, msg: WSEventMessage) => boolean } = {
       to: () => op,
