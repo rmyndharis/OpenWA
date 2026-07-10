@@ -526,4 +526,50 @@ describe('PluginWorkerHost', () => {
       await expect(exec).resolves.toEqual({ continue: true, data: { n: 1 } });
     });
   });
+
+  describe('post-crash dead-check (fail-fast, no stall)', () => {
+    it('dispatchHook resolves {continue:true} immediately when the worker is already dead', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        const host = new PluginWorkerHost(ch);
+        ch.crash(1); // worker dead — handleExit sets this.dead
+        // Without the dead-check this awaits the full timeoutMs (the setTimeout never fires under fake
+        // timers → the test hangs). With it, resolves synchronously.
+        const result = await host.dispatchHook({
+          event: 'message:sending',
+          data: {},
+          source: 'test',
+          timeoutMs: 5000,
+        });
+        expect(result).toEqual({ continue: true });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('dispatchWebhook resolves {ok:false,status:502} immediately when the worker is already dead', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        const host = new PluginWorkerHost(ch);
+        ch.crash(1);
+        const result = await host.dispatchWebhook({
+          instanceId: 'i',
+          route: 'r',
+          method: 'POST',
+          headers: {},
+          query: {},
+          body: '',
+          rawBody: '',
+          verified: true,
+          deliveryId: 'd',
+          timeoutMs: 5000,
+        });
+        expect(result).toEqual({ ok: false, status: 502 });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
 });

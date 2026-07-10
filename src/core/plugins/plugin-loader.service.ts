@@ -979,6 +979,18 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       // ran, making this a harmless no-op.
       unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
       if (intentional) return; // routine disable/enable-failure already logged and expected
+      // Unexpected crash after a successful enable: the worker is gone. Drop the dead host +
+      // unregister the hook shims (so they don't keep dispatching into the dead worker) + mark the
+      // plugin ERROR so the dashboard reflects reality. The dispatchHook/dispatchWebhook dead-checks
+      // fail-fast; this cleanup is the root-cause fix (it also makes the shim's !liveHost guard fire).
+      const crashed = this.plugins.get(pluginId);
+      if (crashed) {
+        crashed.status = PluginStatus.ERROR;
+        crashed.error = `worker exited unexpectedly (code ${code})`;
+        this.pluginStorage.setPluginStatus(pluginId, PluginStatus.ERROR);
+      }
+      this.hookManager.unregisterPlugin(pluginId);
+      this.sandboxHosts.delete(pluginId);
       this.logger.warn(`Sandboxed plugin ${pluginId} worker exited unexpectedly (code ${code})`, {
         pluginId,
         code,

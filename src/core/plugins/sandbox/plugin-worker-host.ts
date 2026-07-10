@@ -127,6 +127,11 @@ export class PluginWorkerHost {
     timeoutMs: number;
     onTimeout?: () => void;
   }): Promise<{ continue: boolean; data?: unknown }> {
+    // Fail fast on a dead worker: a post-crash dispatchHook (the hook shim still holds the stale host
+    // reference) would otherwise post to the dead worker and stall the chain for the full timeout before
+    // resolving. The fail-open { continue: true } matches what the per-call timeout + the in-flight
+    // crash-drain already produce.
+    if (this.dead) return Promise.resolve({ continue: true });
     const id = this.nextId++;
     this.incInFlightHook(options.event);
     return new Promise(resolve => {
@@ -175,6 +180,9 @@ export class PluginWorkerHost {
     timeoutMs: number;
     onTimeout?: () => void;
   }): Promise<{ status: number; headers?: Record<string, string>; body?: string; ok: boolean; error?: string }> {
+    // Fail fast on a dead worker — mirrors the in-flight crash-drain's 502 (handleExit) so a post-crash
+    // dispatchWebhook returns immediately instead of waiting the full timeout for a worker that's gone.
+    if (this.dead) return Promise.resolve({ ok: false, status: 502 });
     const id = this.nextId++;
     return new Promise(resolve => {
       const timer = setTimeout(() => {
