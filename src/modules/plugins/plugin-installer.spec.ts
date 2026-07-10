@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { BadRequestException } from '@nestjs/common';
 import { parsePluginPackage } from './plugin-installer';
 
 const validManifest = { id: 'my-plg', name: 'My Plugin', version: '1.0.0', type: 'extension', main: 'index.js' };
@@ -7,6 +8,59 @@ function zipOf(files: Record<string, string>): Buffer {
   const z = new AdmZip();
   for (const [name, content] of Object.entries(files)) z.addFile(name, Buffer.from(content));
   return z.toBuffer();
+}
+
+/**
+ * Build a valid plugin zip, then corrupt one entry's compressed bytes so `getData()` throws a
+ * decompression/CRC error (BAD_CRC / zlib invalid-code) — simulating a truncated or damaged archive.
+ */
+function zipWithCorruptEntry(target: string): Buffer {
+  const z = new AdmZip();
+  z.addFile('manifest.json', Buffer.from(JSON.stringify(validManifest)));
+  z.addFile('index.js', Buffer.from('module.exports=class{}'));
+  z.addFile(target, Buffer.from('A'.repeat(100)));
+  const buf = Buffer.from(z.toBuffer()); // writable copy
+  const locsig = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // PK\x03\x04 local file header signature
+  let off = buf.indexOf(locsig);
+  while (off !== -1) {
+    const nameLen = buf.readUInt16LE(off + 26);
+    const extraLen = buf.readUInt16LE(off + 28);
+    const name = buf.slice(off + 30, off + 30 + nameLen).toString();
+    const dataStart = off + 30 + nameLen + extraLen;
+    if (name === target) {
+      buf[dataStart] ^= 0xff; // flip the first compressed byte → bad CRC / invalid deflate stream
+      break;
+    }
+    off = buf.indexOf(locsig, off + 1);
+  }
+  return buf;
+}
+
+/**
+ * Build a plugin zip whose `target` entry declares uncompressed size = 0 in BOTH the central
+ * directory and the local header, while the entry still carries real (deflated) content. adm-zip
+ * only sets zlib `maxOutputLength` when the declared size is > 0, so without a bound this entry
+ * inflates with no cap — the zip-bomb residual gap (a lying-header entry).
+ */
+function zipWithLyingZeroSizeEntry(target: string, content: string): Buffer {
+  const z = new AdmZip();
+  z.addFile('manifest.json', Buffer.from(JSON.stringify(validManifest)));
+  z.addFile('index.js', Buffer.from('module.exports=class{}'));
+  z.addFile(target, Buffer.from(content));
+  const buf = Buffer.from(z.toBuffer()); // writable copy
+  const censig = Buffer.from([0x50, 0x4b, 0x01, 0x02]); // PK\x01\x02 central directory header signature
+  let off = buf.indexOf(censig);
+  while (off !== -1) {
+    const nameLen = buf.readUInt16LE(off + 28);
+    const name = buf.slice(off + 46, off + 46 + nameLen).toString();
+    if (name === target) {
+      const locoff = buf.readUInt32LE(off + 42); // CENOFF — local header offset
+      buf.writeUInt32LE(0, off + 24); // CENLEN = 0 (declared uncompressed size, central)
+      buf.writeUInt32LE(0, locoff + 22); // LOCLEN = 0 (declared uncompressed size, local)
+    }
+    off = buf.indexOf(censig, off + 1);
+  }
+  return buf;
 }
 
 describe('parsePluginPackage', () => {
@@ -122,5 +176,35 @@ describe('parsePluginPackage', () => {
   it('rejects an archive that exceeds the size limit (before decompressing)', () => {
     const buf = zipOf({ 'manifest.json': JSON.stringify(validManifest), 'index.js': 'a'.repeat(100) });
     expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 10 })).toThrow(/size limit/i);
+  });
+
+  it('rejects a corrupt entry with a clean 400, not an uncaught decompression error / 500', () => {
+    // A truncated/damaged entry throws BAD_CRC / a zlib error from getData(); without the try/catch
+    // that escapes as an HTTP 500. It must surface as a BadRequestException (clean 400).
+    const buf = zipWithCorruptEntry('data.bin');
+    expect(() => parsePluginPackage(buf)).toThrow(BadRequestException);
+    expect(() => parsePluginPackage(buf)).toThrow(/corrupt or too large/i);
+  });
+
+  it('rejects a lying size=0 entry whose actual content exceeds the cap (no unbounded inflation)', () => {
+    // adm-zip skips zlib `maxOutputLength` when declared size is 0, so this entry would inflate with
+    // NO cap. The declared aggregate (0 + tiny manifest + index) passes the pre-check; only the
+    // actual-bytes bound stops the lying entry. Actual content (500B) exceeds the per-entry cap (200B)
+    // → ERR_BUFFER_TOO_LARGE → BadRequestException.
+    const buf = zipWithLyingZeroSizeEntry('big.bin', 'A'.repeat(500));
+    expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 200 })).toThrow(BadRequestException);
+    expect(() => parsePluginPackage(buf, { maxEntries: 100, maxTotalBytes: 200 })).toThrow(/corrupt or too large/i);
+  });
+
+  it('happy path unchanged: a normal small plugin installs identically (no regression)', () => {
+    const buf = zipOf({
+      'manifest.json': JSON.stringify(validManifest),
+      'index.js': 'module.exports=class{}',
+      'extra.txt': 'some extra bytes',
+    });
+    const out = parsePluginPackage(buf);
+    expect(out.manifest.id).toBe('my-plg');
+    expect(out.entries.map(e => e.relPath).sort()).toEqual(['extra.txt', 'index.js', 'manifest.json']);
+    expect(out.entries.find(e => e.relPath === 'extra.txt')?.data.toString()).toBe('some extra bytes');
   });
 });

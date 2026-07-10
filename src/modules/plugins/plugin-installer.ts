@@ -1,5 +1,6 @@
 import AdmZip from 'adm-zip';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { BadRequestException } from '@nestjs/common';
 import { PluginManifest, PluginType } from '../../core/plugins';
 
@@ -24,6 +25,25 @@ export const INSTALLABLE_TYPES = new Set<string>([PluginType.EXTENSION]);
 
 const SAFE_ID = /^[a-z0-9][a-z0-9._-]*$/i;
 const REQUIRED_FIELDS = ['id', 'name', 'version', 'type', 'main'] as const;
+
+/**
+ * Decompress one zip entry with a hard cap on actual output bytes. adm-zip only forwards zlib
+ * `maxOutputLength` when the entry's declared uncompressed size is positive, so an entry that lies
+ * about being empty (header.size = 0) would otherwise inflate with NO cap — a memory-exhaustion
+ * vector. For that case we inflate bounded ourselves; every other path is left to `getData()` (a
+ * corrupt/CRC mismatch or a lying-small header throws `BAD_CRC` / `ERR_BUFFER_TOO_LARGE`, which the
+ * caller catches and maps to a clean 400).
+ */
+function readEntryData(entry: AdmZip.IZipEntry, maxBytes: number): Buffer {
+  if (entry.header.size === 0 && entry.header.compressedSize > 0) {
+    const compressed = entry.getCompressedData();
+    if (compressed.length === 0) return Buffer.alloc(0);
+    // maxOutputLength aborts inflation (ERR_BUFFER_TOO_LARGE) once output exceeds the cap, so a
+    // lying size=0 entry cannot grow unbounded in memory before we reject the archive.
+    return zlib.inflateRawSync(compressed, { maxOutputLength: maxBytes });
+  }
+  return entry.getData();
+}
 
 export interface ParsedPackage {
   manifest: PluginManifest;
@@ -57,9 +77,17 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
   const dir = path.posix.dirname(manifestEntry.entryName);
   const prefix = dir === '.' ? '' : dir + '/';
 
+  let manifestRaw: Buffer;
+  try {
+    manifestRaw = readEntryData(manifestEntry, limits.maxTotalBytes);
+  } catch {
+    // A corrupt / oversized manifest entry must surface as a clean 400, not an uncaught
+    // decompression error (BAD_CRC / ERR_BUFFER_TOO_LARGE) that would escape as an HTTP 500.
+    throw new BadRequestException('Plugin package is corrupt or too large to extract');
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(manifestEntry.getData().toString('utf-8'));
+    parsed = JSON.parse(manifestRaw.toString('utf-8'));
   } catch {
     throw new BadRequestException('manifest.json is not valid JSON');
   }
@@ -102,7 +130,16 @@ export function parsePluginPackage(buffer: Buffer, limits: PackageLimits = DEFAU
     if (relPath.includes('\\') || norm.startsWith('..') || norm === '..' || path.posix.isAbsolute(norm)) {
       throw new BadRequestException(`Unsafe path in archive: ${e.entryName}`);
     }
-    entries.push({ relPath: norm, data: e.getData() });
+    let data: Buffer;
+    try {
+      data = readEntryData(e, limits.maxTotalBytes);
+    } catch {
+      // Corrupt entry (bad CRC / truncated), a lying-small header (zlib ERR_BUFFER_TOO_LARGE), or a
+      // lying size=0 entry that exceeds the cap — all must yield a clean 400, never an uncaught
+      // decompression error (HTTP 500).
+      throw new BadRequestException('Plugin package is corrupt or too large to extract');
+    }
+    entries.push({ relPath: norm, data });
   }
 
   const mainRel = path.posix.normalize(manifest.main);
