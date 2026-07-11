@@ -40,6 +40,7 @@ export class BaileysPlugin implements IEnginePlugin {
 
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
+    const dbSessionId = config.dbSessionId as string;
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;
 
@@ -51,6 +52,7 @@ export class BaileysPlugin implements IEnginePlugin {
 
     return new BaileysAdapter({
       sessionId,
+      dbSessionId,
       authDir,
       proxyUrl,
       proxyType,

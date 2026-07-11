@@ -3,14 +3,6 @@ import { ChatSummary, Contact } from '../interfaces/whatsapp-engine.interface';
 import { parseWaId, toNeutralJid as canonicalizeWaId, userPart } from '../identity/wa-id';
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 
-/**
- * Baileys' own `Contact.phoneNumber` (present since the v7 LID rework) is the resolved phone JID
- * alongside the lid-based `id`. This alias exists only so call sites can spell the intent; no field
- * augmentation is needed anymore (the pre-v7 `jid` field this type used to patch in was removed from
- * `Contact` upstream and is no longer read here).
- */
-type BaileysContactWithPhone = BaileysContact;
-
 interface LastMessage {
   key: WAMessageKey;
   timestamp: number;
@@ -23,7 +15,7 @@ interface LastMessage {
  * each connect) and is mapped to the neutral `Contact`/`ChatSummary` on read. Holds no socket — pure data.
  */
 export class BaileysSessionStore {
-  private readonly contacts = new Map<string, BaileysContactWithPhone>();
+  private readonly contacts = new Map<string, BaileysContact>();
   private readonly chats = new Map<string, Chat>();
   private readonly lastMessages = new Map<string, LastMessage>();
   private readonly lidToPn = new Map<string, string>();
@@ -47,13 +39,13 @@ export class BaileysSessionStore {
     private readonly sessionId?: string,
   ) {}
 
-  upsertContacts(records: Partial<BaileysContactWithPhone>[] = []): void {
+  upsertContacts(records: Partial<BaileysContact>[] = []): void {
     for (const r of records) {
       if (!r.id) {
         continue;
       }
       const existing = this.contacts.get(r.id) ?? { id: r.id };
-      const merged: BaileysContactWithPhone = { ...existing, ...r };
+      const merged: BaileysContact = { ...existing, ...r };
       this.contacts.set(r.id, merged);
       // Capture a lid->phone pair from the merged record (lid + phone can arrive in separate updates).
       // `phoneNumber` is the authoritative PN field; fall back to `id` itself only when it's already
@@ -281,7 +273,7 @@ export class BaileysSessionStore {
     return parsed.kind === 'user' ? `${parsed.userPart}@s.whatsapp.net` : jid;
   }
 
-  private toNeutralContact(c: BaileysContactWithPhone): Contact {
+  private toNeutralContact(c: BaileysContact): Contact {
     const number = c.phoneNumber ? userPart(c.phoneNumber) : c.id.endsWith('@s.whatsapp.net') ? userPart(c.id) : '';
     return {
       id: this.toNeutralJid(c.id),

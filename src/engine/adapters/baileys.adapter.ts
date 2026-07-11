@@ -259,7 +259,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         if (!key.id) {
           return undefined;
         }
-        const stored = await this.config.messageStore?.getMessage(this.config.sessionId, key.id);
+        const stored = await this.config.messageStore?.getMessage(this.config.dbSessionId, key.id);
         return stored?.message ?? undefined;
       },
       logger: baileysLogger,
@@ -436,7 +436,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     }
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
-    await this.config.messageStore?.clearSession(this.config.sessionId).catch(() => undefined);
+    await this.config.messageStore?.clearSession(this.config.dbSessionId).catch(() => undefined);
     // Wipe the multi-file auth dir so a fresh link starts clean — stale creds would otherwise be
     // reloaded on the next connect() and block re-linking (Baileys retries them, no QR emitted).
     await this.clearAuthState();
@@ -511,7 +511,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       ? await this.sock!.sendMessage(chatId, content, options)
       : await this.sock!.sendMessage(chatId, content);
     if (sent) {
-      void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
+      void this.config.messageStore?.put(this.config.dbSessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
           error: err instanceof Error ? err.message : String(err),
         }),
@@ -1065,7 +1065,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       } else {
         this.callbacks.onMessage?.(incoming);
       }
-      void this.config.messageStore?.put(this.config.sessionId, msg).catch(err =>
+      void this.config.messageStore?.put(this.config.dbSessionId, msg).catch(err =>
         this.logger.warn('Failed to persist message to store', {
           error: err instanceof Error ? err.message : String(err),
         }),
@@ -1483,7 +1483,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       ? await this.sock!.sendMessage(chatId, content, merged)
       : await this.sock!.sendMessage(chatId, content);
     if (sent) {
-      void this.config.messageStore?.put(this.config.sessionId, sent).catch(err =>
+      void this.config.messageStore?.put(this.config.dbSessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
           error: err instanceof Error ? err.message : String(err),
         }),
@@ -1522,7 +1522,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   /** Resolve a previously-seen message from the store, or throw a clear not-found error. */
   private async requireStored(messageId: string): Promise<WAMessage> {
-    const found = await this.config.messageStore?.getMessage(this.config.sessionId, messageId);
+    const found = await this.config.messageStore?.getMessage(this.config.dbSessionId, messageId);
     if (!found?.key) {
       throw new MessageNotFoundError(messageId);
     }

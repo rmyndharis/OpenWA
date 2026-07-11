@@ -20,7 +20,10 @@ export interface BaileysMessageStore {
  * (the adapter appends the session id to isolate each session).
  */
 export interface BaileysAdapterConfig {
+  /** Session NAME — keys the on-disk auth directory and LID-mapping provenance. */
   sessionId: string;
+  /** Session UUID (Session.id) — keys the FK-bound baileys_stored_messages rows via messageStore. */
+  dbSessionId: string;
   authDir: string;
   proxyUrl?: string;
   proxyType?: 'http' | 'https' | 'socks4' | 'socks5';

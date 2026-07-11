@@ -13,7 +13,10 @@ import { LidMappingStoreService } from './identity/lid-mapping-store.service';
 import { isSafeSessionName } from '../common/utils/path-safety';
 
 export interface EngineCreateOptions {
+  /** Session NAME — the on-disk auth-directory key (matches purgeSessionData/sessionAuthDir). */
   sessionId: string;
+  /** Session UUID (Session.id) — the DB-row key for FK-bound stores (e.g. baileys_stored_messages). */
+  dbSessionId: string;
   proxyUrl?: string;
   proxyType?: 'http' | 'https' | 'socks4' | 'socks5';
 }
@@ -109,6 +112,7 @@ export class EngineFactory implements OnModuleInit {
       // registration, so the factory never assembles browser-shaped fields.
       return enginePlugin.instance.createEngine({
         sessionId: options.sessionId,
+        dbSessionId: options.dbSessionId,
         proxyUrl: options.proxyUrl,
         proxyType: options.proxyType,
       }) as IWhatsAppEngine;

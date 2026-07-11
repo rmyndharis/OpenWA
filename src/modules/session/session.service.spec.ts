@@ -554,7 +554,9 @@ describe('SessionService', () => {
 
       await service.start('sess-uuid-1');
 
-      expect(engineFactory.create).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-uuid-1' }));
+      expect(engineFactory.create).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'test-session', dbSessionId: 'sess-uuid-1' }),
+      );
       expect(mockEngine.initialize).toHaveBeenCalled();
       expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', {
         status: SessionStatus.INITIALIZING,

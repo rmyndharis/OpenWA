@@ -43,8 +43,8 @@ describe('EngineFactory', () => {
     } as unknown as PluginLoaderService;
     const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
 
-    expect(() => factory.create({ sessionId: '../../etc' })).toThrow(/unsafe session name/i);
-    expect(() => factory.create({ sessionId: 'a/b' })).toThrow(/unsafe session name/i);
+    expect(() => factory.create({ sessionId: '../../etc', dbSessionId: 'db-1' })).toThrow(/unsafe session name/i);
+    expect(() => factory.create({ sessionId: 'a/b', dbSessionId: 'db-1' })).toThrow(/unsafe session name/i);
     expect(createEngine).not.toHaveBeenCalled();
   });
 
@@ -56,11 +56,16 @@ describe('EngineFactory', () => {
     } as unknown as PluginLoaderService;
 
     const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
-    factory.create({ sessionId: 'sess-1', proxyUrl: 'http://p', proxyType: 'http' });
+    factory.create({ sessionId: 'sess-1', dbSessionId: 'db-1', proxyUrl: 'http://p', proxyType: 'http' });
 
     // Plain-object (not objectContaining) assertion: any browser key (headless/puppeteerArgs/
     // executablePath/sessionDataPath) leaking into the per-call config would fail this exact match.
-    expect(createEngine).toHaveBeenCalledWith({ sessionId: 'sess-1', proxyUrl: 'http://p', proxyType: 'http' });
+    expect(createEngine).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      dbSessionId: 'db-1',
+      proxyUrl: 'http://p',
+      proxyType: 'http',
+    });
   });
 
   it('registers the built-in engine with the opaque engine config blob (#219 guarantee moves to context.config)', async () => {
@@ -103,7 +108,7 @@ describe('EngineFactory', () => {
     } as unknown as PluginLoaderService;
 
     const factory = new EngineFactory(buildConfigService(), pluginLoader, buildMessageStore(), buildLidStore());
-    expect(() => factory.create({ sessionId: 'sess-2' })).not.toThrow();
+    expect(() => factory.create({ sessionId: 'sess-2', dbSessionId: 'db-2' })).not.toThrow();
   });
 
   it('throws instead of silently building whatsapp-web.js when a non-wwebjs engine has no plugin', () => {
@@ -119,7 +124,7 @@ describe('EngineFactory', () => {
       buildMessageStore(),
       buildLidStore(),
     );
-    expect(() => factory.create({ sessionId: 'sess-b' })).toThrow(/baileys/i);
+    expect(() => factory.create({ sessionId: 'sess-b', dbSessionId: 'db-b' })).toThrow(/baileys/i);
   });
 
   describe('purgeSessionData (delete fully removes on-disk auth, keyed by session name)', () => {

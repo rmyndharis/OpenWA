@@ -105,8 +105,15 @@ function streamOf(...chunks: Buffer[]): AsyncIterable<Buffer> & { destroy: () =>
     destroy: jest.fn(),
   };
 }
+// sessionId (name) and dbSessionId (Session.id UUID) are deliberately distinct here so assertions
+// below prove auth-dir/logging use the name while messageStore (FK-bound) uses the UUID.
 const newAdapter = (): BaileysAdapter =>
-  new BaileysAdapter({ sessionId: 'sess-1', authDir: './data/baileys', messageStore: fakeStore });
+  new BaileysAdapter({
+    sessionId: 'sess-1',
+    dbSessionId: 'db-uuid-1',
+    authDir: './data/baileys',
+    messageStore: fakeStore,
+  });
 
 const noopCallbacks = (over: Partial<EngineEventCallbacks> = {}): EngineEventCallbacks => over;
 
@@ -1649,7 +1656,7 @@ describe('BaileysAdapter store-backed ops', () => {
     fakeStore.getMessage.mockResolvedValue(stored);
     const adapter = await ready();
     await adapter.replyToMessage('628111@s.whatsapp.net', 'TARGET', 'my reply');
-    expect(fakeStore.getMessage).toHaveBeenCalledWith('sess-1', 'TARGET');
+    expect(fakeStore.getMessage).toHaveBeenCalledWith('db-uuid-1', 'TARGET');
     expect(fakeSock.sendMessage).toHaveBeenCalledWith(
       '628111@s.whatsapp.net',
       { text: 'my reply' },
@@ -1738,7 +1745,7 @@ describe('BaileysAdapter store-backed ops', () => {
     await new Promise(r => setImmediate(r));
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const inboundMatcher = expect.objectContaining({ key: expect.objectContaining({ id: 'IN9' }) });
-    expect(fakeStore.put).toHaveBeenCalledWith('sess-1', inboundMatcher);
+    expect(fakeStore.put).toHaveBeenCalledWith('db-uuid-1', inboundMatcher);
   });
 
   it('populates the store on an outgoing send', async () => {
@@ -1746,13 +1753,13 @@ describe('BaileysAdapter store-backed ops', () => {
     await adapter.sendTextMessage('628111@s.whatsapp.net', 'hello');
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const outboundMatcher = expect.objectContaining({ key: expect.objectContaining({ id: 'OUT' }) });
-    expect(fakeStore.put).toHaveBeenCalledWith('sess-1', outboundMatcher);
+    expect(fakeStore.put).toHaveBeenCalledWith('db-uuid-1', outboundMatcher);
   });
 
   it('clears the store on logout', async () => {
     const adapter = await ready();
     await adapter.logout();
-    expect(fakeStore.clearSession).toHaveBeenCalledWith('sess-1');
+    expect(fakeStore.clearSession).toHaveBeenCalledWith('db-uuid-1');
   });
 });
 
