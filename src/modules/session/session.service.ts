@@ -1186,13 +1186,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'engine_init_timeout',
         });
         this.sessionErrors.set(id, err.message);
-        // Evict from the map BEFORE tearing down. forceDestroy() drives the adapter to
-        // EngineStatus.DISCONNECTED, which fires onStateChanged synchronously; while the engine is
-        // still in the map that callback would pass the isLiveEngine guard and run (and the same
-        // window admits onError/onDisconnected, which could write FAILED or schedule a reconnect
-        // against this path). Deleting first makes isLiveEngine return false so no teardown-induced
-        // callback can race the DISCONNECTED write below — the canonical delete-before-teardown used
-        // at evictAndForceDestroy(), start()'s catch, and stop().
+        // Evict from the map BEFORE tearing down. forceDestroy() → beginClientTeardown → setStatus
+        // fires onStateChanged SYNCHRONOUSLY while the engine is still live, so isLiveEngine would
+        // pass and the callback would run a redundant DISCONNECTED write against this path; removing
+        // the engine first makes isLiveEngine return false. Unlike delete()/stop()/forceKill(), this
+        // path has no stoppingSessions + cancelReconnect wrap to fall back on. Matches the canonical
+        // delete-before-teardown at evictAndForceDestroy() and start()'s catch.
+        //
+        // Do NOT port this reorder to delete()/stop()/forceKill(): there, engines.has(id) staying
+        // TRUE for the duration of the teardown await is the sole deterministic block on a concurrent
+        // start() (start() clears stoppingSessions rather than rejecting on it), so delete-first would
+        // open a start()-during-teardown orphan-engine window. Verified in the teardown-ordering audit.
         this.engines.delete(id);
         // Force-kill whatever got launched so a retry doesn't collide with an orphaned browser.
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
