@@ -373,7 +373,8 @@ describe('IngressService.handle — response contract', () => {
   it('returns the ack for a response route WITHOUT awaiting a slow enqueue', async () => {
     let resolveEnqueue: () => void;
     const enqueuePromise = new Promise<unknown>(resolve => {
-      resolveEnqueue = resolve;
+      // Promise resolve requires an argument; wrap it so resolveEnqueue stays a 0-arg () => void.
+      resolveEnqueue = () => resolve(undefined);
     });
     const d = depsWith({
       enqueue: jest.fn().mockReturnValue(enqueuePromise),
