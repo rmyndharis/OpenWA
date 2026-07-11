@@ -161,7 +161,11 @@ describe('verifyIngressSignature', () => {
   it('standard-webhooks: accepts a correctly-signed request', () => {
     const r = verifyIngressSignature(swSpec, {
       rawBody,
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: swSecret,
       now: 1000 * 1000,
       instanceId,
@@ -172,7 +176,11 @@ describe('verifyIngressSignature', () => {
   it('standard-webhooks: rejects a tampered body', () => {
     const r = verifyIngressSignature(swSpec, {
       rawBody: rawBody + ' ',
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: swSecret,
       now: 1000 * 1000,
       instanceId,
@@ -185,7 +193,11 @@ describe('verifyIngressSignature', () => {
     const otherSecret = 'v1,whsec_' + otherKey.toString('base64');
     const r = verifyIngressSignature(swSpec, {
       rawBody,
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: otherSecret,
       now: 1000 * 1000,
       instanceId,
@@ -196,7 +208,11 @@ describe('verifyIngressSignature', () => {
   it('standard-webhooks: rejects a wrong webhook-id', () => {
     const r = verifyIngressSignature(swSpec, {
       rawBody,
-      headers: { 'webhook-id': 'msg_2', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_2',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: swSecret,
       now: 1000 * 1000,
       instanceId,
@@ -207,7 +223,11 @@ describe('verifyIngressSignature', () => {
   it('standard-webhooks: rejects a stale timestamp beyond tolerance (default 300s)', () => {
     const r = verifyIngressSignature(swSpec, {
       rawBody,
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: swSecret,
       now: (1000 + 301) * 1000,
       instanceId,
@@ -217,13 +237,20 @@ describe('verifyIngressSignature', () => {
   });
 
   it('standard-webhooks: honors a declared toleranceSec', () => {
-    const r = verifyIngressSignature({ scheme: 'standard-webhooks' as const, toleranceSec: 10 }, {
-      rawBody,
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
-      secret: swSecret,
-      now: (1000 + 11) * 1000,
-      instanceId,
-    });
+    const r = verifyIngressSignature(
+      { scheme: 'standard-webhooks' as const, toleranceSec: 10 },
+      {
+        rawBody,
+        headers: {
+          'webhook-id': 'msg_1',
+          'webhook-timestamp': '1000',
+          'webhook-signature': swSign('msg_1', 1000, rawBody),
+        },
+        secret: swSecret,
+        now: (1000 + 11) * 1000,
+        instanceId,
+      },
+    );
     expect(r.ok).toBe(false);
   });
 
@@ -243,7 +270,11 @@ describe('verifyIngressSignature', () => {
   it('standard-webhooks: rejects when the secret is prefix-only (decodes to an empty key)', () => {
     const r = verifyIngressSignature(swSpec, {
       rawBody,
-      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      headers: {
+        'webhook-id': 'msg_1',
+        'webhook-timestamp': '1000',
+        'webhook-signature': swSign('msg_1', 1000, rawBody),
+      },
       secret: 'v1,whsec_',
       now: 1000 * 1000,
       instanceId,
