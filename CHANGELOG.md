@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Integration SDK v1 `response` contract for inbound routes.** A route may now declare a host-side
+  `preflight` (today: `session-alive`, returning 503 for a definitively-dead WhatsApp session) and a
+  declarative `ack` (status/body/headers) returned synchronously to the provider. The plugin ALWAYS runs
+  async (enqueued, full DLQ/retry); for routes declaring `response`, the ack is returned without awaiting
+  enqueue so a queue-disabled deployment cannot block the provider's deadline. A dead session (no live
+  engine or `FAILED`) on a concrete-scoped route now fails fast with 503 instead of being swallowed into
+  202; recoverable statuses still 202+enqueue and let the worker fail fast. The inert `mode: 'sync-reply'`
+  value is deprecated in favor of `response` (kept for SDK v1 additive-only compatibility). Routes with no
+  `response` are byte-identical to today's default fast-ack.
+
 ## [0.8.15] - 2026-07-11
 
 - **WhatsApp Web sessions no longer wedge silently in `INITIALIZING` forever.** `engine.initialize()` was awaited with no timeout, and neither whatsapp-web.js nor Puppeteer bounds the initial browser launch/navigation (`page.goto` is called with `timeout: 0` and the web-version-cache fetch carries no timeout). If Chromium stalled under container memory pressure — realistic at the documented 2 GB Standard profile — the await never resolved or rejected: the session sat in `INITIALIZING` indefinitely, `GET /sessions/:id/qr` 400'd forever, and nothing was logged. The #635 abandoned-engine reaper is reactive (terminal `onError` / rejected re-init only), so nothing recovered it. `initializeEngine()` now races `engine.initialize()` against a deadline derived from the configured auth wait (floor 60 s, or `WWEBJS_AUTH_TIMEOUT_MS` + 30 s when an operator has raised that for slow first boots) so a legitimate slow init is never cut short; on timeout it force-kills the wedged browser, marks the session `DISCONNECTED` (retryable, so the existing reconnect backoff picks it up), and rethrows — surfacing the failure to a manual `POST /start` caller instead of hanging. The race's catch is scoped to the timeout only (`EngineInitTimeoutError`): a real init rejection (e.g. Chromium can't launch) propagates untouched so `start()`'s existing `FAILED`+reason diagnostics are preserved — handling both in one catch would downgrade real failures to `DISCONNECTED` and hide their reason. Thanks @INAPA-desarrolloTIC. [#667]

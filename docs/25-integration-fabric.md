@@ -84,6 +84,11 @@ controller: authenticate → normalize → persist → enqueue → fast `202`) d
 a **dispatch tier** (the processor that runs the plugin). A provider spike, a slow adapter, or a wedged
 plugin never loses events; the tiers scale independently with backpressure.
 
+Alongside this async pipeline, a route may additionally declare a `response` contract — host-side
+`preflight` checks and a declarative `ack` — that shapes the synchronous HTTP response the provider sees
+**without** altering the dispatch model. The plugin still always runs async (enqueued, full DLQ/retry);
+`response` only controls what the provider receives back on the request socket. See §25.4 and §25.8.
+
 ## 25.4 Core components
 
 - **Ingress RPC** — the one new primitive. Delivers a verified inbound request into the worker and returns
@@ -91,7 +96,16 @@ plugin never loses events; the tiers scale independently with backpressure.
 - **Ingress controller** — a `@Public` endpoint (`POST|GET /api/ingress/:pluginId/:instanceId/:route`).
   It is public to the API-key guard because an external provider cannot present the gateway's API key, so
   it self-validates (see §25.6). It never runs the plugin inline — providers enforce short acknowledgement
-  deadlines, so the controller fast-acks and defers the work to the queue.
+  deadlines, so the controller fast-acks and defers the work to the queue. A route may additionally
+  declare a host-side `response` contract that shapes that synchronous reply without making the plugin
+  inline. Its `preflight` checks (today: `session-alive`) run **after** signature verification and
+  **before** the dedup persist — returning `503` only for a definitively-dead concrete-scoped WhatsApp
+  session (no live engine or `FAILED`); recoverable statuses and `READY` pass through to a normal
+  `202`+enqueue so the worker can still fail fast and the dedup row still holds the delivery. A declared
+  `ack` (`status`/`body`/`headers`) replaces the default `202 accepted`. For a route declaring `response`,
+  the ack is returned without awaiting enqueue so a queue-disabled deployment cannot block the provider's
+  deadline; the dedup row already persisted is the durability handle. A route with no `response` is
+  byte-identical to today's default fast-ack.
 - **Plugin instance** — a first-class `instanceId` namespaced under a `pluginId`. One adapter can back
   many instances (for example, one external account per WhatsApp number). Each instance owns a host-minted
   ingress secret, a resolved session scope, and a config slice. It is a serializable field threaded
@@ -161,6 +175,16 @@ host refuses to route ingress to a plugin whose declared **major** differs from 
 major, and the surface is **additive-only** within a major. The worker-facing API centres on
 `ctx.registerWebhook(...)` (claim an inbound route), `ctx.conversations.send(...)` (normalized reply), and
 per-instance mapping and handover helpers.
+
+Within major 1 the surface grows additively. A route's optional `response` contract — `preflight[]`
+(host-side checks such as `session-alive`, evaluated after signature verify), `ack{}` (`status`/`body`/
+`headers`, rendered host-side with `{rawBody}`/`{timestamp}`/`{id}` templates from the verified request),
+and an advisory `deadlineMs` — lets an adapter shape the synchronous HTTP response the provider sees; the
+plugin still always runs async, and a route with no `response` is byte-identical to today's default
+fast-ack. The `mode: 'sync-reply'` value is **deprecated** in favor of `response`: it was inert dead code
+that was never wired to the HTTP response (the pipeline is always async + fast-ack), and it is kept in the
+`mode` union only to preserve SDK v1 additive-only compatibility — do not remove it within major 1, and do
+not rely on it at runtime.
 
 The full SDK reference — every manifest field, the envelope schema, the lifecycle, and the golden
 compatibility fixtures — is published alongside the first adapter, so it documents a contract that can
