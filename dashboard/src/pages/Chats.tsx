@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
+import { nextReconnectState } from '../utils/reconnectState';
 import {
   Search,
   Send,
@@ -356,6 +357,25 @@ export function Chats() {
     onMessageReaction: handleIncomingMessageReaction,
     onMessageRevoked: handleIncomingMessageRevoked,
   });
+
+  // A transient WebSocket gap means message.received/ack/revoke events were missed, and the chat
+  // cache uses staleTime: Infinity so it won't refetch on its own. On a reconnect (isConnected
+  // false→true after a prior connect), invalidate the active session's messages so the thread the
+  // gap left stale refreshes. The transition logic is unit-tested in utils/reconnectState.
+  const reconnectHadConnected = useRef(false);
+  const reconnectWasDisconnected = useRef(false);
+  useEffect(() => {
+    const decision = nextReconnectState({
+      isConnected,
+      hadConnected: reconnectHadConnected.current,
+      wasDisconnected: reconnectWasDisconnected.current,
+    });
+    reconnectHadConnected.current = decision.hadConnected;
+    reconnectWasDisconnected.current = decision.wasDisconnected;
+    if (decision.invalidate) {
+      queryClient.invalidateQueries({ queryKey: ['messages', selectedSessionId] });
+    }
+  }, [isConnected, selectedSessionId, queryClient]);
 
   useEffect(() => {
     if (selectedSessionId && isConnected) {
