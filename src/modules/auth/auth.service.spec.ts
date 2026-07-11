@@ -193,6 +193,48 @@ describe('AuthService', () => {
       expect(result.name).toBe('Updated');
       expect(result.role).toBe(ApiKeyRole.OPERATOR); // unchanged
     });
+
+    it('evicts active WebSocket sockets when allowedSessions narrows', async () => {
+      const evictApiKey = jest.fn();
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockReturnValue({ evictApiKey });
+      const key = createMockApiKey({ allowedSessions: ['sess-A', 'sess-B'] });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.update('uuid-1', { allowedSessions: ['sess-A'] });
+
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('evicts active WebSocket sockets when the role changes', async () => {
+      const evictApiKey = jest.fn();
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockReturnValue({ evictApiKey });
+      const key = createMockApiKey({ role: ApiKeyRole.OPERATOR });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.update('uuid-1', { role: ApiKeyRole.ADMIN });
+
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('does not evict on a benign (name-only) update', async () => {
+      const evictApiKey = jest.fn();
+      jest
+        .spyOn((service as unknown as { moduleRef: { get: (...a: unknown[]) => unknown } }).moduleRef, 'get')
+        .mockReturnValue({ evictApiKey });
+      const key = createMockApiKey({ name: 'original' });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+
+      await service.update('uuid-1', { name: 'renamed' });
+
+      expect(evictApiKey).not.toHaveBeenCalled();
+    });
   });
 
   // ── delete / revoke ───────────────────────────────────────────────

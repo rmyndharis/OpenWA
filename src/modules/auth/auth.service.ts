@@ -173,13 +173,35 @@ export class AuthService implements OnModuleInit {
   async update(id: string, dto: UpdateApiKeyDto): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
 
+    // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
+    // allowedIps, allowedSessions, or expiry can widen or restrict what an already-connected WebSocket
+    // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
+    // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
+    // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
+    const before = {
+      role: apiKey.role,
+      allowedIps: apiKey.allowedIps,
+      allowedSessions: apiKey.allowedSessions,
+      expiresAt: apiKey.expiresAt,
+    };
+
     if (dto.name) apiKey.name = dto.name;
     if (dto.role) apiKey.role = dto.role;
     if (dto.allowedIps !== undefined) apiKey.allowedIps = dto.allowedIps;
     if (dto.allowedSessions !== undefined) apiKey.allowedSessions = dto.allowedSessions;
     if (dto.expiresAt !== undefined) apiKey.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
-    return this.apiKeyRepository.save(apiKey);
+    const saved = await this.apiKeyRepository.save(apiKey);
+
+    const authzChanged =
+      saved.role !== before.role ||
+      saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
+      JSON.stringify(saved.allowedIps) !== JSON.stringify(before.allowedIps) ||
+      JSON.stringify(saved.allowedSessions) !== JSON.stringify(before.allowedSessions);
+    if (authzChanged) {
+      this.evictActiveSockets(id);
+    }
+    return saved;
   }
 
   async delete(id: string): Promise<void> {
