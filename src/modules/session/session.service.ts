@@ -20,6 +20,7 @@ import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { userPart } from '../../engine/identity/wa-id';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
@@ -1161,7 +1162,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // propagate untouched so start()'s catch keeps owning FAILED+reason (the diagnosability #600/#631
     // added) — pre-deleting the engine and writing DISCONNECTED here would make start()'s
     // `engines.get(id)` return undefined, skip its FAILED write, and hide the failure reason.
-    const engineInitTimeoutMs = 60_000;
+    // The deadline MUST exceed the auth wait whatsapp-web.js runs INSIDE engine.initialize()
+    // (authTimeoutMs — the inject() poll for WA Web's JS to bootstrap, raisable via
+    // WWEBJS_AUTH_TIMEOUT_MS for slow first boots, e.g. WSL2/low-resource containers). A shorter
+    // outer deadline would SIGKILL a legitimate slow init mid-auth. Floor 60s for the hang case;
+    // otherwise give the configured auth window + 30s for launch/navigation/post-inject overhead.
+    const engineInitTimeoutMs = Math.max(60_000, (resolveAuthTimeoutMs() ?? 30_000) + 30_000);
     // Promise.race can't cancel the losing promise, so swallow a late rejection from initPromise.
     initPromise.catch(() => undefined);
 
@@ -1180,10 +1186,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           action: 'engine_init_timeout',
         });
         this.sessionErrors.set(id, err.message);
+        // Evict from the map BEFORE tearing down. forceDestroy() drives the adapter to
+        // EngineStatus.DISCONNECTED, which fires onStateChanged synchronously; while the engine is
+        // still in the map that callback would pass the isLiveEngine guard and run (and the same
+        // window admits onError/onDisconnected, which could write FAILED or schedule a reconnect
+        // against this path). Deleting first makes isLiveEngine return false so no teardown-induced
+        // callback can race the DISCONNECTED write below — the canonical delete-before-teardown used
+        // at evictAndForceDestroy(), start()'s catch, and stop().
+        this.engines.delete(id);
         // Force-kill whatever got launched so a retry doesn't collide with an orphaned browser.
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        this.engines.delete(id);
         await this.updateStatus(id, SessionStatus.DISCONNECTED);
       }
       throw err;

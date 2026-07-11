@@ -687,6 +687,12 @@ describe('SessionService', () => {
       mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
 
       jest.useFakeTimers();
+      // A start()-path timeout must NOT auto-schedule a reconnect (reconnect is executeReconnect's
+      // domain; a manual start that times out leaves the session DISCONNECTED for the operator).
+      const scheduleReconnect = jest.spyOn(
+        service as unknown as { scheduleReconnect: (...a: unknown[]) => void },
+        'scheduleReconnect',
+      );
       try {
         const pending = service.start('sess-uuid-1');
         // Attach the handler synchronously so the timeout rejection is never briefly unhandled
@@ -705,8 +711,43 @@ describe('SessionService', () => {
         expect(mockEngine.forceDestroy).toHaveBeenCalled(); // wedged browser reaped
         expect(intern().engines.has('sess-uuid-1')).toBe(false); // slot freed for retry
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
+        expect(scheduleReconnect).not.toHaveBeenCalled(); // no auto-reconnect from a start() timeout
       } finally {
         jest.useRealTimers();
+      }
+    });
+
+    it('extends the init deadline past 60s when WWEBJS_AUTH_TIMEOUT_MS is raised, so a legitimate slow auth wait is not cut short', async () => {
+      // #353 slow-boot escape hatch: operators raise the auth wait because WA-Web's inject poll
+      // legitimately takes longer on WSL2/low-resource containers. The init race must extend with
+      // it, not SIGKILL the init at the 60s floor mid-auth.
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
+      process.env.WWEBJS_AUTH_TIMEOUT_MS = '120000'; // → derived deadline max(60s, 120s+30s) = 150s
+
+      jest.useFakeTimers();
+      try {
+        const pending = service.start('sess-uuid-1');
+        let caught: unknown;
+        const settled = pending.catch((e: unknown) => {
+          caught = e;
+        });
+
+        // At 60s the old hardcoded deadline would have fired and killed a healthy slow init; the
+        // derived one must still be waiting.
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(caught).toBeUndefined();
+        expect(mockEngine.forceDestroy).not.toHaveBeenCalled(); // NOT cut short mid-auth
+
+        // Past the derived 150s deadline the race finally fires.
+        await jest.advanceTimersByTimeAsync(90_000); // 60s + 90s = 150s
+        await settled;
+        expect(caught).toBeInstanceOf(EngineInitTimeoutError);
+        expect(String(caught)).toMatch(/timed out after 150000ms/i);
+      } finally {
+        jest.useRealTimers();
+        delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
       }
     });
   });
