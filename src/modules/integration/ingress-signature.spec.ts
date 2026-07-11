@@ -150,4 +150,115 @@ describe('verifyIngressSignature', () => {
     });
     expect(r2.ok).toBe(false);
   });
+
+  // --- standard-webhooks (Standard Webhooks spec; ported from supabase-otp-hook/verify.ts) ---
+  const swRawKey = Buffer.from('0123456789abcdef0123456789abcdef', 'hex'); // 32 raw bytes
+  const swSecret = 'v1,whsec_' + swRawKey.toString('base64');
+  const swSign = (id: string, ts: number, body: string) =>
+    'v1,' + createHmac('sha256', swRawKey).update(`${id}.${ts}.${body}`).digest('base64');
+  const swSpec = { scheme: 'standard-webhooks' as const };
+
+  it('standard-webhooks: accepts a correctly-signed request', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: swSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('standard-webhooks: rejects a tampered body', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody: rawBody + ' ',
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: swSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('standard-webhooks: rejects a wrong key (different secret)', () => {
+    const otherKey = Buffer.alloc(32, 1);
+    const otherSecret = 'v1,whsec_' + otherKey.toString('base64');
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: otherSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('standard-webhooks: rejects a wrong webhook-id', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_2', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: swSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('standard-webhooks: rejects a stale timestamp beyond tolerance (default 300s)', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: swSecret,
+      now: (1000 + 301) * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/replay|tolerance/i);
+  });
+
+  it('standard-webhooks: honors a declared toleranceSec', () => {
+    const r = verifyIngressSignature({ scheme: 'standard-webhooks' as const, toleranceSec: 10 }, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: swSecret,
+      now: (1000 + 11) * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('standard-webhooks: accepts a candidate list with a bogus and a valid v1, candidate', () => {
+    const good = swSign('msg_1', 1000, rawBody);
+    const sigHeader = `v1,deadbeef= v1,${good.slice(3)}`; // bogus candidate first, then the valid one
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': sigHeader },
+      secret: swSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('standard-webhooks: rejects when the secret is prefix-only (decodes to an empty key)', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000', 'webhook-signature': swSign('msg_1', 1000, rawBody) },
+      secret: 'v1,whsec_',
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('standard-webhooks: rejects when a required header is missing', () => {
+    const r = verifyIngressSignature(swSpec, {
+      rawBody,
+      headers: { 'webhook-id': 'msg_1', 'webhook-timestamp': '1000' }, // no webhook-signature
+      secret: swSecret,
+      now: 1000 * 1000,
+      instanceId,
+    });
+    expect(r.ok).toBe(false);
+  });
 });

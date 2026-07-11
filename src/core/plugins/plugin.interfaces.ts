@@ -179,7 +179,18 @@ export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[key
 
 /** How an inbound webhook's authenticity is established before the plugin sees it. */
 export interface IngressSignatureSpec {
-  scheme: 'hmac-sha256' | 'shared-secret' | 'none';
+  /**
+   * - `hmac-sha256`: HMAC over a `contentTemplate` (tokens `{rawBody}`/`{timestamp}`/`{id}`).
+   * - `shared-secret`: constant-time compare of a header value against `instance.secret`.
+   * - `standard-webhooks`: host-side [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+   *   verify. The wire format is fixed by the spec (headers `webhook-id`/`webhook-timestamp`/
+   *   `webhook-signature`, signed content `${webhook-id}.${webhook-timestamp}.${rawBody}`, base64
+   *   HMAC-SHA256 with the base64-decoded Svix key, `v1,` prefix, space-separated candidate list), so
+   *   `header`/`contentTemplate`/`encoding`/`prefix`/`timestampHeader` are IGNORED — only
+   *   `toleranceSec` (default 300) and `dedupHeader` apply. The operator pastes the Svix secret
+   *   (`v1,whsec_<base64>`) as `instance.secret`.
+   */
+  scheme: 'hmac-sha256' | 'shared-secret' | 'standard-webhooks' | 'none';
   header?: string;
   // Template over which the HMAC is computed. `{rawBody}` `{timestamp}` `{id}` placeholders.
   contentTemplate?: string;

@@ -138,3 +138,21 @@ describe('validateIngressManifest: response contract', () => {
     ).toThrow(/'bad header'/);
   });
 });
+
+describe('validateIngressManifest: standard-webhooks scheme', () => {
+  it('loads a standard-webhooks route without header/contentTemplate', () => {
+    expect(() =>
+      validateIngressManifest(
+        manifestWithRoute({ signature: { scheme: 'standard-webhooks', dedupHeader: 'webhook-id' } }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects a standard-webhooks route with a non-positive toleranceSec', () => {
+    expect(() =>
+      validateIngressManifest(
+        manifestWithRoute({ signature: { scheme: 'standard-webhooks', dedupHeader: 'webhook-id', toleranceSec: 0 } }),
+      ),
+    ).toThrow(/toleranceSec/);
+  });
+});
