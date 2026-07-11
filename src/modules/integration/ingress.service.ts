@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { safeEqualStr, verifyIngressSignature } from './ingress-signature';
 import { PluginIngressRoute } from '../../core/plugins/plugin.interfaces';
 import { IngressJobData } from '../queue/processors/ingress.processor';
+import type { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import { evaluatePreflight } from './ingress-preflight';
+import { renderAck } from './ingress-ack';
 
 export interface IngressRequest {
   pluginId: string;
@@ -43,6 +46,14 @@ export interface IngressDeps {
   // Returns an enqueue outcome (queued/dispatched/failed); handle() ignores it — only durability
   // follow-up paths like redrive act on it. Typed as unknown here to keep this pure module decoupled.
   enqueue: (data: IngressJobData, jobId: string) => Promise<unknown>;
+  // Optional host-side session-liveness probe for the `session-alive` preflight: returns the in-memory
+  // EngineStatus for a concrete session scope, or undefined when no engine is live. O(1) (a Map read +
+  // field read); MUST NOT call engine.initialize() or any blocking call. Absent (pure unit tests) → the
+  // session-alive check skips (passes) rather than false-rejecting.
+  sessionStatus?: (scope: string) => EngineStatus | undefined;
+  // Optional structured sink for preflight rejections, so operators can audit deliveries that were
+  // rejected host-side (and therefore leave no dedup/DLQ row). Absent in pure unit tests.
+  log?: (event: string, meta: Record<string, unknown>) => void;
   now: () => number;
 }
 
@@ -54,7 +65,7 @@ export interface IngressDeps {
 export class IngressService {
   constructor(private readonly deps: IngressDeps) {}
 
-  async handle(req: IngressRequest): Promise<{ status: number; body?: string }> {
+  async handle(req: IngressRequest): Promise<{ status: number; body?: string; headers?: Record<string, string> }> {
     const instance = await this.deps.instances.resolve(req.pluginId, req.instanceId);
     if (!instance || !instance.enabled) return { status: 404, body: 'unknown instance' };
 
@@ -84,6 +95,22 @@ export class IngressService {
     });
     if (!verdict.ok) return { status: 401, body: verdict.reason ?? 'signature verification failed' };
 
+    // Host-side preflight (e.g. session-alive). AFTER signature verify (so an unauthenticated caller
+    // cannot probe liveness) and BEFORE the dedup persist (so a 5xx-rejected delivery never writes a
+    // dedup row that would swallow the provider's retry as a 200 'duplicate' — the dedup trap). A
+    // rejection leaves no dedup/DLQ row, so log it for operator audit.
+    const preflight = evaluatePreflight(route, instance.sessionScope, this.deps.sessionStatus);
+    if (preflight) {
+      this.deps.log?.('ingress_preflight_rejected', {
+        pluginId: req.pluginId,
+        instanceId: req.instanceId,
+        route: req.route,
+        status: preflight.status,
+        sessionScope: instance.sessionScope,
+      });
+      return { status: preflight.status, body: preflight.body };
+    }
+
     const dedupHeader = (route.dedupHeader ?? route.signature.dedupHeader ?? 'x-delivery').toLowerCase();
     const deliveryId = req.headers[dedupHeader] ?? deriveDeliveryId(req);
     const payload = { headers: req.headers, query: req.query, body: req.rawBody, rawBody: req.rawBody };
@@ -100,19 +127,32 @@ export class IngressService {
     // Best-effort conversation id for P1 ordering. Never throws — a malformed body just yields undefined.
     const providerConversationId = extractConversationId(route.conversationId, req.headers, req.rawBody);
 
-    await this.deps.enqueue(
-      {
-        pluginId: req.pluginId,
-        instanceId: req.instanceId,
-        route: req.route,
-        deliveryId,
-        sessionId: instance.sessionScope ?? undefined,
-        providerConversationId,
-        payload,
-      },
+    const jobData: IngressJobData = {
+      pluginId: req.pluginId,
+      instanceId: req.instanceId,
+      route: req.route,
       deliveryId,
-    );
-    return { status: 202, body: 'accepted' };
+      sessionId: instance.sessionScope ?? undefined,
+      providerConversationId,
+      payload,
+    };
+
+    const ack = renderAck(route.response?.ack, {
+      rawBody: req.rawBody,
+      timestamp: String(Math.floor(this.deps.now() / 1000)),
+      id: deliveryId,
+    });
+
+    if (route.response) {
+      // Sync-response route: the ack is host-side and final; enqueue (queued or inline) must NOT block
+      // it — a queue-disabled deployment otherwise holds the HTTP response for up to the inline dispatch
+      // timeout. enqueue() never rejects (it swallows inline failures and the factory wrapper writes a
+      // DLQ row on 'failed'), so fire-and-forget is safe; the dedup row already persisted is the durability handle.
+      void this.deps.enqueue(jobData, deliveryId);
+    } else {
+      await this.deps.enqueue(jobData, deliveryId);
+    }
+    return ack;
   }
 }
 

@@ -1,4 +1,5 @@
 import { IngressService, extractConversationId } from './ingress.service';
+import { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 
 function deps(overrides: Record<string, unknown> = {}) {
   return {
@@ -267,5 +268,147 @@ describe('extractConversationId', () => {
 
   it('returns undefined on a malformed body without throwing', () => {
     expect(extractConversationId({ jsonPointer: '/a/b' }, {}, 'not json')).toBeUndefined();
+  });
+});
+
+describe('IngressService.handle — response contract', () => {
+  const baseReq = {
+    pluginId: 'p',
+    instanceId: 'i1',
+    route: 'send-sms',
+    method: 'POST',
+    headers: { 'x-delivery': 'd1' },
+    query: {} as Record<string, string>,
+    rawBody: '{}',
+  };
+
+  function depsWith(overrides: Record<string, unknown> = {}) {
+    return {
+      instances: {
+        resolve: jest.fn().mockResolvedValue({
+          id: 'p:i1',
+          pluginId: 'p',
+          instanceId: 'i1',
+          secret: 's',
+          enabled: true,
+          sessionScope: 'sess-1',
+          verifyToken: null,
+        }),
+      },
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+      }),
+      events: { recordOrSkip: jest.fn().mockResolvedValue(true) },
+      enqueue: jest.fn().mockResolvedValue(undefined),
+      log: jest.fn(),
+      now: () => 0,
+      ...overrides,
+    };
+  }
+
+  it('rejects 503 on a dead session BEFORE dedup or enqueue (no dedup trap)', async () => {
+    const d = depsWith({
+      sessionStatus: jest.fn().mockReturnValue(undefined),
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { preflight: [{ type: 'session-alive' }] },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(503);
+    expect(d.events.recordOrSkip).not.toHaveBeenCalled();
+    expect(d.enqueue).not.toHaveBeenCalled();
+    expect(d.log).toHaveBeenCalledWith(
+      'ingress_preflight_rejected',
+      expect.objectContaining({ status: 503, route: 'send-sms' }),
+    );
+  });
+
+  it('passes a READY session through to ack + enqueue', async () => {
+    const d = depsWith({
+      sessionStatus: jest.fn().mockReturnValue(EngineStatus.READY),
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { preflight: [{ type: 'session-alive' }] },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(202);
+    expect(d.enqueue).toHaveBeenCalled();
+  });
+
+  it('renders a declared ack status/body/headers', async () => {
+    const d = depsWith({
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { ack: { status: 200, body: '{"ok":true}', headers: { 'content-type': 'application/json' } } },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('{"ok":true}');
+    expect(res.headers).toEqual({ 'content-type': 'application/json' });
+  });
+
+  it('returns the ack for a response route WITHOUT awaiting a slow enqueue', async () => {
+    let resolveEnqueue: () => void;
+    const enqueuePromise = new Promise<unknown>(resolve => {
+      resolveEnqueue = resolve;
+    });
+    const d = depsWith({
+      enqueue: jest.fn().mockReturnValue(enqueuePromise),
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { ack: { status: 200 } },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(200); // ack returned before enqueue resolved
+    expect(d.enqueue).toHaveBeenCalled();
+    resolveEnqueue!();
+  });
+
+  it('keeps the duplicate path as 200 "duplicate" regardless of a declared ack', async () => {
+    const d = depsWith({
+      events: { recordOrSkip: jest.fn().mockResolvedValue(false) },
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { ack: { status: 200, body: '{"ok":true}' } },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('duplicate');
+    expect(d.enqueue).not.toHaveBeenCalled();
   });
 });
