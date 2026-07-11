@@ -393,6 +393,30 @@ describe('IngressService.handle — response contract', () => {
     resolveEnqueue!();
   });
 
+  it('survives a rejecting enqueue on a response route (defensive .catch, no unhandled rejection)', async () => {
+    const d = depsWith({
+      log: jest.fn(),
+      enqueue: jest.fn().mockRejectedValue(new Error('boom')),
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'send-sms',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'none' },
+        dedupHeader: 'x-delivery',
+        response: { ack: { status: 200 } },
+      }),
+    });
+    const res = await new IngressService(d).handle(baseReq);
+    expect(res.status).toBe(200); // ack returned despite the rejected enqueue
+    // The rejected enqueue is caught + logged, not thrown. Flush microtasks so the .catch handler runs.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(d.log).toHaveBeenCalledWith(
+      'ingress_enqueue_unhandled',
+      expect.objectContaining({ deliveryId: 'd1', error: 'boom' }),
+    );
+  });
+
   it('keeps the duplicate path as 200 "duplicate" regardless of a declared ack', async () => {
     const d = depsWith({
       events: { recordOrSkip: jest.fn().mockResolvedValue(false) },

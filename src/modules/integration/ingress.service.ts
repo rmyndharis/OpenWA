@@ -146,9 +146,18 @@ export class IngressService {
     if (route.response) {
       // Sync-response route: the ack is host-side and final; enqueue (queued or inline) must NOT block
       // it — a queue-disabled deployment otherwise holds the HTTP response for up to the inline dispatch
-      // timeout. enqueue() never rejects (it swallows inline failures and the factory wrapper writes a
-      // DLQ row on 'failed'), so fire-and-forget is safe; the dedup row already persisted is the durability handle.
-      void this.deps.enqueue(jobData, deliveryId);
+      // timeout. enqueue() is not awaited; the dedup row already persisted is the durability handle. The
+      // .catch() is a defensive guard: enqueue() never rejects today (it swallows inline failures and the
+      // factory wrapper writes a DLQ row on 'failed'), but a future regression must not become an unhandled
+      // rejection that crashes the process on the ingress hot path.
+      void this.deps.enqueue(jobData, deliveryId).catch(err => {
+        this.deps.log?.('ingress_enqueue_unhandled', {
+          pluginId: req.pluginId,
+          instanceId: req.instanceId,
+          deliveryId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     } else {
       await this.deps.enqueue(jobData, deliveryId);
     }
