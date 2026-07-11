@@ -482,6 +482,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         },
       );
 
+      // Cancel any reconnect timer a prior failed executeReconnect left pending, BEFORE installing
+      // fresh reconnect state below. Without this, the stale timer can fire after start() recreates
+      // the engine and destroy/replace it (potentially orphaning the Chromium process). Idempotent:
+      // a no-op when no reconnect state exists (the common fresh-start case).
+      this.cancelReconnect(id);
       // Initialize reconnect state from the (untrusted) opaque session.config — coerced + clamped
       // so a poisoned value can't drive a NaN/immediate-relaunch storm or an unbounded loop.
       const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
