@@ -3,7 +3,7 @@ import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
+import { SessionService, ACK_RECONCILE_DELAY_MS, EngineInitTimeoutError } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -653,6 +653,61 @@ describe('SessionService', () => {
 
       expect(intern().engines.has('sess-uuid-1')).toBe(false);
       expect(mockEngine.forceDestroy).toHaveBeenCalled();
+    });
+  });
+
+  // ── initializeEngine init-timeout race (#667 follow-up) ───────────
+  describe('initializeEngine init-timeout race', () => {
+    type Intern = {
+      engines: Map<string, unknown>;
+      sessionErrors: Map<string, string>;
+    };
+    const intern = () => service as unknown as Intern;
+
+    it('a REAL engine.initialize() rejection still becomes FAILED with the reason recorded (the timeout-scoped catch must NOT downgrade it to DISCONNECTED)', async () => {
+      // Regression guard for #600/#631 diagnosability: a real init failure (e.g. Chromium can't launch)
+      // must stay FAILED+reason. The catch inside initializeEngine handles ONLY the timeout case and
+      // rethrows everything else untouched, so start()'s catch still owns the FAILED+reason path.
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      mockEngine.initialize.mockRejectedValueOnce(new Error('chromium launch failed'));
+
+      await expect(service.start('sess-uuid-1')).rejects.toThrow('chromium launch failed');
+
+      expect(intern().engines.has('sess-uuid-1')).toBe(false); // evicted, not left wedged
+      expect(mockEngine.forceDestroy).toHaveBeenCalled();
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.FAILED });
+      expect(intern().sessionErrors.get('sess-uuid-1')).toBe('chromium launch failed');
+    });
+
+    it('a wedged engine.initialize() (never settles) is force-destroyed, evicted, marked DISCONNECTED, and rethrows after 60s', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      // The hang: initialize() neither resolves nor rejects.
+      mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
+
+      jest.useFakeTimers();
+      try {
+        const pending = service.start('sess-uuid-1');
+        // Attach the handler synchronously so the timeout rejection is never briefly unhandled
+        // during the fake-timer tick (which would otherwise fail the test for the wrong reason).
+        let caught: unknown;
+        const settled = pending.catch((e: unknown) => {
+          caught = e;
+        });
+        // Advance past the 60s init deadline (the async variant flushes microtasks so the
+        // teardown + status writes settle within the same advance).
+        await jest.advanceTimersByTimeAsync(60_000);
+        await settled;
+
+        expect(caught).toBeInstanceOf(EngineInitTimeoutError);
+        expect(String(caught)).toMatch(/timed out after 60000ms/i);
+        expect(mockEngine.forceDestroy).toHaveBeenCalled(); // wedged browser reaped
+        expect(intern().engines.has('sess-uuid-1')).toBe(false); // slot freed for retry
+        expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
