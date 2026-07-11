@@ -29,11 +29,7 @@ html[lang='ar'] {
 
 a {
   font-weight: 500;
-  color: #646cff;
   text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
 }
 
 body {
@@ -73,12 +69,8 @@ button {
   font-size: 1em;
   font-weight: 500;
   font-family: inherit;
-  background-color: #1a1a1a;
   cursor: pointer;
   transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
 }
 /* Visible keyboard focus — cross-browser and keyboard-only, so the ring guides Tab navigation
    without flashing on every mouse click. */
@@ -104,12 +96,6 @@ html {
   :root:not([data-theme='dark']) {
     color: #213547;
     background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  :root:not([data-theme='dark']) button {
-    background-color: #f9f9f9;
   }
 }
 
