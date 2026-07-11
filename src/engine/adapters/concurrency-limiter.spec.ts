@@ -75,4 +75,34 @@ describe('ConcurrencyLimiter', () => {
     await expect(limiter.run(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     await expect(limiter.run(() => Promise.resolve('after'))).resolves.toBe('after'); // slot was released
   });
+
+  it('rejects an arrival when the waiter queue is full (bounded, no unbounded heap growth)', async () => {
+    const limiter = new ConcurrencyLimiter(1, 1); // 1 active slot, 1 queued waiter max
+    let release!: () => void;
+    const active = limiter.run(
+      () =>
+        new Promise<void>(resolve => {
+          release = resolve;
+        }),
+    ); // takes the only slot
+    const queued = limiter.run(() => Promise.resolve('queued')); // parks in the 1 waiter slot
+    // The (max + K)th arrival must REJECT, not park — otherwise a burst grows heap without bound.
+    await expect(limiter.run(() => Promise.resolve('overflow'))).rejects.toThrow(/queue full/i);
+    release!();
+    await Promise.all([active, queued]);
+  });
+
+  it('keeps an unbounded queue when maxQueued is omitted (backward compatible)', async () => {
+    const limiter = new ConcurrencyLimiter(1);
+    let release!: () => void;
+    const active = limiter.run(
+      () =>
+        new Promise<void>(resolve => {
+          release = resolve;
+        }),
+    );
+    const parked = Array.from({ length: 50 }, () => limiter.run(() => Promise.resolve('ok')));
+    release!(); // drain: active finishes, then the 50 parked tasks run one at a time
+    await expect(Promise.all([active, ...parked])).resolves.toHaveLength(51);
+  });
 });

@@ -8,15 +8,25 @@ export class ConcurrencyLimiter {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
 
-  /** `max` is clamped to at least 1 so a misconfigured 0/negative value never deadlocks the gate. */
-  constructor(private readonly max: number) {
+  /**
+   * `max` is clamped to at least 1 so a misconfigured 0/negative value never deadlocks the gate.
+   * `maxQueued` bounds how many tasks may PARK waiting for a slot; an (active + queued)th arrival is
+   * rejected (throws) instead of parking forever — this caps in-heap state under a burst, since each
+   * parked closure holds its task (and an inbound media buffer) alive. Default Infinity preserves the
+   * original unbounded-queue behavior for callers that don't opt into a cap.
+   */
+  constructor(private readonly max: number, private readonly maxQueued = Infinity) {
     this.max = Math.max(1, Math.floor(max));
+    this.maxQueued = Math.max(0, Math.floor(maxQueued));
   }
 
   async run<T>(task: () => Promise<T>): Promise<T> {
     if (this.active < this.max) {
       this.active++;
     } else {
+      if (this.waiters.length >= this.maxQueued) {
+        throw new Error('ConcurrencyLimiter queue full');
+      }
       // Park until a finishing task HANDS us its slot. We must not increment on wake: the count was
       // never released (it was transferred), so re-incrementing would over-admit when a fresh run()
       // raced into the microtask gap and already took a (wrongly-freed) slot.

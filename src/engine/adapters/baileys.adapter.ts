@@ -117,7 +117,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private readonly logger = createLogger('BaileysAdapter');
   // Bound concurrent inbound media downloads: each materialises a full decrypted buffer in heap, so an
   // unbounded fire-and-forget loop lets a sender flood the gateway with N parallel multi-MB allocations.
-  private readonly inboundLimiter = new ConcurrencyLimiter(inboundMediaConcurrency());
+  private readonly inboundLimiter = new ConcurrencyLimiter(
+    inboundMediaConcurrency(),
+    // Queue cap == active slots: beyond (active + queued) concurrent media messages, reject instead of
+    // parking, so a burst can't grow heap without bound (each parked closure holds the message).
+    inboundMediaConcurrency(),
+  );
   private readonly authPath: string;
   private readonly sessionStore: BaileysSessionStore;
   private sock: WASocket | null = null;
@@ -919,7 +924,19 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
       // keeps the newest by timestamp — and none are dropped (the limiter queues the overflow).
-      void this.inboundLimiter.run(() => this.processInboundMessage(msg));
+      // Throttle through the limiter so a burst of media messages can't run unbounded parallel
+      // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
+      // keeps the newest by timestamp. When the waiter queue is saturated we REJECT instead of parking
+      // forever, and re-process the message WITHOUT media: the message (body + metadata) is still
+      // emitted, but we skip the heap-heavy download that the limiter exists to bound.
+      void this.inboundLimiter
+        .run(() => this.processInboundMessage(msg))
+        .catch(() => {
+          this.logger.warn('Inbound media limiter saturated; emitting message without media', {
+            msgId: msg.key?.id ?? 'unknown',
+          });
+          return this.processInboundMessage(msg, { skipMedia: true });
+        });
     }
   }
 
@@ -946,7 +963,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     });
   }
 
-  private async processInboundMessage(msg: WAMessage): Promise<void> {
+  private async processInboundMessage(msg: WAMessage, opts?: { skipMedia?: boolean }): Promise<void> {
     try {
       const b = await this.loadLib();
       const remoteJid = msg.key.remoteJid!;
@@ -1002,7 +1019,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       }
 
       // --- Normal message: enrich + emit ---
-      const incoming = await this.mapMessage(msg, contentType);
+      const incoming = await this.mapMessage(msg, contentType, { skipMediaDownload: opts?.skipMedia });
       if (msg.key.fromMe === true) {
         this.callbacks.onMessageCreate?.(incoming);
       } else {
