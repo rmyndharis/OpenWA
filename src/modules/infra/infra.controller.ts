@@ -188,6 +188,70 @@ interface LidMappingRow {
   updatedAt: string;
 }
 
+interface PluginInstanceRow {
+  id: string;
+  pluginId: string;
+  instanceId: string;
+  sessionScope: string | null;
+  secret: string;
+  verifyToken: string | null;
+  config: string | Record<string, unknown> | null;
+  enabled: boolean | number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ConversationMappingRow {
+  id: string;
+  sessionId: string;
+  chatId: string;
+  pluginId: string;
+  instanceId: string;
+  providerConversationId: string;
+  handoverState: string;
+  metadata: string | Record<string, unknown> | null;
+  updatedAt: string;
+}
+
+interface IngressEventRow {
+  id: string;
+  instanceId: string;
+  pluginId: string;
+  providerDeliveryId: string;
+  route: string;
+  payload: string | Record<string, unknown>;
+  sessionId: string | null;
+  createdAt: string;
+}
+
+interface WebhookDeliveryFailureRow {
+  id: string;
+  webhookId: string;
+  sessionId: string;
+  event: string;
+  url: string;
+  idempotencyKey: string | null;
+  deliveryId: string | null;
+  attempts: number;
+  lastStatusCode: number | null;
+  lastError: string;
+  createdAt: string;
+}
+
+interface IntegrationDeliveryFailureRow {
+  id: string;
+  direction: string;
+  pluginId: string;
+  instanceId: string;
+  sessionId: string | null;
+  deliveryId: string | null;
+  attempts: number;
+  lastError: string;
+  payload: string | Record<string, unknown> | null;
+  redriven: boolean | number;
+  createdAt: string;
+}
+
 interface MigrationTables {
   sessions: SessionRow[];
   webhooks: WebhookRow[];
@@ -196,6 +260,11 @@ interface MigrationTables {
   templates: TemplateRow[];
   baileysStoredMessages: BaileysStoredMessageRow[];
   lidMappings: LidMappingRow[];
+  pluginInstances: PluginInstanceRow[];
+  conversationMappings: ConversationMappingRow[];
+  ingressEvents: IngressEventRow[];
+  webhookDeliveryFailures: WebhookDeliveryFailureRow[];
+  integrationDeliveryFailures: IntegrationDeliveryFailureRow[];
 }
 
 // Saved infrastructure config returned to the dashboard form for hydration. Secret
@@ -821,6 +890,11 @@ export class InfraController {
       templates: number;
       baileysStoredMessages: number;
       lidMappings: number;
+      pluginInstances: number;
+      conversationMappings: number;
+      ingressEvents: number;
+      webhookDeliveryFailures: number;
+      integrationDeliveryFailures: number;
     };
   }> {
     // Get all entities from Data DB
@@ -833,6 +907,11 @@ export class InfraController {
     let templates: TemplateRow[] = [];
     let baileysStoredMessages: BaileysStoredMessageRow[] = [];
     let lidMappings: LidMappingRow[] = [];
+    let pluginInstances: PluginInstanceRow[] = [];
+    let conversationMappings: ConversationMappingRow[] = [];
+    let ingressEvents: IngressEventRow[] = [];
+    let webhookDeliveryFailures: WebhookDeliveryFailureRow[] = [];
+    let integrationDeliveryFailures: IntegrationDeliveryFailureRow[] = [];
 
     try {
       messages = await this.dataDataSource.query<MessageRow[]>('SELECT * FROM messages');
@@ -866,6 +945,40 @@ export class InfraController {
       this.logger.debug('Lid mappings table not available for export', { error: String(error) });
     }
 
+    // Integration Fabric + both DLQs were added after the original migration set; tolerate a genuinely
+    // absent table (older DB) like the tables above rather than 500-ing the whole export.
+    try {
+      pluginInstances = await this.dataDataSource.query<PluginInstanceRow[]>('SELECT * FROM plugin_instances');
+    } catch (error) {
+      this.logger.debug('plugin_instances table not available for export', { error: String(error) });
+    }
+    try {
+      conversationMappings = await this.dataDataSource.query<ConversationMappingRow[]>(
+        'SELECT * FROM conversation_mappings',
+      );
+    } catch (error) {
+      this.logger.debug('conversation_mappings table not available for export', { error: String(error) });
+    }
+    try {
+      ingressEvents = await this.dataDataSource.query<IngressEventRow[]>('SELECT * FROM ingress_events');
+    } catch (error) {
+      this.logger.debug('ingress_events table not available for export', { error: String(error) });
+    }
+    try {
+      webhookDeliveryFailures = await this.dataDataSource.query<WebhookDeliveryFailureRow[]>(
+        'SELECT * FROM webhook_delivery_failures',
+      );
+    } catch (error) {
+      this.logger.debug('webhook_delivery_failures table not available for export', { error: String(error) });
+    }
+    try {
+      integrationDeliveryFailures = await this.dataDataSource.query<IntegrationDeliveryFailureRow[]>(
+        'SELECT * FROM integration_delivery_failures',
+      );
+    } catch (error) {
+      this.logger.debug('integration_delivery_failures table not available for export', { error: String(error) });
+    }
+
     return {
       exportedAt: new Date().toISOString(),
       dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
@@ -877,6 +990,11 @@ export class InfraController {
         templates,
         baileysStoredMessages,
         lidMappings,
+        pluginInstances,
+        conversationMappings,
+        ingressEvents,
+        webhookDeliveryFailures,
+        integrationDeliveryFailures,
       },
       counts: {
         sessions: sessions.length,
@@ -886,6 +1004,11 @@ export class InfraController {
         templates: templates.length,
         baileysStoredMessages: baileysStoredMessages.length,
         lidMappings: lidMappings.length,
+        pluginInstances: pluginInstances.length,
+        conversationMappings: conversationMappings.length,
+        ingressEvents: ingressEvents.length,
+        webhookDeliveryFailures: webhookDeliveryFailures.length,
+        integrationDeliveryFailures: integrationDeliveryFailures.length,
       },
     };
   }
@@ -926,6 +1049,11 @@ export class InfraController {
       templates: number;
       baileysStoredMessages: number;
       lidMappings: number;
+      pluginInstances: number;
+      conversationMappings: number;
+      ingressEvents: number;
+      webhookDeliveryFailures: number;
+      integrationDeliveryFailures: number;
     };
     warnings: string[];
   }> {
@@ -958,6 +1086,13 @@ export class InfraController {
       // lid_mappings is not a FK to sessions, so the sessions DELETE below won't clear it; clear it
       // explicitly so a restore replaces the cache rather than colliding on existing lid PKs.
       await clearTable('lid_mappings');
+      // Integration Fabric + both DLQs: none carry an FK constraint to sessions (sessionId is provenance),
+      // so clearing them here before the sessions DELETE keeps the replace-semantics complete.
+      await clearTable('plugin_instances');
+      await clearTable('conversation_mappings');
+      await clearTable('ingress_events');
+      await clearTable('webhook_delivery_failures');
+      await clearTable('integration_delivery_failures');
       await queryRunner.query('DELETE FROM sessions');
 
       // Import sessions first
@@ -1168,6 +1303,157 @@ export class InfraController {
         }
       }
 
+      // Import plugin instances (Integration Fabric config + ingress HMAC secret)
+      let pluginInstancesCount = 0;
+      if (data.tables.pluginInstances?.length) {
+        for (const pi of data.tables.pluginInstances) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO plugin_instances (id, "pluginId", "instanceId", "sessionScope", secret, "verifyToken", config, enabled, "createdAt", "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+              [
+                pi.id,
+                pi.pluginId,
+                pi.instanceId,
+                pi.sessionScope,
+                pi.secret,
+                pi.verifyToken,
+                pi.config == null
+                  ? null
+                  : typeof pi.config === 'string'
+                    ? pi.config
+                    : JSON.stringify(pi.config),
+                pi.enabled,
+                pi.createdAt,
+                pi.updatedAt,
+              ],
+            );
+            pluginInstancesCount++;
+          } catch (err) {
+            warnings.push(`Failed to import plugin instance ${pi.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import conversation mappings (handover state; sessionId is non-FK provenance)
+      let conversationMappingsCount = 0;
+      if (data.tables.conversationMappings?.length) {
+        for (const cm of data.tables.conversationMappings) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO conversation_mappings (id, "sessionId", "chatId", "pluginId", "instanceId", "providerConversationId", "handoverState", metadata, "updatedAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [
+                cm.id,
+                cm.sessionId,
+                cm.chatId,
+                cm.pluginId,
+                cm.instanceId,
+                cm.providerConversationId,
+                cm.handoverState,
+                cm.metadata == null
+                  ? null
+                  : typeof cm.metadata === 'string'
+                    ? cm.metadata
+                    : JSON.stringify(cm.metadata),
+                cm.updatedAt,
+              ],
+            );
+            conversationMappingsCount++;
+          } catch (err) {
+            warnings.push(`Failed to import conversation mapping ${cm.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import ingress events (durable inbound dedup oracle; payload is JSON)
+      let ingressEventsCount = 0;
+      if (data.tables.ingressEvents?.length) {
+        for (const ie of data.tables.ingressEvents) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO ingress_events (id, "instanceId", "pluginId", "providerDeliveryId", route, payload, "sessionId", "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                ie.id,
+                ie.instanceId,
+                ie.pluginId,
+                ie.providerDeliveryId,
+                ie.route,
+                typeof ie.payload === 'string' ? ie.payload : JSON.stringify(ie.payload ?? {}),
+                ie.sessionId,
+                ie.createdAt,
+              ],
+            );
+            ingressEventsCount++;
+          } catch (err) {
+            warnings.push(`Failed to import ingress event ${ie.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import webhook delivery failures (webhook DLQ)
+      let webhookDeliveryFailuresCount = 0;
+      if (data.tables.webhookDeliveryFailures?.length) {
+        for (const wf of data.tables.webhookDeliveryFailures) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO webhook_delivery_failures (id, "webhookId", "sessionId", event, url, "idempotencyKey", "deliveryId", attempts, "lastStatusCode", "lastError", "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                wf.id,
+                wf.webhookId,
+                wf.sessionId,
+                wf.event,
+                wf.url,
+                wf.idempotencyKey,
+                wf.deliveryId,
+                wf.attempts,
+                wf.lastStatusCode,
+                wf.lastError,
+                wf.createdAt,
+              ],
+            );
+            webhookDeliveryFailuresCount++;
+          } catch (err) {
+            warnings.push(`Failed to import webhook delivery failure ${wf.id}: ${err}`);
+          }
+        }
+      }
+
+      // Import integration delivery failures (inbound + outbound DLQ)
+      let integrationDeliveryFailuresCount = 0;
+      if (data.tables.integrationDeliveryFailures?.length) {
+        for (const df of data.tables.integrationDeliveryFailures) {
+          try {
+            await queryRunner.query(
+              `INSERT INTO integration_delivery_failures (id, direction, "pluginId", "instanceId", "sessionId", "deliveryId", attempts, "lastError", payload, redriven, "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+              [
+                df.id,
+                df.direction,
+                df.pluginId,
+                df.instanceId,
+                df.sessionId,
+                df.deliveryId,
+                df.attempts,
+                df.lastError,
+                df.payload == null
+                  ? null
+                  : typeof df.payload === 'string'
+                    ? df.payload
+                    : JSON.stringify(df.payload),
+                df.redriven,
+                df.createdAt,
+              ],
+            );
+            integrationDeliveryFailuresCount++;
+          } catch (err) {
+            warnings.push(`Failed to import integration delivery failure ${df.id}: ${err}`);
+          }
+        }
+      }
+
       const counts = {
         sessions: sessionsCount,
         webhooks: webhooksCount,
@@ -1176,6 +1462,11 @@ export class InfraController {
         templates: templatesCount,
         baileysStoredMessages: baileysStoredMessagesCount,
         lidMappings: lidMappingsCount,
+        pluginInstances: pluginInstancesCount,
+        conversationMappings: conversationMappingsCount,
+        ingressEvents: ingressEventsCount,
+        webhookDeliveryFailures: webhookDeliveryFailuresCount,
+        integrationDeliveryFailures: integrationDeliveryFailuresCount,
       };
 
       // "Replace all data" must be all-or-nothing: the import already DELETEd every row, so if any

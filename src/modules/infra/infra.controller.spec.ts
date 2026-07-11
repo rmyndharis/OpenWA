@@ -37,6 +37,11 @@ import { MessageBatch, BatchStatus } from '../message/entities/message-batch.ent
 import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
+import { PluginInstance } from '../integration/entities/plugin-instance.entity';
+import { ConversationMapping } from '../integration/entities/conversation-mapping.entity';
+import { IngressEvent } from '../integration/entities/ingress-event.entity';
+import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
+import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -467,7 +472,17 @@ describe('InfraController.importData round-trips export-data (no silent message/
     ds = new DataSource({
       type: 'sqlite',
       database: ':memory:',
-      entities: [Session, Webhook, Message, MessageBatch],
+      entities: [
+        Session,
+        Webhook,
+        Message,
+        MessageBatch,
+        PluginInstance,
+        ConversationMapping,
+        IngressEvent,
+        WebhookDeliveryFailure,
+        IntegrationDeliveryFailure,
+      ],
       synchronize: true,
     });
     await ds.initialize();
@@ -552,6 +567,55 @@ describe('InfraController.importData round-trips export-data (no silent message/
     const b = await ds.getRepository(MessageBatch).findOneByOrFail({ id: 'b1' });
     expect(b.batchId).toBe('BATCH1');
     expect(b.status).toBe(BatchStatus.COMPLETED);
+  });
+
+  it('round-trips plugin instances + integration delivery failures (Integration Fabric + DLQ)', async () => {
+    await seedSession('s1');
+    await ds.getRepository(PluginInstance).save(
+      ds.getRepository(PluginInstance).create({
+        id: 'chatwoot:acct1',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        sessionScope: 's1',
+        secret: 'hmac-secret',
+        verifyToken: null,
+        config: { baseUrl: 'https://x' },
+        enabled: true,
+      }),
+    );
+    await ds.getRepository(IntegrationDeliveryFailure).save(
+      ds.getRepository(IntegrationDeliveryFailure).create({
+        direction: 'outbound',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        sessionId: 's1',
+        deliveryId: 'd1',
+        attempts: 3,
+        lastError: 'boom',
+        payload: { foo: 'bar' },
+        redriven: false,
+      }),
+    );
+
+    const dump = await controller.exportData();
+    expect(dump.counts.pluginInstances).toBe(1);
+    expect(dump.counts.integrationDeliveryFailures).toBe(1);
+
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.pluginInstances).toBe(1);
+    expect(res.counts.integrationDeliveryFailures).toBe(1);
+
+    expect(await ds.getRepository(PluginInstance).count()).toBe(1);
+    expect(await ds.getRepository(IntegrationDeliveryFailure).count()).toBe(1);
+    const pi = await ds.getRepository(PluginInstance).findOneByOrFail({ id: 'chatwoot:acct1' });
+    expect(pi.secret).toBe('hmac-secret'); // ingress HMAC secret survives a SQLite→Postgres migration
+    expect(pi.config).toEqual({ baseUrl: 'https://x' });
+    const dlf = await ds.getRepository(IntegrationDeliveryFailure).findOneByOrFail({ deliveryId: 'd1' });
+    expect(dlf.lastError).toBe('boom');
+    expect(dlf.payload).toEqual({ foo: 'bar' });
   });
 
   it('rolls back and reports imported:false when a row fails — existing data is preserved', async () => {
