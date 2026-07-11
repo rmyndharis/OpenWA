@@ -118,9 +118,14 @@ services:
       # ENGINE_TYPE as unset, so .env.generated wins. Set ENGINE_TYPE in your .env/host to pin an
       # engine (e.g. baileys) — a real value flows through here and keeps top precedence.
       - ENGINE_TYPE=${ENGINE_TYPE:-}
-      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-/app/data/sessions}
-      - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
-      - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
+      # Engine launch options (session data path, headless, browser args). Forwarded EMPTY by default
+      # so the dashboard (Infrastructure > Engine) selections saved to data/.env.generated apply — like
+      # ENGINE_TYPE above. main.ts treats a blank value as unset (.env.generated wins), and the app
+      # layer (configuration.ts) supplies the sane container default (headless, ./data/sessions, the
+      # sandbox + no-dev-shm flag set) when nothing is set anywhere. Set one on the host/.env to pin it.
+      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-}
+      - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-}
+      - PUPPETEER_ARGS=${PUPPETEER_ARGS:-}
       # Optional WhatsApp Web version override. Leave empty for whatsapp-web.js auto-selection.
       # If a session hangs at "authenticating", set WWEBJS_WEB_VERSION to a known-good cached build
       # from wppconnect-team/wa-version; latest|auto|off also forces auto-selection.

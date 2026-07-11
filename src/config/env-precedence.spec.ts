@@ -104,6 +104,12 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
       'REDIS_ENABLED',
       'REDIS_HOST',
       'REDIS_PORT',
+      // Engine launch options the dashboard saves — compose blank-forwards these too, so a dashboard
+      // edit isn't shadowed by a pinned container default; the app layer (configuration.ts) supplies
+      // the sane default when nothing is set.
+      'PUPPETEER_HEADLESS',
+      'SESSION_DATA_PATH',
+      'PUPPETEER_ARGS',
     ]) {
       expect(BLANK_SHADOWED_ENV_KEYS).toContain(key);
     }
@@ -113,6 +119,7 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
     ['DATABASE_TYPE', 'postgres'],
     ['STORAGE_TYPE', 's3'],
     ['REDIS_ENABLED', 'true'],
+    ['PUPPETEER_HEADLESS', 'false'],
   ])('lets .env.generated supply %s when the forwarded value is blank, but a host value pins', (key, fileValue) => {
     const prev = process.env[key];
     try {

@@ -56,9 +56,14 @@ describe('configuration — Puppeteer args delimiter', () => {
     expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
   });
 
-  it('defaults to discrete sandbox flags when unset', () => {
+  it('defaults to the Docker-relevant sandbox flag set when unset', () => {
     delete process.env.PUPPETEER_ARGS;
-    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
+    expect(configuration().engine.puppeteer.args).toEqual([
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ]);
   });
 });
 
