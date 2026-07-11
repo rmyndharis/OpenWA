@@ -187,8 +187,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event_name == 'push'
+    needs: [build, test-postgres]
     permissions:
       contents: read
       packages: write
