@@ -681,9 +681,9 @@ describe('SessionService', () => {
         >;
         cancelReconnect: (id: string) => void;
       };
-      // Call-through spy: records the invocation AND runs the real cancelReconnect (which clears the
-      // handle), so the assertion proves start() reached it and the stale timer is actually cleared.
-      const cancelSpy = jest.spyOn(i, 'cancelReconnect');
+      // Spy clearTimeout directly so the assertion pins that the stale HANDLE was actually cleared —
+      // not merely that cancelReconnect was reached (which would hold even if it forgot clearTimeout).
+      const clearTimeoutSpy = jest.spyOn(globalThis, 'clearTimeout');
       const staleFired = jest.fn();
       // Seed a pending reconnect timer exactly as a failed executeReconnect leaves behind.
       // tsc resolves setTimeout to the DOM overload (number) in the spec context; force the field type.
@@ -695,13 +695,13 @@ describe('SessionService', () => {
 
       // start() must cancel the stale timer so it can't later destroy/replace the engine start() just
       // created (or orphan a Chromium process), then install a fresh reconnect state.
-      expect(cancelSpy).toHaveBeenCalledWith('sess-uuid-1');
       expect(staleFired).not.toHaveBeenCalled();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(staleTimer);
       const after = i.reconnectStates.get('sess-uuid-1');
       expect(after?.timer).toBeNull();
       expect(after?.attempts).toBe(0);
       clearTimeout(staleTimer);
-      cancelSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     });
   });
 

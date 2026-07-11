@@ -205,7 +205,7 @@ describe('AuthService', () => {
 
       await service.update('uuid-1', { allowedSessions: ['sess-A'] });
 
-      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1', 'authorization_changed');
     });
 
     it('evicts active WebSocket sockets when the role changes', async () => {
@@ -219,7 +219,7 @@ describe('AuthService', () => {
 
       await service.update('uuid-1', { role: ApiKeyRole.ADMIN });
 
-      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1', 'authorization_changed');
     });
 
     it('does not evict on a benign (name-only) update', async () => {
@@ -269,7 +269,7 @@ describe('AuthService', () => {
       await service.delete('uuid-1');
 
       expect(repository.remove).toHaveBeenCalledWith(key);
-      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1', 'deleted');
     });
   });
 
@@ -297,7 +297,7 @@ describe('AuthService', () => {
       await service.revoke('uuid-1');
 
       expect(key.isActive).toBe(false);
-      expect(evictApiKey).toHaveBeenCalledWith('uuid-1');
+      expect(evictApiKey).toHaveBeenCalledWith('uuid-1', 'revoked');
     });
 
     it('does not roll back the revoke if WebSocket eviction throws (best-effort)', async () => {

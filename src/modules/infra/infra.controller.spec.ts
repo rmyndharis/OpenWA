@@ -332,6 +332,14 @@ describe('InfraController.saveConfig env-name correctness and merge (#226)', () 
     expect(env).not.toContain('S3_SECRET_KEY=');
   });
 
+  it('defaults PUPPETEER_ARGS to the full Docker sandbox flag set when browserArgs is empty', () => {
+    // Once compose blank-forwards PUPPETEER_ARGS this saved value wins at runtime, so the default must
+    // keep --disable-dev-shm-usage (the Docker /dev/shm tab-crash guard) — NOT the old 2-flag set.
+    const env = written({ engine: { headless: true, sessionDataPath: './data/sessions', browserArgs: '' } });
+    expect(env).toContain('PUPPETEER_ARGS=--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu');
+    expect(env).not.toContain('PUPPETEER_ARGS=--no-sandbox --disable-gpu');
+  });
+
   it('writes STORAGE_LOCAL_PATH (the name the backend reads) for local storage', () => {
     const env = written({ storage: { type: 'local', localPath: './data/media' } });
     expect(env).toContain('STORAGE_LOCAL_PATH=./data/media');

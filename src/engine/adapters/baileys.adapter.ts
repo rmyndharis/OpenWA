@@ -923,9 +923,6 @@ export class BaileysAdapter implements IWhatsAppEngine {
       }
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
-      // keeps the newest by timestamp — and none are dropped (the limiter queues the overflow).
-      // Throttle through the limiter so a burst of media messages can't run unbounded parallel
-      // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
       // keeps the newest by timestamp. When the waiter queue is saturated we REJECT instead of parking
       // forever, and re-process the message WITHOUT media: the message (body + metadata) is still
       // emitted, but we skip the heap-heavy download that the limiter exists to bound.

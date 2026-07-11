@@ -132,7 +132,7 @@ export function Infrastructure() {
     type: 'whatsapp-web.js',
     headless: true,
     sessionDataPath: './data/sessions',
-    browserArgs: '--no-sandbox --disable-gpu',
+    browserArgs: '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu',
   });
 
   const [redisEnabled, setRedisEnabled] = useState(false);

@@ -30,14 +30,17 @@ class CatalogResource
     }
 
     /**
-     * List catalog products (paginated).
+     * List catalog products (paginated). Returns a page shaped
+     * {products: list, pagination: {page, limit, total, totalPages}} — iterate over the `products`
+     * field, not the result itself. Consistent with the JavaScript, Python, and Java SDKs.
      *
      * @param array<string,mixed> $query  e.g. ['page' => 1, 'limit' => 20].
-     * @return array<int,array<string,mixed>>
+     * @return array{products: array<int,array<string,mixed>>, pagination: array<string,mixed>}
      */
     public function products(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/catalog/products", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/catalog/products", $query)
+            ?? ['products' => [], 'pagination' => []];
     }
 
     /** @return array<string,mixed> */

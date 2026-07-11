@@ -67,6 +67,15 @@ export function isSessionSubscriptionAllowed(allowedSessions: string[] | null | 
   return allowedSessions.includes(sessionId);
 }
 
+/** Why an API key's live WebSocket sockets are being torn down — drives the client-facing message. */
+export type ApiKeyEvictionReason = 'revoked' | 'deleted' | 'authorization_changed';
+
+const EVICTION_MESSAGES: Record<ApiKeyEvictionReason, string> = {
+  revoked: 'API key has been revoked',
+  deleted: 'API key has been deleted',
+  authorization_changed: 'API key authorization changed; please reconnect',
+};
+
 @WebSocketGateway({
   cors: {
     origin: resolveWsCorsOrigin(),
@@ -132,18 +141,20 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   /**
-   * Tear down every active socket authenticated with `keyId`. Called by AuthService when a
-   * key is revoked or deleted so the key's already-subscribed sockets stop receiving events
-   * immediately instead of lingering until they disconnect on their own. Each socket gets a
-   * clean close (an `UNAUTHORIZED` reason) rather than a silent drop.
+   * Tear down every active socket authenticated with `keyId`. Called by AuthService when a key is
+   * revoked, deleted, or has its authorization (role/allowedSessions/allowedIps/expiry) narrowed, so
+   * the key's already-subscribed sockets stop receiving events immediately instead of lingering until
+   * they disconnect on their own. Each socket gets a clean close (an `UNAUTHORIZED` reason) reflecting
+   * the actual trigger, rather than a silent drop.
    */
-  evictApiKey(keyId: string): void {
+  evictApiKey(keyId: string, reason: ApiKeyEvictionReason = 'revoked'): void {
     const sockets = this.socketsByKeyId.get(keyId);
     if (!sockets || sockets.size === 0) return;
-    this.logger.log(`Evicting ${sockets.size} WebSocket connection(s) for revoked key ${keyId}`);
+    this.logger.log(`Evicting ${sockets.size} WebSocket connection(s) (${reason}) for key ${keyId}`);
     this.socketsByKeyId.delete(keyId);
+    const message = EVICTION_MESSAGES[reason];
     for (const client of sockets) {
-      client.emit('message', this.createError('UNAUTHORIZED', 'API key has been revoked'));
+      client.emit('message', this.createError('UNAUTHORIZED', message));
       client.disconnect(true);
     }
   }

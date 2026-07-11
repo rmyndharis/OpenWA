@@ -694,7 +694,11 @@ export class InfraController {
         }
         updates.PUPPETEER_HEADLESS = config.engine.headless !== false ? 'true' : 'false';
         updates.SESSION_DATA_PATH = config.engine.sessionDataPath || './data/sessions';
-        updates.PUPPETEER_ARGS = config.engine.browserArgs || '--no-sandbox --disable-gpu';
+        // Must match configuration.ts's PUPPETEER_ARGS default (4 flags). Once compose blank-forwards
+        // PUPPETEER_ARGS, this saved value wins at runtime — a 2-flag default here would silently drop
+        // --disable-dev-shm-usage (the Docker /dev/shm tab-crash guard) after any Infrastructure save.
+        updates.PUPPETEER_ARGS =
+          config.engine.browserArgs || '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu';
       }
 
       // .env.generated is one KEY=value per line, loaded on the next boot. A value carrying a
