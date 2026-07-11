@@ -1318,11 +1318,7 @@ export class InfraController {
                 pi.sessionScope,
                 pi.secret,
                 pi.verifyToken,
-                pi.config == null
-                  ? null
-                  : typeof pi.config === 'string'
-                    ? pi.config
-                    : JSON.stringify(pi.config),
+                pi.config == null ? null : typeof pi.config === 'string' ? pi.config : JSON.stringify(pi.config),
                 pi.enabled,
                 pi.createdAt,
                 pi.updatedAt,
@@ -1438,11 +1434,7 @@ export class InfraController {
                 df.deliveryId,
                 df.attempts,
                 df.lastError,
-                df.payload == null
-                  ? null
-                  : typeof df.payload === 'string'
-                    ? df.payload
-                    : JSON.stringify(df.payload),
+                df.payload == null ? null : typeof df.payload === 'string' ? df.payload : JSON.stringify(df.payload),
                 df.redriven,
                 df.createdAt,
               ],

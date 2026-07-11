@@ -675,7 +675,10 @@ describe('SessionService', () => {
   describe('start() stale reconnect timer', () => {
     it('cancels a pending reconnect timer before recreating the engine', async () => {
       const i = service as unknown as {
-        reconnectStates: Map<string, { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }>;
+        reconnectStates: Map<
+          string,
+          { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }
+        >;
         cancelReconnect: (id: string) => void;
       };
       // Call-through spy: records the invocation AND runs the real cancelReconnect (which clears the

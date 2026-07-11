@@ -15,7 +15,10 @@ export class ConcurrencyLimiter {
    * parked closure holds its task (and an inbound media buffer) alive. Default Infinity preserves the
    * original unbounded-queue behavior for callers that don't opt into a cap.
    */
-  constructor(private readonly max: number, private readonly maxQueued = Infinity) {
+  constructor(
+    private readonly max: number,
+    private readonly maxQueued = Infinity,
+  ) {
     this.max = Math.max(1, Math.floor(max));
     this.maxQueued = Math.max(0, Math.floor(maxQueued));
   }

@@ -88,7 +88,7 @@ describe('ConcurrencyLimiter', () => {
     const queued = limiter.run(() => Promise.resolve('queued')); // parks in the 1 waiter slot
     // The (max + K)th arrival must REJECT, not park — otherwise a burst grows heap without bound.
     await expect(limiter.run(() => Promise.resolve('overflow'))).rejects.toThrow(/queue full/i);
-    release!();
+    release();
     await Promise.all([active, queued]);
   });
 
@@ -102,7 +102,7 @@ describe('ConcurrencyLimiter', () => {
         }),
     );
     const parked = Array.from({ length: 50 }, () => limiter.run(() => Promise.resolve('ok')));
-    release!(); // drain: active finishes, then the 50 parked tasks run one at a time
+    release(); // drain: active finishes, then the 50 parked tasks run one at a time
     await expect(Promise.all([active, ...parked])).resolves.toHaveLength(51);
   });
 });
