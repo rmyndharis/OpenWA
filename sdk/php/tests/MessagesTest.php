@@ -20,6 +20,24 @@ class MessagesTest extends TestCase
         $this->assertSame(['chatId' => 'a@c.us', 'text' => 'hi'], $call['body']);
     }
 
+    public function testListReturnsMessagesPageEnvelope(): void
+    {
+        // The server responds with a {messages, total} page, not a flat array. Pin the shape so a
+        // future change — or a misunderstood "fix" that unwraps it and drops `total` — is caught.
+        $backend = (new MockBackend())->on(200, [
+            'messages' => [['id' => 'm1', 'body' => 'hi', 'chatId' => 'a@c.us']],
+            'total' => 1,
+        ]);
+        $client = $backend->makeClient();
+        $page = $client->messages->list('s1', ['limit' => 10]);
+        $this->assertArrayHasKey('messages', $page);
+        $this->assertIsArray($page['messages']);
+        $this->assertSame('m1', $page['messages'][0]['id']);
+        $this->assertSame(1, $page['total']);
+        $this->assertStringContainsString('/messages', $backend->lastCall()['path']);
+        $this->assertStringContainsString('limit=10', $backend->lastCall()['query']);
+    }
+
     public static function mediaSegments(): array
     {
         return [

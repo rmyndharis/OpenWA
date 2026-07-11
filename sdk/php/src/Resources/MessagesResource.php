@@ -22,12 +22,17 @@ class MessagesResource
     }
 
     /**
+     * List messages, optionally filtered by chat or sender. Returns a page shaped
+     * {messages: list, total: count} — iterate over the `messages` field, not the
+     * result itself. Consistent with the JavaScript, Python, and Java SDKs.
+     *
      * @param array<string,mixed> $query
-     * @return array<int,array<string,mixed>>
+     * @return array{messages: array<int,array<string,mixed>>, total: int}
      */
     public function list(string $sessionId, array $query = []): array
     {
-        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages", $query) ?? [];
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages", $query)
+            ?? ['messages' => [], 'total' => 0];
     }
 
     /**

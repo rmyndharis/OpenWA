@@ -7,10 +7,10 @@ name: SDK CI
 on:
   push:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/**/*.controller.ts', 'src/**/*.service.ts', 'src/engine/interfaces/whatsapp-engine.interface.ts']
   pull_request:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/**/*.controller.ts', 'src/**/*.service.ts', 'src/engine/interfaces/whatsapp-engine.interface.ts']
 
 jobs:
   javascript:
