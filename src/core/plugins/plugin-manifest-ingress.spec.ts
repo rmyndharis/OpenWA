@@ -81,3 +81,60 @@ describe('warnUnauthenticatedIngressRoutes', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
+
+function manifestWithRoute(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'p',
+    name: 'p',
+    version: '1.0.0',
+    type: 'extension',
+    main: 'index.js',
+    sdkVersion: '1',
+    permissions: ['webhook:ingress'],
+    ingress: [
+      { route: 'r', mode: 'async', verify: 'core', maxBodyBytes: 1024, signature: { scheme: 'none' }, ...overrides },
+    ],
+  } as never;
+}
+
+describe('validateIngressManifest: response contract', () => {
+  it('accepts a route with no response (default fast-ack)', () => {
+    expect(() => validateIngressManifest(manifestWithRoute())).not.toThrow();
+  });
+
+  it('accepts a valid response contract', () => {
+    expect(() =>
+      validateIngressManifest(
+        manifestWithRoute({
+          response: {
+            preflight: [{ type: 'session-alive' }],
+            ack: { status: 200, body: '{"ok":true}', headers: { 'content-type': 'application/json' } },
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects an out-of-range ack.status', () => {
+    expect(() => validateIngressManifest(manifestWithRoute({ response: { ack: { status: 99 } } }))).toThrow(
+      /ack\.status/,
+    );
+    expect(() => validateIngressManifest(manifestWithRoute({ response: { ack: { status: 600 } } }))).toThrow(
+      /ack\.status/,
+    );
+  });
+
+  it('rejects a CR/LF in an ack header value (injection guard)', () => {
+    expect(() =>
+      validateIngressManifest(
+        manifestWithRoute({ response: { ack: { headers: { 'content-type': 'text/plain\r\nX-Injected: yes' } } } }),
+      ),
+    ).toThrow(/invalid characters/);
+  });
+
+  it('rejects a non-token ack header name', () => {
+    expect(() =>
+      validateIngressManifest(manifestWithRoute({ response: { ack: { headers: { 'bad header': 'x' } } } })),
+    ).toThrow(/'bad header'/);
+  });
+});
