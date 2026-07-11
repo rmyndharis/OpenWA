@@ -27,7 +27,10 @@ import { createLogger } from '../../common/services/logger.service';
  * PluginLoaderService is @Global (PluginsModule), so it injects without importing that module.
  */
 @Module({
-  imports: [SessionModule, TypeOrmModule.forFeature([PluginInstance, IngressEvent, IntegrationDeliveryFailure], 'data')],
+  imports: [
+    SessionModule,
+    TypeOrmModule.forFeature([PluginInstance, IngressEvent, IntegrationDeliveryFailure], 'data'),
+  ],
   controllers: [IngressController, RedriveController, IntegrationInstanceController],
   providers: [
     PluginInstanceService,
