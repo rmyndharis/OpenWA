@@ -21,6 +21,11 @@ const DEFAULT_REMOTE_TEMPLATE = 'https://raw.githubusercontent.com/wppconnect-te
 // `lastFailureAt`: subsequent calls return null instantly for FAILURE_BACKOFF_MS, then retry. `inFlight`
 // dedupes concurrent resolves into a single fetch.
 const FAILURE_BACKOFF_MS = 60_000;
+// Minimum age a WhatsApp Web build must reach before we'll auto-pin it. The registry's
+// `currentVersion` tracks the latest build, which can be minutes old and unvalidated; a build
+// published at least this long ago is far less likely to hang before reaching QR readiness on a
+// fresh start (the #488 / #684 failure class). Exposed for tests.
+export const WEB_VERSION_SETTLE_MS = 12 * 60 * 60 * 1000; // 12h
 let cachedCurrentVersion: string | undefined;
 let inFlight: Promise<string | null> | null = null;
 let lastFailureAt = 0;
@@ -40,11 +45,39 @@ function buildRemotePin(version: string): WebVersionPin {
   };
 }
 
+type WaVersionEntry = { version?: unknown; beta?: unknown; released?: unknown; expire?: unknown };
+
+/**
+ * Pick the WhatsApp Web build to auto-pin from the registry's `versions[]`: the newest non-beta,
+ * unexpired build published at least `WEB_VERSION_SETTLE_MS` ago — i.e. one the ecosystem has had
+ * time to validate — rather than the registry's `currentVersion`, which can be minutes old. Falls
+ * back to `currentVersion` when no build qualifies (a freshly-reset registry, or every build still
+ * too new), so this hardens pinning without ever defeating it. Pure: pass `now` explicitly.
+ */
+export function pickSettledWebVersion(versions: unknown, now: number, currentVersion: string | null): string | null {
+  if (!Array.isArray(versions)) return currentVersion;
+  const settledCutoff = now - WEB_VERSION_SETTLE_MS;
+  let best: { version: string; released: number } | null = null;
+  for (const raw of versions) {
+    if (!raw || typeof raw !== 'object') continue;
+    const e = raw as WaVersionEntry;
+    if (typeof e.version !== 'string' || !/^\d/.test(e.version)) continue;
+    if (e.beta === true) continue;
+    const released = typeof e.released === 'string' ? Date.parse(e.released) : NaN;
+    if (!Number.isFinite(released) || released > settledCutoff) continue; // too fresh
+    const expire = typeof e.expire === 'string' ? Date.parse(e.expire) : NaN;
+    if (Number.isFinite(expire) && expire <= now) continue; // already expired
+    if (!best || best.released < released) best = { version: e.version, released };
+  }
+  return best?.version ?? currentVersion;
+}
+
 /**
  * Fetch the current known-good WhatsApp Web build from the wa-version registry. A SUCCESSFUL resolve
  * is cached for the process lifetime; a failure resolves to null WITHOUT caching, so a later call
  * retries (a single transient outage must not permanently defeat the #488 fix). Concurrent callers
- * share one in-flight fetch.
+ * share one in-flight fetch. Prefers a build that has settled (see `pickSettledWebVersion`) over the
+ * registry's possibly-minute-old `currentVersion`.
  */
 export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): Promise<string | null> {
   if (typeof cachedCurrentVersion === 'string') return cachedCurrentVersion;
@@ -59,13 +92,15 @@ export async function resolveCurrentWebVersion(fetcher: typeof fetch = fetch): P
       try {
         const res = await fetcher(WA_VERSION_REGISTRY_URL, { signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as { currentVersion?: unknown };
-        const v = json.currentVersion;
-        if (typeof v === 'string' && /^\d/.test(v)) {
-          cachedCurrentVersion = v; // cache only on success
-          return v;
+        const json = (await res.json()) as { currentVersion?: unknown; versions?: unknown };
+        const rawCurrent =
+          typeof json.currentVersion === 'string' && /^\d/.test(json.currentVersion) ? json.currentVersion : null;
+        const picked = pickSettledWebVersion(json.versions, Date.now(), rawCurrent);
+        if (picked) {
+          cachedCurrentVersion = picked; // cache only on success
+          return picked;
         }
-        lastFailureAt = Date.now(); // malformed payload — back off, then retry
+        lastFailureAt = Date.now(); // nothing usable — back off, then retry
         return null;
       } finally {
         clearTimeout(timer);
