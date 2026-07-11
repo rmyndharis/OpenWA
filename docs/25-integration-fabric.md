@@ -176,6 +176,19 @@ major, and the surface is **additive-only** within a major. The worker-facing AP
 `ctx.registerWebhook(...)` (claim an inbound route), `ctx.conversations.send(...)` (normalized reply), and
 per-instance mapping and handover helpers.
 
+The `signature.scheme` field enumerates `hmac-sha256` (HMAC over a `contentTemplate`), `shared-secret`
+(constant-time header compare), `standard-webhooks`, and `none` (unauthenticated — see §25.6). The
+`standard-webhooks` scheme verifies a [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+payload host-side — Supabase Auth's Send-SMS hook and any Svix-routed provider speak it natively. Its wire
+format is fixed by the spec (the `webhook-id` / `webhook-timestamp` / `webhook-signature` header triple,
+signed over `${id}.${timestamp}.${rawBody}`), so only `toleranceSec` (default 300) and `dedupHeader`
+apply; `header`, `contentTemplate`, `encoding`, `prefix`, and `timestampHeader` are ignored, and the
+operator pastes the provider's Svix secret (`v1,whsec_<base64>`) as the instance secret. It is the
+recommended scheme for Standard-Webhooks providers: because the `session-alive` preflight (§25.4) runs
+*after* signature verification, an unauthenticated caller can no longer use that preflight as a liveness
+oracle on a route that previously declared `scheme: "none"`. The existing `hmac-sha256`/`shared-secret`/
+`none` behavior is unchanged.
+
 Within major 1 the surface grows additively. A route's optional `response` contract — `preflight[]`
 (host-side checks such as `session-alive`, evaluated after signature verify), `ack{}` (`status`/`body`/
 `headers`, rendered host-side with `{rawBody}`/`{timestamp}`/`{id}` templates from the verified request),

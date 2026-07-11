@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value is deprecated in favor of `response` (kept for SDK v1 additive-only compatibility). Routes with no
   `response` are byte-identical to today's default fast-ack.
 
+- **`standard-webhooks` ingress signature scheme.** A route may now declare
+  `signature.scheme: "standard-webhooks"` to verify [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
+  payloads host-side (Supabase Auth's Send SMS hook, and any Svix-routed provider). The wire format is
+  fixed by the spec, so only `toleranceSec` (default 300s) and `dedupHeader` apply. The operator pastes
+  the provider's Svix secret (`v1,whsec_<base64>`) as the instance secret. This surfaces a bad signature
+  as a synchronous 401 and — because the `session-alive` preflight runs after verify — makes that preflight
+  safe to use (an unauthenticated caller can no longer probe liveness). Additive; existing
+  `hmac-sha256`/`shared-secret`/`none` behavior is unchanged.
+
 ## [0.8.15] - 2026-07-11
 
 - **WhatsApp Web sessions no longer wedge silently in `INITIALIZING` forever.** `engine.initialize()` was awaited with no timeout, and neither whatsapp-web.js nor Puppeteer bounds the initial browser launch/navigation (`page.goto` is called with `timeout: 0` and the web-version-cache fetch carries no timeout). If Chromium stalled under container memory pressure — realistic at the documented 2 GB Standard profile — the await never resolved or rejected: the session sat in `INITIALIZING` indefinitely, `GET /sessions/:id/qr` 400'd forever, and nothing was logged. The #635 abandoned-engine reaper is reactive (terminal `onError` / rejected re-init only), so nothing recovered it. `initializeEngine()` now races `engine.initialize()` against a deadline derived from the configured auth wait (floor 60 s, or `WWEBJS_AUTH_TIMEOUT_MS` + 30 s when an operator has raised that for slow first boots) so a legitimate slow init is never cut short; on timeout it force-kills the wedged browser, marks the session `DISCONNECTED` (retryable, so the existing reconnect backoff picks it up), and rethrows — surfacing the failure to a manual `POST /start` caller instead of hanging. The race's catch is scoped to the timeout only (`EngineInitTimeoutError`): a real init rejection (e.g. Chromium can't launch) propagates untouched so `start()`'s existing `FAILED`+reason diagnostics are preserved — handling both in one catch would downgrade real failures to `DISCONNECTED` and hide their reason. Thanks @INAPA-desarrolloTIC. [#667]
