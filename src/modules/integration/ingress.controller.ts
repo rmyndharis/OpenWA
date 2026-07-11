@@ -68,6 +68,7 @@ export class IngressController {
       query,
       rawBody,
     });
+    if (result.headers) res.set(result.headers);
     res.status(result.status).send(result.body ?? '');
   }
 }

@@ -7,7 +7,7 @@ import { IngressService } from './ingress.service';
 const RAW = '{\n  "event": "message_created",\n  "id": 42\n}\n';
 
 function fakeRes() {
-  const captured: { status?: number; body?: string } = {};
+  const captured: { status?: number; body?: string; headers?: Record<string, string> } = {};
   const res = {
     status: jest.fn((code: number) => {
       captured.status = code;
@@ -15,6 +15,10 @@ function fakeRes() {
     }),
     send: jest.fn((body: string) => {
       captured.body = body;
+      return res;
+    }),
+    set: jest.fn((headers: Record<string, string>) => {
+      captured.headers = headers;
       return res;
     }),
   } as unknown as Response;
@@ -64,5 +68,25 @@ describe('IngressController', () => {
     expect(arg.headers['x-verify-token']).toBe('vtok');
     expect(arg.route).toBe('meta');
     expect(arg.rawBody).toBe('');
+  });
+
+  it('forwards response headers from the pipeline', async () => {
+    const handle = jest.fn().mockResolvedValue({
+      status: 200,
+      body: '{"ok":true}',
+      headers: { 'content-type': 'application/json' },
+    });
+    const controller = new IngressController({ handle } as unknown as IngressService);
+    const { res, captured } = fakeRes();
+    const req = {
+      method: 'POST',
+      params: { path: ['send-sms'] },
+      headers: { 'x-delivery': 'd1' },
+      rawBody: Buffer.from('{}'),
+    } as unknown as Request & { rawBody?: Buffer };
+    await controller.receive('p', 'i1', {}, req, res);
+    expect(captured.status).toBe(200);
+    expect(captured.body).toBe('{"ok":true}');
+    expect(captured.headers).toEqual({ 'content-type': 'application/json' });
   });
 });
