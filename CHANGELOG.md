@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back. The registry is also checked for stale entries (an action that is in fact emitted) and empty
   reasons, so it cannot decay into a dumping ground.
 
+- **Operator-tunable HTTP server timeouts.** The gateway now pins `requestTimeout`,
+  `headersTimeout`, and `keepAliveTimeout` on its HTTP server explicitly (previously Node's
+  implicit defaults), exposed via `REQUEST_TIMEOUT_MS` / `HEADERS_TIMEOUT_MS` /
+  `KEEPALIVE_TIMEOUT_MS` and logged at boot. Defaults match Node 22 (300s / 65s / 5s);
+  `headersTimeout` is normalized to stay above `keepAliveTimeout` (Node requires it), and the three
+  are validated as positive integers at boot.
+
 
 ## [0.8.16] - 2026-07-12
 

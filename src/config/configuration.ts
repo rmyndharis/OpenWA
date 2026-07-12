@@ -3,6 +3,17 @@ import { computeFeatureFlags } from './feature-flags';
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
 
+  // HTTP server timeouts (Node http.Server). Pinned explicitly so they are operator-tunable and
+  // observable at boot rather than left at Node's implicit defaults. requestTimeout defaults to
+  // Node's 300s; keepAliveTimeout to 5s; headersTimeout to 65s (a second above keepAlive — Node
+  // requires headers > keepAlive, and main.ts normalizes it anyway). Set any to 0 at your own risk;
+  // env.validation rejects 0 so a bound is never silently disabled.
+  http: {
+    requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS || '300000', 10),
+    headersTimeoutMs: parseInt(process.env.HEADERS_TIMEOUT_MS || '65000', 10),
+    keepAliveTimeoutMs: parseInt(process.env.KEEPALIVE_TIMEOUT_MS || '5000', 10),
+  },
+
   // Global message search. Opt-out via SEARCH_ENABLED=false. Provider defaults to 'auto' (the
   // built-in DB full-text provider — Postgres tsvector/GIN, SQLite FTS5); 'none' disables the
   // /search route + module at runtime while keeping the config namespace loaded.

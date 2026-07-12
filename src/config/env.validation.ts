@@ -148,6 +148,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'RATE_LIMIT_LONG_LIMIT',
     'WEBHOOK_TIMEOUT',
     'INGRESS_INSTANCE_LIMIT',
+    'REQUEST_TIMEOUT_MS',
+    'HEADERS_TIMEOUT_MS',
+    'KEEPALIVE_TIMEOUT_MS',
   ]) {
     checkPositiveInt(key);
   }

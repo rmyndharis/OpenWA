@@ -12,6 +12,7 @@ import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
+import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
@@ -234,6 +235,18 @@ async function bootstrap() {
   app.use('/api/admin/queues', (req: Request, res: Response, next: NextFunction) => {
     void bullBoardAuth.use(req, res, next);
   });
+
+  // Apply explicit HTTP server timeouts so they are operator-tunable (REQUEST_TIMEOUT_MS /
+  // HEADERS_TIMEOUT_MS / KEEPALIVE_TIMEOUT_MS) and observable at boot, instead of Node's implicit
+  // defaults. Done after the adapter exists and before listen().
+  const appliedHttpTimeouts = applyHttpTimeouts(
+    app.getHttpAdapter().getInstance() as HttpTimeoutSink,
+    app.get(ConfigService).get<HttpTimeoutConfig>('http')!,
+  );
+  bootstrapLogger.log(
+    `HTTP server timeouts applied: requestTimeout=${appliedHttpTimeouts.requestTimeoutMs}ms ` +
+      `headersTimeout=${appliedHttpTimeouts.headersTimeoutMs}ms keepAliveTimeout=${appliedHttpTimeouts.keepAliveTimeoutMs}ms`,
+  );
 
   const port = process.env.PORT || 2785;
   await app.listen(port);
