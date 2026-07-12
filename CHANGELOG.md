@@ -112,6 +112,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `common/utils` (it has no engine-specific logic), so the webhook module no longer imports across the
   engine boundary.
 
+- **Optional Redis-backed rate-limit storage.** When `REDIS_ENABLED=true`, API rate-limit counters
+  now persist to Redis (a new `RedisThrottlerStorage` implementing @nestjs/throttler v6's
+  `ThrottlerStorage`), so limits aggregate across replicas behind a load balancer instead of being
+  per-process. Default off (single-node deployments gain nothing and it adds a connection dependency).
+  Fail-OPEN on Redis error — rate limiting is a secondary control, and fail-closed would self-DoS the
+  API.
+
 ### Fixed
 
 - **Silent delivery failure for 1:1 Baileys sends to LID-migrated contacts (ack 463).** On the

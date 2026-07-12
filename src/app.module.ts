@@ -5,6 +5,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
+import Redis from 'ioredis';
+import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
@@ -211,12 +213,14 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
       },
     }),
 
-    // Rate limiting
+    // Rate limiting. When REDIS_ENABLED, the hit-count storage moves to Redis so limits aggregate
+    // across replicas; otherwise the default in-memory (per-process) storage is used. Default off —
+    // a single-node deployment gains nothing from Redis storage, and it adds a connection dep.
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        throttlers: [
+      useFactory: (configService: ConfigService) => {
+        const throttlers = [
           {
             name: 'short',
             ttl: configService.get<number>('api.rateLimit.shortTtl', 1000),
@@ -232,8 +236,23 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             ttl: configService.get<number>('api.rateLimit.longTtl', 3600000),
             limit: configService.get<number>('api.rateLimit.longLimit', 1000),
           },
-        ],
-      }),
+        ];
+        // Fail-open on Redis error (see RedisThrottlerStorage), so a Redis outage never blocks the API.
+        const redisStorage =
+          process.env.REDIS_ENABLED === 'true'
+            ? new RedisThrottlerStorage(
+                new Redis({
+                  host: configService.get<string>('redis.host', 'localhost'),
+                  port: configService.get<number>('redis.port', 6379),
+                  username: configService.get<string>('redis.username'),
+                  password: configService.get<string>('redis.password'),
+                  connectTimeout: configService.get<number>('redis.connectTimeoutMs', 5000),
+                  maxRetriesPerRequest: 3,
+                }),
+              )
+            : undefined;
+        return { throttlers, ...(redisStorage ? { storage: redisStorage } : {}) };
+      },
     }),
 
     // Core modules
