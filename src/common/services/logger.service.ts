@@ -1,4 +1,5 @@
 import { Injectable, LoggerService as NestLoggerService, Scope } from '@nestjs/common';
+import { getRequestId } from './request-context';
 
 export enum LogLevel {
   ERROR = 'error',
@@ -119,12 +120,16 @@ export class LoggerService implements NestLoggerService {
     const metadata =
       typeof context === 'object' && context !== null ? (redactSecrets(context) as Record<string, unknown>) : {};
 
+    // Stamp every log line with the active request id (set by requestContextMiddleware) so a request
+    // can be traced across logs. Absent outside a request scope (boot, workers, cron).
+    const requestId = getRequestId();
     const logEntry = {
       timestamp,
       level,
       context: contextName,
       message,
       ...metadata,
+      ...(requestId ? { requestId } : {}),
     };
 
     const output =

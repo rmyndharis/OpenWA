@@ -4,6 +4,7 @@ import { Repository, Between, LessThan } from 'typeorm';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
 import { ApiKey } from '../auth/entities/api-key.entity';
 import { createLogger } from '../../common/services/logger.service';
+import { getRequestId } from '../../common/services/request-context';
 
 /** Upper bound on a single audit-log page, so a large `limit` can't load the whole table at once. */
 export const MAX_AUDIT_PAGE_SIZE = 200;
@@ -77,6 +78,11 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
     context: AuditContext = {},
     severity: AuditSeverity = AuditSeverity.INFO,
   ): Promise<AuditLog | null> {
+    // Stamp the active request id into metadata so an audit row traces back to the same request as
+    // the log lines. Absent outside a request scope (so no metadata blob is created for worker/cron).
+    const requestId = getRequestId();
+    const metadata =
+      context.metadata || requestId ? { ...(context.metadata ?? {}), ...(requestId ? { requestId } : {}) } : null;
     const auditLog = this.auditRepository.create({
       action,
       severity,
@@ -89,7 +95,7 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
       method: context.method || null,
       path: context.path || null,
       statusCode: context.statusCode || null,
-      metadata: context.metadata || null,
+      metadata,
       errorMessage: context.errorMessage || null,
     });
 

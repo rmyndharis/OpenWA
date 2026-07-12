@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/metrics` are not counted. Conventional unprefixed names so a generic RED dashboard or a 5xx
   error-rate alert matches them directly.
 
+- **Request correlation ids (`X-Request-ID`).** Every inbound request now carries an id that
+  propagates through the whole request via AsyncLocalStorage, so each JSON log line and each
+  audit-log metadata blob stamps it — a request can be traced end-to-end. A valid client-supplied
+  `X-Request-ID` (alphanumeric + dash, ≤128 chars) is echoed; anything else (including a CRLF
+  header-injection attempt) is replaced with a generated UUID. The id is also set on the response.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

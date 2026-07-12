@@ -13,6 +13,7 @@ import { LoggerService, LogLevel, createLogger } from './common/services/logger.
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
+import { requestContextMiddleware } from './common/middleware/request-context.middleware';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
@@ -92,6 +93,10 @@ async function bootstrap() {
     }),
   );
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
+
+  // Assign a request id to every inbound request (X-Request-ID), echo it on the response, and run
+  // the whole downstream chain inside its scope so every log line + audit row carries it.
+  app.use(requestContextMiddleware);
 
   // Let Nest own every shutdown signal EXCEPT SIGTERM/SIGINT — those we route through the bounded
   // drain below, so a load balancer / orchestrator observes readiness=503 and stops routing BEFORE
