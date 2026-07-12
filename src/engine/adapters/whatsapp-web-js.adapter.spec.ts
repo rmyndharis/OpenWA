@@ -17,7 +17,6 @@ import * as fs from 'fs';
 import * as qrcode from 'qrcode';
 import { UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
 import { EngineStatus } from '../interfaces/whatsapp-engine.interface';
