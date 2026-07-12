@@ -506,11 +506,12 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
-    const options = this.withEphemeral(chatId);
+    const jid = await this.toDeliverableJid(chatId);
+    const options = this.withEphemeral(jid);
     const content = { text, ...this.withMentions(mentions) };
     const sent = options
-      ? await this.sock!.sendMessage(chatId, content, options)
-      : await this.sock!.sendMessage(chatId, content);
+      ? await this.sock!.sendMessage(jid, content, options)
+      : await this.sock!.sendMessage(jid, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.dbSessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {
@@ -544,7 +545,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.ensureReady();
     const presence = state === 'typing' ? 'composing' : state === 'recording' ? 'recording' : 'paused';
     try {
-      await this.sock!.sendPresenceUpdate(presence, chatId);
+      await this.sock!.sendPresenceUpdate(presence, await this.toDeliverableJid(chatId));
     } catch (error) {
       // Presence is best-effort — a failure here must never surface as a 500 on the direct typing
       // endpoint or MCP tool (mirrors the whatsapp-web.js adapter; #583 R4). A migrated contact can
@@ -1520,6 +1521,26 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * `undefined` keeps the send a 2-arg call, identical to before. React/delete/status do not route
    * through here, so they are excluded by construction (reactions are NOT excluded by Baileys' guard).
    */
+  /**
+   * Resolve a 1:1 phone-dialect chat id (`@c.us` / `@s.whatsapp.net`) to the contact's `@lid` when the
+   * mapping is known. WhatsApp rejects PN-addressed 1:1 sends to LID-migrated accounts with ack error
+   * 463 ("missing tctoken" — the privacy token is stored and honored under the LID), while the very
+   * same send addressed to the LID delivers (verified live). Groups, broadcast, already-lid and
+   * unmapped ids pass through unchanged, reproducing the previous behavior.
+   */
+  private async toDeliverableJid(chatId: string): Promise<string> {
+    if (!chatId.endsWith('@c.us') && !chatId.endsWith('@s.whatsapp.net')) {
+      return chatId;
+    }
+    try {
+      const pn = this.sessionStore.toEngineJid(chatId);
+      const lid = await this.sock?.signalRepository?.lidMapping?.getLIDForPN(pn);
+      return lid ?? chatId;
+    } catch {
+      return chatId; // resolution is best-effort; an unmapped contact sends to the PN as before
+    }
+  }
+
   private withEphemeral(
     chatId: string,
     options?: MiscMessageGenerationOptions,
@@ -1537,10 +1558,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
   ): Promise<MessageResult> {
-    const merged = this.withEphemeral(chatId, options);
+    const jid = await this.toDeliverableJid(chatId);
+    const merged = this.withEphemeral(jid, options);
     const sent = merged
-      ? await this.sock!.sendMessage(chatId, content, merged)
-      : await this.sock!.sendMessage(chatId, content);
+      ? await this.sock!.sendMessage(jid, content, merged)
+      : await this.sock!.sendMessage(jid, content);
     if (sent) {
       void this.config.messageStore?.put(this.config.dbSessionId, sent).catch(err =>
         this.logger.warn('Failed to persist sent message to store', {

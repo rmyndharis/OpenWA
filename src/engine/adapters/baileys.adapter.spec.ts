@@ -43,6 +43,7 @@ class FakeSock extends EventEmitter {
   public newsletterMetadata = jest.fn();
   public newsletterFollow = jest.fn().mockResolvedValue(undefined);
   public newsletterUnfollow = jest.fn().mockResolvedValue(undefined);
+  public signalRepository: { lidMapping: { getLIDForPN: jest.Mock } } | undefined;
   fire(event: string, arg: unknown): void {
     this.emitter.emit(event, arg);
   }
@@ -578,6 +579,7 @@ describe('BaileysAdapter location + contact + poll sends', () => {
 describe('BaileysAdapter messaging', () => {
   beforeEach(() => {
     fakeSock.user = { id: '628999:1@s.whatsapp.net', name: 'Me' };
+    fakeSock.signalRepository = undefined;
     fakeSock.resetEmitter();
     jest.clearAllMocks();
   });
@@ -624,6 +626,23 @@ describe('BaileysAdapter messaging', () => {
     await new Promise(resolve => setImmediate(resolve));
 
     expect(onMessageCreate).not.toHaveBeenCalled();
+  });
+
+  it('sendTextMessage resolves a phone-dialect 1:1 id to the known LID (463 tctoken fix)', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    fakeSock.signalRepository = { lidMapping: { getLIDForPN: jest.fn().mockResolvedValue('484848@lid') } };
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('628111@c.us', 'hello');
+    expect(fakeSock.signalRepository.lidMapping.getLIDForPN).toHaveBeenCalledWith('628111@s.whatsapp.net');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('484848@lid', { text: 'hello' });
+  });
+
+  it('sendTextMessage keeps the phone jid when no LID mapping is known', async () => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    fakeSock.signalRepository = { lidMapping: { getLIDForPN: jest.fn().mockResolvedValue(null) } };
+    const adapter = await readyAdapter();
+    await adapter.sendTextMessage('628111@c.us', 'hello');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@c.us', { text: 'hello' });
   });
 
   it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
