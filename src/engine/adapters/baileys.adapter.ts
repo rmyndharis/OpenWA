@@ -39,6 +39,7 @@ import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
+import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig, BaileysLogger } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
@@ -880,17 +881,59 @@ export class BaileysAdapter implements IWhatsAppEngine {
   getSubscribedChannels(): Promise<Channel[]> {
     return this.unsupported('getSubscribedChannels');
   }
-  getChannelById(_channelId: string): Promise<Channel | null> {
-    return this.unsupported('getChannelById');
+  async getChannelById(channelId: string): Promise<Channel | null> {
+    this.ensureReady();
+    // newsletterMetadata resolves ANY channel by jid (richer than the wwjs subscribed-list lookup).
+    const meta = await this.sock!.newsletterMetadata('jid', channelId);
+    return meta ? this.toChannel(meta) : null;
   }
-  subscribeToChannel(_inviteCode: string): Promise<Channel> {
-    return this.unsupported('subscribeToChannel');
+
+  async subscribeToChannel(inviteCode: string): Promise<Channel> {
+    this.ensureReady();
+    const meta = await this.sock!.newsletterMetadata('invite', inviteCode);
+    if (!meta) {
+      throw new ChannelNotFoundError(inviteCode);
+    }
+    await this.sock!.newsletterFollow(meta.id);
+    return this.toChannel(meta);
   }
-  unsubscribeFromChannel(_channelId: string): Promise<void> {
-    return this.unsupported('unsubscribeFromChannel');
+
+  async unsubscribeFromChannel(channelId: string): Promise<void> {
+    this.ensureReady();
+    await this.sock!.newsletterUnfollow(channelId);
   }
+
+  // getChannelMessages is not wired: Baileys' newsletterFetchMessages returns the RAW query
+  // BinaryNode with no library parser, so mapping it to ChannelMessage[] needs a verified
+  // BinaryNode walk (or a live spike) that can't be validated without a WhatsApp session. Kept as a
+  // documented adapter-gap in the engine capability matrix rather than shipped as an unverified walk.
   getChannelMessages(_channelId: string, _limit?: number): Promise<ChannelMessage[]> {
     return this.unsupported('getChannelMessages');
+  }
+
+  /** Map a Baileys NewsletterMetadata to the neutral Channel shape (optionals only when present). */
+  private toChannel(meta: {
+    id: string;
+    name: string;
+    description?: string;
+    invite?: string;
+    creation_time?: number;
+    subscribers?: number;
+    picture?: { url?: string };
+    verification?: string;
+    thread_metadata?: { creation_time?: number };
+  }): Channel {
+    const createdAt = meta.creation_time ?? meta.thread_metadata?.creation_time;
+    return {
+      id: meta.id,
+      name: meta.name,
+      ...(meta.description ? { description: meta.description } : {}),
+      ...(meta.invite ? { inviteCode: meta.invite } : {}),
+      ...(meta.subscribers !== undefined ? { subscriberCount: meta.subscribers } : {}),
+      ...(meta.picture?.url ? { picture: meta.picture.url } : {}),
+      ...(meta.verification ? { verified: meta.verification === 'VERIFIED' } : {}),
+      ...(createdAt !== undefined ? { createdAt } : {}),
+    };
   }
   getContactStatuses(): Promise<Status[]> {
     return this.unsupported('getContactStatuses');

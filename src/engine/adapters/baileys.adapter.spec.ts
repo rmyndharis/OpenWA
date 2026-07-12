@@ -40,6 +40,9 @@ class FakeSock extends EventEmitter {
   public chatModify = jest.fn().mockResolvedValue(undefined);
   public addChatLabel = jest.fn().mockResolvedValue(undefined);
   public removeChatLabel = jest.fn().mockResolvedValue(undefined);
+  public newsletterMetadata = jest.fn();
+  public newsletterFollow = jest.fn().mockResolvedValue(undefined);
+  public newsletterUnfollow = jest.fn().mockResolvedValue(undefined);
   fire(event: string, arg: unknown): void {
     this.emitter.emit(event, arg);
   }
@@ -89,6 +92,7 @@ import { BaileysAdapter } from './baileys.adapter';
 import { EngineStatus, EngineEventCallbacks } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 
 const fakeStore = {
@@ -1751,6 +1755,64 @@ describe('BaileysAdapter store-backed ops', () => {
     const adapter = await ready();
     await adapter.removeLabelFromChat('628111@s.whatsapp.net', 'LABEL8');
     expect(fakeSock.removeChatLabel).toHaveBeenCalledWith('628111@s.whatsapp.net', 'LABEL8');
+  });
+
+  it('getChannelById maps newsletterMetadata(jid) → Channel (optionals only when present)', async () => {
+    fakeSock.newsletterMetadata.mockResolvedValue({
+      id: '120363N@newsletter',
+      name: 'Announcements',
+      description: 'News',
+      invite: 'ABC123',
+      subscribers: 421,
+      picture: { url: 'https://x/p.png' },
+      verification: 'VERIFIED',
+      creation_time: 1700000000,
+    });
+    const adapter = await ready();
+    const channel = await adapter.getChannelById('120363N@newsletter');
+    expect(fakeSock.newsletterMetadata).toHaveBeenCalledWith('jid', '120363N@newsletter');
+    expect(channel).toEqual({
+      id: '120363N@newsletter',
+      name: 'Announcements',
+      description: 'News',
+      inviteCode: 'ABC123',
+      subscriberCount: 421,
+      picture: 'https://x/p.png',
+      verified: true,
+      createdAt: 1700000000,
+    });
+  });
+
+  it('getChannelById returns null when newsletterMetadata resolves null', async () => {
+    fakeSock.newsletterMetadata.mockResolvedValue(null);
+    const adapter = await ready();
+    expect(await adapter.getChannelById('unknown@newsletter')).toBeNull();
+  });
+
+  it('subscribeToChannel resolves invite→jid via newsletterMetadata then follows', async () => {
+    fakeSock.newsletterMetadata.mockResolvedValue({ id: '120363S@newsletter', name: 'Solo', invite: 'CODE1' });
+    const adapter = await ready();
+    const channel = await adapter.subscribeToChannel('CODE1');
+    expect(fakeSock.newsletterMetadata).toHaveBeenCalledWith('invite', 'CODE1');
+    expect(fakeSock.newsletterFollow).toHaveBeenCalledWith('120363S@newsletter');
+    expect(channel).toEqual({ id: '120363S@newsletter', name: 'Solo', inviteCode: 'CODE1' });
+  });
+
+  it('subscribeToChannel throws ChannelNotFoundError when the invite resolves null', async () => {
+    fakeSock.newsletterMetadata.mockResolvedValue(null);
+    const adapter = await ready();
+    await expect(adapter.subscribeToChannel('BADCODE')).rejects.toBeInstanceOf(ChannelNotFoundError);
+  });
+
+  it('unsubscribeFromChannel wires 1:1 to sock.newsletterUnfollow(channelId)', async () => {
+    const adapter = await ready();
+    await adapter.unsubscribeFromChannel('120363U@newsletter');
+    expect(fakeSock.newsletterUnfollow).toHaveBeenCalledWith('120363U@newsletter');
+  });
+
+  it('getChannelMessages remains unsupported (raw BinaryNode — no library parser)', async () => {
+    const adapter = await ready();
+    await expect(adapter.getChannelMessages('120363M@newsletter', 10)).rejects.toBeInstanceOf(EngineNotSupportedError);
   });
 
   it('populates the store on an inbound message', async () => {

@@ -97,6 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Baileys engine still cannot read stories — `fetchStatus` returns the *about* text, not stories
   (documented as a library limitation).
 
+- **Channel lookup / subscribe / unsubscribe on the Baileys engine.** `getChannelById(id)`,
+  `subscribeToChannel(inviteCode)`, and `unsubscribeFromChannel(id)` now work via Baileys
+  `newsletterMetadata` (mapped to `Channel` with optional fields), `newsletterFollow` (subscribe,
+  resolving invite→jid first), and `newsletterUnfollow` (unsubscribe, 1:1). `getChannelById` on
+  Baileys resolves ANY channel by jid (richer than the whatsapp-web.js subscribed-list lookup).
+  `getChannelMessages` remains unsupported — `newsletterFetchMessages` returns a raw BinaryNode with
+  no library parser, so it stays a documented gap rather than an unverified walk.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

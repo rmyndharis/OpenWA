@@ -28,17 +28,12 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 | Method | baileys | wwjs |
 |---|---|---|
-| `getChannelById` | not-available — **adapter-gap** | supported |
 | `getChannelMessages` | not-available — **adapter-gap** | supported |
 | `getSubscribedChannels` | not-available — **library-limitation** | supported |
-| `subscribeToChannel` | not-available — **adapter-gap** | supported |
-| `unsubscribeFromChannel` | not-available — **adapter-gap** | supported |
 
-- **`getChannelById` (baileys, adapter-gap).** `sock.newsletterMetadata('jid', channelId)` → `NewsletterMetadata` (`Socket/newsletter.d.ts:9`, shape at `Types/Mex.d.ts:115`). Map `{id,name,description,inviteCode:invite,subscriberCount:subscribers,picture:picture?.url,verified:verification==='VERIFIED',createdAt:creation_time}`. Note: resolves channels by raw jid including not-subscribed ones (wwjs only sees subscribed).
-- **`getChannelMessages` (baileys, adapter-gap).** `sock.newsletterFetchMessages(channelId, limit??50, 0, 0)` (`Socket/newsletter.d.ts:19`) returns the **raw `BinaryNode`** of `<message_updates>` children (`newsletter.js:149`). The fetch is one line; the real work is walking the children and mapping each to `ChannelMessage{id,body,timestamp,hasMedia}` — no library parser is exposed.
+> **Wired.** ✅ `getChannelById`, `subscribeToChannel`, `unsubscribeFromChannel` on Baileys — via `newsletterMetadata('jid'|'invite', …)` → `NewsletterMetadata` mapped to `Channel` (id/name/description/inviteCode/subscriberCount/picture/verified/createdAt), `newsletterFollow` (subscribe, invite→jid bridge), `newsletterUnfollow` (unsubscribe, 1:1). `getChannelById` on Baileys resolves ANY channel by jid (richer than the wwjs subscribed-list lookup).
+- **`getChannelMessages` (baileys, adapter-gap).** `sock.newsletterFetchMessages(channelId, limit, 0, 0)` (`Socket/newsletter.d.ts:19`) returns the **raw `BinaryNode`** of `<message_updates>` children (`newsletter.js:149`). The fetch is one line; the real work is walking the children and mapping each to `ChannelMessage{id,body,timestamp,hasMedia}` — no library parser is exposed. Not wired: a hand-written BinaryNode walk can't be verified without a live WhatsApp session, so it stays a documented gap rather than an unverified implementation.
 - **`getSubscribedChannels` (baileys, library-limitation).** No enumerate-subscribed-newsletters query in the library. All 23 `Socket/newsletter.d.ts` exports are per-jid (`newsletterMetadata` requires a key; `newsletterSubscribers(jid)` returns the count of one newsletter). The `newsletter` event surfaces jids opportunistically during live sync, but that is incremental, not a list-all. Would require a raw WMex/app-state hack against an undocumented XWAPath.
-- **`subscribeToChannel` (baileys, adapter-gap).** Two-step: `newsletterFollow(jid)` (`Socket/newsletter.d.ts:10`) needs a jid, but OpenWA takes an invite code — bridge via `newsletterMetadata('invite', inviteCode).id` first, then `newsletterFollow`.
-- **`unsubscribeFromChannel` (baileys, adapter-gap).** 1:1 — `await sock.newsletterUnfollow(channelId)` (`Socket/newsletter.d.ts:11`). `channelId` is already the `@newsletter` jid, no resolution needed.
 
 ### Labels (WhatsApp Business)
 
@@ -107,14 +102,11 @@ All Tier-1 adapter-gaps have been wired:
 - ✅ `deleteMessage(forEveryone=false)` — Baileys (`chatModify({ deleteForMe })`)
 - ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` — whatsapp-web.js (`sendMessage('status@broadcast', …)`; `recipients` not honored)
 - ✅ `addLabelToChat` / `removeLabelFromChat` — Baileys (`addChatLabel` / `removeChatLabel`; WhatsApp-Business-only)
+- ✅ `getChannelById` / `subscribeToChannel` / `unsubscribeFromChannel` — Baileys (`newsletterMetadata` / `newsletterFollow` / `newsletterUnfollow`)
 
 ### Tier 2 — small-to-medium effort, medium-high value
 
-| # | Method : engine | Library call to wire | Effort | Value |
-|---|---|---|---|---|
-| 7 | `getChannelById` : **baileys** | `sock.newsletterMetadata('jid', channelId)` → map `NewsletterMetadata` (`Socket/newsletter.d.ts:9`) | **S** | Channel/newsletter parity. ~1-liner field map. |
-| 8 | `unsubscribeFromChannel` : **baileys** | `await sock.newsletterUnfollow(channelId)` (`Socket/newsletter.d.ts:11`) | **S** | 1:1, no jid resolution needed. |
-| 9 | `subscribeToChannel` : **baileys** | 2-step: `newsletterMetadata('invite',code).id` then `newsletterFollow(jid)` (`Socket/newsletter.d.ts:9,10`) | **S** | Channel growth (join by invite code). |
+_All Tier-2 items wired (see progress above). Remaining channel work is Tier 3: `getChannelMessages` (raw BinaryNode, no library parser)._
 
 ### Tier 3 — medium effort
 

@@ -72,12 +72,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
     evidence:
       'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) + getCollections (business.d.ts:11) — adapter unwired (returns Product[]+cursor, not Catalog metadata; medium-confidence shape synthesis); wwjs index.d.ts has NO Client.getCatalog (0 hits), adapter stubs to null @whatsapp-web-js.adapter.ts:1770',
   },
-  getChannelById: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys Socket/newsletter.d.ts:9 newsletterMetadata(type,key) → NewsletterMetadata (Mex.d.ts:115) — adapter unwired; wwjs resolves via getChannels() find-by-id @whatsapp-web-js.adapter.ts:1562',
-  },
+  getChannelById: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getChannelMessages: {
     wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'adapter-gap' },
@@ -195,17 +190,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   sendVideoMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   setGroupDescription: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   setGroupSubject: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  subscribeToChannel: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys Socket/newsletter.d.ts:10 newsletterFollow(jid) needs a jid — bridge via newsletterMetadata("invite",code).id (2-step); adapter unwired; wwjs Client.subscribeToChannel (Client.js:2529)',
-  },
+  subscribeToChannel: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   unblockContact: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  unsubscribeFromChannel: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys Socket/newsletter.d.ts:11 newsletterUnfollow(jid) — channelId is the @newsletter jid, maps 1:1; adapter unwired; wwjs Client.unsubscribeFromChannel (Client.js:2550)',
-  },
+  unsubscribeFromChannel: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
 };
