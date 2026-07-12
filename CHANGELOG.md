@@ -69,6 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everyone (`forEveryone=true`) was already wired; this completes `deleteMessage` on the Baileys
   engine for the most common delete mode.
 
+- **Status posts on the whatsapp-web.js engine.** `postTextStatus`, `postImageStatus`, and
+  `postVideoStatus` now work on whatsapp-web.js (the default engine) — they route through
+  `sendMessage('status@broadcast', …)` (text styling via `extra: { backgroundColor, fontStyle }`;
+  media via `MessageMedia` + `caption`). Previously these returned 501 on the default engine despite
+  the library supporting them; the stale "blocked upstream, #455" guard is removed (#455 is a closed
+  feature request, and whatsapp-web.js 1.34.7 ships a real status-send path). Caveat: the library has
+  no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it
+  broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys
+  engine continues to honor `recipients`.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

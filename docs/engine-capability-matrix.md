@@ -74,12 +74,9 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 | Method | baileys | wwjs |
 |---|---|---|
-| `postTextStatus` | supported | not-available — **adapter-gap** |
-| `postImageStatus` | supported | not-available — **adapter-gap** |
-| `postVideoStatus` | supported | not-available — **adapter-gap** |
 | `deleteStatus` | supported (caveat) | not-available — **adapter-gap** |
 
-- **`postTextStatus` / `postImageStatus` / `postVideoStatus` (wwjs, adapter-gap).** The library **does** support status broadcast — the wwjs adapter simply throws (`EngineNotSupportedError`, self-labelled "Baileys-only; wwebjs blocked upstream, see #455") instead of routing it. `Client.sendMessage('status@broadcast', ...)` hits the `isStatus` branch which calls `sendStatusTextMsgAction({color,font,text})` (`Utils.js:537`) for text and `sendStatusMediaMsgAction(msg, mediaUpdate)` (`Utils.js:565`) for image/video/gif/audio (`Client.js:1410-1432` allows these content types for status). Wiring: `client.sendMessage('status@broadcast', mediaOrText, { ... })`. **Caveat:** `sendStatusTextMsgAction`/`sendStatusMediaMsgAction` take no recipients arg, so wwjs always broadcasts to the account's status-privacy audience — `StatusPostOptions.recipients` (Baileys `statusJidList` allow-list) cannot be honored on wwjs.
+> **Wired.** ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` on whatsapp-web.js — routed via `sendMessage('status@broadcast', …)` (`{ extra: { backgroundColor, fontStyle } }` for text; `{ caption }` for media). **Caveat:** whatsapp-web.js has no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys engine honors `recipients` (`statusJidList`).
 - **`deleteStatus` (wwjs, adapter-gap).** `client.revokeStatusMessage(statusId)` exists (`index.d.ts:139`; `Client.js:2795` → `WAWebRevokeStatusAction`). Revokes OWN status only (throws if `!msg.id.fromMe || !msg.id.remote.isStatus()`). Adapter throws instead of calling it.
 - **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as *empirically unverified* (`baileys.adapter.ts:909-911`) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
 
@@ -115,11 +112,8 @@ These are the capabilities the underlying library already supports but the OpenW
 
 | # | Method : engine | Library call to wire | Effort | Value |
 |---|---|---|---|---|
-| 1 | `postTextStatus` : **wwjs** | `client.sendMessage('status@broadcast', text, {extra:{backgroundColor,font}})` — routes to `sendStatusTextMsgAction` (`Utils.js:537`) | **S** | Status broadcast parity. Flagship feature currently 501 on the default engine despite the library supporting it. Document the `recipients` (statusJidList) caveat. |
-| 2 | `postImageStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for image status. |
-| 3 | `postVideoStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for video status. |
-| 4 | `addLabelToChat` : **baileys** | `await sock.addChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70`) | **S** | 1:1 mapping. WhatsApp Business CRM parity. |
-| 5 | `removeLabelFromChat` : **baileys** | `await sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:71`) | **S** | 1:1 mapping. Pairs with #4. |
+| 1 | `addLabelToChat` : **baileys** | `await sock.addChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70`) | **S** | 1:1 mapping. WhatsApp Business CRM parity. |
+| 2 | `removeLabelFromChat` : **baileys** | `await sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:71`) | **S** | 1:1 mapping. Pairs with #1. |
 
 ### Tier 2 — small-to-medium effort, medium-high value
 

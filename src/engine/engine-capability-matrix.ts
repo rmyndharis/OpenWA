@@ -170,24 +170,9 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   leaveGroup: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   logout: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   markUnread: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  postImageStatus: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
-    baileys: { status: 'supported' },
-    evidence:
-      'wwjs sendStatusMediaMsgAction (Utils.js:565) handles image status@broadcast — adapter throws "blocked upstream #455" instead of routing it; baileys postStatus({image,caption,mimetype}) @baileys.adapter.ts:888. Caveat: wwjs sendStatusMediaMsgAction has no recipients arg (statusJidList not honored)',
-  },
-  postTextStatus: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
-    baileys: { status: 'supported' },
-    evidence:
-      'wwjs sendStatusTextMsgAction({color,font,text}) (Utils.js:537) — adapter throws "blocked upstream #455" instead of routing status@broadcast text; baileys sendMessage(status@broadcast,{text},{statusJidList,...}) @baileys.adapter.ts:885. Caveat: wwjs has no recipients arg (statusJidList not honored)',
-  },
-  postVideoStatus: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
-    baileys: { status: 'supported' },
-    evidence:
-      'wwjs sendStatusMediaMsgAction (Utils.js:565) handles video/gif/audio status — adapter throws "blocked upstream #45455" instead of routing it; baileys postStatus({video,caption,mimetype}) @baileys.adapter.ts:891. Caveat: wwjs has no recipients arg (statusJidList not honored)',
-  },
+  postImageStatus: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
+  postTextStatus: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
+  postVideoStatus: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   promoteParticipants: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   reactToMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   removeLabelFromChat: {

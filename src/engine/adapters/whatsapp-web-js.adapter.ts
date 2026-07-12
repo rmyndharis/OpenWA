@@ -1743,21 +1743,66 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return [];
   }
 
-  async postTextStatus(_text: string, _options?: StatusPostOptions): Promise<StatusResult> {
+  private warnedStatusRecipients = false;
+
+  async postTextStatus(text: string, options: StatusPostOptions): Promise<StatusResult> {
     this.ensureReady();
-    // whatsapp-web.js doesn't have native status posting
-    // This would require using the underlying WhatsApp Web API directly
-    throw new EngineNotSupportedError('postTextStatus (Baileys-only; wwebjs blocked upstream, see #455)');
+    this.warnStatusRecipientsOnce(options);
+    // whatsapp-web.js posts a text status by messaging status@broadcast with styling in `extra`
+    // (Client.js maps options.extra → page extraOptions → sendStatusTextMsgAction in Utils.js).
+    // backgroundColor is a #RRGGBB hex; font is the fontStyle index 0-7.
+    const msg = await this.client!.sendMessage('status@broadcast', text, {
+      extra: {
+        ...(options.backgroundColor !== undefined ? { backgroundColor: options.backgroundColor } : {}),
+        ...(options.font !== undefined ? { fontStyle: options.font } : {}),
+      },
+    });
+    return this.toStatusResult(msg);
   }
 
-  async postImageStatus(_media: MediaInput, _options?: StatusPostOptions): Promise<StatusResult> {
-    this.ensureReady();
-    throw new EngineNotSupportedError('postImageStatus (Baileys-only; wwebjs blocked upstream, see #455)');
+  async postImageStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus(media, options);
   }
 
-  async postVideoStatus(_media: MediaInput, _options?: StatusPostOptions): Promise<StatusResult> {
+  async postVideoStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
+    return this.postMediaStatus(media, options);
+  }
+
+  private async postMediaStatus(media: MediaInput, options: StatusPostOptions): Promise<StatusResult> {
     this.ensureReady();
-    throw new EngineNotSupportedError('postVideoStatus (Baileys-only; wwebjs blocked upstream, see #455)');
+    this.warnStatusRecipientsOnce(options);
+    const messageMedia = await this.toStatusMessageMedia(media);
+    const msg = await this.client!.sendMessage('status@broadcast', messageMedia, {
+      ...(options.caption !== undefined ? { caption: options.caption } : {}),
+    });
+    return this.toStatusResult(msg);
+  }
+
+  /** Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped). */
+  private async toStatusMessageMedia(media: MediaInput): Promise<MessageMedia> {
+    if (typeof media.data === 'string') {
+      if (isHttpUrl(media.data)) return loadRemoteMedia(media.data);
+      return new MessageMedia(media.mimetype, media.data, media.filename);
+    }
+    return new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
+  }
+
+  private toStatusResult(msg: Message | undefined): StatusResult {
+    const ts = msg?.timestamp ? new Date(msg.timestamp * 1000) : new Date();
+    return {
+      statusId: msg?.id?._serialized ?? '',
+      timestamp: ts,
+      expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
+    };
+  }
+
+  private warnStatusRecipientsOnce(options: StatusPostOptions): void {
+    if (this.warnedStatusRecipients || !options.recipients?.length) return;
+    this.warnedStatusRecipients = true;
+    this.logger.warn(
+      "postStatus on the whatsapp-web.js engine broadcasts to the account's status-privacy audience; " +
+        'the recipients allow-list is not honored by whatsapp-web.js (it is on the Baileys engine).',
+    );
   }
 
   async deleteStatus(_statusId: string): Promise<void> {

@@ -1085,30 +1085,47 @@ describe('WhatsAppWebJsAdapter.resolveContactPhone (@lid -> phone, #263)', () =>
   });
 });
 
-describe('WhatsAppWebJsAdapter status methods (Baileys-only, surface HTTP 501, #455)', () => {
-  // The 4 status methods are Baileys-only; the wwebjs adapter stubs each to EngineNotSupportedError
-  // (which extends NestJS NotImplementedException -> HTTP 501). This locks the new-contract signatures
-  // (postTextStatus(text, options) / postImage|VideoStatus(media, options) / deleteStatus(statusId))
-  // so a future refactor that silently starts returning data instead of throwing is caught here.
-  const readyAdapter = (): WhatsAppWebJsAdapter => {
+describe('WhatsAppWebJsAdapter status methods', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
     (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
-    // ensureReady() requires both status === READY and a non-null client before the method body runs.
-    (adapter as unknown as { client: unknown }).client = {};
+    (adapter as unknown as { client: unknown }).client = client;
     return adapter;
   };
   const media = { mimetype: 'image/png', data: 'iVBOR' };
   const options = { recipients: ['628111@c.us'] };
+  const STATUS_TTL_MS = 24 * 3_600_000;
 
-  it.each([
-    ['postTextStatus', ['hello', options]] as const,
-    ['postImageStatus', [media, options]] as const,
-    ['postVideoStatus', [media, options]] as const,
-    ['deleteStatus', ['STATUS1']] as const,
-  ])('%s rejects with EngineNotSupportedError (501)', async (method, args) => {
-    await expect(
-      (readyAdapter() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method](...args),
-    ).rejects.toBeInstanceOf(EngineNotSupportedError);
+  it('postTextStatus posts to status@broadcast with styling in `extra` and returns a StatusResult', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'STATUS1' }, timestamp: 1700000010 });
+    const result = await readyAdapter({ sendMessage }).postTextStatus('hello', {
+      ...options,
+      backgroundColor: '#ff0000',
+      font: 2,
+    });
+    expect(sendMessage).toHaveBeenCalledWith('status@broadcast', 'hello', {
+      extra: { backgroundColor: '#ff0000', fontStyle: 2 },
+    });
+    const ts = new Date(1700000010 * 1000);
+    expect(result).toEqual({ statusId: 'STATUS1', timestamp: ts, expiresAt: new Date(ts.getTime() + STATUS_TTL_MS) });
+  });
+
+  it.each([['postImageStatus'], ['postVideoStatus']] as const)(
+    '%s posts media to status@broadcast with the caption and returns a StatusResult',
+    async method => {
+      const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'STATUS2' }, timestamp: 1700000011 });
+      const result = await readyAdapter({ sendMessage })[method](media, { ...options, caption: 'cap' });
+      expect(sendMessage).toHaveBeenCalledWith('status@broadcast', expect.any(MessageMedia), { caption: 'cap' });
+      const ts = new Date(1700000011 * 1000);
+      expect(result.statusId).toBe('STATUS2');
+      expect(result.expiresAt).toEqual(new Date(ts.getTime() + STATUS_TTL_MS));
+    },
+  );
+
+  it('deleteStatus is still not supported (separate gap — revokeStatusMessage)', async () => {
+    await expect(readyAdapter({ sendMessage: jest.fn() }).deleteStatus('STATUS1')).rejects.toBeInstanceOf(
+      EngineNotSupportedError,
+    );
   });
 });
 
