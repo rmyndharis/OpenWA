@@ -53,12 +53,7 @@ export interface MethodCapability {
 }
 
 export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
-  addLabelToChat: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys Socket/chats.d.ts:70 addChatLabel(jid,labelId) + business.d.ts:163 — adapter throws at baileys.adapter.ts:859; wwjs Client.js:2921 addOrRemoveLabels (adapter changeChatLabel @1534)',
-  },
+  addLabelToChat: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   addParticipants: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   blockContact: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   checkNumberExists: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
@@ -175,12 +170,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   postVideoStatus: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   promoteParticipants: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   reactToMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  removeLabelFromChat: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys Socket/chats.d.ts:71 removeChatLabel(jid,labelId) + business.d.ts:164 — adapter throws at baileys.adapter.ts:862; wwjs Client.js:2921 addOrRemoveLabels (adapter changeChatLabel @1534)',
-  },
+  removeLabelFromChat: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   removeParticipants: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   replyToMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   requestPairingCode: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },

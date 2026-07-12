@@ -38,6 +38,8 @@ class FakeSock extends EventEmitter {
   public updateBlockStatus = jest.fn().mockResolvedValue(undefined);
   public readMessages = jest.fn().mockResolvedValue(undefined);
   public chatModify = jest.fn().mockResolvedValue(undefined);
+  public addChatLabel = jest.fn().mockResolvedValue(undefined);
+  public removeChatLabel = jest.fn().mockResolvedValue(undefined);
   fire(event: string, arg: unknown): void {
     this.emitter.emit(event, arg);
   }
@@ -1737,6 +1739,18 @@ describe('BaileysAdapter store-backed ops', () => {
       '628111@s.whatsapp.net',
     );
     expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('addLabelToChat wires 1:1 to sock.addChatLabel(chatId, labelId)', async () => {
+    const adapter = await ready();
+    await adapter.addLabelToChat('628111@s.whatsapp.net', 'LABEL8');
+    expect(fakeSock.addChatLabel).toHaveBeenCalledWith('628111@s.whatsapp.net', 'LABEL8');
+  });
+
+  it('removeLabelFromChat wires 1:1 to sock.removeChatLabel(chatId, labelId)', async () => {
+    const adapter = await ready();
+    await adapter.removeLabelFromChat('628111@s.whatsapp.net', 'LABEL8');
+    expect(fakeSock.removeChatLabel).toHaveBeenCalledWith('628111@s.whatsapp.net', 'LABEL8');
   });
 
   it('populates the store on an inbound message', async () => {

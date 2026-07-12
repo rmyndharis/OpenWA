@@ -866,11 +866,16 @@ export class BaileysAdapter implements IWhatsAppEngine {
   getChatLabels(_chatId: string): Promise<Label[]> {
     return this.unsupported('getChatLabels');
   }
-  addLabelToChat(_chatId: string, _labelId: string): Promise<void> {
-    return this.unsupported('addLabelToChat');
+  // WhatsApp Business only — Baileys rejects these on personal accounts. The label must already
+  // exist (use getLabels on an engine that lists them); addChatLabel/removeChatLabel associate it
+  // with a chat, they do not create/edit the label definition.
+  async addLabelToChat(chatId: string, labelId: string): Promise<void> {
+    this.ensureReady();
+    await this.sock!.addChatLabel(chatId, labelId);
   }
-  removeLabelFromChat(_chatId: string, _labelId: string): Promise<void> {
-    return this.unsupported('removeLabelFromChat');
+  async removeLabelFromChat(chatId: string, labelId: string): Promise<void> {
+    this.ensureReady();
+    await this.sock!.removeChatLabel(chatId, labelId);
   }
   getSubscribedChannels(): Promise<Channel[]> {
     return this.unsupported('getSubscribedChannels');

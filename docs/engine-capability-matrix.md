@@ -44,13 +44,11 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 | Method | baileys | wwjs |
 |---|---|---|
-| `addLabelToChat` | not-available — **adapter-gap** | supported |
-| `removeLabelFromChat` | not-available — **adapter-gap** | supported |
 | `getLabels` | not-available — **library-limitation** | supported |
 | `getLabelById` | not-available — **library-limitation** | supported |
 | `getChatLabels` | not-available — **library-limitation** | supported |
 
-- **`addLabelToChat` / `removeLabelFromChat` (baileys, adapter-gap).** 1:1 — `sock.addChatLabel(jid,labelId)` / `sock.removeChatLabel(jid,labelId)` (`Socket/chats.d.ts:70-71`, also `business.d.ts:163-164`), both `Promise<void>`. WhatsApp-Business-only op (rejects on personal accounts). Do **not** use `addLabel(jid, LabelActionBody)` (`chats.d.ts:69`) — that creates/edits the label *definition*, not the chat association.
+> **Wired.** ✅ `addLabelToChat` / `removeLabelFromChat` on the Baileys engine — 1:1 to `sock.addChatLabel(chatId, labelId)` / `sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70-71`). WhatsApp-Business-only (rejects on personal accounts). Do **not** use `addLabel(jid, LabelActionBody)` (`chats.d.ts:69`) — that creates/edits the label *definition*, not the chat association.
 - **`getLabels` / `getLabelById` / `getChatLabels` (baileys, library-limitation).** No label read/fetch symbol anywhere in `lib/**/*.d.ts` (`Types/Label.d.ts` has only the interface + `LabelColor` enum; `chats.d.ts`/`business.d.ts` expose only writes). Label data does arrive via app-state sync (`messaging-history.set`), so a determined adapter could capture+cache labels from the event stream — but that is a relay/cache hack, not a first-class getter, and there is no network fetch to seed/refresh it on demand.
 
 ### Catalog / Products / Orders (WhatsApp Business)
@@ -108,12 +106,12 @@ These are the capabilities the underlying library already supports but the OpenW
 
 > **Progress.** ✅ `deleteMessage` (`forEveryone=false`, Baileys) — wired via `chatModify({ deleteForMe })`; moved to `supported`.
 
-### Tier 1 — small effort, high value
+### Tier 1 — small effort, high value ✅ shipped
 
-| # | Method : engine | Library call to wire | Effort | Value |
-|---|---|---|---|---|
-| 1 | `addLabelToChat` : **baileys** | `await sock.addChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70`) | **S** | 1:1 mapping. WhatsApp Business CRM parity. |
-| 2 | `removeLabelFromChat` : **baileys** | `await sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:71`) | **S** | 1:1 mapping. Pairs with #1. |
+All Tier-1 adapter-gaps have been wired:
+- ✅ `deleteMessage(forEveryone=false)` — Baileys (`chatModify({ deleteForMe })`)
+- ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` — whatsapp-web.js (`sendMessage('status@broadcast', …)`; `recipients` not honored)
+- ✅ `addLabelToChat` / `removeLabelFromChat` — Baileys (`addChatLabel` / `removeChatLabel`; WhatsApp-Business-only)
 
 ### Tier 2 — small-to-medium effort, medium-high value
 

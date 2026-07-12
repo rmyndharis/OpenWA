@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys
   engine continues to honor `recipients`.
 
+- **Chat labels on the Baileys engine.** `addLabelToChat` and `removeLabelFromChat` now work on
+  the Baileys engine — 1:1 to `sock.addChatLabel(chatId, labelId)` / `sock.removeChatLabel(chatId,
+  labelId)` instead of returning 501. WhatsApp-Business-only (rejects on personal accounts). Label
+  *listing* (`getLabels` / `getLabelById` / `getChatLabels`) remains unavailable on Baileys (no
+  first-class library API — see `docs/engine-capability-matrix.md`).
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading
