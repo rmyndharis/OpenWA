@@ -38,8 +38,8 @@ const sourceBodies = listTsFiles(SRC_DIR)
 
 const memberKeys = Object.keys(AuditAction) as (keyof typeof AuditAction)[];
 
-const isEmitted = (key: keyof typeof AuditAction): boolean =>
-  sourceBodies.some(body => body.includes(`AuditAction.${key}`));
+const isEmitted = (key: keyof typeof AuditAction | undefined): boolean =>
+  key !== undefined && sourceBodies.some(body => body.includes(`AuditAction.${key}`));
 
 const memberKeyForValue = (value: string): keyof typeof AuditAction | undefined =>
   memberKeys.find(k => AuditAction[k] === (value as AuditAction));
