@@ -64,12 +64,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   checkNumberExists: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   createGroup: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   deleteChat: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  deleteMessage: {
-    wwjs: { status: 'supported' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
-    evidence:
-      'baileys forEveryone=true already wired (sendMessage({delete})); forEveryone=false throws at baileys.adapter.ts:655 — library has chatModify({deleteForMe}) (Types/Chat.d.ts:76 via Socket/chats.d.ts:64, already used @baileys.adapter.ts:820,833); wwjs Message.delete (Message.js)',
-  },
+  deleteMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   deleteStatus: {
     wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
     baileys: { status: 'supported' },

@@ -97,11 +97,9 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 | Method | baileys | wwjs |
 |---|---|---|
-| `deleteMessage` | not-available — **adapter-gap** (partial) | supported |
 | `getChatHistory` | not-available — **library-limitation** | supported |
 | `getMessageReactions` | not-available — **library-limitation** | supported |
 
-- **`deleteMessage` (baileys, adapter-gap, partial).** Only the `forEveryone=false` (delete-for-me) branch is missing — `forEveryone=true` is already correctly wired via `sendMessage({delete})`. The library HAS delete-for-me: `chatModify({deleteForMe:{deleteMedia,key,timestamp}}, jid)` (`Types/Chat.d.ts:76` via `Socket/chats.d.ts:64`). `target.key` is already obtained via `requireStored(messageId)` and `chatModify` is already in use at `baileys.adapter.ts:820,833`. Drop the `if(!forEveryone) throw` guard at line 655 and route the false branch to `chatModify`.
 - **`getChatHistory` (baileys, library-limitation).** The only history primitive is `fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp)` (`Socket/business.d.ts:25`) — it returns a sync-token *string*, not messages; the messages are delivered later via the `messaging-history.set` event. There is no per-chat `fetchMessages(chatId, limit)` on the socket. A synchronous `Promise<IncomingMessage[]>` for one chat would require an OpenWA-side chat-indexed store populated from `messages.upsert` + `messaging-history.set` events.
 - **`getMessageReactions` (baileys, library-limitation).** No on-demand server fetch. Reactions exist only as event-augmented state on `WAMessage.reactions` (`proto.IReaction[]` at `WAProto/index.d.ts:10623`), mutated by `updateMessageWithReaction` and surfaced via the `messages.reaction` event. The adapter already processes `reactionMessage` events (`baileys.adapter.ts:1048-1057`) and emits `onMessageReaction`, but it does **not** persist `.reactions` into its `messageStore` (early-returns at line 1058). A store-backed read would need that persistence added first; even then, only reactions observed since session start are known (no historical backfill).
 
@@ -111,16 +109,17 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 These are the capabilities the underlying library already supports but the OpenWA adapter does not wire. Ranked high-value + low-effort first. Each is a self-contained backlog item; an engineer can open the cited symbol and start.
 
+> **Progress.** ✅ `deleteMessage` (`forEveryone=false`, Baileys) — wired via `chatModify({ deleteForMe })`; moved to `supported`.
+
 ### Tier 1 — small effort, high value
 
 | # | Method : engine | Library call to wire | Effort | Value |
 |---|---|---|---|---|
-| 1 | `deleteMessage` (forEveryone=false) : **baileys** | `sock.chatModify({deleteForMe:{deleteMedia:true,key,target.key,timestamp:Date.now()}}, chatId)` — drop the `!forEveryone` throw at `baileys.adapter.ts:655` | **S** | Core messaging op. Delete-for-me is heavily used; currently 501 on baileys for the most common delete mode. `chatModify` already used at lines 820/833; `target.key` already resolved. |
-| 2 | `postTextStatus` : **wwjs** | `client.sendMessage('status@broadcast', text, {extra:{backgroundColor,font}})` — routes to `sendStatusTextMsgAction` (`Utils.js:537`) | **S** | Status broadcast parity. Flagship feature currently 501 on the default engine despite the library supporting it. Document the `recipients` (statusJidList) caveat. |
-| 3 | `postImageStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for image status. |
-| 4 | `postVideoStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for video status. |
-| 5 | `addLabelToChat` : **baileys** | `await sock.addChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70`) | **S** | 1:1 mapping. WhatsApp Business CRM parity. |
-| 6 | `removeLabelFromChat` : **baileys** | `await sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:71`) | **S** | 1:1 mapping. Pairs with #5. |
+| 1 | `postTextStatus` : **wwjs** | `client.sendMessage('status@broadcast', text, {extra:{backgroundColor,font}})` — routes to `sendStatusTextMsgAction` (`Utils.js:537`) | **S** | Status broadcast parity. Flagship feature currently 501 on the default engine despite the library supporting it. Document the `recipients` (statusJidList) caveat. |
+| 2 | `postImageStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for image status. |
+| 3 | `postVideoStatus` : **wwjs** | `client.sendMessage('status@broadcast', new MessageMedia(...), {caption})` — routes to `sendStatusMediaMsgAction` (`Utils.js:565`) | **S** | Same as above for video status. |
+| 4 | `addLabelToChat` : **baileys** | `await sock.addChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70`) | **S** | 1:1 mapping. WhatsApp Business CRM parity. |
+| 5 | `removeLabelFromChat` : **baileys** | `await sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:71`) | **S** | 1:1 mapping. Pairs with #4. |
 
 ### Tier 2 — small-to-medium effort, medium-high value
 

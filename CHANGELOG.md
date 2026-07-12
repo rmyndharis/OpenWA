@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/engine-capability-matrix.md` inventories the unwired adapter-gaps as a prioritized capability
   backlog.
 
+- **Delete-for-me on the Baileys engine.** `deleteMessage(…, forEveryone=false)` now performs a
+  delete-for-me via Baileys' `chatModify({ deleteForMe })` instead of returning 501. Revoke-for-
+  everyone (`forEveryone=true`) was already wired; this completes `deleteMessage` on the Baileys
+  engine for the most common delete mode.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

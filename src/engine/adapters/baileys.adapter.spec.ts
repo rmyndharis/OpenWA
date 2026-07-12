@@ -1728,9 +1728,15 @@ describe('BaileysAdapter store-backed ops', () => {
     await expect(adapter.replyToMessage('c', 'GONE', 'x')).rejects.toThrow(/not found/i);
   });
 
-  it('deleteMessage for-me (forEveryone=false) is not supported', async () => {
+  it('deleteMessage for-me (forEveryone=false) deletes via chatModify({ deleteForMe })', async () => {
+    fakeStore.getMessage.mockResolvedValue({ ...stored, messageTimestamp: 1700000007 });
     const adapter = await ready();
-    await expect(adapter.deleteMessage('c', 'TARGET', false)).rejects.toBeInstanceOf(EngineNotSupportedError);
+    await adapter.deleteMessage('628111@s.whatsapp.net', 'TARGET', false);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      { deleteForMe: { deleteMedia: true, key: stored.key, timestamp: 1700000007 } },
+      '628111@s.whatsapp.net',
+    );
+    expect(fakeSock.sendMessage).not.toHaveBeenCalled();
   });
 
   it('populates the store on an inbound message', async () => {

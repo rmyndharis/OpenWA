@@ -650,12 +650,23 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async deleteMessage(chatId: string, messageId: string, forEveryone = true): Promise<void> {
     this.ensureReady();
-    if (!forEveryone) {
-      // Baileys only supports revoke-for-everyone via sendMessage; delete-for-me is not implemented.
-      throw new EngineNotSupportedError('deleteMessage (delete-for-me)');
-    }
     const target = await this.requireStored(messageId);
-    await this.sock!.sendMessage(chatId, { delete: target.key });
+    if (forEveryone) {
+      await this.sock!.sendMessage(chatId, { delete: target.key });
+      return;
+    }
+    // Delete-for-me (revoke on this device only): Baileys exposes it as a chat modification, not a
+    // sendMessage. The stored message timestamp (epoch seconds) is part of the payload.
+    await this.sock!.chatModify(
+      {
+        deleteForMe: {
+          deleteMedia: true,
+          key: target.key,
+          timestamp: this.toUnixSeconds(target.messageTimestamp),
+        },
+      },
+      chatId,
+    );
   }
 
   // ----- Groups -----
