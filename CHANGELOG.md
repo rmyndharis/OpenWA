@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X-Request-ID` (alphanumeric + dash, ≤128 chars) is echoed; anything else (including a CRLF
   header-injection attempt) is replaced with a generated UUID. The id is also set on the response.
 
+- **Engine capability matrix + drift gate.** A committed, source-verified matrix
+  (`src/engine/engine-capability-matrix.ts`) records, for every `IWhatsAppEngine` method on each
+  engine (whatsapp-web.js default, Baileys), whether it is `supported` or `not-available` — and for
+  the not-available ones, the root cause: `adapter-gap` (the underlying library supports it, OpenWA
+  just hasn't wired it — fixable) vs `library-limitation` (no first-class library API), with the
+  cited library symbol as evidence. A drift gate fails when a method's throw-availability changes.
+  `docs/engine-capability-matrix.md` inventories the unwired adapter-gaps as a prioritized capability
+  backlog.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading
