@@ -16,6 +16,7 @@ hand-written resource methods.
 | Python                  | [`rmyndharis-openwa`](python/)      | sync (httpx), PEP 561 typed |
 | PHP                     | [`rmyndharis/openwa`](php/)         | sync (Guzzle, PHP 8.1+)     |
 | Java                    | [`com.rmyndharis:openwa`](java/)    | sync (java.net.http + Gson, Java 17) |
+| Go                      | [`github.com/rmyndharis/OpenWA/sdk/go`](go/) | stdlib-only, context-first, injectable transport (Go 1.22+) |
 
 ## Coverage
 
@@ -160,6 +161,37 @@ Requires Java 17+. Errors are a typed, unchecked hierarchy — branch with
 custom `HttpTransport` that records the request — no network. See
 [`java/README.md`](java/README.md) for the full guide.
 
+## Go
+
+```bash
+go get github.com/rmyndharis/OpenWA/sdk/go
+```
+
+```go
+import (
+    "context"
+    openwa "github.com/rmyndharis/OpenWA/sdk/go"
+)
+
+client, err := openwa.New("http://localhost:2785", "owa_k1_…")
+if err != nil {
+    log.Fatal(err)
+}
+
+ctx := context.Background()
+client.Sessions.Start(ctx, "my-session")
+res, err := client.Messages.SendText(ctx, "my-session", openwa.SendTextRequest{
+    ChatID: "628123456789@c.us",
+    Text:   "Hello from the OpenWA Go SDK!",
+})
+fmt.Println(res.MessageID)
+```
+
+Requires Go 1.22+. Stdlib-only, context-first. Errors are typed — match with
+`errors.Is(err, openwa.ErrConflict)` or unwrap `*openwa.APIError` with
+`errors.As`. Inject an `http.RoundTripper` with `openwa.WithTransport(...)` for
+testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
+
 ## Reliability & security
 
 - **Use HTTPS in production.** The API key is sent as `X-API-Key` on every
@@ -186,6 +218,8 @@ cd sdk/python && python -m pytest -q
 cd sdk/php && composer install && ./vendor/bin/phpunit
 # Java
 cd sdk/java && mvn -B verify
+# Go
+cd sdk/go && go test -race ./... && go vet ./...
 ```
 
 Each test suite mocks the HTTP layer and asserts on the exact path, so the
