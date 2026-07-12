@@ -1736,23 +1736,31 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getContactStatus(contactId: string): Promise<Status[]> {
     this.ensureReady();
-    return this.collectStatuses([await this.client!.getBroadcastById(contactId)]);
+    // A contact with no active 24h story resolves to an "empty" Broadcast (id/msgs/getContact
+    // undefined — Broadcast._patch only runs when data is truthy). That is the common case, so guard
+    // it: return [] rather than dereferencing undefined inside collectStatuses (→ 500).
+    const broadcast = await this.client!.getBroadcastById(contactId);
+    return broadcast?.msgs?.length ? this.collectStatuses([broadcast]) : [];
   }
 
   /**
    * Map whatsapp-web.js story Broadcasts (+ their Messages) into the neutral Status shape. Each
    * Broadcast is one contact's story (its `msgs`); we flatten across broadcasts. type collapses to
    * the Status union (image/video, else text — audio/other stories are rare and become 'text').
-   * expiresAt is timestamp + 24h (WhatsApp status TTL).
+   * expiresAt is timestamp + 24h (WhatsApp status TTL). Broadcasts without msgs are skipped (a story
+   * that expired between getBroadcasts and here, or a phantom entry).
    */
   private async collectStatuses(
     broadcasts: ReadonlyArray<{
-      msgs: Message[];
+      msgs?: Message[];
       getContact: () => Promise<{ id: { _serialized: string }; name?: string; pushname?: string }>;
     }>,
   ): Promise<Status[]> {
     const statuses: Status[] = [];
     for (const broadcast of broadcasts) {
+      if (!broadcast?.msgs?.length) {
+        continue;
+      }
       const contact = await broadcast.getContact();
       const contactSummary = {
         id: contact.id._serialized,

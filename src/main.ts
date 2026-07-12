@@ -243,9 +243,12 @@ async function bootstrap() {
 
   // Apply explicit HTTP server timeouts so they are operator-tunable (REQUEST_TIMEOUT_MS /
   // HEADERS_TIMEOUT_MS / KEEPALIVE_TIMEOUT_MS) and observable at boot, instead of Node's implicit
-  // defaults. Done after the adapter exists and before listen().
+  // defaults. Done after the adapter exists and before listen(). Target MUST be the http.Server
+  // (app.getHttpServer()) — NOT getHttpAdapter().getInstance(), which is the Express APPLICATION
+  // (a function with no requestTimeout/headersTimeout/keepAliveTimeout props); writing onto it is
+  // inert. The timeouts only take effect on the real server.
   const appliedHttpTimeouts = applyHttpTimeouts(
-    app.getHttpAdapter().getInstance() as HttpTimeoutSink,
+    app.getHttpServer() as HttpTimeoutSink,
     app.get(ConfigService).get<HttpTimeoutConfig>('http')!,
   );
   bootstrapLogger.log(

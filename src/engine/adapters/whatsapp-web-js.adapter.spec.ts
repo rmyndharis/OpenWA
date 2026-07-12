@@ -1164,6 +1164,26 @@ describe('WhatsAppWebJsAdapter status methods', () => {
       }),
     );
   });
+
+  it('getContactStatus returns [] for a contact with no active story (empty Broadcast, no 500)', async () => {
+    // getBroadcastById for a contact not currently posting resolves an "empty" Broadcast: the
+    // Broadcast constructor only _patches when data is truthy, so id/msgs/getContact are undefined.
+    const getBroadcastById = jest.fn().mockResolvedValue({ msgs: undefined });
+    const result = await readyAdapter({ sendMessage: jest.fn(), getBroadcastById }).getContactStatus(
+      '628999@s.whatsapp.net',
+    );
+    expect(getBroadcastById).toHaveBeenCalledWith('628999@s.whatsapp.net');
+    expect(result).toEqual([]);
+  });
+
+  it('getContactStatuses skips empty Broadcasts in the plural path (no crash)', async () => {
+    const getBroadcasts = jest.fn().mockResolvedValue([
+      { msgs: undefined }, // a contact whose story expired / phantom entry
+      storyBroadcast,
+    ]);
+    const result = await readyAdapter({ sendMessage: jest.fn(), getBroadcasts }).getContactStatuses();
+    expect(result).toHaveLength(2); // only the populated broadcast maps
+  });
 });
 
 describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve current WA-Web build)', () => {
