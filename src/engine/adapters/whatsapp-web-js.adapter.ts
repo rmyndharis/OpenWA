@@ -144,6 +144,18 @@ export function isHttpUrl(value: string): boolean {
 }
 
 /**
+ * Detect Puppeteer's "Execution context was destroyed" error. During `Client.inject()` this is most
+ * often a persistent browser profile left stale by an OpenWA upgrade that changed the Chromium/Chrome
+ * binary (e.g. the v0.8.12 amd64 Debian Chromium → Chrome for Testing switch, #663 / #708) — but it is
+ * not exclusively that: Puppeteer also raises it on a page navigation or a renderer crash (see
+ * puppeteer-core `ExecutionContext` / `IsolatedWorld`), so the caller advises rather than asserts.
+ * Pure so the detection is unit-testable without mocking the whatsapp-web.js `Client`.
+ */
+export function isExecutionContextDestroyedError(reason: string): boolean {
+  return /execution context was destroyed/i.test(reason);
+}
+
+/**
  * Fetch remote media for sending, with an SSRF host guard, a byte cap, and a timeout.
  * The guard runs BEFORE any network call, so an internal/reserved URL throws `SsrfBlockedError`
  * and no outbound socket is opened. The byte cap (node-fetch `size`) and `AbortSignal` timeout
@@ -431,6 +443,24 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     } catch (error) {
       this.setStatus(EngineStatus.FAILED);
       const reason = error instanceof Error ? error.message : String(error);
+      if (isExecutionContextDestroyedError(reason)) {
+        // #708: Puppeteer's "Execution context was destroyed" during inject reads like a Puppeteer bug.
+        // During initialize() its dominant cause is a browser profile left stale by an upgrade that
+        // changed the Chromium/Chrome binary (e.g. v0.8.12 amd64: Debian Chromium → Chrome for Testing,
+        // #663) — but it can also follow a page navigation or a renderer crash, so advise, don't assert.
+        // The profile dir is the same one clearLocalAuth() removes on a clean re-pair. Safe to compute
+        // here: sessionDataPath is a required config field already resolved in the try block above, so
+        // this can't throw and mask the original error we are about to rethrow.
+        this.logger.warn(
+          `"${reason}" during initialize. If this followed an OpenWA upgrade that changed the ` +
+            `Chromium/Chrome binary (v0.8.12 amd64 switched Debian Chromium → Chrome for Testing), the ` +
+            `session's browser profile is likely stale — delete the profile dir ` +
+            `"${path.join(path.resolve(this.config.sessionDataPath), `session-${this.config.sessionId}`)}" ` +
+            `and start again to re-scan. If no upgrade happened, Puppeteer also raises this on a page ` +
+            `navigation or renderer crash (check for memory pressure or a WhatsApp Web reload). ` +
+            `See docs/12-troubleshooting-faq.md.`,
+        );
+      }
       this.callbacks.onError?.(reason);
       throw error;
     }

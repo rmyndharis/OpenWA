@@ -5,6 +5,7 @@ import {
   extractLinkedParentJID,
   isHttpUrl,
   isSupportedProxyUrl,
+  isExecutionContextDestroyedError,
   buildProxyLaunchConfig,
   loadRemoteMedia,
   resolveAuthTimeoutMs,
@@ -81,6 +82,35 @@ describe('isSupportedProxyUrl', () => {
   it.each(['not a url', 'ftp://proxy:21', 'proxy:8080', ''])('rejects %s', url => {
     expect(isSupportedProxyUrl(url)).toBe(false);
   });
+});
+
+describe('isExecutionContextDestroyedError (#708 — Puppeteer context loss during initialize)', () => {
+  it('matches the bare Puppeteer error', () => {
+    expect(isExecutionContextDestroyedError('Execution context was destroyed')).toBe(true);
+  });
+
+  it('matches the Runtime.callFunctionOn form (the stale-profile signature during inject)', () => {
+    expect(
+      isExecutionContextDestroyedError('Protocol error (Runtime.callFunctionOn): Execution context was destroyed.'),
+    ).toBe(true);
+  });
+
+  it('matches the "most likely because of a navigation" variant', () => {
+    expect(
+      isExecutionContextDestroyedError('Execution context was destroyed, most likely because of a navigation.'),
+    ).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(isExecutionContextDestroyedError('EXECUTION CONTEXT WAS DESTROYED')).toBe(true);
+  });
+
+  it.each(['Failed to launch the browser process:  Code: null', 'Target closed', 'Navigation timeout exceeded', ''])(
+    'does not match unrelated initialize errors (%s)',
+    reason => {
+      expect(isExecutionContextDestroyedError(reason)).toBe(false);
+    },
+  );
 });
 
 describe('buildProxyLaunchConfig (#628 — proxy credentials must not go into --proxy-server)', () => {

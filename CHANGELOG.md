@@ -51,6 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading
+  across the v0.8.12 amd64 browser-binary switch (Debian Chromium → Chrome for Testing, #663) — or any
+  later change to the Chromium/Chrome binary — can leave an already-authenticated `whatsapp-web.js`
+  session's persistent browser profile incompatible with the new binary: on the next start the page
+  context is destroyed during injection and the engine fails with Puppeteer's opaque
+  `Execution context was destroyed`, which reads like a Puppeteer bug and gave no hint that the stale
+  profile was the cause. The `whatsapp-web.js` adapter now detects that error in its `initialize()`
+  catch and logs an advisory pointing the operator at the remedy (delete the session profile dir and
+  re-scan); the error still propagates unchanged, so existing failure handling is unaffected. The
+  profile is not auto-recovered — a tainted profile is not safely portable across Chromium major
+  versions (clearing only the cache subdirs is insufficient), so a one-time re-authentication is
+  required. [#708]
+
 - **OpenAPI export script under current env validation.** `scripts/export-openapi.ts` had been broken
   since the SQLite `DATABASE_NAME` file-path validation tightened (it pinned an in-memory data DB,
   which that rule rejects). The data connection now uses a temp-dir SQLite file that is removed on

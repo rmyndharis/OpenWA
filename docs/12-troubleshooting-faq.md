@@ -341,6 +341,44 @@ If `Code: null` happens on Kubernetes, and the host kernel logs or `dmesg` shows
 limit the instant before the failure — that tells you A vs B. If neither moves and you see the crashpad
 `--database` line, it's C. If running in K8s as non-root with the Debian `chromium` package, it is likely D.
 
+### Issue: `Execution context was destroyed` on the first start after an upgrade
+
+> **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.
+
+**Symptoms:** A `whatsapp-web.js` session that was already authenticated fails within seconds of
+**Start** after upgrading OpenWA — no QR is produced — and the session's `lastError` / container log
+show:
+
+```text
+Protocol error (Runtime.callFunctionOn): Execution context was destroyed.
+```
+
+**Cause:** The session's persistent browser profile (`<SESSION_DATA_PATH>/session-<name>`, created by
+whatsapp-web.js's `LocalAuth`) was built with a different Chromium/Chrome binary than the one the new
+image runs. A browser profile carries binary-bound state (page caches, GPU shader caches, IndexedDB /
+Local Storage version markers) that is not safely portable across Chromium major versions or binary
+flavours; loading the stale profile destroys the page context during `Client.inject()`. The dominant
+trigger today is the **v0.8.12** amd64 switch from Debian's `chromium` package to Chrome for Testing
+(#663), but the same symptom can follow any future change to the bundled browser binary. The error
+reads like a Puppeteer bug and gives no hint that the profile is the cause — the adapter now logs an
+advisory when it detects this error.
+
+**Fix:** delete the affected session's profile dir and start the session again to scan a new QR. The
+profile cannot be salvaged — clearing only the cache subdirs (`Cache`, `GPUCache`, `Code Cache`, …) is
+**not** enough, the taint is deeper than the caches — so a one-time re-authentication is required.
+
+The profile dir is named after the session **name**, while the REST API addresses a session by its
+**id** (a UUID) — so the two placeholders below are different values:
+
+```bash
+docker exec openwa-api rm -rf /app/data/sessions/session-<name>
+# then POST /sessions/<id>/force-kill and POST /sessions/<id>/start (the session's UUID id), and scan the new QR
+```
+
+Re-creating the session (`DELETE /sessions/<id>`) also purges its profile dir; create it again and
+scan. Messages are unaffected — they live in the database, not the browser profile — so nothing is lost
+except the WhatsApp pairing, which must be re-scanned.
+
 ### Issue: Frequent Disconnections
 
 **Symptoms:**
