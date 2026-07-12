@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly (`provenance: true`) so the attestation pair is self-documenting rather than reliant on
   the action default.
 
+- **HTTP RED metrics.** The `/api/metrics` endpoint now exposes
+  `http_requests_total{method,route,status}` and an `http_request_duration_seconds` histogram (per
+  route), recorded by a global interceptor. Route labels use the Express route pattern (bounded —
+  `/api/sessions/:id`, not the raw URL) with a `Controller#handler` fallback, and `/api/health` +
+  `/api/metrics` are not counted. Conventional unprefixed names so a generic RED dashboard or a 5xx
+  error-rate alert matches them directly.
+
 ### Fixed
 
 - **OpenAPI export script under current env validation.** `scripts/export-openapi.ts` had been broken

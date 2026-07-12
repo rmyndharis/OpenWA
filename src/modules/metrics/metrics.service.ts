@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'crypto';
 import { StatsService } from '../stats/stats.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
+import { renderHttpRequestMetrics } from '../../common/metrics/request-metrics';
 
 /**
  * Prometheus exposition for OpenWA. Kept dependency-free (no prom-client) — the
@@ -103,6 +104,10 @@ export class MetricsService {
     );
     lines.push('# TYPE openwa_webhook_delivery_failures_total counter');
     lines.push(`openwa_webhook_delivery_failures_total ${getWebhookDeliveryFailuresTotal()}`);
+
+    // HTTP RED metrics (request rate + duration per route), recorded by RequestMetricsInterceptor.
+    // Included in the same cached render — a few seconds of staleness is fine for Prometheus.
+    lines.push(...renderHttpRequestMetrics());
 
     const text = lines.join('\n') + '\n';
     this.cachedRender = { at: now, text };
