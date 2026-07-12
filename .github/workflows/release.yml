@@ -195,11 +195,12 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    # Gate the public Release on every CI-strength job AND a successfully built+pushed image, so a tag
-    # never produces a GitHub Release without passing the same gate CI enforces plus a matching
-    # container image (the docker job also builds the dashboard, which the gates above verify
-    # separately). Trades a few minutes of buildx latency for release/image consistency.
-    needs: [lint, test, test-postgres, dashboard, build, docker]
+    # Gate the public Release on every CI-strength job AND a successfully built+pushed image that
+    # also boots, so a tag never produces a GitHub Release without passing the same gate CI enforces,
+    # a matching container image, and a runtime boot check on both architectures (boot-smoke runs the
+    # published image on amd64 + arm64). Trades a few minutes of buildx/boot latency for release
+    # safety.
+    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -278,3 +279,66 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ──── Boot Smoke (amd64 + arm64) ──────────────────────────────────
+  # The docker job proves the image BUILDS for both architectures; this proves the just-pushed image
+  # actually BOOTS and serves the liveness endpoint on both. A boot regression that only surfaces at
+  # runtime on one architecture (e.g. a native-dep/Chromium SIGTRAP on arm64 that a clean build still
+  # produces) cannot reach a public Release. Runs the published image — not a rebuild — against the
+  # dependency-free /api/health/live (NOT /ready, which needs a DB and would conflate boot failure
+  # with database setup). Both architectures are tried even if the first fails, so logs name both.
+  boot-smoke:
+    name: Boot smoke (amd64 + arm64)
+    runs-on: ubuntu-latest
+    needs: [docker]
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve published image ref
+        id: image
+        # metadata-action publishes the {{version}} tag (e.g. 0.8.16) from the v-prefixed git tag, so
+        # strip the leading "v" to match it. github.repository is trusted; the tag derives from the
+        # pushed git ref, not from untrusted input.
+        env:
+          REPO: ${{ github.repository }}
+        run: echo "ref=ghcr.io/${REPO}:${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Boot + liveness check on each architecture
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          exit_code=0
+          for platform in linux/amd64 linux/arm64; do
+            echo "::group::boot-smoke $platform"
+            docker rm -f openwa-smoke >/dev/null 2>&1 || true
+            if ! docker run --rm --platform "$platform" -d -p 2785:2785 --name openwa-smoke "$IMAGE" >/dev/null; then
+              echo "FAIL: $platform — could not start container (image pull/run error)"
+              exit_code=1
+              echo "::endgroup::"
+              continue
+            fi
+            ok=""
+            for i in $(seq 1 40); do
+              if curl -sf http://127.0.0.1:2785/api/health/live >/dev/null 2>&1; then ok=1; break; fi
+              sleep 5
+            done
+            if [ -n "$ok" ]; then
+              echo "OK: $platform — /api/health/live returned 200"
+            else
+              echo "FAIL: $platform — /api/health/live did not return 200 within ~200s; container logs follow:"
+              docker logs openwa-smoke 2>&1 | tail -60 || true
+              exit_code=1
+            fi
+            docker stop openwa-smoke >/dev/null 2>&1 || true
+            docker rm -f openwa-smoke >/dev/null 2>&1 || true
+            echo "::endgroup::"
+          done
+          exit "$exit_code"

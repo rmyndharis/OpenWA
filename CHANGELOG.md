@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the machine-readable contract can never silently drift from the code. SDK/API consumers now have a
   versioned artifact at the repo root.
 
+- **Pre-release boot smoke on amd64 + arm64.** Cutting a release tag now runs the just-published
+  image on both `linux/amd64` and `linux/arm64` (via QEMU) and polls the dependency-free
+  `/api/health/live` endpoint before the GitHub Release is created — so a runtime-only boot regression
+  on one architecture (a clean build can still produce a native-dep/Chromium SIGTRAP on arm64) cannot
+  ship under a release. The Release job waits on the new boot-smoke job.
+
 ### Fixed
 
 - **OpenAPI export script under current env validation.** `scripts/export-openapi.ts` had been broken
