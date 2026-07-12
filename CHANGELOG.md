@@ -105,6 +105,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getChannelMessages` remains unsupported — `newsletterFetchMessages` returns a raw BinaryNode with
   no library parser, so it stays a documented gap rather than an unverified walk.
 
+- **Bounded webhook fan-out.** An event matching N webhooks now delivers at most
+  `WEBHOOK_DISPATCH_CONCURRENCY` (default 16) concurrently instead of opening N outbound sockets at
+  once; the rest queue and run as slots free. Per-webhook isolation (`Promise.allSettled`) is
+  unchanged. The shared `ConcurrencyLimiter` was also promoted from `engine/adapters` to
+  `common/utils` (it has no engine-specific logic), so the webhook module no longer imports across the
+  engine boundary.
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

@@ -64,7 +64,7 @@ import {
   isMediaDownloadEnabled,
   withInboundDownloadTimeout,
 } from './inbound-media-cap';
-import { ConcurrencyLimiter } from './concurrency-limiter';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /**
  * Map a whatsapp-web.js MessageAck integer to the neutral DeliveryStatus.

@@ -78,6 +78,8 @@ describe('WebhookService', () => {
         if (key === 'webhook.retryDelay') return 100;
         // Distinct from the hardcoded 10000 fallback so a regression to a literal timeout is caught.
         if (key === 'webhook.timeout') return 25000;
+        // A small, non-default cap so the fan-out-bound test (5 webhooks) can assert the limiter holds.
+        if (key === 'webhook.dispatchConcurrency') return 2;
         return def as T;
       }),
     };
@@ -382,6 +384,49 @@ describe('WebhookService', () => {
 
       resolveSlow({ ok: true, status: 200 });
       await dispatchP;
+    });
+
+    it('bounds concurrent delivery to WEBHOOK_DISPATCH_CONCURRENCY (cap=2, 5 webhooks → peak ≤ 2)', async () => {
+      const hooks = Array.from({ length: 5 }, (_, i) =>
+        createMockWebhook({ id: `wh-${i}`, url: `https://h${i}.example/hook`, events: ['message.received'] }),
+      );
+      (repository.find as jest.Mock).mockResolvedValue(hooks);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+
+      let inFlight = 0;
+      let peak = 0;
+      let resolved = 0;
+      const releasers: Array<() => void> = [];
+      mockFetch.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            releasers.push(() => {
+              inFlight -= 1;
+              resolved += 1;
+              resolve({ ok: true, status: 200 });
+            });
+          }),
+      );
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      // Let the limiter admit up to the cap (2) and each reach fetch. The other 3 stay parked.
+      for (let i = 0; i < 20 && releasers.length < 2; i++) {
+        await new Promise(r => setImmediate(r));
+      }
+      expect(inFlight).toBeLessThanOrEqual(2);
+      // Release in a macrotask loop: freeing a slot lets the limiter admit the next webhook, whose fetch
+      // pushes a fresh releaser on the NEXT tick — a single synchronous drain would miss it and hang.
+      for (let i = 0; i < 50 && resolved < 5; i++) {
+        while (releasers.length) (releasers.shift() as () => void)();
+        await new Promise(r => setImmediate(r));
+      }
+      await dispatchP;
+      // Peak across the whole run never exceeded the cap. (An unbounded fan-out would reach 5.)
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(mockFetch).toHaveBeenCalledTimes(5);
     });
 
     it('salts each sibling webhook with a distinct idempotency key so one receiver cannot dedupe out another', async () => {

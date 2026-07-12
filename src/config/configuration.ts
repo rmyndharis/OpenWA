@@ -133,6 +133,9 @@ export default () => ({
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),
     maxRetries: parseInt(process.env.WEBHOOK_MAX_RETRIES || '3', 10),
     retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY || '5000', 10),
+    // Cap on how many matching webhooks are delivered CONCURRENTLY for one event. Without it, an event
+    // matching N webhooks opens N outbound sockets at once (no per-event bound). Default 16.
+    dispatchConcurrency: parseInt(process.env.WEBHOOK_DISPATCH_CONCURRENCY || '16', 10),
   },
 
   // API configuration

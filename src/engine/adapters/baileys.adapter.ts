@@ -53,7 +53,7 @@ import {
   isMediaDownloadEnabled,
   withInboundDownloadTimeout,
 } from './inbound-media-cap';
-import { ConcurrencyLimiter } from './concurrency-limiter';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). */
 const BAILEYS_BROWSER: [string, string, string] = ['OpenWA', 'Chrome', '120.0.0'];

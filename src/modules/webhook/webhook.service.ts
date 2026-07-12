@@ -33,6 +33,7 @@ import {
   redactSsrfError,
 } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 export interface WebhookPayload {
   event: string;
@@ -57,6 +58,7 @@ export interface WebhookJobData {
 export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
   private readonly queueEnabled: boolean;
+  private readonly dispatchLimiter: ConcurrencyLimiter;
   private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -73,6 +75,10 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     private readonly webhookQueue?: Queue<WebhookJobData>,
   ) {
     this.queueEnabled = configService.get<boolean>('queue.enabled', false);
+    // Bound fan-out: cap how many matching webhooks are delivered CONCURRENTLY for one event. Without
+    // it, an event matching N webhooks opens N outbound sockets at once. Default 16
+    // (WEBHOOK_DISPATCH_CONCURRENCY).
+    this.dispatchLimiter = new ConcurrencyLimiter(this.configService.get<number>('webhook.dispatchConcurrency', 16));
   }
 
   /**
@@ -304,7 +310,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
     // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
     // recursive retry with backoff sleeps).
-    const tasks = matchingWebhooks.map(async webhook => {
+    const deliverOne = async (webhook: Webhook): Promise<void> => {
       // Generate unique delivery ID for each webhook
       const deliveryId = generateDeliveryId();
 
@@ -488,7 +494,11 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           });
         }
       }
-    });
+    };
+    // Bound fan-out: deliver to all matching webhooks concurrently, but cap in-flight deliveries at
+    // WEBHOOK_DISPATCH_CONCURRENCY so an event matching many webhooks (or slow receivers) can't open an
+    // unbounded number of outbound sockets at once. allSettled preserves the per-webhook isolation.
+    const tasks = matchingWebhooks.map(webhook => this.dispatchLimiter.run(() => deliverOne(webhook)));
     await Promise.allSettled(tasks);
   }
 

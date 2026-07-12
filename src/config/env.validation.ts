@@ -151,6 +151,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'REQUEST_TIMEOUT_MS',
     'HEADERS_TIMEOUT_MS',
     'KEEPALIVE_TIMEOUT_MS',
+    'WEBHOOK_DISPATCH_CONCURRENCY',
   ]) {
     checkPositiveInt(key);
   }
