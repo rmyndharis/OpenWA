@@ -1122,10 +1122,10 @@ describe('WhatsAppWebJsAdapter status methods', () => {
     },
   );
 
-  it('deleteStatus is still not supported (separate gap — revokeStatusMessage)', async () => {
-    await expect(readyAdapter({ sendMessage: jest.fn() }).deleteStatus('STATUS1')).rejects.toBeInstanceOf(
-      EngineNotSupportedError,
-    );
+  it('deleteStatus revokes via client.revokeStatusMessage(statusId)', async () => {
+    const revokeStatusMessage = jest.fn().mockResolvedValue(undefined);
+    await readyAdapter({ sendMessage: jest.fn(), revokeStatusMessage }).deleteStatus('STATUS1');
+    expect(revokeStatusMessage).toHaveBeenCalledWith('STATUS1');
   });
 });
 

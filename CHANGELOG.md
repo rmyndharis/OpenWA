@@ -85,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *listing* (`getLabels` / `getLabelById` / `getChatLabels`) remains unavailable on Baileys (no
   first-class library API — see `docs/engine-capability-matrix.md`).
 
+- **Status delete on the whatsapp-web.js engine.** `deleteStatus(statusId)` now works on
+  whatsapp-web.js via `client.revokeStatusMessage(statusId)` instead of returning 501 — completing
+  the status lifecycle (post + delete) on the default engine. Own-status only (the library revokes
+  the caller's own status posts).
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

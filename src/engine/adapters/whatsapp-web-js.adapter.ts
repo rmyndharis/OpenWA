@@ -1805,9 +1805,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     );
   }
 
-  async deleteStatus(_statusId: string): Promise<void> {
+  async deleteStatus(statusId: string): Promise<void> {
     this.ensureReady();
-    throw new EngineNotSupportedError('deleteStatus');
+    // Revokes the caller's own status post. revokeStatusMessage resolves the message by id and
+    // throws if it isn't fromMe/isn't a status — the statusId returned by postText/Image/VideoStatus
+    // (msg.id._serialized) is the id it expects.
+    await this.client!.revokeStatusMessage(statusId);
   }
 
   // ========== Catalog (Phase 3) ==========

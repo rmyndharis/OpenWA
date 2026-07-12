@@ -70,12 +70,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 ### Status — post / delete
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `deleteStatus` | supported (caveat) | not-available — **adapter-gap** |
-
-> **Wired.** ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` on whatsapp-web.js — routed via `sendMessage('status@broadcast', …)` (`{ extra: { backgroundColor, fontStyle } }` for text; `{ caption }` for media). **Caveat:** whatsapp-web.js has no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys engine honors `recipients` (`statusJidList`).
-- **`deleteStatus` (wwjs, adapter-gap).** `client.revokeStatusMessage(statusId)` exists (`index.d.ts:139`; `Client.js:2795` → `WAWebRevokeStatusAction`). Revokes OWN status only (throws if `!msg.id.fromMe || !msg.id.remote.isStatus()`). Adapter throws instead of calling it.
+> **Wired.** ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` + `deleteStatus` on whatsapp-web.js. Posts route via `sendMessage('status@broadcast', …)` (`{ extra: { backgroundColor, fontStyle } }` for text; `{ caption }` for media); `deleteStatus` calls `revokeStatusMessage(statusId)` (own-status only). **Caveat:** whatsapp-web.js has no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys engine honors `recipients` (`statusJidList`).
 - **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as *empirically unverified* (`baileys.adapter.ts:909-911`) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
 
 ### Status — read (contact stories)
@@ -120,9 +115,8 @@ All Tier-1 adapter-gaps have been wired:
 | 7 | `getChannelById` : **baileys** | `sock.newsletterMetadata('jid', channelId)` → map `NewsletterMetadata` (`Socket/newsletter.d.ts:9`) | **S** | Channel/newsletter parity. ~1-liner field map. |
 | 8 | `unsubscribeFromChannel` : **baileys** | `await sock.newsletterUnfollow(channelId)` (`Socket/newsletter.d.ts:11`) | **S** | 1:1, no jid resolution needed. |
 | 9 | `subscribeToChannel` : **baileys** | 2-step: `newsletterMetadata('invite',code).id` then `newsletterFollow(jid)` (`Socket/newsletter.d.ts:9,10`) | **S** | Channel growth (join by invite code). |
-| 10 | `deleteStatus` : **wwjs** | `await client.revokeStatusMessage(statusId)` (`index.d.ts:139`) | **S** | Completes the wwjs status lifecycle (post + delete). Own-status only. |
-| 11 | `getContactStatuses` : **wwjs** | `client.getBroadcasts()` → flatten `Broadcast.msgs` to `Status[]` (`index.d.ts:133`) | **M** | Read contact stories on the default engine. Adapter already has the stub; replace `[]` with the call + mapping. |
-| 12 | `getContactStatus` : **wwjs** | `client.getBroadcastById(contactId)` → map `Broadcast.msgs` (`index.d.ts:136`) | **M** | Per-contact story read. Pairs with #11. |
+| 10 | `getContactStatuses` : **wwjs** | `client.getBroadcasts()` → flatten `Broadcast.msgs` to `Status[]` (`index.d.ts:133`) | **M** | Read contact stories on the default engine. Adapter already has the stub; replace `[]` with the call + mapping. |
+| 11 | `getContactStatus` : **wwjs** | `client.getBroadcastById(contactId)` → map `Broadcast.msgs` (`index.d.ts:136`) | **M** | Per-contact story read. Pairs with #10. |
 
 ### Tier 3 — medium effort
 

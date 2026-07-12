@@ -60,12 +60,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   createGroup: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   deleteChat: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   deleteMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
-  deleteStatus: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
-    baileys: { status: 'supported' },
-    evidence:
-      'wwjs Client.revokeStatusMessage (index.d.ts:139; Client.js:2795 WAWebRevokeStatusAction.sendStatusRevokeMsgAction) — adapter throws instead of calling it; baileys sendMessage(status@broadcast,{delete}) @baileys.adapter.ts:913 (self-described empirically-unverified revoke shape)',
-  },
+  deleteStatus: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   demoteParticipants: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   destroy: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   disconnect: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
