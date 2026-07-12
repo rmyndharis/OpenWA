@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on one architecture (a clean build can still produce a native-dep/Chromium SIGTRAP on arm64) cannot
   ship under a release. The Release job waits on the new boot-smoke job.
 
+- **SBOM attestation on published images.** Each image built by CI and on release now carries an
+  in-toto SBOM attestation alongside the SLSA provenance that `docker/build-push-action` already
+  generates by default. Both are verifiable with
+  `docker buildx imagetools inspect ghcr.io/rmyndharis/openwa:<tag>`. Provenance is now also pinned
+  explicitly (`provenance: true`) so the attestation pair is self-documenting rather than reliant on
+  the action default.
+
 ### Fixed
 
 - **OpenAPI export script under current env validation.** `scripts/export-openapi.ts` had been broken
