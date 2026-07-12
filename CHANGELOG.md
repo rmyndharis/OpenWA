@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `headersTimeout` is normalized to stay above `keepAliveTimeout` (Node requires it), and the three
   are validated as positive integers at boot.
 
+- **Committed OpenAPI snapshot + CI sync gate.** The gateway's OpenAPI document is now committed as
+  `openapi.json` (generated from the NestJS Swagger decorators via `npm run openapi:export`) and a CI
+  check (`npm run openapi:check`) fails when a controller/DTO change lands without regenerating it, so
+  the machine-readable contract can never silently drift from the code. SDK/API consumers now have a
+  versioned artifact at the repo root.
+
+### Fixed
+
+- **OpenAPI export script under current env validation.** `scripts/export-openapi.ts` had been broken
+  since the SQLite `DATABASE_NAME` file-path validation tightened (it pinned an in-memory data DB,
+  which that rule rejects). The data connection now uses a temp-dir SQLite file that is removed on
+  exit, so the snapshot generator runs hermetically again.
+
 
 ## [0.8.16] - 2026-07-12
 

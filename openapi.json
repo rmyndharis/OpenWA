@@ -1,0 +1,7209 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/audit": {
+      "get": {
+        "operationId": "AuditController_findAll",
+        "parameters": [
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "api_key_created",
+                "api_key_used",
+                "api_key_revoked",
+                "api_key_deleted",
+                "api_key_auth_failed",
+                "session_created",
+                "session_started",
+                "session_stopped",
+                "session_force_killed",
+                "session_deleted",
+                "session_qr_generated",
+                "session_connected",
+                "session_disconnected",
+                "message_sent",
+                "message_failed",
+                "webhook_created",
+                "webhook_deleted",
+                "webhook_triggered",
+                "webhook_failed",
+                "integration_instance_created",
+                "integration_instance_updated",
+                "integration_instance_secret_regenerated",
+                "integration_instance_deleted"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "info",
+                "warn",
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "apiKeyId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of audit logs"
+          }
+        },
+        "summary": "List audit logs with optional filters",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/auth/api-keys": {
+      "post": {
+        "operationId": "AuthController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "API key created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreatedResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a new API key (admin only)",
+        "tags": [
+          "auth"
+        ]
+      },
+      "get": {
+        "operationId": "AuthController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "All API keys (the plaintext key is never returned; only the keyPrefix).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List all API keys (admin only)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/api-keys/{id}": {
+      "get": {
+        "operationId": "AuthController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The API key (plaintext never returned; only the keyPrefix).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get API key details (admin only)",
+        "tags": [
+          "auth"
+        ]
+      },
+      "put": {
+        "operationId": "AuthController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApiKeyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update API key (admin only)",
+        "tags": [
+          "auth"
+        ]
+      },
+      "delete": {
+        "operationId": "AuthController_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "API key deleted"
+          }
+        },
+        "summary": "Delete API key (admin only)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/api-keys/{id}/revoke": {
+      "post": {
+        "operationId": "AuthController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked API key (isActive now false).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Revoke API key (admin only)",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/validate": {
+      "post": {
+        "operationId": "AuthValidateController_validate",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "description": "API key to validate",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "API key is valid"
+          },
+          "401": {
+            "description": "Invalid or missing API key"
+          }
+        },
+        "summary": "Validate an API key",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/sessions": {
+      "post": {
+        "operationId": "SessionController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Session name already exists"
+          }
+        },
+        "summary": "Create a new WhatsApp session",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "get": {
+        "operationId": "SessionController_findAll",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max sessions to return (1-1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of sessions to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List all sessions",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}": {
+      "get": {
+        "operationId": "SessionController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get session by ID",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "delete": {
+        "operationId": "SessionController_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session deleted"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Delete a session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/start": {
+      "post": {
+        "operationId": "SessionController_start",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session already started"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Start a session and initialize WhatsApp connection",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/stop": {
+      "post": {
+        "operationId": "SessionController_stop",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Stop a session and disconnect WhatsApp",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/force-kill": {
+      "post": {
+        "operationId": "SessionController_forceKill",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session force-killed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Force-kill a stuck session (SIGKILL its wedged engine, then tear it down)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/qr": {
+      "get": {
+        "operationId": "SessionController_getQRCode",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "QR code data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QRCodeResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "QR code not ready or session already authenticated"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get QR code for session authentication",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/pairing-code": {
+      "post": {
+        "operationId": "SessionController_requestPairingCode",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestPairingCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Pairing code generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingCodeResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not started or already authenticated"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Request an 8-char pairing code to link via phone number (alternative to QR)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/groups": {
+      "get": {
+        "operationId": "SessionController_getGroups",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max groups to return (1–1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of groups to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of groups the session is a member of"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get all groups for a session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats": {
+      "get": {
+        "operationId": "SessionController_getChats",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max chats to return (1–1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of chats to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of active chats (most recent first)"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get active chats for a session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/read": {
+      "post": {
+        "operationId": "SessionController_markChatRead",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkChatReadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat marked as read successfully"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Mark a chat as read/seen",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/unread": {
+      "post": {
+        "operationId": "SessionController_markChatUnread",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkChatReadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat marked as unread successfully"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Mark a chat as unread",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/delete": {
+      "post": {
+        "operationId": "SessionController_deleteChat",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat deleted successfully"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Delete a chat from the chat list (e.g. a group you have left)",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/chats/typing": {
+      "post": {
+        "operationId": "SessionController_sendChatState",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendChatStateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Presence sent"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Send a typing/recording presence indicator to a chat (or clear it with 'paused')",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/stats/overview": {
+      "get": {
+        "operationId": "SessionController_getStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Session statistics including counts and memory usage"
+          }
+        },
+        "summary": "Get session statistics for multi-session monitoring",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/webhooks": {
+      "post": {
+        "operationId": "WebhookController_create",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Webhook created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a webhook for the session",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "get": {
+        "operationId": "WebhookController_findBySession",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List all webhooks for a session",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/webhooks/{id}": {
+      "get": {
+        "operationId": "WebhookController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Webhook ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Webhook details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Webhook not found"
+          }
+        },
+        "summary": "Get a webhook by ID",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "put": {
+        "operationId": "WebhookController_update",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Webhook ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Webhook not found"
+          }
+        },
+        "summary": "Update a webhook",
+        "tags": [
+          "webhooks"
+        ]
+      },
+      "delete": {
+        "operationId": "WebhookController_delete",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Webhook ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Webhook deleted"
+          },
+          "404": {
+            "description": "Webhook not found"
+          }
+        },
+        "summary": "Delete a webhook",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/webhooks/{id}/test": {
+      "post": {
+        "operationId": "WebhookController_test",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Webhook ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test result"
+          },
+          "404": {
+            "description": "Webhook not found"
+          }
+        },
+        "summary": "Test a webhook by sending a test payload",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks/delivery-failures": {
+      "get": {
+        "operationId": "WebhooksListController_deliveryFailures",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": false,
+            "in": "query",
+            "description": "Filter to a single session",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max records to return (1-1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of records to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Permanently-failed webhook deliveries, most recent first"
+          }
+        },
+        "summary": "List recently-failed webhook deliveries (all retries exhausted)",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/webhooks": {
+      "get": {
+        "operationId": "WebhooksListController_findAll",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max webhooks to return (1-1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of webhooks to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WebhookResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List webhooks visible to the calling key (scoped to its allowed sessions)",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages": {
+      "get": {
+        "operationId": "MessageController_getMessages",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": false,
+            "in": "query",
+            "description": "Filter by chat ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Filter by sender. A phone also matches messages from a lid that resolves to it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max messages to return (default 50)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Offset for pagination",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Message history"
+          }
+        },
+        "summary": "Get message history for a session",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-text": {
+      "post": {
+        "operationId": "MessageController_sendText",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTextMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Message sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Send a text message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-template": {
+      "post": {
+        "operationId": "MessageController_sendTemplate",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTemplateMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Template rendered and sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          },
+          "404": {
+            "description": "Session or template not found"
+          }
+        },
+        "summary": "Render a stored text template and send it as a text message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-image": {
+      "post": {
+        "operationId": "MessageController_sendImage",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMediaMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          }
+        },
+        "summary": "Send an image message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-video": {
+      "post": {
+        "operationId": "MessageController_sendVideo",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMediaMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Video sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          }
+        },
+        "summary": "Send a video message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-audio": {
+      "post": {
+        "operationId": "MessageController_sendAudio",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendAudioMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Audio sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          }
+        },
+        "summary": "Send an audio/voice message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-document": {
+      "post": {
+        "operationId": "MessageController_sendDocument",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMediaMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          }
+        },
+        "summary": "Send a document/file",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-location": {
+      "post": {
+        "operationId": "MessageController_sendLocation",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendLocationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Location sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a location message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-contact": {
+      "post": {
+        "operationId": "MessageController_sendContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendContactDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Contact sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a contact card message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-sticker": {
+      "post": {
+        "operationId": "MessageController_sendSticker",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMediaMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Sticker sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a sticker message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-poll": {
+      "post": {
+        "operationId": "MessageController_sendPoll",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendPollDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Poll sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send a native WhatsApp poll",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/reply": {
+      "post": {
+        "operationId": "MessageController_reply",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reply sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Reply to a message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/forward": {
+      "post": {
+        "operationId": "MessageController_forward",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForwardMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Message forwarded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Forward a message to another chat",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/react": {
+      "post": {
+        "operationId": "MessageController_react",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReactMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reaction added or removed. Send empty emoji to remove reaction."
+          },
+          "400": {
+            "description": "Session not active or message not found"
+          }
+        },
+        "summary": "Add or remove a reaction to a message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/{chatId}/history": {
+      "get": {
+        "description": "Reads messages directly from the WhatsApp client for the given chat, bypassing the local DB. Useful for retrieving messages that arrived before the gateway was started.",
+        "operationId": "MessageController_getChatHistory",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID (e.g. 1234567890@c.us or groupId@g.us)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max messages to return (default 50)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "includeMedia",
+            "required": false,
+            "in": "query",
+            "description": "When true, downloads media (base64) for messages that have it. Slower; default false.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "deep",
+            "required": false,
+            "in": "query",
+            "description": "When true, raises the limit ceiling from 100 to 2000 for reaching further back in history (whatsapp-web.js only; loads earlier messages on demand). Forces metadata-only (includeMedia is ignored). Large/slow requests may increase WhatsApp rate-limiting risk; default false.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat history (most recent messages)"
+          }
+        },
+        "summary": "Fetch chat history live from WhatsApp",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/{chatId}/{messageId}/reactions": {
+      "get": {
+        "operationId": "MessageController_getReactions",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID containing the message",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "description": "Message ID to get reactions for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of reactions with senders"
+          }
+        },
+        "summary": "Get reactions for a specific message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/delete": {
+      "post": {
+        "operationId": "MessageController_deleteMessage",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message deleted"
+          },
+          "400": {
+            "description": "Session not active or message not found"
+          }
+        },
+        "summary": "Delete a message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-bulk": {
+      "post": {
+        "operationId": "MessageController_sendBulk",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBulkMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Batch created and processing started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkMessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          }
+        },
+        "summary": "Send messages to multiple recipients (async batch processing)",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/batch/{batchId}": {
+      "get": {
+        "operationId": "MessageController_getBatchStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "batchId",
+            "required": true,
+            "in": "path",
+            "description": "Batch ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batch status and progress"
+          },
+          "404": {
+            "description": "Batch not found"
+          }
+        },
+        "summary": "Get batch processing status",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/batch/{batchId}/cancel": {
+      "post": {
+        "operationId": "MessageController_cancelBatch",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "batchId",
+            "required": true,
+            "in": "path",
+            "description": "Batch ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Batch cancelled"
+          },
+          "400": {
+            "description": "Batch already completed or cancelled"
+          },
+          "404": {
+            "description": "Batch not found"
+          }
+        },
+        "summary": "Cancel a running batch",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/templates": {
+      "post": {
+        "operationId": "TemplateController_create",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Template created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a message template for the session",
+        "tags": [
+          "templates"
+        ]
+      },
+      "get": {
+        "operationId": "TemplateController_findBySession",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponseDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List all templates for a session",
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/templates/{id}": {
+      "get": {
+        "operationId": "TemplateController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Template ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found"
+          }
+        },
+        "summary": "Get a template by ID",
+        "tags": [
+          "templates"
+        ]
+      },
+      "put": {
+        "operationId": "TemplateController_update",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Template ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Template updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found"
+          }
+        },
+        "summary": "Update a template",
+        "tags": [
+          "templates"
+        ]
+      },
+      "delete": {
+        "operationId": "TemplateController_delete",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Template ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Template deleted"
+          },
+          "404": {
+            "description": "Template not found"
+          }
+        },
+        "summary": "Delete a template",
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "HealthController_check",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Application is healthy"
+          }
+        },
+        "summary": "Basic health check",
+        "tags": [
+          "health"
+        ],
+        "security": []
+      }
+    },
+    "/api/health/live": {
+      "get": {
+        "operationId": "HealthController_liveness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Application is alive"
+          }
+        },
+        "summary": "Liveness probe for Kubernetes",
+        "tags": [
+          "health"
+        ],
+        "security": []
+      }
+    },
+    "/api/health/ready": {
+      "get": {
+        "operationId": "HealthController_readiness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Application is ready to accept traffic"
+          },
+          "503": {
+            "description": "A required dependency is down"
+          }
+        },
+        "summary": "Readiness probe — verifies the auth/audit + data databases respond",
+        "tags": [
+          "health"
+        ],
+        "security": []
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "operationId": "SettingsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Current settings"
+          }
+        },
+        "summary": "Get application settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "SettingsController_update",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Settings are derived from environment configuration and cannot be changed at runtime"
+          }
+        },
+        "summary": "Settings are read-only at runtime (environment-derived)",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/infra/status": {
+      "get": {
+        "operationId": "InfraController_getStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Infrastructure status"
+          }
+        },
+        "summary": "Get infrastructure status",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/engines": {
+      "get": {
+        "operationId": "InfraController_getEngines",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of available engines"
+          }
+        },
+        "summary": "Get available WhatsApp engines",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/engines/current": {
+      "get": {
+        "operationId": "InfraController_getCurrentEngine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Current engine info"
+          }
+        },
+        "summary": "Get current active engine",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/config": {
+      "get": {
+        "operationId": "InfraController_getConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Saved configuration (secrets omitted)"
+          }
+        },
+        "summary": "Read the saved infrastructure configuration for the dashboard form",
+        "tags": [
+          "infrastructure"
+        ]
+      },
+      "put": {
+        "operationId": "InfraController_saveConfig",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Configuration to save",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configuration saved"
+          }
+        },
+        "summary": "Save infrastructure configuration to .env file",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/restart": {
+      "post": {
+        "operationId": "InfraController_requestRestart",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Server will restart with new profiles"
+          }
+        },
+        "summary": "Request server restart with Docker orchestration",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/health": {
+      "get": {
+        "operationId": "InfraController_healthCheck",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Server is healthy"
+          }
+        },
+        "summary": "Health check endpoint",
+        "tags": [
+          "infrastructure"
+        ],
+        "security": []
+      }
+    },
+    "/api/infra/export-data": {
+      "get": {
+        "operationId": "InfraController_exportData",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Exported data as JSON"
+          }
+        },
+        "summary": "Export all data from Data DB for migration",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/import-data": {
+      "post": {
+        "operationId": "InfraController_importData",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Exported data from export-data endpoint",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "object",
+                    "properties": {
+                      "sessions": {
+                        "type": "array"
+                      },
+                      "webhooks": {
+                        "type": "array"
+                      },
+                      "messages": {
+                        "type": "array"
+                      },
+                      "messageBatches": {
+                        "type": "array"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Data imported successfully"
+          }
+        },
+        "summary": "Import data to Data DB (replaces existing data)",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/files/count": {
+      "get": {
+        "operationId": "InfraController_getStorageFileCount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "File count and size"
+          }
+        },
+        "summary": "Get file count in current storage",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/export": {
+      "get": {
+        "operationId": "InfraController_exportStorage",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Tar.gz archive stream"
+          }
+        },
+        "summary": "Export all storage files as tar.gz",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/infra/storage/import": {
+      "post": {
+        "operationId": "InfraController_importStorage",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Path to tar.gz file to import",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import result"
+          }
+        },
+        "summary": "Import storage files from tar.gz",
+        "tags": [
+          "infrastructure"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts": {
+      "get": {
+        "operationId": "ContactController_findAll",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max contacts to return (1–1000, default 1000)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Number of contacts to skip (for paging)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of contacts"
+          },
+          "400": {
+            "description": "Session not ready"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get all contacts for a session",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/{contactId}": {
+      "get": {
+        "operationId": "ContactController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID (e.g., 628xxx@c.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contact details"
+          },
+          "404": {
+            "description": "Contact not found"
+          }
+        },
+        "summary": "Get a specific contact by ID",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/check/{number}": {
+      "get": {
+        "operationId": "ContactController_checkNumber",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "required": true,
+            "in": "path",
+            "description": "Phone number to check (e.g., 628123456789)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Number existence check result"
+          }
+        },
+        "summary": "Check if a phone number exists on WhatsApp",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/{contactId}/profile-picture": {
+      "get": {
+        "operationId": "ContactController_getProfilePicture",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID (e.g., 628xxx@c.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile picture URL"
+          }
+        },
+        "summary": "Get profile picture URL for a contact",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/{contactId}/phone": {
+      "get": {
+        "operationId": "ContactController_resolvePhone",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID / JID to resolve (e.g., an @lid)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolved phone number (MSISDN digits), or null when the engine cannot map it"
+          }
+        },
+        "summary": "Resolve a contact id (e.g. an @lid) to a phone number — best-effort",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/contacts/{contactId}/block": {
+      "post": {
+        "operationId": "ContactController_blockContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID (e.g., 628xxx@c.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contact blocked"
+          }
+        },
+        "summary": "Block a contact",
+        "tags": [
+          "contacts"
+        ]
+      },
+      "delete": {
+        "operationId": "ContactController_unblockContact",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID (e.g., 628xxx@c.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contact unblocked"
+          }
+        },
+        "summary": "Unblock a contact",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}": {
+      "get": {
+        "operationId": "GroupController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID (e.g., 120363xxx@g.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group details with participants"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        },
+        "summary": "Get detailed group info",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups": {
+      "post": {
+        "operationId": "GroupController_create",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroupDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Group created"
+          }
+        },
+        "summary": "Create a new group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/participants": {
+      "post": {
+        "operationId": "GroupController_addParticipants",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParticipantsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participants added"
+          }
+        },
+        "summary": "Add participants to a group",
+        "tags": [
+          "groups"
+        ]
+      },
+      "delete": {
+        "operationId": "GroupController_removeParticipants",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParticipantsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participants removed"
+          }
+        },
+        "summary": "Remove participants from a group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/participants/promote": {
+      "post": {
+        "operationId": "GroupController_promoteParticipants",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParticipantsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participants promoted"
+          }
+        },
+        "summary": "Promote participants to admin",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/participants/demote": {
+      "post": {
+        "operationId": "GroupController_demoteParticipants",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParticipantsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Participants demoted"
+          }
+        },
+        "summary": "Demote participants from admin",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/subject": {
+      "put": {
+        "operationId": "GroupController_setSubject",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupSubjectDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Subject updated"
+          }
+        },
+        "summary": "Change group name/subject",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/description": {
+      "put": {
+        "operationId": "GroupController_setDescription",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupDescriptionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Description updated"
+          }
+        },
+        "summary": "Change group description",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/leave": {
+      "post": {
+        "operationId": "GroupController_leave",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Left the group"
+          }
+        },
+        "summary": "Leave a group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/invite-code": {
+      "get": {
+        "operationId": "GroupController_getInviteCode",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group invite code"
+          }
+        },
+        "summary": "Get group invite code/link",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/invite-code/revoke": {
+      "post": {
+        "operationId": "GroupController_revokeInviteCode",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New invite code generated"
+          }
+        },
+        "summary": "Revoke group invite code and generate new one",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/labels": {
+      "get": {
+        "operationId": "LabelController_findAll",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of labels"
+          },
+          "400": {
+            "description": "Session not ready or not a business account"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Get all labels (WhatsApp Business only)",
+        "tags": [
+          "labels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/labels/{labelId}": {
+      "get": {
+        "operationId": "LabelController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labelId",
+            "required": true,
+            "in": "path",
+            "description": "Label ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Label details"
+          },
+          "404": {
+            "description": "Label not found"
+          }
+        },
+        "summary": "Get a specific label by ID",
+        "tags": [
+          "labels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/labels/chat/{chatId}": {
+      "get": {
+        "operationId": "LabelController_getChatLabels",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of labels for the chat"
+          }
+        },
+        "summary": "Get labels for a specific chat",
+        "tags": [
+          "labels"
+        ]
+      },
+      "post": {
+        "operationId": "LabelController_addLabelToChat",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "labelId": {
+                    "type": "string",
+                    "description": "Label ID to add"
+                  }
+                },
+                "required": [
+                  "labelId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Label added to chat"
+          },
+          "422": {
+            "description": "Labels require a WhatsApp Business account, or the chat type has no labels"
+          }
+        },
+        "summary": "Add a label to a chat",
+        "tags": [
+          "labels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/labels/chat/{chatId}/{labelId}": {
+      "delete": {
+        "operationId": "LabelController_removeLabelFromChat",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "description": "Chat ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "labelId",
+            "required": true,
+            "in": "path",
+            "description": "Label ID to remove",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Label removed from chat"
+          },
+          "422": {
+            "description": "Labels require a WhatsApp Business account, or the chat type has no labels"
+          }
+        },
+        "summary": "Remove a label from a chat",
+        "tags": [
+          "labels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels": {
+      "get": {
+        "operationId": "ChannelController_findAll",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of subscribed channels"
+          },
+          "400": {
+            "description": "Session not ready"
+          }
+        },
+        "summary": "Get all subscribed channels/newsletters",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels/{channelId}": {
+      "get": {
+        "operationId": "ChannelController_findOne",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "required": true,
+            "in": "path",
+            "description": "Channel ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel details"
+          },
+          "404": {
+            "description": "Channel not found"
+          }
+        },
+        "summary": "Get a specific channel by ID",
+        "tags": [
+          "channels"
+        ]
+      },
+      "delete": {
+        "operationId": "ChannelController_unsubscribe",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "required": true,
+            "in": "path",
+            "description": "Channel ID to unsubscribe from",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully unsubscribed from channel"
+          }
+        },
+        "summary": "Unsubscribe from a channel",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels/{channelId}/messages": {
+      "get": {
+        "operationId": "ChannelController_getMessages",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "required": true,
+            "in": "path",
+            "description": "Channel ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max messages to return (default 50)",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of channel messages"
+          }
+        },
+        "summary": "Get messages from a channel",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/channels/subscribe": {
+      "post": {
+        "operationId": "ChannelController_subscribe",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "inviteCode": {
+                    "type": "string",
+                    "description": "Channel invite code (from channel link)",
+                    "example": "ABC123xyz"
+                  }
+                },
+                "required": [
+                  "inviteCode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successfully subscribed to channel"
+          }
+        },
+        "summary": "Subscribe to a channel using invite code",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/stats/overview": {
+      "get": {
+        "operationId": "StatsController_getOverview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Cross-session aggregate statistics (sessions, messages, etc.)."
+          }
+        },
+        "summary": "Get overall statistics",
+        "tags": [
+          "statistics"
+        ]
+      }
+    },
+    "/api/stats/messages": {
+      "get": {
+        "operationId": "StatsController_getMessageStats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Message statistics with a time series for the requested period."
+          }
+        },
+        "summary": "Get message statistics with time series",
+        "tags": [
+          "statistics"
+        ]
+      }
+    },
+    "/api/stats/sessions/{sessionId}": {
+      "get": {
+        "operationId": "StatsController_getSessionStats",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-session statistics for the requested session."
+          }
+        },
+        "summary": "Get statistics for a specific session",
+        "tags": [
+          "statistics"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status": {
+      "get": {
+        "operationId": "StatusController_getStatuses",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status updates visible to the session, grouped by contact."
+          }
+        },
+        "summary": "Get all contact status updates",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status/{contactId}": {
+      "get": {
+        "operationId": "StatusController_getContactStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status updates from the requested contact."
+          }
+        },
+        "summary": "Get status updates from a specific contact",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status/send-text": {
+      "post": {
+        "operationId": "StatusController_sendTextStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTextStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Text status posted to the specified recipients."
+          }
+        },
+        "summary": "Post a text status (Baileys only)",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status/send-image": {
+      "post": {
+        "operationId": "StatusController_sendImageStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendImageStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Image status posted to the specified recipients."
+          }
+        },
+        "summary": "Post an image status (Baileys only)",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status/send-video": {
+      "post": {
+        "operationId": "StatusController_sendVideoStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendVideoStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Video status posted to the specified recipients."
+          }
+        },
+        "summary": "Post a video status (Baileys only)",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/status/{statusId}": {
+      "delete": {
+        "operationId": "StatusController_deleteStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "statusId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status deleted."
+          }
+        },
+        "summary": "Delete own status",
+        "tags": [
+          "status"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/catalog": {
+      "get": {
+        "operationId": "CatalogController_getCatalog",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Business catalog metadata for the session."
+          }
+        },
+        "summary": "Get business catalog info",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/catalog/products": {
+      "get": {
+        "operationId": "CatalogController_getProducts",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "Result page (1-based).",
+            "schema": {
+              "minimum": 1,
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Page size.",
+            "schema": {
+              "minimum": 1,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of catalog products."
+          }
+        },
+        "summary": "List catalog products",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/catalog/products/{productId}": {
+      "get": {
+        "operationId": "CatalogController_getProduct",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "productId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested catalog product."
+          }
+        },
+        "summary": "Get a specific product",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-product": {
+      "post": {
+        "operationId": "CatalogController_sendProduct",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Product message sent."
+          }
+        },
+        "summary": "Send a product message",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-catalog": {
+      "post": {
+        "operationId": "CatalogController_sendCatalog",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendCatalogDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Catalog link sent."
+          }
+        },
+        "summary": "Send catalog link",
+        "tags": [
+          "catalog"
+        ]
+      }
+    },
+    "/api/plugins": {
+      "get": {
+        "operationId": "PluginsController_findAll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of all plugins"
+          }
+        },
+        "summary": "List all plugins",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/install": {
+      "post": {
+        "operationId": "PluginsController_install",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "Plugin installed"
+          },
+          "400": {
+            "description": "Invalid package"
+          },
+          "409": {
+            "description": "Plugin already installed"
+          }
+        },
+        "summary": "Install a plugin from an uploaded .zip package",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/install-url": {
+      "post": {
+        "operationId": "PluginsController_installFromUrl",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallFromUrlDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin installed"
+          },
+          "400": {
+            "description": "Invalid URL, download failed, or invalid package"
+          },
+          "409": {
+            "description": "Plugin already installed"
+          }
+        },
+        "summary": "Install a plugin by downloading its .zip from a URL (SSRF-guarded)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/catalog": {
+      "get": {
+        "operationId": "PluginsController_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Catalog entries"
+          },
+          "400": {
+            "description": "Catalog could not be fetched or parsed"
+          }
+        },
+        "summary": "List the remote plugin catalog, annotated with install state",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}": {
+      "get": {
+        "operationId": "PluginsController_findOne",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin details"
+          },
+          "404": {
+            "description": "Plugin not found"
+          }
+        },
+        "summary": "Get plugin by ID",
+        "tags": [
+          "plugins"
+        ]
+      },
+      "delete": {
+        "operationId": "PluginsController_uninstall",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin uninstalled"
+          },
+          "400": {
+            "description": "Cannot uninstall (e.g. built-in)"
+          },
+          "404": {
+            "description": "Plugin not found"
+          }
+        },
+        "summary": "Uninstall a plugin (removes its files; built-ins are protected)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/enable": {
+      "post": {
+        "operationId": "PluginsController_enable",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin enabled successfully"
+          }
+        },
+        "summary": "Enable a plugin",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/disable": {
+      "post": {
+        "operationId": "PluginsController_disable",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin disabled successfully"
+          }
+        },
+        "summary": "Disable a plugin",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/config": {
+      "put": {
+        "operationId": "PluginsController_updateConfig",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginConfigDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Plugin configuration updated"
+          }
+        },
+        "summary": "Update plugin configuration",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/config-ui": {
+      "get": {
+        "operationId": "PluginsController_getConfigUi",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config UI HTML"
+          },
+          "404": {
+            "description": "Plugin not found or has no config UI"
+          }
+        },
+        "summary": "Serve a plugin's sandboxed config-UI entry HTML (for an iframe srcdoc)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/config/{sessionId}": {
+      "put": {
+        "operationId": "PluginsController_updateSessionConfig",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginConfigDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-session plugin configuration updated"
+          },
+          "400": {
+            "description": "Plugin is global (not session-scoped)"
+          },
+          "404": {
+            "description": "Plugin not found"
+          }
+        },
+        "summary": "Set a plugin config override for a specific session (empty = clear it)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/sessions": {
+      "put": {
+        "operationId": "PluginsController_updateSessions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginSessionsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Plugin session activation updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Plugin is global (not session-scoped)"
+          },
+          "404": {
+            "description": "Plugin not found"
+          }
+        },
+        "summary": "Set which sessions a session-scoped plugin is activated for (['*'] = all)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/update": {
+      "post": {
+        "operationId": "PluginsController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallFromUrlDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin updated"
+          },
+          "400": {
+            "description": "Invalid URL/package, id mismatch, or built-in"
+          },
+          "404": {
+            "description": "Plugin not found"
+          }
+        },
+        "summary": "Update an installed plugin in place from a URL (preserves config + enabled state)",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/plugins/{id}/health": {
+      "get": {
+        "operationId": "PluginsController_healthCheck",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin health status"
+          }
+        },
+        "summary": "Check plugin health",
+        "tags": [
+          "plugins"
+        ]
+      }
+    },
+    "/api/ingress/{pluginId}/{instanceId}/{path}": {
+      "get": {
+        "operationId": "IngressController_receive_get",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "post": {
+        "operationId": "IngressController_receive_post",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "put": {
+        "operationId": "IngressController_receive_put",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "delete": {
+        "operationId": "IngressController_receive_delete",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "patch": {
+        "operationId": "IngressController_receive_patch",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "options": {
+        "operationId": "IngressController_receive_options",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "head": {
+        "operationId": "IngressController_receive_head",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      },
+      "search": {
+        "operationId": "IngressController_receive_search",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GET verification challenge echo, or a duplicate delivery already persisted (idempotent re-delivery). Not the primary success path — see 202."
+          },
+          "202": {
+            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+          },
+          "401": {
+            "description": "Signature verification failed (missing, stale, or wrong secret)."
+          },
+          "403": {
+            "description": "GET verification challenge failed (verifyToken mismatch)."
+          },
+          "404": {
+            "description": "Unknown pluginId/instanceId, or no route claimed by the plugin."
+          },
+          "413": {
+            "description": "Request body exceeds the route maxBodyBytes limit."
+          },
+          "429": {
+            "description": "Per-instance rate limit exceeded (INGRESS_INSTANCE_LIMIT)."
+          }
+        },
+        "tags": [
+          "integration"
+        ],
+        "security": []
+      }
+    },
+    "/api/integration/instances/{pluginId}/{instanceId}/redrive": {
+      "post": {
+        "operationId": "RedriveController_redriveInstance",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Dead-lettered ingress deliveries for the instance re-dispatched. Returns the count redriven."
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      }
+    },
+    "/api/integration/plugins/{pluginId}/instances": {
+      "post": {
+        "operationId": "IntegrationInstanceController_create",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInstanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Instance created. The plaintext ingress secret and verifyToken are revealed once in this response — store them immediately (both masked on every later read).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      },
+      "get": {
+        "operationId": "IntegrationInstanceController_list",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Instances for the plugin (secrets masked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstanceView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      }
+    },
+    "/api/integration/plugins/{pluginId}/instances/{instanceId}": {
+      "get": {
+        "operationId": "IntegrationInstanceController_getOne",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The instance (secret masked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      },
+      "patch": {
+        "operationId": "IntegrationInstanceController_patch",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInstanceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Instance updated (secret masked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      },
+      "delete": {
+        "operationId": "IntegrationInstanceController_remove",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Instance deleted and its session scope torn down."
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      }
+    },
+    "/api/integration/plugins/{pluginId}/instances/{instanceId}/regenerate-secret": {
+      "post": {
+        "operationId": "IntegrationInstanceController_regenerate",
+        "parameters": [
+          {
+            "name": "pluginId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret regenerated. The new plaintext secret is revealed once in this response; the verifyToken is also shown (unchanged).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "integration"
+        ]
+      }
+    },
+    "/api/search": {
+      "get": {
+        "operationId": "SearchController_search",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "description": "Search term (required, non-empty)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "required": false,
+            "in": "query",
+            "description": "Restrict to a single session",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": false,
+            "in": "query",
+            "description": "Restrict to a single chat id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Sender filter",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "required": false,
+            "in": "query",
+            "description": "incoming | outgoing",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "incoming",
+                "outgoing"
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "description": "Message type filter",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dateFrom",
+            "required": false,
+            "in": "query",
+            "description": "Epoch-ms lower bound (inclusive)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "dateTo",
+            "required": false,
+            "in": "query",
+            "description": "Epoch-ms upper bound (inclusive)",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max hits to return",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "description": "Pagination offset",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results from the active provider"
+          },
+          "400": {
+            "description": "Empty or whitespace-only \"q\""
+          },
+          "501": {
+            "description": "No search provider configured"
+          }
+        },
+        "summary": "Search messages across sessions (active search provider)",
+        "tags": [
+          "search"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "OpenWA API",
+    "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API",
+    "version": "0.8.16",
+    "contact": {
+      "name": "OpenWA",
+      "url": "https://github.com/rmyndharis/OpenWA",
+      "email": "yudhi@rmyndharis.com"
+    }
+  },
+  "tags": [
+    {
+      "name": "sessions",
+      "description": "WhatsApp session management"
+    },
+    {
+      "name": "messages",
+      "description": "Send and manage messages"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook configuration"
+    },
+    {
+      "name": "contacts",
+      "description": "Contact management"
+    },
+    {
+      "name": "groups",
+      "description": "Group management"
+    },
+    {
+      "name": "labels",
+      "description": "Label management (WhatsApp Business)"
+    },
+    {
+      "name": "channels",
+      "description": "Channel/Newsletter management"
+    },
+    {
+      "name": "catalog",
+      "description": "Product catalog (WhatsApp Business)"
+    },
+    {
+      "name": "status",
+      "description": "Status/Stories"
+    },
+    {
+      "name": "statistics",
+      "description": "Usage statistics"
+    },
+    {
+      "name": "templates",
+      "description": "Message templates"
+    },
+    {
+      "name": "plugins",
+      "description": "Plugin management"
+    },
+    {
+      "name": "settings",
+      "description": "Application settings"
+    },
+    {
+      "name": "infrastructure",
+      "description": "Infrastructure & datastore management"
+    },
+    {
+      "name": "integration",
+      "description": "Integration Fabric (provider webhooks & instances)"
+    },
+    {
+      "name": "auth",
+      "description": "API key management"
+    },
+    {
+      "name": "audit",
+      "description": "Audit log"
+    },
+    {
+      "name": "metrics",
+      "description": "Prometheus metrics"
+    },
+    {
+      "name": "health",
+      "description": "Health check endpoints"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "X-API-Key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    },
+    "schemas": {
+      "CreateApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Friendly name for the API key",
+            "example": "Production Bot"
+          },
+          "role": {
+            "type": "string",
+            "description": "Role/permission level",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ],
+            "default": "operator"
+          },
+          "allowedIps": {
+            "description": "Allowed IP addresses (whitelist)",
+            "example": [
+              "192.168.1.1",
+              "10.0.0.0/8"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedSessions": {
+            "description": "Allowed session IDs this key can access",
+            "example": [
+              "session-uuid-1",
+              "session-uuid-2"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Expiration date (ISO 8601)",
+            "example": "2027-12-31T23:59:59Z"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "ApiKeyCreatedResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string",
+            "description": "First 8 characters of the key (for identification)"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ]
+          },
+          "allowedIps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "usageCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "Full API key (only shown once at creation)",
+            "example": "owa_k1_abc123..."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "keyPrefix",
+          "role",
+          "isActive",
+          "usageCount",
+          "createdAt",
+          "apiKey"
+        ]
+      },
+      "ApiKeyResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "keyPrefix": {
+            "type": "string",
+            "description": "First 8 characters of the key (for identification)"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ]
+          },
+          "allowedIps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "usageCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "keyPrefix",
+          "role",
+          "isActive",
+          "usageCount",
+          "createdAt"
+        ]
+      },
+      "UpdateApiKeyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ]
+          },
+          "allowedIps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSessionDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique name for the session (alphanumeric and hyphens only)",
+            "example": "my-bot",
+            "minLength": 3,
+            "maxLength": 50
+          },
+          "config": {
+            "type": "object",
+            "description": "Session configuration options",
+            "example": {
+              "autoReconnect": true
+            }
+          },
+          "proxyUrl": {
+            "type": "string",
+            "description": "Proxy URL for this session (e.g., http://user:pass@proxy.example.com:8080)",
+            "example": "http://proxy.example.com:8080"
+          },
+          "proxyType": {
+            "type": "string",
+            "description": "Proxy type",
+            "enum": [
+              "http",
+              "https",
+              "socks4",
+              "socks5"
+            ],
+            "example": "http"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "SessionResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "sess_123e4567-e89b-12d3-a456-426614174000"
+          },
+          "name": {
+            "type": "string",
+            "example": "my-bot"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "initializing",
+              "qr_ready",
+              "authenticating",
+              "ready",
+              "disconnected",
+              "failed"
+            ],
+            "example": "ready"
+          },
+          "phone": {
+            "type": "string",
+            "example": "628123456789",
+            "nullable": true
+          },
+          "pushName": {
+            "type": "string",
+            "example": "John Doe",
+            "nullable": true
+          },
+          "connectedAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-02-02T10:00:00Z",
+            "nullable": true
+          },
+          "lastActive": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2025-02-02T10:30:00Z",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2025-02-02T09:00:00Z"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2025-02-02T10:00:00Z"
+          },
+          "lastError": {
+            "type": "string",
+            "description": "Human-readable reason for the most recent terminal engine failure (only set when status is FAILED).",
+            "example": "Failed to launch the browser process: spawn /usr/bin/chromium ENOENT",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "QRCodeResponseDto": {
+        "type": "object",
+        "properties": {
+          "qrCode": {
+            "type": "string",
+            "description": "QR code as data URL",
+            "example": "data:image/png;base64,..."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "initializing",
+              "qr_ready",
+              "authenticating",
+              "ready",
+              "disconnected",
+              "failed"
+            ],
+            "example": "qr_ready"
+          }
+        },
+        "required": [
+          "qrCode",
+          "status"
+        ]
+      },
+      "RequestPairingCodeDto": {
+        "type": "object",
+        "properties": {
+          "phoneNumber": {
+            "type": "string",
+            "description": "Phone number to link, digits only in international format (country code + number).",
+            "example": "628123456789"
+          }
+        },
+        "required": [
+          "phoneNumber"
+        ]
+      },
+      "PairingCodeResponseDto": {
+        "type": "object",
+        "properties": {
+          "pairingCode": {
+            "type": "string",
+            "description": "The 8-character pairing code to enter in WhatsApp.",
+            "example": "ABCD1234"
+          },
+          "status": {
+            "type": "string",
+            "description": "Current session status.",
+            "example": "qr_ready"
+          }
+        },
+        "required": [
+          "pairingCode",
+          "status"
+        ]
+      },
+      "MarkChatReadDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
+            "example": "1234567890@c.us"
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "DeleteChatDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
+            "example": "1234567890-123@g.us"
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "SendChatStateDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID, in the active engine's native format (e.g. 1234567890@c.us)",
+            "example": "1234567890@c.us"
+          },
+          "state": {
+            "type": "string",
+            "description": "Presence to send: 'typing' or 'recording' shows the indicator; 'paused' clears it",
+            "enum": [
+              "typing",
+              "recording",
+              "paused"
+            ],
+            "example": "typing"
+          }
+        },
+        "required": [
+          "chatId",
+          "state"
+        ]
+      },
+      "CreateWebhookDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Webhook URL to receive events",
+            "example": "https://your-server.com/webhook"
+          },
+          "events": {
+            "type": "array",
+            "description": "Event types to subscribe to. '*' subscribes to all events.",
+            "example": [
+              "message.received",
+              "session.status"
+            ],
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "message.received",
+                "message.sent",
+                "message.ack",
+                "message.failed",
+                "message.revoked",
+                "message.reaction",
+                "session.status",
+                "session.qr",
+                "session.authenticated",
+                "session.disconnected",
+                "group.join",
+                "group.leave",
+                "group.update",
+                "*"
+              ]
+            }
+          },
+          "secret": {
+            "type": "string",
+            "description": "Secret key for HMAC signature verification",
+            "example": "your-secret-key"
+          },
+          "headers": {
+            "type": "object",
+            "description": "Custom headers to include in webhook requests",
+            "example": {
+              "X-Custom-Header": "value"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.",
+            "example": {
+              "conditions": [
+                {
+                  "field": "sender",
+                  "operator": "is",
+                  "value": [
+                    "1234567890@c.us"
+                  ]
+                },
+                {
+                  "field": "body",
+                  "operator": "contains",
+                  "value": "invoice"
+                }
+              ]
+            }
+          },
+          "retryCount": {
+            "type": "number",
+            "description": "Number of retry attempts on failure",
+            "example": 3,
+            "minimum": 0,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "WebhookResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.",
+            "example": {
+              "conditions": [
+                {
+                  "field": "sender",
+                  "operator": "is",
+                  "value": [
+                    "1234567890@c.us"
+                  ]
+                },
+                {
+                  "field": "body",
+                  "operator": "contains",
+                  "value": "invoice"
+                }
+              ]
+            }
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "retryCount": {
+            "type": "number"
+          },
+          "lastTriggeredAt": {
+            "type": "object"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "url",
+          "events",
+          "active",
+          "retryCount",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UpdateWebhookDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Webhook URL"
+          },
+          "events": {
+            "type": "array",
+            "description": "Event types to subscribe to. '*' subscribes to all events.",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "message.received",
+                "message.sent",
+                "message.ack",
+                "message.failed",
+                "message.revoked",
+                "message.reaction",
+                "session.status",
+                "session.qr",
+                "session.authenticated",
+                "session.disconnected",
+                "group.join",
+                "group.leave",
+                "group.update",
+                "*"
+              ]
+            }
+          },
+          "secret": {
+            "type": "string",
+            "description": "Secret key for HMAC signature"
+          },
+          "headers": {
+            "type": "object",
+            "description": "Custom headers"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.",
+            "example": {
+              "conditions": [
+                {
+                  "field": "sender",
+                  "operator": "is",
+                  "value": [
+                    "1234567890@c.us"
+                  ]
+                },
+                {
+                  "field": "body",
+                  "operator": "contains",
+                  "value": "invoice"
+                }
+              ]
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Enable/disable webhook"
+          },
+          "retryCount": {
+            "type": "number",
+            "description": "Retry count"
+          }
+        }
+      },
+      "SendTextMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)",
+            "example": "628123456789@c.us"
+          },
+          "text": {
+            "type": "string",
+            "description": "Text message content",
+            "example": "Hello from OpenWA!",
+            "maxLength": 4096
+          },
+          "mentions": {
+            "description": "WIDs to @mention (e.g. [\"62811@c.us\"]). The text/caption must also contain the @<number> token.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "chatId",
+          "text"
+        ]
+      },
+      "MessageResponseDto": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "example": "true_628123456789@c.us_3EB0123456789"
+          },
+          "timestamp": {
+            "type": "number",
+            "example": 1706868000
+          }
+        },
+        "required": [
+          "messageId",
+          "timestamp"
+        ]
+      },
+      "SendTemplateMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)",
+            "example": "628123456789@c.us"
+          },
+          "templateId": {
+            "type": "string",
+            "description": "Template ID to render. Provide either templateId or templateName.",
+            "example": "b1c2d3e4-f5a6-7890-bcde-f01234567890"
+          },
+          "templateName": {
+            "type": "string",
+            "description": "Template name to render. Provide either templateId or templateName.",
+            "example": "order-confirmation"
+          },
+          "vars": {
+            "type": "object",
+            "description": "Variables substituted into {{placeholder}} tokens in the template",
+            "example": {
+              "customer": "Alice",
+              "orderId": "1234"
+            }
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "SendMediaMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "WhatsApp chat ID",
+            "example": "628123456789@c.us"
+          },
+          "url": {
+            "type": "string",
+            "description": "Media URL (http/https)",
+            "example": "https://example.com/image.jpg"
+          },
+          "base64": {
+            "type": "string",
+            "description": "Base64 encoded media data"
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "Media MIME type (required when using base64)",
+            "example": "image/jpeg"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Filename for the media",
+            "example": "image.jpg"
+          },
+          "caption": {
+            "type": "string",
+            "description": "Caption for the media",
+            "example": "Check out this image!",
+            "maxLength": 1024
+          },
+          "mentions": {
+            "description": "WIDs to @mention (e.g. [\"62811@c.us\"]). The text/caption must also contain the @<number> token.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "SendAudioMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "WhatsApp chat ID",
+            "example": "628123456789@c.us"
+          },
+          "url": {
+            "type": "string",
+            "description": "Media URL (http/https)",
+            "example": "https://example.com/image.jpg"
+          },
+          "base64": {
+            "type": "string",
+            "description": "Base64 encoded media data"
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "Media MIME type (required when using base64)",
+            "example": "image/jpeg"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Filename for the media",
+            "example": "image.jpg"
+          },
+          "caption": {
+            "type": "string",
+            "description": "Caption for the media",
+            "example": "Check out this image!",
+            "maxLength": 1024
+          },
+          "mentions": {
+            "description": "WIDs to @mention (e.g. [\"62811@c.us\"]). The text/caption must also contain the @<number> token.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ptt": {
+            "type": "boolean",
+            "description": "Send as a WhatsApp voice note (PTT — mic bubble + waveform). Provide audio/ogg; codecs=opus bytes for reliable playback; when the mimetype is omitted it defaults to that for voice notes. Expects a JSON boolean. Default false = plain audio file. Only valid on send-audio."
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "SendLocationDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID (e.g. 628123456789@c.us)"
+          },
+          "latitude": {
+            "type": "number",
+            "example": -6.2088
+          },
+          "longitude": {
+            "type": "number",
+            "example": 106.8456
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "chatId",
+          "latitude",
+          "longitude"
+        ]
+      },
+      "SendContactDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "contactName": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "contactNumber": {
+            "type": "string",
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "chatId",
+          "contactName",
+          "contactNumber"
+        ]
+      },
+      "SendPollDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat ID (e.g. 628123456789@c.us or 1203630000@g.us)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Poll question / title",
+            "maxLength": 255,
+            "example": "Where should we meet?"
+          },
+          "options": {
+            "description": "Options to vote on (WhatsApp allows between 2 and 12)",
+            "example": [
+              "Park",
+              "Beach",
+              "Downtown"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowMultipleAnswers": {
+            "type": "boolean",
+            "description": "Allow voters to pick several options (default single choice)"
+          }
+        },
+        "required": [
+          "chatId",
+          "name",
+          "options"
+        ]
+      },
+      "ReplyMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "quotedMessageId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "chatId",
+          "quotedMessageId",
+          "text"
+        ]
+      },
+      "ForwardMessageDto": {
+        "type": "object",
+        "properties": {
+          "fromChatId": {
+            "type": "string"
+          },
+          "toChatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromChatId",
+          "toChatId",
+          "messageId"
+        ]
+      },
+      "ReactMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "emoji": {
+            "type": "string",
+            "description": "Emoji to react with. Send an empty string to remove the reaction.",
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId",
+          "emoji"
+        ]
+      },
+      "DeleteMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "forEveryone": {
+            "type": "boolean",
+            "description": "Delete for everyone (default true)"
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId"
+        ]
+      },
+      "BulkMediaDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Media URL (http/https)"
+          },
+          "base64": {
+            "type": "string",
+            "description": "Base64-encoded media data"
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "Media MIME type"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Filename (documents only)"
+          },
+          "ptt": {
+            "type": "boolean",
+            "description": "Audio only: send as a WhatsApp voice note (PTT)"
+          }
+        }
+      },
+      "BulkMessageContentDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Text content for text messages",
+            "maxLength": 4096
+          },
+          "image": {
+            "description": "Image URL or base64",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMediaDto"
+              }
+            ]
+          },
+          "video": {
+            "description": "Video URL or base64",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMediaDto"
+              }
+            ]
+          },
+          "audio": {
+            "description": "Audio URL or base64",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMediaDto"
+              }
+            ]
+          },
+          "document": {
+            "description": "Document URL or base64",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMediaDto"
+              }
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Caption for media messages",
+            "maxLength": 1024
+          }
+        }
+      },
+      "BulkMessageItemDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Recipient chat ID",
+            "example": "628123456789@c.us"
+          },
+          "type": {
+            "type": "string",
+            "description": "Message type",
+            "enum": [
+              "text",
+              "image",
+              "video",
+              "audio",
+              "document"
+            ]
+          },
+          "content": {
+            "description": "Message content based on type",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMessageContentDto"
+              }
+            ]
+          },
+          "variables": {
+            "type": "object",
+            "description": "Variables for template substitution"
+          }
+        },
+        "required": [
+          "chatId",
+          "type",
+          "content"
+        ]
+      },
+      "BulkMessageOptionsDto": {
+        "type": "object",
+        "properties": {
+          "delayBetweenMessages": {
+            "type": "number",
+            "description": "Delay between messages in ms (min: 1000, default: 3000)",
+            "default": 3000
+          },
+          "randomizeDelay": {
+            "type": "boolean",
+            "description": "Add random 0-2s to delay",
+            "default": true
+          },
+          "stopOnError": {
+            "type": "boolean",
+            "description": "Stop batch on first error",
+            "default": false
+          }
+        }
+      },
+      "SendBulkMessageDto": {
+        "type": "object",
+        "properties": {
+          "batchId": {
+            "type": "string",
+            "description": "Custom batch ID (auto-generated if not provided)"
+          },
+          "messages": {
+            "description": "Array of messages (max 100 per request)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BulkMessageItemDto"
+            }
+          },
+          "options": {
+            "description": "Batch processing options",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BulkMessageOptionsDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "messages"
+        ]
+      },
+      "BulkMessageResponseDto": {
+        "type": "object",
+        "properties": {
+          "batchId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "totalMessages": {
+            "type": "number"
+          },
+          "estimatedCompletionTime": {
+            "type": "string"
+          },
+          "statusUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "batchId",
+          "status",
+          "totalMessages",
+          "statusUrl"
+        ]
+      },
+      "CreateTemplateDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique template name within the session",
+            "example": "order-confirmation",
+            "maxLength": 100
+          },
+          "body": {
+            "type": "string",
+            "description": "Template body with {{variable}} placeholders",
+            "example": "Hi {{customer}}, your order {{orderId}} has shipped.",
+            "maxLength": 4096
+          },
+          "header": {
+            "type": "string",
+            "description": "Optional header text, prepended to the rendered body",
+            "example": "OpenWA Store",
+            "maxLength": 1024
+          },
+          "footer": {
+            "type": "string",
+            "description": "Optional footer text, appended to the rendered body",
+            "example": "Reply STOP to unsubscribe.",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "name",
+          "body"
+        ]
+      },
+      "TemplateResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "header": {
+            "type": "string",
+            "nullable": true
+          },
+          "footer": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sessionId",
+          "name",
+          "body",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UpdateTemplateDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Template name",
+            "maxLength": 100
+          },
+          "body": {
+            "type": "string",
+            "description": "Template body with {{variable}} placeholders",
+            "maxLength": 4096
+          },
+          "header": {
+            "type": "string",
+            "description": "Optional header text",
+            "maxLength": 1024
+          },
+          "footer": {
+            "type": "string",
+            "description": "Optional footer text",
+            "maxLength": 1024
+          }
+        }
+      },
+      "CreateGroupDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Group subject/name",
+            "maxLength": 100
+          },
+          "participants": {
+            "description": "Participant WhatsApp IDs (e.g. 628123456789@c.us)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "participants"
+        ]
+      },
+      "ParticipantsDto": {
+        "type": "object",
+        "properties": {
+          "participants": {
+            "description": "Participant WhatsApp IDs (e.g. 628123456789@c.us)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "participants"
+        ]
+      },
+      "GroupSubjectDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "New group subject/name",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "GroupDescriptionDto": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "New group description (may be empty to clear it)",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "description"
+        ]
+      },
+      "SendTextStatusDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Status text body.",
+            "example": "Out for delivery 📦",
+            "maxLength": 4096
+          },
+          "backgroundColor": {
+            "type": "string",
+            "description": "Background color (hex).",
+            "example": "#25D366"
+          },
+          "font": {
+            "type": "number",
+            "description": "Font family index (0–5).",
+            "example": 0,
+            "minimum": 0,
+            "maximum": 5
+          },
+          "recipients": {
+            "description": "Recipient JIDs (1–256). WhatsApp Status is not posted to a group — use @c.us or @lid individuals.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "text",
+          "recipients"
+        ]
+      },
+      "StatusMediaInput": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Public http(s) URL of the media (server-fetched, SSRF-guarded).",
+            "example": "https://example.com/banner.jpg"
+          },
+          "base64": {
+            "type": "string",
+            "description": "Base64-encoded media. Requires mimetype.",
+            "example": "data:image/jpeg;base64,..."
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "MIME type. Required when sending base64.",
+            "example": "image/jpeg"
+          }
+        }
+      },
+      "SendImageStatusDto": {
+        "type": "object",
+        "properties": {
+          "image": {
+            "description": "Image source (URL or base64).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatusMediaInput"
+              }
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional caption.",
+            "example": "New drop!",
+            "maxLength": 1024
+          },
+          "recipients": {
+            "description": "Recipient JIDs (1–256), @c.us or @lid.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "image",
+          "recipients"
+        ]
+      },
+      "SendVideoStatusDto": {
+        "type": "object",
+        "properties": {
+          "video": {
+            "description": "Video source (URL or base64).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatusMediaInput"
+              }
+            ]
+          },
+          "caption": {
+            "type": "string",
+            "description": "Optional caption.",
+            "example": "Demo",
+            "maxLength": 1024
+          },
+          "recipients": {
+            "description": "Recipient JIDs (1–256), @c.us or @lid.",
+            "example": [
+              "628123456789@c.us"
+            ],
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "video",
+          "recipients"
+        ]
+      },
+      "SendProductDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat to send the product card to (@c.us or @g.us).",
+            "example": "628123456789@c.us"
+          },
+          "productId": {
+            "type": "string",
+            "description": "Catalog product id to send.",
+            "example": "product-42"
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional body text accompanying the product card.",
+            "example": "Back in stock!"
+          }
+        },
+        "required": [
+          "chatId",
+          "productId"
+        ]
+      },
+      "SendCatalogDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Chat to send the catalog to (@c.us or @g.us).",
+            "example": "628123456789@c.us"
+          },
+          "body": {
+            "type": "string",
+            "description": "Optional body text accompanying the catalog.",
+            "example": "Browse our full catalog"
+          }
+        },
+        "required": [
+          "chatId"
+        ]
+      },
+      "InstallFromUrlDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "HTTP(S) URL of the plugin .zip to download and install"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "PluginConfigDto": {
+        "type": "object",
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Plugin configuration object"
+          }
+        },
+        "required": [
+          "config"
+        ]
+      },
+      "PluginSessionsDto": {
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "description": "Sessions to activate the plugin for; ['*'] = all numbers, [] = none",
+            "example": [
+              "*"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "sessions"
+        ]
+      },
+      "PluginDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Plugin ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "Plugin name"
+          },
+          "version": {
+            "type": "string",
+            "description": "Plugin version"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "engine",
+              "storage",
+              "queue",
+              "auth",
+              "extension"
+            ],
+            "description": "Plugin type"
+          },
+          "description": {
+            "type": "string",
+            "description": "Plugin description"
+          },
+          "author": {
+            "type": "string",
+            "description": "Plugin author"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "installed",
+              "enabled",
+              "disabled",
+              "error"
+            ],
+            "description": "Plugin status"
+          },
+          "config": {
+            "type": "object",
+            "description": "Plugin configuration"
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Whether this is a built-in plugin"
+          },
+          "provides": {
+            "description": "Features provided by this plugin",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ingressCapable": {
+            "type": "boolean",
+            "description": "Whether this plugin can host provisioned ingress instances"
+          },
+          "sessionScoped": {
+            "type": "boolean",
+            "description": "Whether the plugin is scoped to specific sessions (false = global)"
+          },
+          "activeSessions": {
+            "description": "Sessions this plugin is activated for; ['*'] = all numbers",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "configSchema": {
+            "type": "object",
+            "description": "Configuration schema"
+          },
+          "configUi": {
+            "type": "object",
+            "description": "Sandboxed-iframe config editor (entry HTML + optional height)"
+          },
+          "i18n": {
+            "type": "object",
+            "description": "Localized dashboard text (name/description/config titles) per locale code"
+          },
+          "sessionConfig": {
+            "type": "object",
+            "description": "Per-session config overrides, keyed by sessionId (secrets redacted)"
+          },
+          "loadedAt": {
+            "type": "string",
+            "description": "When the plugin was loaded"
+          },
+          "enabledAt": {
+            "type": "string",
+            "description": "When the plugin was enabled"
+          },
+          "error": {
+            "type": "string",
+            "description": "Error message if plugin is in error state"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "type",
+          "status",
+          "config",
+          "builtIn",
+          "provides",
+          "ingressCapable",
+          "sessionScoped",
+          "activeSessions"
+        ]
+      },
+      "CreateInstanceDto": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "description": "Operator-chosen instance id (unique within the plugin). Namespaces the ingress URL and the instance secret.",
+            "example": "chatwoot-prod-1"
+          },
+          "sessionScope": {
+            "type": "string",
+            "description": "Session id the instance is scoped to. Omit for all sessions.",
+            "example": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a"
+          },
+          "verifyToken": {
+            "type": "string",
+            "description": "Token echoed back for the provider webhook verification handshake. Auto-generated when omitted.",
+            "example": "a1b2c3d4e5f6"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Ingress HMAC secret shared with the provider. Omit to auto-generate a random 64-hex secret. Masked (****) on every read.",
+            "writeOnly": true,
+            "example": "super-secret-provider-webhook-key"
+          },
+          "config": {
+            "type": "object",
+            "description": "Per-instance config slice passed to the adapter (shape defined by the plugin).",
+            "example": {
+              "apiKey": "chatwoot-key",
+              "inboxId": 42
+            }
+          }
+        },
+        "required": [
+          "instanceId"
+        ]
+      },
+      "IngressUrl": {
+        "type": "object",
+        "properties": {
+          "route": {
+            "type": "string",
+            "description": "Plugin-declared route segment the provider posts to."
+          },
+          "url": {
+            "type": "string",
+            "description": "Full ingress URL (BASE_URL + plugin/instance/route), or a relative path when BASE_URL is unset."
+          }
+        },
+        "required": [
+          "route",
+          "url"
+        ]
+      },
+      "InstanceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Instance row id."
+          },
+          "pluginId": {
+            "type": "string",
+            "description": "Plugin id this instance belongs to."
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Operator-chosen instance id (unique within the plugin)."
+          },
+          "sessionScope": {
+            "type": "object",
+            "description": "Session id the instance is scoped to, or null for all sessions.",
+            "nullable": true
+          },
+          "secret": {
+            "type": "string",
+            "description": "Ingress HMAC secret. Masked ('***') on every read; plaintext returned only once on create/regenerate-secret."
+          },
+          "verifyToken": {
+            "type": "object",
+            "description": "Provider verify-token. Masked ('***') on reads when set; plaintext on create/regenerate-secret.",
+            "nullable": true
+          },
+          "config": {
+            "type": "object",
+            "description": "Per-instance config slice passed to the adapter, or null.",
+            "nullable": true
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether ingress is accepted and dispatch is active."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Creation timestamp."
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Last update timestamp."
+          },
+          "ingressUrls": {
+            "description": "Ingress URLs the provider posts webhook deliveries to.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngressUrl"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "pluginId",
+          "instanceId",
+          "secret",
+          "enabled",
+          "createdAt",
+          "updatedAt",
+          "ingressUrls"
+        ]
+      },
+      "UpdateInstanceDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the instance is enabled (ingress accepted, dispatch active).",
+            "example": true
+          },
+          "sessionScope": {
+            "type": "string",
+            "description": "Session id the instance is scoped to. Omit for all sessions."
+          },
+          "config": {
+            "type": "object",
+            "description": "Per-instance config slice passed to the adapter."
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "X-API-Key": []
+    }
+  ]
+}

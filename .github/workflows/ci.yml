@@ -45,6 +45,12 @@ jobs:
       - name: Check version consistency (docs track package.json)
         run: npm run check:versions
 
+      # The committed openapi.json is the machine-readable API contract. Fail if a controller/DTO
+      # change landed without regenerating the snapshot (npm run openapi:export). The generator
+      # bootstraps the app hermetically (in-memory/temp SQLite, no listen), so this is a static check.
+      - name: Check OpenAPI snapshot is up to date
+        run: npm run openapi:check
+
   test:
     name: Test
     runs-on: ubuntu-latest
