@@ -90,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the status lifecycle (post + delete) on the default engine. Own-status only (the library revokes
   the caller's own status posts).
 
+- **Read contact stories on the whatsapp-web.js engine.** `getContactStatuses()` and
+  `getContactStatus(contactId)` now return contact "stories" (24h status posts) via
+  whatsapp-web.js `getBroadcasts()` / `getBroadcastById()` flattened to `Status[]` (contact via
+  `broadcast.getContact()`, type from `MessageTypes`, 24h TTL) instead of stubbing to `[]`. The
+  Baileys engine still cannot read stories — `fetchStatus` returns the *about* text, not stories
+  (documented as a library limitation).
+
 ### Fixed
 
 - **Diagnosable failure for a stale browser profile after a binary-changing upgrade.** Upgrading

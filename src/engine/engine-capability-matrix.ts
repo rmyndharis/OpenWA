@@ -99,16 +99,15 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   getChats: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getContactById: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getContactStatus: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
+    wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'library-limitation' },
     evidence:
-      'baileys fetchStatus (Socket/chats.d.ts:42 via USyncStatusProtocol) = about/profile text only, NOT 24h stories — no story getter in lib; wwjs Client.getBroadcastById (index.d.ts:136; Client.js:2771) EXISTS but adapter stubs to [] @whatsapp-web-js.adapter.ts:1740',
+      'baileys fetchStatus (Socket/chats.d.ts:42 via USyncStatusProtocol) = about/profile text only, NOT 24h stories — no story getter in lib',
   },
   getContactStatuses: {
-    wwjs: { status: 'not-available', rootCause: 'adapter-gap' },
+    wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'library-limitation' },
-    evidence:
-      'baileys fetchStatus = about text only; no story enumerate in lib; wwjs Client.getBroadcasts (index.d.ts:133; Client.js:2759 WWebJS.getAllStatuses) EXISTS but adapter stubs to [] @whatsapp-web-js.adapter.ts:1732',
+    evidence: 'baileys fetchStatus = about text only; no story enumerate in lib',
   },
   getContacts: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getGroupInfo: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },

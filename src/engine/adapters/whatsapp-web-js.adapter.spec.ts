@@ -1126,6 +1126,44 @@ describe('WhatsAppWebJsAdapter status methods', () => {
     await readyAdapter({ sendMessage: jest.fn(), revokeStatusMessage }).deleteStatus('STATUS1');
     expect(revokeStatusMessage).toHaveBeenCalledWith('STATUS1');
   });
+
+  const storyBroadcast = {
+    getContact: () => Promise.resolve({ id: { _serialized: '628111@c.us' }, name: 'Alice', pushname: 'Alice' }),
+    msgs: [
+      { id: { _serialized: 'ST1' }, type: 'image', body: 'cap1', timestamp: 1700000020 },
+      { id: { _serialized: 'ST2' }, type: 'chat', body: 'hello', timestamp: 1700000021 },
+    ],
+  };
+
+  it('getContactStatuses reads contact stories via getBroadcasts() mapped to Status[]', async () => {
+    const getBroadcasts = jest.fn().mockResolvedValue([storyBroadcast]);
+    const result = await readyAdapter({ sendMessage: jest.fn(), getBroadcasts }).getContactStatuses();
+    expect(getBroadcasts).toHaveBeenCalled();
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      id: 'ST1',
+      contact: { id: '628111@c.us', name: 'Alice', pushName: 'Alice' },
+      type: 'image',
+      caption: 'cap1',
+      timestamp: new Date(1700000020 * 1000),
+      expiresAt: new Date(1700000020 * 1000 + 24 * 3_600_000),
+    });
+    expect(result[1].type).toBe('text');
+  });
+
+  it('getContactStatus reads one contact stories via getBroadcastById mapped to Status[]', async () => {
+    const getBroadcastById = jest.fn().mockResolvedValue(storyBroadcast);
+    const result = await readyAdapter({ sendMessage: jest.fn(), getBroadcastById }).getContactStatus('628111@c.us');
+    expect(getBroadcastById).toHaveBeenCalledWith('628111@c.us');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        id: 'ST1',
+        type: 'image',
+        contact: { id: '628111@c.us', name: 'Alice', pushName: 'Alice' },
+      }),
+    );
+  });
 });
 
 describe('resolveWebVersionPin (#251/#488 — explicit pin + auto-resolve current WA-Web build)', () => {

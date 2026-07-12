@@ -1731,16 +1731,47 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getContactStatuses(): Promise<Status[]> {
     this.ensureReady();
-    // whatsapp-web.js has limited Status API support
-    // This is a stub that can be enhanced when the library adds support
-    this.logger.warn('getContactStatuses not fully implemented in whatsapp-web.js');
-    return [];
+    return this.collectStatuses(await this.client!.getBroadcasts());
   }
 
-  async getContactStatus(_contactId: string): Promise<Status[]> {
+  async getContactStatus(contactId: string): Promise<Status[]> {
     this.ensureReady();
-    this.logger.warn('getContactStatus not fully implemented in whatsapp-web.js');
-    return [];
+    return this.collectStatuses([await this.client!.getBroadcastById(contactId)]);
+  }
+
+  /**
+   * Map whatsapp-web.js story Broadcasts (+ their Messages) into the neutral Status shape. Each
+   * Broadcast is one contact's story (its `msgs`); we flatten across broadcasts. type collapses to
+   * the Status union (image/video, else text — audio/other stories are rare and become 'text').
+   * expiresAt is timestamp + 24h (WhatsApp status TTL).
+   */
+  private async collectStatuses(
+    broadcasts: ReadonlyArray<{
+      msgs: Message[];
+      getContact: () => Promise<{ id: { _serialized: string }; name?: string; pushname?: string }>;
+    }>,
+  ): Promise<Status[]> {
+    const statuses: Status[] = [];
+    for (const broadcast of broadcasts) {
+      const contact = await broadcast.getContact();
+      const contactSummary = {
+        id: contact.id._serialized,
+        ...(contact.name ? { name: contact.name } : {}),
+        ...(contact.pushname ? { pushName: contact.pushname } : {}),
+      };
+      for (const msg of broadcast.msgs) {
+        const ts = new Date(msg.timestamp * 1000);
+        statuses.push({
+          id: msg.id._serialized,
+          contact: contactSummary,
+          type: msg.type === MessageTypes.IMAGE ? 'image' : msg.type === MessageTypes.VIDEO ? 'video' : 'text',
+          ...(msg.body ? { caption: msg.body } : {}),
+          timestamp: ts,
+          expiresAt: new Date(ts.getTime() + 24 * 3_600_000),
+        });
+      }
+    }
+    return statuses;
   }
 
   private warnedStatusRecipients = false;
