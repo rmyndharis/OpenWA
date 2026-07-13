@@ -1,5 +1,20 @@
 package openwa
 
+import "net/url"
+
+// ListSessionsQuery paginates GET /sessions. Both fields optional.
+type ListSessionsQuery struct {
+	Limit  *int
+	Offset *int
+}
+
+func (q *ListSessionsQuery) values() url.Values {
+	v := url.Values{}
+	setInt(v, "limit", q.Limit)
+	setInt(v, "offset", q.Offset)
+	return v
+}
+
 // SessionResponse describes a WhatsApp session. Status is one of: created,
 // initializing, qr_ready, authenticating, ready, disconnected, failed.
 type SessionResponse struct {

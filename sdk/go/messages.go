@@ -37,7 +37,7 @@ func (s *MessagesService) SendVideo(ctx context.Context, sessionID string, body 
 }
 
 // SendAudio sends audio (set PTT for a voice note).
-func (s *MessagesService) SendAudio(ctx context.Context, sessionID string, body SendMediaRequest) (*MessageResponse, error) {
+func (s *MessagesService) SendAudio(ctx context.Context, sessionID string, body SendAudioRequest) (*MessageResponse, error) {
 	return s.send(ctx, sessionID, "send-audio", body)
 }
 

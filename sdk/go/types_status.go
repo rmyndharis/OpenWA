@@ -1,12 +1,38 @@
 package openwa
 
-// StatusRecord is a status/story entry.
+// StatusContact is the poster of a status entry (from a GET list).
+type StatusContact struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	PushName string `json:"pushName,omitempty"`
+}
+
+// StatusRecord is a status/story entry as returned by GET endpoints.
 type StatusRecord struct {
-	ID        string  `json:"id"`
-	StatusID  string  `json:"statusId,omitempty"`
-	Type      string  `json:"type,omitempty"`
-	Body      *string `json:"body,omitempty"`
-	Timestamp any     `json:"timestamp,omitempty"`
+	ID              string        `json:"id"`
+	Contact         StatusContact `json:"contact"`
+	Type            string        `json:"type,omitempty"`
+	Caption         string        `json:"caption,omitempty"`
+	MediaURL        string        `json:"mediaUrl,omitempty"`
+	BackgroundColor string        `json:"backgroundColor,omitempty"`
+	Font            *int          `json:"font,omitempty"`
+	Timestamp       any           `json:"timestamp,omitempty"`
+	ExpiresAt       any           `json:"expiresAt,omitempty"`
+}
+
+// StatusListResponse is the {"statuses": [...]} envelope returned by GET
+// /sessions/:id/status and GET /sessions/:id/status/:contactId.
+type StatusListResponse struct {
+	Statuses []StatusRecord `json:"statuses"`
+}
+
+// StatusResult is the acknowledgement returned by Send{Text,Image,Video}Status.
+// It intentionally differs from StatusRecord: the POST response has statusId +
+// timing, no contact/media.
+type StatusResult struct {
+	StatusID  string `json:"statusId"`
+	Timestamp any    `json:"timestamp,omitempty"`
+	ExpiresAt any    `json:"expiresAt,omitempty"`
 }
 
 // SendTextStatusRequest posts a text status. Recipients is required.

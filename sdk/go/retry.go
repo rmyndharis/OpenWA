@@ -1,11 +1,31 @@
 package openwa
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
 )
+
+// idempotentMethods is the set of HTTP methods that are safe to retry after a
+// network error — the request has RFC-defined idempotent semantics, so
+// re-issuing it will not cause a duplicate side effect.
+var idempotentMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodOptions: true,
+	http.MethodPut:     true,
+	http.MethodDelete:  true,
+}
+
+// isIdempotent reports whether it is safe to retry a request that failed with a
+// network error (as opposed to a retryable HTTP status the server explicitly
+// sent). POST is treated as non-idempotent because we cannot tell whether the
+// server processed the request before the connection dropped — replaying it
+// could double-send a WhatsApp message.
+func isIdempotent(method string) bool { return idempotentMethods[method] }
 
 // RetryPolicy controls automatic retries. Retries are OFF by default — pass one
 // with WithRetry to opt in. Only network errors and the statuses in
@@ -112,7 +132,24 @@ func retryMiddleware(p RetryPolicy, log Logger) Middleware {
 
 				resp, err := next.RoundTrip(r)
 
-				retryable := err != nil || (resp != nil && p.retryableStatus(resp.StatusCode))
+				retryable := false
+				switch {
+				case err != nil:
+					// Never retry a context cancellation/deadline — the
+					// caller has already stopped waiting.
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return resp, err
+					}
+					// Network error: only retry idempotent methods, since we
+					// can't tell whether the server processed the request
+					// before the connection dropped.
+					retryable = isIdempotent(req.Method)
+				case resp != nil && p.retryableStatus(resp.StatusCode):
+					// A retryable HTTP status is the server explicitly telling
+					// us to back off. Safe to retry for any method: the server
+					// has rejected the request before processing it.
+					retryable = true
+				}
 				if !retryable || attempt >= p.MaxRetries {
 					return resp, err
 				}

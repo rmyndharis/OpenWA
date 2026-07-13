@@ -18,6 +18,8 @@ import (
 //	var apiErr *openwa.APIError
 //	if errors.As(err, &apiErr) { log.Println(apiErr.StatusCode, apiErr.Body) }
 var (
+	// ErrBadRequest is returned for a 400 (invalid request payload).
+	ErrBadRequest = errors.New("openwa: bad request")
 	// ErrUnauthorized is returned for a 401 (missing or invalid API key).
 	ErrUnauthorized = errors.New("openwa: unauthorized")
 	// ErrForbidden is returned for a 403 (insufficient role).
@@ -60,6 +62,8 @@ func (e *APIError) Error() string {
 // use errors.Is(err, ErrNotFound) without matching on the status code directly.
 func (e *APIError) Is(target error) bool {
 	switch e.StatusCode {
+	case 400:
+		return target == ErrBadRequest
 	case 401:
 		return target == ErrUnauthorized
 	case 403:

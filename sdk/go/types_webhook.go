@@ -1,10 +1,15 @@
 package openwa
 
-// WebhookFilterCondition is one condition in a webhook filter.
+// WebhookFilterCondition is one condition in a webhook filter. Value is
+// polymorphic per field kind — the server accepts a string (text fields), a
+// []string (id/idArray/enum fields), or a bool (boolean fields). Passing a
+// []string for a text/boolean field triggers a 400. Use any so all shapes
+// round-trip cleanly for both create and read-back.
 type WebhookFilterCondition struct {
-	Field    string   `json:"field"`
-	Operator string   `json:"operator"`
-	Value    []string `json:"value"`
+	Field         string `json:"field"`
+	Operator      string `json:"operator"`
+	Value         any    `json:"value"`
+	CaseSensitive *bool  `json:"caseSensitive,omitempty"`
 }
 
 // WebhookFilters groups filter conditions.

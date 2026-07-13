@@ -6,10 +6,10 @@ import "context"
 // Backed by src/modules/session/session.controller.ts.
 type SessionsService struct{ client *Client }
 
-// List returns all sessions.
-func (s *SessionsService) List(ctx context.Context) ([]SessionResponse, error) {
+// List returns sessions. Pass nil for the default (server-side) limit/offset.
+func (s *SessionsService) List(ctx context.Context, query *ListSessionsQuery) ([]SessionResponse, error) {
 	var out []SessionResponse
-	err := s.client.do(ctx, "GET", "/api/sessions", nil, nil, &out)
+	err := s.client.do(ctx, "GET", "/api/sessions", valuesOf(query), nil, &out)
 	return out, err
 }
 

@@ -17,7 +17,7 @@ func TestRouting(t *testing.T) {
 		wantMethod string
 		wantPath   string
 	}{
-		{"Sessions.List", func(c *Client) { c.Sessions.List(ctx) }, "GET", "/api/sessions"},
+		{"Sessions.List", func(c *Client) { c.Sessions.List(ctx, nil) }, "GET", "/api/sessions"},
 		{"Sessions.Get", func(c *Client) { c.Sessions.Get(ctx, "s1") }, "GET", "/api/sessions/s1"},
 		{"Sessions.Create", func(c *Client) { c.Sessions.Create(ctx, CreateSessionRequest{}) }, "POST", "/api/sessions"},
 		{"Sessions.Delete", func(c *Client) { c.Sessions.Delete(ctx, "s1") }, "DELETE", "/api/sessions/s1"},
@@ -32,7 +32,7 @@ func TestRouting(t *testing.T) {
 		{"Messages.SendText", func(c *Client) { c.Messages.SendText(ctx, "s1", SendTextRequest{}) }, "POST", "/api/sessions/s1/messages/send-text"},
 		{"Messages.SendImage", func(c *Client) { c.Messages.SendImage(ctx, "s1", SendMediaRequest{}) }, "POST", "/api/sessions/s1/messages/send-image"},
 		{"Messages.SendVideo", func(c *Client) { c.Messages.SendVideo(ctx, "s1", SendMediaRequest{}) }, "POST", "/api/sessions/s1/messages/send-video"},
-		{"Messages.SendAudio", func(c *Client) { c.Messages.SendAudio(ctx, "s1", SendMediaRequest{}) }, "POST", "/api/sessions/s1/messages/send-audio"},
+		{"Messages.SendAudio", func(c *Client) { c.Messages.SendAudio(ctx, "s1", SendAudioRequest{}) }, "POST", "/api/sessions/s1/messages/send-audio"},
 		{"Messages.SendDocument", func(c *Client) { c.Messages.SendDocument(ctx, "s1", SendMediaRequest{}) }, "POST", "/api/sessions/s1/messages/send-document"},
 		{"Messages.SendSticker", func(c *Client) { c.Messages.SendSticker(ctx, "s1", SendMediaRequest{}) }, "POST", "/api/sessions/s1/messages/send-sticker"},
 		{"Messages.SendLocation", func(c *Client) { c.Messages.SendLocation(ctx, "s1", SendLocationRequest{}) }, "POST", "/api/sessions/s1/messages/send-location"},

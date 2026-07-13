@@ -90,6 +90,12 @@ func New(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	// A zero (or negative) timeout means "use the default" per WithTimeout's
+	// documentation — never an infinite timeout, which would silently pin
+	// goroutines waiting for a dead peer.
+	if cfg.timeout <= 0 {
+		cfg.timeout = DefaultTimeout
+	}
 
 	warnIfInsecure(cfg)
 

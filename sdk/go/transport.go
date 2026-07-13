@@ -53,10 +53,15 @@ func authMiddleware(cfg *config) Middleware {
 			// Clone so we never mutate the caller's request headers.
 			r := req.Clone(req.Context())
 			for k, vs := range cfg.headers {
+				// Only apply defaults for a header the caller has not already
+				// set. The check runs once per key so all default values are
+				// added (not just the first, which the earlier per-value check
+				// silently dropped).
+				if r.Header.Get(k) != "" {
+					continue
+				}
 				for _, v := range vs {
-					if r.Header.Get(k) == "" {
-						r.Header.Add(k, v)
-					}
+					r.Header.Add(k, v)
 				}
 			}
 			r.Header.Set("X-API-Key", cfg.apiKey)

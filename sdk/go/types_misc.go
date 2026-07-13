@@ -9,10 +9,17 @@ type HealthResponse struct {
 	Version   string `json:"version,omitempty"`
 }
 
-// HealthReadyResponse is the /health/ready payload.
+// DependencyStatus is one dependency's health snapshot inside a readiness
+// payload (e.g. {"mainDatabase":{"status":"up"}}).
+type DependencyStatus struct {
+	Status string `json:"status"`
+}
+
+// HealthReadyResponse is the /health/ready payload. Details maps a dependency
+// name (e.g. "mainDatabase", "dataDatabase") to its DependencyStatus.
 type HealthReadyResponse struct {
-	Status  string            `json:"status"`
-	Details map[string]string `json:"details,omitempty"`
+	Status  string                      `json:"status"`
+	Details map[string]DependencyStatus `json:"details,omitempty"`
 }
 
 // ── Auth ─────────────────────────────────────────────────
@@ -59,8 +66,7 @@ type UpdateTemplateRequest struct {
 type LabelRecord struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	Color    string `json:"color,omitempty"`
-	ColorHex string `json:"colorHex,omitempty"`
+	HexColor string `json:"hexColor,omitempty"`
 }
 
 // AddLabelRequest applies a label to a chat.

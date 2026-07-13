@@ -14,9 +14,20 @@ type SendTextRequest struct {
 	Text   string `json:"text"`
 }
 
-// SendMediaRequest sends image/video/audio/document/sticker media. Provide
-// exactly one of URL or Base64. Ptt (audio only) sends as a voice note.
+// SendMediaRequest sends image/video/document/sticker media. Provide exactly
+// one of URL or Base64. For audio use SendAudioRequest (PTT lives there).
 type SendMediaRequest struct {
+	ChatID   string `json:"chatId"`
+	URL      string `json:"url,omitempty"`
+	Base64   string `json:"base64,omitempty"`
+	Mimetype string `json:"mimetype,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+}
+
+// SendAudioRequest sends audio. PTT sends as a voice note. Server only accepts
+// PTT on /send-audio, so it is kept off the shared media struct to avoid a 400.
+type SendAudioRequest struct {
 	ChatID   string `json:"chatId"`
 	URL      string `json:"url,omitempty"`
 	Base64   string `json:"base64,omitempty"`
@@ -193,13 +204,25 @@ type ReactionRecord struct {
 	Senders []ReactionSender `json:"senders"`
 }
 
+// BulkMediaContent is a per-item media block for a bulk send. It deliberately
+// omits chatId (the parent BulkMessageItem carries it) so the server's
+// forbidNonWhitelisted validator does not reject the empty chatId that reusing
+// SendMediaRequest would emit.
+type BulkMediaContent struct {
+	URL      string `json:"url,omitempty"`
+	Base64   string `json:"base64,omitempty"`
+	Mimetype string `json:"mimetype,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+}
+
 // BulkMessageContent is the per-item content of a bulk send.
 type BulkMessageContent struct {
 	Text     string            `json:"text,omitempty"`
-	Image    *SendMediaRequest `json:"image,omitempty"`
-	Video    *SendMediaRequest `json:"video,omitempty"`
-	Audio    *SendMediaRequest `json:"audio,omitempty"`
-	Document *SendMediaRequest `json:"document,omitempty"`
+	Image    *BulkMediaContent `json:"image,omitempty"`
+	Video    *BulkMediaContent `json:"video,omitempty"`
+	Audio    *BulkMediaContent `json:"audio,omitempty"`
+	Document *BulkMediaContent `json:"document,omitempty"`
 	Caption  string            `json:"caption,omitempty"`
 }
 
