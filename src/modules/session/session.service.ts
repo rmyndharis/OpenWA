@@ -43,7 +43,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
-  ) { }
+  ) {}
 
   /**
    * On backend startup, reset all active session statuses to disconnected
