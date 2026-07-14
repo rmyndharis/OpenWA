@@ -43,7 +43,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
-  ) {}
+  ) { }
 
   /**
    * On backend startup, reset all active session statuses to disconnected
@@ -486,6 +486,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       status,
       action: 'status_update',
     });
+
+    // Dispatch webhook
+    void this.webhookService.dispatch(id, 'session.status', {
+      status,
+    });
+
     // Emit real-time event to connected WebSocket clients
     this.eventsGateway.emitSessionStatus(id, status);
   }
