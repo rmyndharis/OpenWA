@@ -100,7 +100,6 @@
     "@nestjs/cli": "^11.0.24",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.1.28",
-    "@types/adm-zip": "^0.5.8",
     "@types/archiver": "^8.0.0",
     "@types/dockerode": "^4.0.1",
     "@types/express": "^5.0.0",

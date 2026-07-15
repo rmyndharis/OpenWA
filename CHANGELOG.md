@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message category after picking a file now clears it so stale bytes aren't routed to the wrong
   endpoint.
 
+### Security
+
+- **Plugin archive extraction hardened against CVE-2026-39244 (adm-zip declared-size zip-bomb OOM).**
+  The `adm-zip` bump to `0.6.0` in #728 brings upstream's fix for CVE-2026-39244: a crafted archive
+  declaring a huge entry size could drive an unbounded `Buffer.alloc` and exhaust memory during
+  extraction. This closes the declared-size allocation vector on the plugin marketplace install path
+  (`src/modules/plugins/plugin-installer.ts`), complementing the project's own `readEntryData()` guard
+  that already caps *decompressed* bytes via zlib `maxOutputLength`. The two adm-zip 0.6.0 behavior
+  changes (`extractEntryTo` subdirectory preservation, non-fatal `utimes`) touch APIs this project does
+  not use. The now-redundant `@types/adm-zip` devDependency is dropped as well — adm-zip 0.6.0 ships its
+  own `types.d.ts`.
+
 ## [0.8.17] - 2026-07-13
 
 ### Added
