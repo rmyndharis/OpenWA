@@ -3,6 +3,8 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  HttpException,
+  HttpStatus,
   OnModuleDestroy,
   OnModuleInit,
   OnApplicationBootstrap,
@@ -110,6 +112,26 @@ export class EngineInitTimeoutError extends Error {
     super(`engine.initialize() timed out after ${timeoutMs}ms`);
     this.name = 'EngineInitTimeoutError';
   }
+}
+
+/**
+ * whatsapp-web.js throws this primitive STRING (not an Error) from its inject() auth poll when WA Web's
+ * login bootstrap doesn't complete within authTimeoutMs (default 30s). Match it defensively as both the
+ * bare string and an Error carrying the same message, since the library's throw shape isn't contracted.
+ */
+const ENGINE_AUTH_TIMEOUT = 'auth timeout';
+
+/**
+ * Diagnostic surfaced when the engine's internal auth-timeout fires (#733): points at the usual cause
+ * (the session proxy / network egress / firewall blocking WhatsApp so no QR is ever delivered) and the
+ * WWEBJS_AUTH_TIMEOUT_MS knob for legitimately slow first boots.
+ */
+const ENGINE_AUTH_TIMEOUT_MESSAGE =
+  'WhatsApp Web authentication timed out. Verify the session proxy URL and network egress can reach ' +
+  'WhatsApp; for slow first boots, raise WWEBJS_AUTH_TIMEOUT_MS.';
+
+function isAuthTimeoutRejection(err: unknown): boolean {
+  return err === ENGINE_AUTH_TIMEOUT || (err instanceof Error && err.message === ENGINE_AUTH_TIMEOUT);
 }
 
 @Injectable()
@@ -1202,6 +1224,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
         await this.updateStatus(id, SessionStatus.DISCONNECTED);
+      } else if (isAuthTimeoutRejection(err)) {
+        // The engine's INTERNAL auth-timeout: whatsapp-web.js throws the primitive string 'auth timeout'
+        // (see ENGINE_AUTH_TIMEOUT) when its inject poll exhausts authTimeoutMs (default 30s) — the common
+        // pre-QR failure when the browser launched but couldn't reach WhatsApp, e.g. a dead/unreachable
+        // session proxy (#733). onError already evicted the engine + wrote FAILED before this catch ran, so
+        // only the HTTP mapping remains: surface a diagnostic 504 instead of letting the bare string escape
+        // to NestJS's default handler as a meaningless 500.
+        throw new HttpException(ENGINE_AUTH_TIMEOUT_MESSAGE, HttpStatus.GATEWAY_TIMEOUT);
       }
       throw err;
     } finally {
