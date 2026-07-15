@@ -154,6 +154,13 @@ export function Infrastructure() {
   // operator's in-progress, unsaved edits. A successful save restarts → full page reload, re-arming it.
   const formHydrated = useRef(false);
 
+  // The engine radio seeds ONCE from the running engine (which honours a real ENGINE_TYPE env override
+  // over the saved .env.generated value — see the effect below), then is never re-stamped by a background
+  // refetch. `engineTouched` additionally wins over a late first resolution: if the operator clicked a
+  // different engine before /engines/current resolved, the delayed seed must not revert their selection (#735).
+  const engineHydrated = useRef(false);
+  const engineTouched = useRef(false);
+
   // LIVE indicators (not editable) — always reflect the running process, every refetch.
   useEffect(() => {
     if (!infraStatus) return;
@@ -236,9 +243,13 @@ export function Infrastructure() {
   }, [infraStatus, savedConfig]);
 
   // The active engine reflects what's actually running (honours a real-env ENGINE_TYPE override),
-  // so seed the selected radio from it rather than the saved .env.generated value.
+  // so seed the selected radio from it rather than the saved .env.generated value — but only ONCE, and
+  // never after the operator has touched it. Without this guard a background refetch (or a late first
+  // resolution racing an early click) re-stamps the running engine over an in-progress selection (#735).
   useEffect(() => {
-    if (currentEngine) setEngineConfig(prev => ({ ...prev, type: currentEngine }));
+    if (!currentEngine || engineHydrated.current || engineTouched.current) return;
+    engineHydrated.current = true;
+    setEngineConfig(prev => (prev.type === currentEngine ? prev : { ...prev, type: currentEngine }));
   }, [currentEngine]);
 
   if (loading) {
@@ -276,8 +287,10 @@ export function Infrastructure() {
     setRedisConfig(prev => ({ ...prev, [key]: value }));
   const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
     setStorageConfig(prev => ({ ...prev, [key]: value }));
-  const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) =>
+  const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
+    if (key === 'type') engineTouched.current = true;
     setEngineConfig(prev => ({ ...prev, [key]: value }));
+  };
 
   const handleSaveConfig = async () => {
     setSaving(true);
