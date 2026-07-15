@@ -981,6 +981,30 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
   }
 
+  /**
+   * Extract a `MessageResult` from the value returned by `client.sendMessage`. On some whatsapp-web.js
+   * versions, sending to a `@lid` recipient succeeds (the message is delivered) but the method returns
+   * `undefined` rather than a `Message` object, causing a runtime crash on `msg.id._serialized`.
+   * When `msg` is falsy we synthesise a best-effort id from the chatId and current timestamp so the
+   * caller can still record the outbound message without throwing.
+   */
+  private extractMessageResult(msg: Message | undefined | null, chatId: string): MessageResult {
+    if (msg?.id) {
+      return {
+        id: msg.id._serialized,
+        timestamp: msg.timestamp,
+      };
+    }
+    // Synthesise a stable-enough id for persistence when wwebjs returns nothing.
+    const ts = Math.floor(Date.now() / 1000);
+    const synthetic = `true_${chatId}_${ts}`;
+    this.logger.warn(
+      'sendMessage returned no Message object (known @lid quirk) — using synthetic id',
+      { chatId, syntheticId: synthetic },
+    );
+    return { id: synthetic, timestamp: ts };
+  }
+
   async sendTextMessage(chatId: string, text: string, mentions?: string[]): Promise<MessageResult> {
     this.ensureReady();
     // wwebjs accepts neutral `<phone>@c.us` WIDs directly as mentionedJidList, so no de-normalization
@@ -988,10 +1012,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.sendResolved(chatId, to =>
       mentions?.length ? this.client!.sendMessage(to, text, { mentions }) : this.client!.sendMessage(to, text),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -1043,10 +1064,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }),
     );
 
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async getContacts(): Promise<Contact[]> {
@@ -1147,10 +1165,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       address: location.address || '',
     });
     const msg = await this.sendResolved(chatId, to => this.client!.sendMessage(to, loc));
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
@@ -1164,10 +1179,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         parseVCards: true,
       }),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -1193,10 +1205,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         sendMediaAsSticker: true,
       }),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
@@ -1215,10 +1224,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.sendResolved(chatId, to =>
       this.client!.sendMessage(to, new Poll(poll.name, poll.options, pollOptions)),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult> {
@@ -1236,10 +1242,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
     // accepts an explicit target (#583 R1).
     const msg = await this.sendResolved(chatId, to => quotedMsg.reply(text, to));
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.extractMessageResult(msg, chatId);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
