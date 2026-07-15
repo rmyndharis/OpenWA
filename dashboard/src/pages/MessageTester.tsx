@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import { messageApi, contactApi } from '../services/api';
+import { Send, CheckCircle, XCircle, Loader2, Upload, X } from 'lucide-react';
+import { messageApi, contactApi, type SendMediaPayload } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
 import { useSessionsQuery, useSessionGroupsQuery } from '../hooks/queries';
@@ -17,6 +17,31 @@ interface ApiResponse {
 
 const messageTypes = ['text', 'image', 'video', 'audio', 'document'] as const;
 
+// Hint the native file picker at the right category (documents accept anything).
+const mediaAccept: Record<(typeof messageTypes)[number], string> = {
+  text: '*/*',
+  image: 'image/*',
+  video: 'video/*',
+  audio: 'audio/*',
+  document: '*/*',
+};
+
+// Fallback MIME for when the browser leaves File.type empty (some extensions). The backend requires a
+// mimetype on every base64 send, so default by the selected message category.
+const fallbackMime: Record<(typeof messageTypes)[number], string> = {
+  text: 'text/plain',
+  image: 'image/jpeg',
+  video: 'video/mp4',
+  audio: 'audio/mpeg',
+  document: 'application/octet-stream',
+};
+
+// Client pre-check before base64-encoding an upload. Aligned with the default request-body limit: base64
+// inflates ~1.33x, so ~18 MiB raw stays under the 25 MiB BODY_SIZE_LIMIT and lets the backend reject with a
+// clear 413 instead of the tab OOMing on a multi-hundred-MB pick before the request is even sent. The
+// backend's MEDIA_DOWNLOAD_MAX_BYTES (default 50 MiB) stays authoritative for URL sends (fetched server-side).
+const MEDIA_UPLOAD_MAX_BYTES = 18 * 1024 * 1024;
+
 export function MessageTester() {
   const { t } = useTranslation();
   useDocumentTitle(t('messageTester.title'));
@@ -30,6 +55,10 @@ export function MessageTester() {
   const [messageType, setMessageType] = useState<typeof messageTypes[number]>('text');
   const [content, setContent] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
+  // A locally-picked media file, read as raw base64 (the engine contract — NOT a data: URI). Mutually
+  // exclusive with mediaUrl: picking a file clears the URL field; typing a URL drops the file.
+  const [mediaFile, setMediaFile] = useState<{ base64: string; mimetype: string; filename: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
 
@@ -59,6 +88,33 @@ export function MessageTester() {
     }
   }, [groups, selectedGroup, recipientType]);
 
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file after it's removed
+    if (!file) return;
+    // Reject before base64-encoding so an oversized pick surfaces a clear error instead of OOMing the tab
+    // (the backend 413 cap only applies after the whole body is uploaded).
+    if (file.size > MEDIA_UPLOAD_MAX_BYTES) {
+      setResponse({ success: false, timestamp: new Date().toISOString(), error: t('messageTester.fileTooLarge') });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string') return;
+      // readAsDataURL yields "data:<mime>;base64,<payload>"; the engine expects raw base64, so strip the prefix.
+      const base64 = dataUrl.split(',')[1] ?? '';
+      if (!base64) return;
+      setMediaFile({ base64, mimetype: file.type || fallbackMime[messageType], filename: file.name });
+      setMediaUrl('');
+      if (messageType === 'document') setContent(file.name);
+    };
+    reader.onerror = () => {
+      setResponse({ success: false, timestamp: new Date().toISOString(), error: t('messageTester.fileReadError') });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSend = async () => {
     const targetId = recipientType === 'group' ? selectedGroup : recipient;
     if (!session || !targetId) return;
@@ -85,14 +141,20 @@ export function MessageTester() {
       let result;
       if (messageType === 'text') {
         result = await messageApi.sendText(session, chatId, content);
-      } else if (messageType === 'image') {
-        result = await messageApi.sendImage(session, chatId, mediaUrl, content);
-      } else if (messageType === 'video') {
-        result = await messageApi.sendVideo(session, chatId, mediaUrl, content);
-      } else if (messageType === 'audio') {
-        result = await messageApi.sendAudio(session, chatId, mediaUrl);
       } else {
-        result = await messageApi.sendDocument(session, chatId, mediaUrl, content);
+        // sendMedia unifies URL and base64 (local file) sends; base64 wins when a file is picked. The
+        // backend accepts url XOR base64 and requires a mimetype for base64 (always provided here).
+        const payload: SendMediaPayload = mediaFile
+          ? { base64: mediaFile.base64, mimetype: mediaFile.mimetype }
+          : { url: mediaUrl };
+        if ((messageType === 'image' || messageType === 'video') && content) payload.caption = content;
+        if (messageType === 'document' && content) payload.filename = content;
+        result = await messageApi.sendMedia(
+          session,
+          chatId,
+          messageType as 'image' | 'video' | 'audio' | 'document',
+          payload,
+        );
       }
 
       setResponse({
@@ -196,7 +258,12 @@ export function MessageTester() {
                 <button
                   key={type}
                   className={messageType === type ? 'active' : ''}
-                  onClick={() => setMessageType(type)}
+                  onClick={() => {
+                    // A picked file's mimetype is bound to the category active at pick time, so dropping the
+                    // category would route stale bytes to the wrong send-${type} endpoint — clear it.
+                    if (type !== messageType) setMediaFile(null);
+                    setMessageType(type);
+                  }}
                 >
                   {t(`messageTester.types.${type}`)}
                 </button>
@@ -221,8 +288,36 @@ export function MessageTester() {
                 <input
                   type="text"
                   value={mediaUrl}
-                  onChange={e => setMediaUrl(e.target.value)}
+                  onChange={e => {
+                    setMediaUrl(e.target.value);
+                    if (mediaFile) setMediaFile(null);
+                  }}
                   placeholder="https://example.com/file.jpg"
+                  disabled={!!mediaFile}
+                />
+              </div>
+              <div className="form-group">
+                <label>{t('messageTester.uploadFile')}</label>
+                {mediaFile ? (
+                  <div className="file-selected">
+                    <span className="file-name" title={mediaFile.filename}>
+                      {mediaFile.filename}
+                    </span>
+                    <button type="button" className="remove-file-btn" onClick={() => setMediaFile(null)}>
+                      <X size={14} /> {t('messageTester.removeFile')}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" className="browse-btn" onClick={() => fileInputRef.current?.click()}>
+                    <Upload size={14} /> {t('messageTester.browse')}
+                  </button>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  style={{ display: 'none' }}
+                  accept={mediaAccept[messageType]}
+                  onChange={handleFileChange}
                 />
               </div>
               {messageType !== 'audio' && (

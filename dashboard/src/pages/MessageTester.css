@@ -209,6 +209,63 @@
   margin: 0;
 }
 
+.message-tester .browse-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.message-tester .browse-btn:hover{
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.message-tester .file-selected{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.message-tester .file-name{
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-tester .remove-file-btn{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  color: var(--error);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.message-tester .remove-file-btn:hover{
+  text-decoration: underline;
+}
+
 @media (max-width: 1000px) {
   .message-tester .tester-panels{
     grid-template-columns: 1fr;
