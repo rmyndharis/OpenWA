@@ -98,7 +98,18 @@ Create a new session (OPERATOR).
 curl -X POST "$BASE/api/sessions" \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{ "name": "my-bot", "config": { "autoReconnect": true }, "proxyUrl": "http://proxy.example.com:8080", "proxyType": "http" }'
+  -d '{ "name": "my-bot" }'
+```
+
+With an optional per-session egress proxy — only if your network can't reach WhatsApp directly. The
+proxy **must be a real, reachable host**; an unreachable value silently blocks the WhatsApp WebSocket
+(no QR is ever delivered) and `POST /api/sessions/:id/start` returns `504` after ~30s:
+
+```bash
+curl -X POST "$BASE/api/sessions" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "my-bot", "proxyUrl": "http://user:pass@your-real-proxy.host:8080", "proxyType": "http" }'
 ```
 
 #### POST /api/sessions/:id/start

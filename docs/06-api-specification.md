@@ -367,19 +367,33 @@ Create a new WhatsApp session.
 | --- | --- | --- | --- | --- |
 | `name` | string | Yes | `@IsString`; length 3–50; `@Matches(/^[a-zA-Z0-9-]+$/)` (letters, numbers, hyphens only) | Unique session name; duplicate → `409` |
 | `config` | object | No | `@IsOptional` (arbitrary object, no shape validation) | Opaque engine config; defaults to `{}`; never returned by read routes |
-| `proxyUrl` | string | No | `@IsOptional`; `@IsString`; max 255; `@IsUrl` (protocols `http`/`https`/`socks4`/`socks5`, `require_protocol`, `require_tld:false`, `allow_underscores`) | Per-session proxy egress; credentialed `http://user:pass@host` and single-label hosts allowed; not SSRF-blocked |
+| `proxyUrl` | string | No | `@IsOptional`; `@IsString`; max 255; `@IsUrl` (protocols `http`/`https`/`socks4`/`socks5`, `require_protocol`, `require_tld:false`, `allow_underscores`) | Per-session proxy egress; credentialed `http://user:pass@host` and single-label hosts allowed; not SSRF-blocked. ⚠ **Must be a real, reachable proxy** — an unreachable value silently blocks the WhatsApp WebSocket (no QR, start → `504`); leave unset unless you need it. See "Per-session egress proxy" below. |
 | `proxyType` | `http` \| `https` \| `socks4` \| `socks5` | No | `@IsOptional`; `@IsIn([...])` | Proxy protocol |
 
 ```json
 {
   "name": "my-bot",
-  "config": { "autoReconnect": true },
-  "proxyUrl": "http://proxy.example.com:8080",
-  "proxyType": "http"
+  "config": { "autoReconnect": true }
 }
 ```
 
 Minimal: `{ "name": "my-bot" }`.
+
+**Optional — per-session egress proxy.** Route a session's traffic through a proxy only if your
+network cannot reach WhatsApp directly. Set `proxyUrl`/`proxyType` on the same request:
+
+```json
+{
+  "name": "my-bot",
+  "proxyUrl": "http://user:pass@your-real-proxy.host:8080",
+  "proxyType": "http"
+}
+```
+
+> ⚠ `proxyUrl` **must point at a real, reachable proxy server.** A placeholder or unreachable value
+> (e.g. `http://proxy.example.com:8080`) launches the engine pinned to a dead proxy, so the WhatsApp
+> WebSocket never connects, **no QR code is ever delivered**, and `POST /api/sessions/:id/start`
+> returns `504 Gateway Timeout` after ~30s. Leave `proxyUrl` unset unless you genuinely need a proxy.
 
 **Response** `201`
 
@@ -391,8 +405,8 @@ Minimal: `{ "name": "my-bot" }`.
   "phone": null,
   "pushName": null,
   "config": { "autoReconnect": true },
-  "proxyUrl": "http://proxy.example.com:8080",
-  "proxyType": "http",
+  "proxyUrl": null,
+  "proxyType": null,
   "connectedAt": null,
   "lastActiveAt": null,
   "createdAt": "2026-06-25T09:00:00.000Z",

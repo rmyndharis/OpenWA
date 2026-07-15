@@ -25,8 +25,11 @@ export class CreateSessionDto {
 
   // Phase 3: Proxy per session
   @ApiPropertyOptional({
-    description: 'Proxy URL for this session (e.g., http://user:pass@proxy.example.com:8080)',
-    example: 'http://proxy.example.com:8080',
+    description:
+      'Optional per-session egress proxy URL (http/https/socks4/socks5; credentialed form ' +
+      '"http://user:pass@host" allowed). Must be a REAL, REACHABLE proxy — an unreachable value ' +
+      'silently blocks the WhatsApp WebSocket (no QR is ever delivered) and the session start times ' +
+      'out (~30s → 504 Gateway Timeout). Leave unset unless your network cannot reach WhatsApp directly.',
   })
   @IsOptional()
   @IsString()
