@@ -16,14 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Engine auth-timeout now returns a diagnostic 504 instead of a bare 500.** When the WhatsApp Web
-  engine's internal authentication poll exhausts its timeout (default 30s) — e.g. the session proxy
-  is unreachable, so the browser launches but no QR is ever delivered — `POST /api/sessions/:id/start`
-  previously let the primitive `'auth timeout'` string escape to NestJS's default handler as a
-  meaningless `500 Internal Server Error`. It now maps to `504 Gateway Timeout` with a message
-  pointing at the proxy / network-egress / firewall causes and the `WWEBJS_AUTH_TIMEOUT_MS` knob for
-  legitimately slow first boots. The outer engine-init hang deadline (`EngineInitTimeoutError`) still
-  surfaces as 500 and is tracked separately.
+- **Engine start timeouts now return a diagnostic 504 instead of a bare 500.** Two
+  `POST /api/sessions/:id/start` failure modes previously escaped to NestJS's default handler as a
+  meaningless `500 Internal Server Error`: (1) the **auth-timeout** — whatsapp-web.js throws the
+  primitive string `'auth timeout'` when its login poll exhausts `authTimeoutMs` (default 30s), e.g.
+  an unreachable session proxy means the browser launches but no QR is ever delivered; and (2) the
+  **outer init-hang deadline** (`EngineInitTimeoutError`) — a wedged `initialize()` that never settles
+  within `max(60s, WWEBJS_AUTH_TIMEOUT_MS+30s)`, usually a container memory/resource limit or a stalled
+  Chromium. Both now map to `504 Gateway Timeout` with a diagnostic message (proxy/network vs resource
+  limits respectively) and the `WWEBJS_AUTH_TIMEOUT_MS` knob for slow first boots. Engine cleanup
+  (force-destroy + evict + status) still runs before mapping; generic non-timeout init rejections
+  (e.g. "chromium launch failed") still propagate untouched.
 
 ## [0.8.17] - 2026-07-13
 

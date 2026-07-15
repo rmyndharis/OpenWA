@@ -1224,6 +1224,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
         await this.updateStatus(id, SessionStatus.DISCONNECTED);
+        // Map to a diagnostic 504 like the auth-timeout branch below, so a wedged init doesn't escape as a
+        // bare 500 (#733 follow-up). The browser stalled mid-startup — usually a container memory/resource
+        // limit or a wedged Chromium, not a network/proxy issue (that's the auth-timeout's signature).
+        throw new HttpException(
+          `Engine initialization timed out after ${err.timeoutMs}ms — the browser process did not complete ` +
+            'startup in time (often a container memory/resource limit or a stalled Chromium, not a network ' +
+            'issue). Retry the session; for chronically slow first boots, raise WWEBJS_AUTH_TIMEOUT_MS.',
+          HttpStatus.GATEWAY_TIMEOUT,
+        );
       } else if (isAuthTimeoutRejection(err)) {
         // The engine's INTERNAL auth-timeout: whatsapp-web.js throws the primitive string 'auth timeout'
         // (see ENGINE_AUTH_TIMEOUT) when its inject poll exhausts authTimeoutMs (default 30s) — the common

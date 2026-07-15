@@ -3,7 +3,7 @@ import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SessionService, ACK_RECONCILE_DELAY_MS, EngineInitTimeoutError } from './session.service';
+import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -726,8 +726,12 @@ describe('SessionService', () => {
         await jest.advanceTimersByTimeAsync(60_000);
         await settled;
 
-        expect(caught).toBeInstanceOf(EngineInitTimeoutError);
-        expect(String(caught)).toMatch(/timed out after 60000ms/i);
+        // The outer init-hang deadline now maps to a diagnostic 504 (like the auth-timeout) instead of
+        // escaping as a bare 500 (#733 follow-up). Cleanup (force-destroy + evict + DISCONNECTED) still
+        // runs inside initializeEngine before the mapped error is thrown — asserted below.
+        expect(caught).toBeInstanceOf(HttpException);
+        expect((caught as HttpException).getStatus()).toBe(HttpStatus.GATEWAY_TIMEOUT);
+        expect((caught as HttpException).getResponse() as string).toMatch(/timed out after 60000ms/i);
         expect(mockEngine.forceDestroy).toHaveBeenCalled(); // wedged browser reaped
         expect(intern().engines.has('sess-uuid-1')).toBe(false); // slot freed for retry
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
@@ -763,8 +767,9 @@ describe('SessionService', () => {
         // Past the derived 150s deadline the race finally fires.
         await jest.advanceTimersByTimeAsync(90_000); // 60s + 90s = 150s
         await settled;
-        expect(caught).toBeInstanceOf(EngineInitTimeoutError);
-        expect(String(caught)).toMatch(/timed out after 150000ms/i);
+        expect(caught).toBeInstanceOf(HttpException);
+        expect((caught as HttpException).getStatus()).toBe(HttpStatus.GATEWAY_TIMEOUT);
+        expect((caught as HttpException).getResponse() as string).toMatch(/timed out after 150000ms/i);
       } finally {
         jest.useRealTimers();
         delete process.env.WWEBJS_AUTH_TIMEOUT_MS;
