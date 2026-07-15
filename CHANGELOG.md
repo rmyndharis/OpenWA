@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `endpoint` and `forcePathStyle` are now applied only when an endpoint is configured, so AWS S3 uses
   its default virtual-hosted addressing while MinIO-compatible stores keep path-style.
 
+- **`.env.example` no longer ships a default `S3_ENDPOINT`.** The template's pre-filled
+  `http://localhost:9000` silently re-routed a copy-paste AWS S3 config to MinIO/path-style mode and the
+  local fallback; it is now commented out so the default is AWS virtual-hosted mode (#735 follow-up).
+
 - **WhatsApp Engine selection on the Infrastructure page no longer reverts to the running engine.**
   The engine radio was re-stamped from the live `/engines/current` value on every emission, so a late
   first resolution (or a window-focus refetch) overwrote an operator's in-progress, unsaved selection
