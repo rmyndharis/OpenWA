@@ -88,7 +88,8 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+COPY scripts/patch-wwebjs-lid-last-received-key.js ./scripts/patch-wwebjs-lid-last-received-key.js
+RUN npm ci --omit=dev && node scripts/patch-wwebjs-lid-last-received-key.js && npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
 # arm64: use Debian's chromium installed above (CfT has no linux-arm64 build).
@@ -114,7 +115,7 @@ COPY --from=builder /app/dashboard/dist ./dashboard/dist
 
 # Create data directories with correct ownership
 RUN mkdir -p ./data/sessions ./data/media && \
-    chown -R openwa:openwa /app
+    chown -R openwa:openwa ./data
 
 # The non-root openwa user has no home of its own (`useradd -r`, no -m). Chromium resolves the home
 # dir from the passwd entry via glib's getpwuid() — it IGNORES $HOME — so it tries to read/write
