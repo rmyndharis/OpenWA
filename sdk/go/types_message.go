@@ -204,16 +204,20 @@ type ReactionRecord struct {
 	Senders []ReactionSender `json:"senders"`
 }
 
-// BulkMediaContent is a per-item media block for a bulk send. It deliberately
-// omits chatId (the parent BulkMessageItem carries it) so the server's
-// forbidNonWhitelisted validator does not reject the empty chatId that reusing
-// SendMediaRequest would emit.
+// BulkMediaContent is a per-item media block for a bulk send. It mirrors the
+// server's BulkMediaDto whitelist (url/base64/mimetype/filename/ptt) exactly. It
+// deliberately omits chatId (the parent BulkMessageItem carries it) and caption
+// (which lives at the BulkMessageContent level, not on the media object) so the
+// server's forbidNonWhitelisted validator does not reject a stray field.
+//
+// PTT applies to audio only: set it true to send the audio as a WhatsApp voice
+// note. It is ignored for image/video/document.
 type BulkMediaContent struct {
 	URL      string `json:"url,omitempty"`
 	Base64   string `json:"base64,omitempty"`
 	Mimetype string `json:"mimetype,omitempty"`
 	Filename string `json:"filename,omitempty"`
-	Caption  string `json:"caption,omitempty"`
+	PTT      bool   `json:"ptt,omitempty"`
 }
 
 // BulkMessageContent is the per-item content of a bulk send.

@@ -476,6 +476,35 @@ func TestBulkMediaContentOmitsChatID(t *testing.T) {
 	}
 }
 
+func TestBulkAudioSerializesPTT(t *testing.T) {
+	// Bulk audio with PTT must emit "ptt":true so the server sends it as a voice
+	// note; the media block must not emit a "caption" key (not whitelisted by
+	// BulkMediaDto — caption lives at the content level).
+	body := SendBulkRequest{
+		Messages: []BulkMessageItem{{
+			ChatID: "628@c.us",
+			Type:   "audio",
+			Content: BulkMessageContent{
+				Audio:   &BulkMediaContent{URL: "https://x/v.ogg", PTT: true},
+				Caption: "voicenote",
+			},
+		}},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"ptt":true`) {
+		t.Fatalf("bulk audio must emit ptt:true; got: %s", raw)
+	}
+	audioBlock := string(raw)
+	if i := strings.Index(audioBlock, `"audio":{`); i >= 0 {
+		if j := strings.Index(audioBlock[i:], "}"); j >= 0 && strings.Contains(audioBlock[i:i+j], `"caption"`) {
+			t.Fatalf("bulk media block must not emit caption; got: %s", raw)
+		}
+	}
+}
+
 func TestContextCancel(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `[]`}
 	c := newTestClient(t, rt)
