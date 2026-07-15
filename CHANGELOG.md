@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Send-response semantics clarified (docs only).** The send endpoints' Swagger response and `docs/06` now state explicitly that `201` means the gateway accepted the message for sending — not that the recipient received it — and that WhatsApp does not reject an unregistered recipient synchronously, so a message to a number that is not on WhatsApp still returns `201` with a `messageId` but never delivers. `GET /sessions/{id}/contacts/check/{number}` is cross-referenced as the way to pre-validate a new recipient, and the async message `status` lifecycle (`sent → delivered → read`, or `failed`) as the source of real delivery state. No behavior change. Refs #738.
 
-
 ### Fixed
 
 - **Engine auth-timeout now returns a diagnostic 504 instead of a bare 500.** When the WhatsApp Web
@@ -24,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pointing at the proxy / network-egress / firewall causes and the `WWEBJS_AUTH_TIMEOUT_MS` knob for
   legitimately slow first boots. The outer engine-init hang deadline (`EngineInitTimeoutError`) still
   surfaces as 500 and is tracked separately.
+
+- **S3 storage no longer falls back to local without an `endpoint`.** The S3 client init required an
+  `endpoint`, which only S3-compatible stores (MinIO, R2) need — standard AWS S3 (whose endpoint is
+  derived from region) silently initialized no client and served all media from local disk (#735).
+  `endpoint` and `forcePathStyle` are now applied only when an endpoint is configured, so AWS S3 uses
+  its default virtual-hosted addressing while MinIO-compatible stores keep path-style.
+
+- **WhatsApp Engine selection on the Infrastructure page no longer reverts to the running engine.**
+  The engine radio was re-stamped from the live `/engines/current` value on every emission, so a late
+  first resolution (or a window-focus refetch) overwrote an operator's in-progress, unsaved selection
+  (#735). The selection now seeds once and freezes on the first user interaction, matching the
+  one-time hydration lock the other infrastructure fields already had.
+
+- **Message Tester supports uploading local media files.** Media messages could previously only be
+  sent from a URL; a file picker is now available alongside the URL field (mutually exclusive with
+  it), reading the file as base64 (#735). The backend already accepted `base64`; this adds the
+  dashboard UI for it. Uploads are client-capped at 18 MiB (the effective base64-over-JSON body
+  limit) so an oversized pick surfaces a clear error instead of freezing the tab, and switching the
+  message category after picking a file now clears it so stale bytes aren't routed to the wrong
+  endpoint.
 
 ## [0.8.17] - 2026-07-13
 

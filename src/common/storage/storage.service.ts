@@ -63,15 +63,19 @@ export class StorageService {
       const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY || s3Config.secretAccessKey;
       const region = process.env.S3_REGION || s3Config.region || 'us-east-1';
 
-      if (endpoint && accessKeyId && secretAccessKey) {
+      // Standard AWS S3 needs only credentials + region — the SDK derives the regional endpoint, and
+      // an `endpoint` is only required for S3-compatible stores (MinIO, R2, …). Requiring it dropped
+      // valid AWS configs to a silent local fallback (#735). forcePathStyle is likewise a path-style
+      // concern (MinIO/etc.); AWS S3 uses virtual-hosted addressing — so tie both to the endpoint.
+      if (accessKeyId && secretAccessKey) {
         this.s3Client = new S3Client({
-          endpoint,
+          ...(endpoint ? { endpoint } : {}),
           region,
           credentials: {
             accessKeyId,
             secretAccessKey,
           },
-          forcePathStyle: true, // Required for MinIO
+          ...(endpoint ? { forcePathStyle: true } : {}), // Required for path-style stores (MinIO)
         });
         this.s3Bucket = process.env.S3_BUCKET || s3Config.bucket || 'openwa';
         void this.initializeS3Bucket();
