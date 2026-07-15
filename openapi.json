@@ -2732,6 +2732,7 @@
     },
     "/api/sessions/{sessionId}/contacts/check/{number}": {
       "get": {
+        "description": "Returns whether the number is a registered WhatsApp account and its canonical id. Use this to pre-validate a recipient before sending: the send endpoints return 201 on accepting a message even for numbers that are not on WhatsApp, so this is the only way to confirm a new number is reachable before you send to it.",
         "operationId": "ContactController_checkNumber",
         "parameters": [
           {
@@ -6077,10 +6078,12 @@
         "properties": {
           "messageId": {
             "type": "string",
+            "description": "The message id, assigned when the gateway accepts the message for sending. A 201 here means the message was handed to the WhatsApp client — it does NOT confirm delivery. WhatsApp does not reject an unregistered recipient synchronously, so a message to a number that is not on WhatsApp still returns 201 with a valid messageId but never delivers. To confirm a number is on WhatsApp before sending, use GET /api/sessions/{sessionId}/contacts/check/{number}; track real delivery via the message `status` field (sent → delivered → read).",
             "example": "true_628123456789@c.us_3EB0123456789"
           },
           "timestamp": {
             "type": "number",
+            "description": "Unix timestamp (seconds) at which the gateway accepted the message for sending.",
             "example": 1706868000
           }
         },

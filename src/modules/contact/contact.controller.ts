@@ -45,7 +45,14 @@ export class ContactController {
   }
 
   @Get('check/:number')
-  @ApiOperation({ summary: 'Check if a phone number exists on WhatsApp' })
+  @ApiOperation({
+    summary: 'Check if a phone number exists on WhatsApp',
+    description:
+      'Returns whether the number is a registered WhatsApp account and its canonical id. Use this to ' +
+      'pre-validate a recipient before sending: the send endpoints return 201 on accepting a message ' +
+      'even for numbers that are not on WhatsApp, so this is the only way to confirm a new number is ' +
+      'reachable before you send to it.',
+  })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'number', description: 'Phone number to check (e.g., 628123456789)' })
   @ApiResponse({
