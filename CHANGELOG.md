@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Logs CSV export truncated at 200 rows.** The export loop requested 500-row pages and treated any
+  short page as the last one, but `GET /audit` clamps `limit` to `MAX_AUDIT_PAGE_SIZE` (200) — so the
+  first page always looked short and every export stopped at 200 rows regardless of how much history
+  matched. Pagination now terminates on the server-reported `total` (and on empty pages) instead of on
+  a guessed page size, so the export can no longer be truncated by a server-side clamp. Thanks
+  @kabir74705 for the report and the original fix.
+
 ### Added
 
 - **Official Go SDK (`sdk/go`).** Hand-written, stdlib-only (no third-party dependencies) Go client
