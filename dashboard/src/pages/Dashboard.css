@@ -88,23 +88,13 @@
   z-index: 2;
 }
 
-.dashboard .stat-trend{
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
+.dashboard .stat-detail{
   font-size: 0.75rem;
-  font-weight: 500;
+  line-height: 1.35;
   margin-top: 0.5rem;
+  color: var(--text-muted);
   position: relative;
   z-index: 2;
-}
-
-.dashboard .stat-trend.up{
-  color: var(--primary);
-}
-
-.dashboard .stat-trend.down{
-  color: var(--error);
 }
 
 .dashboard .sessions-section{

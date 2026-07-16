@@ -152,7 +152,8 @@
     "title": "Dashboard",
     "subtitle": "Overview of your WhatsApp sessions and activity",
     "stats": {
-      "activeSessions": "Active Sessions",
+      "activeSessions": "Connected Sessions",
+      "sessionsDetail": "{{running}} running · {{total}} total",
       "messagesToday": "Messages Today",
       "webhooksConfigured": "Webhooks Configured",
       "apiCalls": "API Calls (24h)",

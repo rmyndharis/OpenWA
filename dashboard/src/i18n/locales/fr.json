@@ -152,7 +152,8 @@
     "title": "Tableau de bord",
     "subtitle": "Aperçu de vos sessions WhatsApp et de votre activité",
     "stats": {
-      "activeSessions": "Sessions actives",
+      "activeSessions": "Sessions connectées",
+      "sessionsDetail": "{{running}} en cours · {{total}} au total",
       "messagesToday": "Messages aujourd'hui",
       "webhooksConfigured": "Webhooks configurés",
       "apiCalls": "Appels API (24h)",

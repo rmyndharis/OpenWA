@@ -152,7 +152,8 @@
     "title": "لوحة التحكم",
     "subtitle": "نظرة عامة على جلسات واتساب ونشاطك",
     "stats": {
-      "activeSessions": "الجلسات النشطة",
+      "activeSessions": "الجلسات المتصلة",
+      "sessionsDetail": "{{running}} قيد التشغيل · {{total}} الإجمالي",
       "messagesToday": "رسائل اليوم",
       "webhooksConfigured": "الويب هوك المُهيّأة",
       "apiCalls": "استدعاءات API (24 ساعة)",

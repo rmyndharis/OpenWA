@@ -152,7 +152,8 @@
     "title": "대시보드",
     "subtitle": "WhatsApp 세션 및 활동 개요",
     "stats": {
-      "activeSessions": "활성 세션",
+      "activeSessions": "연결된 세션",
+      "sessionsDetail": "{{running}} 실행 중 · 총 {{total}}",
       "messagesToday": "오늘의 메시지",
       "webhooksConfigured": "설정된 웹훅",
       "apiCalls": "API 호출 (24시간)",

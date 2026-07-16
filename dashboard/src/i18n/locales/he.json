@@ -152,7 +152,8 @@
     "title": "דאשבורד",
     "subtitle": "סקירה כללית של ה-Sessions והפעילות שלך ב-WhatsApp",
     "stats": {
-      "activeSessions": "Sessions פעילים",
+      "activeSessions": "סשנים מחוברים",
+      "sessionsDetail": "{{running}} רצים · {{total}} בסך הכול",
       "messagesToday": "הודעות היום",
       "webhooksConfigured": "Webhooks מוגדרים",
       "apiCalls": "קריאות API (24 שעות)",

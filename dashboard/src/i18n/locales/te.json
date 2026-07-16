@@ -152,7 +152,8 @@
     "title": "డ్యాష్‌బోర్డ్",
     "subtitle": "మీ వాట్సాప్ సెషన్లు మరియు యాక్టివిటీ యొక్క అవలోకనం",
     "stats": {
-      "activeSessions": "యాక్టివ్ సెషన్స్",
+      "activeSessions": "కనెక్ట్ అయిన సెషన్లు",
+      "sessionsDetail": "{{running}} నడుస్తోంది · మొత్తం {{total}}",
       "messagesToday": "ఈరోజు సందేశాలు",
       "webhooksConfigured": "కాన్ఫిగర్ చేసిన వెబ్‌హుక్స్",
       "apiCalls": "API కాల్స్ (24 గంటలు)",

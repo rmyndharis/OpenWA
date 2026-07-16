@@ -152,7 +152,8 @@
     "title": "Panel",
     "subtitle": "Resumen de tus sesiones de WhatsApp y actividad",
     "stats": {
-      "activeSessions": "Sesiones activas",
+      "activeSessions": "Sesiones conectadas",
+      "sessionsDetail": "{{running}} en ejecución · {{total}} en total",
       "messagesToday": "Mensajes hoy",
       "webhooksConfigured": "Webhooks configurados",
       "apiCalls": "Llamadas API (24h)",

@@ -152,7 +152,8 @@
     "title": "控制面板",
     "subtitle": "查看你的 WhatsApp 工作階段及活動概覽",
     "stats": {
-      "activeSessions": "活躍工作階段",
+      "activeSessions": "已連接工作階段",
+      "sessionsDetail": "{{running}} 運行中 · 共 {{total}}",
       "messagesToday": "今日訊息",
       "webhooksConfigured": "已設定 Webhook",
       "apiCalls": "API 呼叫（24 小時）",

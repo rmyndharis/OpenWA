@@ -152,7 +152,8 @@
     "title": "仪表盘",
     "subtitle": "查看你的 WhatsApp 会话和活动概览",
     "stats": {
-      "activeSessions": "活跃会话",
+      "activeSessions": "已连接会话",
+      "sessionsDetail": "{{running}} 运行中 · 共 {{total}}",
       "messagesToday": "今日消息",
       "webhooksConfigured": "已配置 Webhook",
       "apiCalls": "API 调用（24 小时）",

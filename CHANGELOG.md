@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a guessed page size, so the export can no longer be truncated by a server-side clamp. Thanks
   @kabir74705 for the report and the original fix.
 
+- **Dashboard overstated connected sessions and showed a fabricated trend.** The "Active Sessions" KPI
+  read `stats.active`, which counts running engine instances — including `initializing`, `qr_ready`,
+  and `connecting` — so it reported sessions that could not yet send or receive as active. The green
+  "+N" trend arrow beneath it was not a delta at all: it rendered the current READY count as though it
+  were a period-over-period gain, so a steady deployment appeared to be permanently growing. The card
+  now reports the READY count (relabelled "Connected Sessions") with a plain `{running} running ·
+  {total} total` breakdown, and the fake trend indicator is gone. Thanks @kabir74705 for spotting both.
+
 ### Added
 
 - **Official Go SDK (`sdk/go`).** Hand-written, stdlib-only (no third-party dependencies) Go client
