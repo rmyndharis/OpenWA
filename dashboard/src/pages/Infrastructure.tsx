@@ -161,6 +161,10 @@ export function Infrastructure() {
   const engineHydrated = useRef(false);
   const engineTouched = useRef(false);
 
+  /** Whether engineConfig.type reflects a real value (seeded from the running engine or user-picked)
+   * rather than the useState default — the save payload omits `type` when it doesn't. */
+  const engineTypeKnown = (): boolean => engineHydrated.current || engineTouched.current;
+
   // LIVE indicators (not editable) — always reflect the running process, every refetch.
   useEffect(() => {
     if (!infraStatus) return;
@@ -300,7 +304,11 @@ export function Infrastructure() {
         redis: { enabled: redisEnabled, ...redisConfig },
         queue: { enabled: queueEnabled },
         storage: { ...storageConfig },
-        engine: { ...engineConfig },
+        // Only send `type` once we actually know it — either the radio seeded from the running engine
+        // or the operator picked one. If /engines/current never resolved (endpoint down), engineConfig.type
+        // still holds its useState default, and sending that would persist ENGINE_TYPE and silently flip
+        // the engine on the next restart. The backend treats an absent `type` as "leave ENGINE_TYPE alone".
+        engine: engineTypeKnown() ? { ...engineConfig } : { ...engineConfig, type: undefined },
       };
 
       const result = await infraApi.saveConfig(payload);

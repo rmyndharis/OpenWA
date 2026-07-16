@@ -7,25 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Logs CSV export truncated at 200 rows.** The export loop requested 500-row pages and treated any
-  short page as the last one, but `GET /audit` clamps `limit` to `MAX_AUDIT_PAGE_SIZE` (200) — so the
-  first page always looked short and every export stopped at 200 rows regardless of how much history
-  matched. Pagination now terminates on the server-reported `total` (and on empty pages) instead of on
-  a guessed page size, so the export can no longer be truncated by a server-side clamp. Thanks
-  @kabir74705 for the report and the original fix.
-
-- **Dashboard overstated connected sessions and showed a fabricated trend.** The "Active Sessions" KPI
-  read `stats.active`, which counts running engine instances — including `initializing`, `qr_ready`,
-  and `connecting` — so it reported sessions that could not yet send or receive as active. The green
-  "+N" trend arrow beneath it was not a delta at all: it rendered the current READY count as though it
-  were a period-over-period gain, so a steady deployment appeared to be permanently growing. The card
-  now reports the READY count (relabelled "Connected Sessions") with a plain `{running} running ·
-  {total} total` breakdown, and the fake trend indicator is gone. Thanks @kabir74705 for spotting both.
-
 ### Added
-
 - **Official Go SDK (`sdk/go`).** Hand-written, stdlib-only (no third-party dependencies) Go client
   covering the user-facing API surface, joining the JavaScript/Python/PHP/Java clients. Entry point is
   `openwa.New(baseURL, apiKey, opts...)`, which returns a concurrency-safe `*Client` whose exported
@@ -46,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test time. Requires Go 1.22+. Thanks @Revelts.
 
 ### Changed
-
 - **v0.8.18's whatsapp-web.js id-rename fix also restored the Chats page (docs only).** The v0.8.18 entry
   credits that fix with repairing inbound media downloads, message ids, acks, reply quoting, and reactions,
   but never mentions `GET /sessions/{id}/chats` — which the same patch repaired as well. The rename broke the
@@ -128,6 +109,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — that signal existed all along and is now written down. No behavior change. Refs #738.
 
 ### Fixed
+- **Logs CSV export truncated at 200 rows.** The export loop requested 500-row pages and treated any
+  short page as the last one, but `GET /audit` clamps `limit` to `MAX_AUDIT_PAGE_SIZE` (200) — so the
+  first page always looked short and every export stopped at 200 rows regardless of how much history
+  matched. Pagination now terminates on the server-reported `total` (and on empty pages) instead of on
+  a guessed page size, so the export can no longer be truncated by a server-side clamp. Thanks
+  @kabir74705 for the report and the original fix.
+
+- **Dashboard overstated connected sessions and showed a fabricated trend.** The "Active Sessions" KPI
+  read `stats.active`, which counts running engine instances — including `initializing`, `qr_ready`,
+  and `connecting` — so it reported sessions that could not yet send or receive as active. The green
+  "+N" trend arrow beneath it was not a delta at all: it rendered the current READY count as though it
+  were a period-over-period gain, so a steady deployment appeared to be permanently growing. The card
+  now reports the READY count (relabelled "Connected Sessions") with a plain `{running} running ·
+  {total} total` breakdown, and the fake trend indicator is gone. Thanks @kabir74705 for spotting both.
 
 - **The whatsapp-web.js backport can no longer latch in a half-patched dependency.** The patcher proves a
   tree is whole before standing down, and #759 added that check precisely so a run that died mid-apply
@@ -191,6 +186,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report different URLs for the same server, which read as "the UI is pinned to localhost" and sent #731
   chasing `BASE_URL`/`BIND_HOST`/`API_PORT` rather than the actual cause. (#731)
 
+- **Saving Infrastructure no longer persists a guessed engine when the running engine is unknown.** The
+  engine radio falls back to its `whatsapp-web.js` default until `/infra/engines/current` resolves; if that
+  request failed, saving wrote that default as `ENGINE_TYPE`, silently switching a Baileys deployment on
+  the next restart. The save payload now omits `engine.type` unless the radio actually seeded from the
+  running engine or the operator picked one — the backend leaves a saved `ENGINE_TYPE` untouched when the
+  field is absent, so an unrelated save can no longer flip the engine.
+
 - **The dashboard now clears a message deleted for everyone while the thread is open (whatsapp-web.js).**
   `message.revoked` carries `revokedId` — the id of the original deleted message, which whatsapp-web.js
   resolves separately from the event's own `id` — but the dashboard's WebSocket projection dropped the
@@ -230,6 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(sessionId, waMessageId)` unique index and silently drop a bulk row. Refs #757.
 
 ### Security
+
 
 ## [0.8.18] - 2026-07-17
 
