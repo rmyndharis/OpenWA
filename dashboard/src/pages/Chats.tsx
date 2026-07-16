@@ -26,7 +26,7 @@ import {
   type MessageType,
   type SearchHit,
 } from '../services/api';
-import { mergeDeliveryStatus, type ChatMessageView } from '../utils/chatMessages';
+import { mergeDeliveryStatus, findRevokedIndex, type ChatMessageView } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
@@ -330,17 +330,18 @@ export function Chats() {
   );
 
   const handleIncomingMessageRevoked = useCallback(
-    (event: { sessionId: string; id: string; type: string }) => {
+    (event: { sessionId: string; id: string; revokedId?: string; type: string }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      // Walk every cached chat under this session, find the message by id or waMessageId and zero it
-      // — the backend emits an empty body; the localized "deleted" label is rendered below.
+      // Walk every cached chat under this session, find the deleted message and zero it — the
+      // backend emits an empty body; the localized "deleted" label is rendered below. Matching is
+      // in findRevokedIndex: the event carries two candidate ids and wwebjs's `id` alone can miss.
       const caches = queryClient.getQueriesData<ChatMessageView[]>({
         queryKey: ['messages', event.sessionId],
       });
       for (const [key, list] of caches) {
         if (!list) continue;
-        const idx = list.findIndex(m => m.id === event.id || m.waMessageId === event.id);
+        const idx = findRevokedIndex(list, event);
         if (idx === -1) continue;
         const target = list[idx];
         const next = list.slice();

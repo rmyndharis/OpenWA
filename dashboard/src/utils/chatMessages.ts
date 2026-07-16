@@ -140,3 +140,29 @@ export function removeMessageById(
   if (!list.some(m => m.id === id)) return list;
   return list.filter(m => m.id !== id);
 }
+
+/**
+ * Locate the message a `message.revoked` event refers to. Returns -1 if it isn't cached.
+ *
+ * The event carries two candidate ids: `id`, and `revokedId` — the ORIGINAL deleted message, which
+ * whatsapp-web.js resolves separately because its revoke event can carry an id of its own that never
+ * matches a stored row. Baileys sets the two identically, and wwebjs leaves `revokedId` undefined
+ * when the original isn't in its local store.
+ *
+ * Both candidates are tried rather than preferring `revokedId` (the `revokedId ?? id` shape the
+ * backend uses to key its own UPDATE): matching either id is a superset that stays correct whichever
+ * of the two the cached row was stored under, so it cannot regress the Baileys path. Each candidate
+ * is checked against both the DB row id and `waMessageId` — a live WS message and its persisted copy
+ * are keyed differently. `revokedId` is guarded because an undefined one would otherwise match a row
+ * whose `waMessageId` is also undefined.
+ */
+export function findRevokedIndex(
+  list: ChatMessageView[],
+  event: { id: string; revokedId?: string },
+): number {
+  const matches = (m: ChatMessageView, candidate: string): boolean =>
+    m.id === candidate || m.waMessageId === candidate;
+  return list.findIndex(
+    m => matches(m, event.id) || (event.revokedId !== undefined && matches(m, event.revokedId)),
+  );
+}
