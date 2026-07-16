@@ -53,6 +53,23 @@ const REQUIRED_SITES = [
 /** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */
 const ARTIFACT_RE = /(\.rej|\.orig|~)$/;
 
+/** True once `rel`'s REQUIRED_SITES marker is present in the installed tree. */
+function siteLanded(wwjsDir, rel) {
+  const marker = REQUIRED_SITES.find(([r]) => r === rel)[1];
+  return marker.test(fs.readFileSync(path.join(wwjsDir, rel), 'utf8'));
+}
+
+/**
+ * Flag an error raised once `patch` has started writing. `--best-effort` degrades on a pre-flight failure
+ * (no `patch` binary — nothing ran, tree untouched) but must never swallow one of these: `patch` applies
+ * hunks as it goes, so failing mid-apply leaves whatsapp-web.js half-patched — which the self-disable
+ * check above reads as healthy, latching the broken tree in on every later run.
+ */
+function partialTree(err) {
+  err.leftPartialTree = true;
+  return err;
+}
+
 function findArtifacts(root, dir = root) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -81,6 +98,20 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   const msgJs = path.join(wwjsDir, 'src', 'structures', 'Message.js');
   const msgSrc = fs.readFileSync(msgJs, 'utf8');
   if (/_normalizeId\(|\.\$1/.test(msgSrc)) {
+    // Message.js normalizing is necessary but NOT sufficient to stand down. `patch` writes as it goes and
+    // Message.js is patched early, so a run that died part-way through lands here too — and skipping would
+    // latch that half-patched tree in permanently, because every later run takes this same branch and never
+    // reaches the assertions below. An upstream release that fixes this lands every site at once; a crashed
+    // run does not. Proving the tree is whole is what tells the two apart.
+    const missing = REQUIRED_SITES.filter(([rel]) => !siteLanded(wwjsDir, rel));
+    if (missing.length) {
+      throw new Error(
+        'whatsapp-web.js is PARTIALLY patched — Message.js normalizes ids but ' +
+          `${missing.map(([rel]) => rel).join(', ')} did not land. A previous run left the tree half-patched; ` +
+          'it cannot repair itself. Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) ' +
+          'and re-run. If the installed version genuinely ships its own fix, drop this backport instead.',
+      );
+    }
     return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };
   }
 
@@ -111,23 +142,29 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
     // failure: rethrow it rather than let the assertions below misreport it as version skew.
     if (e.status !== 1) {
       const detail = e.stderr ? String(e.stderr).trim() : e.message;
-      throw new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
+      const err = new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
+      // ENOENT means `patch` never executed, so the tree is untouched and degrading is still safe.
+      throw e.code === 'ENOENT' ? err : partialTree(err);
     }
   }
 
   const artifacts = findArtifacts(wwjsDir);
   const unexpected = artifacts.filter(a => !EXPECTED_REJECTS.has(a));
   if (unexpected.length) {
-    throw new Error(
-      `unexpected patch artifact(s) — version skew vs the backport base: ${unexpected.join(', ')}. ` +
-        'Re-evaluate scripts/wwebjs-201832.patch against the installed whatsapp-web.js.',
+    throw partialTree(
+      new Error(
+        `unexpected patch artifact(s) — version skew vs the backport base: ${unexpected.join(', ')}. ` +
+          'Re-evaluate scripts/wwebjs-201832.patch against the installed whatsapp-web.js.',
+      ),
     );
   }
 
   // Verify EVERY normalization site landed — a hunk placed at a wrong offset leaves no .rej.
   for (const [rel, marker] of REQUIRED_SITES) {
-    if (!marker.test(fs.readFileSync(path.join(wwjsDir, rel), 'utf8'))) {
-      throw new Error(`${rel} was not patched (missing ${marker}) — aborting rather than ship a partial backport.`);
+    if (!siteLanded(wwjsDir, rel)) {
+      throw partialTree(
+        new Error(`${rel} was not patched (missing ${marker}) — aborting rather than ship a partial backport.`),
+      );
     }
   }
 
@@ -152,7 +189,11 @@ if (require.main === module) {
     const res = applyBackport(target || DEFAULT_WWJS);
     console.log(`patch-wwebjs-201832: ${res.skipped ? `skipped — ${res.reason}` : res.note}`);
   } catch (e) {
-    if (bestEffort) {
+    // `--best-effort` degrades only while the tree is still pristine — an unpatched whatsapp-web.js is a
+    // known-degraded dev install, which is the trade this flag exists to make. A HALF-patched one is not
+    // that trade: it is undetectable afterwards (the self-disable check reads it as healthy) and would
+    // ship silently. Fail on it regardless of the flag.
+    if (bestEffort && !e.leftPartialTree) {
       console.warn(
         `patch-wwebjs-201832: skipped — ${e.message}\n` +
           '  Inbound media/message ids may be broken on current WhatsApp Web builds (#747).\n' +
