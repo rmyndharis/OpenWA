@@ -27,9 +27,40 @@ var idempotentMethods = map[string]bool{
 // could double-send a WhatsApp message.
 func isIdempotent(method string) bool { return idempotentMethods[method] }
 
+// backpressureStatuses are the statuses that mean the server declined the
+// request before acting on it: 429 (rate limited) and 503 (unavailable). Only
+// these are safe to retry for a non-idempotent method.
+//
+// The rest of the retryable set (500/502/504) can be returned AFTER the gateway
+// has already sent the WhatsApp message — a 504 from a reverse proxy is the
+// textbook case — so replaying a POST on those would duplicate the send. The
+// SDK has no idempotency key to deduplicate with, so it declines the retry
+// rather than risk a second message.
+var backpressureStatuses = map[int]bool{
+	http.StatusTooManyRequests:    true, // 429
+	http.StatusServiceUnavailable: true, // 503
+}
+
+// retryableForMethod reports whether a retryable status may be retried for this
+// method. Idempotent methods may retry any status in the policy; a
+// non-idempotent one (POST) is limited to the backpressure statuses.
+func retryableForMethod(method string, status int) bool {
+	if isIdempotent(method) {
+		return true
+	}
+	return backpressureStatuses[status]
+}
+
 // RetryPolicy controls automatic retries. Retries are OFF by default — pass one
 // with WithRetry to opt in. Only network errors and the statuses in
 // RetryableStatuses are retried; a non-retryable response is returned as-is.
+//
+// Non-idempotent requests (POST — every send endpoint) are retried
+// conservatively, because the SDK has no idempotency key to deduplicate with:
+// never after a network error, and on a retryable status only for 429 and 503,
+// which prove the server declined the request before acting on it. A
+// 500/502/504 may arrive after the gateway already sent the message, so a POST
+// is not replayed on those. Idempotent methods retry the full policy.
 //
 // Because every request the SDK issues sets req.GetBody, request bodies are
 // safely rewound on each attempt.
@@ -146,9 +177,11 @@ func retryMiddleware(p RetryPolicy, log Logger) Middleware {
 					retryable = isIdempotent(req.Method)
 				case resp != nil && p.retryableStatus(resp.StatusCode):
 					// A retryable HTTP status is the server explicitly telling
-					// us to back off. Safe to retry for any method: the server
-					// has rejected the request before processing it.
-					retryable = true
+					// us to back off — but only 429/503 prove it declined the
+					// request before acting on it. A 500/502/504 can arrive
+					// after the gateway already sent the message, so replaying
+					// a POST on those would double-send.
+					retryable = retryableForMethod(req.Method, resp.StatusCode)
 				}
 				if !retryable || attempt >= p.MaxRetries {
 					return resp, err

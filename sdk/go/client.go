@@ -37,6 +37,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -152,6 +153,16 @@ func New(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+const insecureWarning = "openwa: baseURL uses insecure http:// — the API key is sent in cleartext; use https:// in production"
+
+// warnIfInsecure warns once, at construction, when the API key would travel in
+// cleartext to a non-localhost host.
+//
+// Unlike the SDK's per-request logging, this does not stay silent under the
+// default nopLogger: the caller most likely to point at a plaintext http:// URL
+// by accident is the one who has not wired a logger up yet, so a discarded
+// warning would be no warning at all. An injected logger receives it instead of
+// stderr, and WithInsecureHTTP silences it entirely.
 func warnIfInsecure(cfg *config) {
 	if cfg.allowInsecure {
 		return
@@ -161,11 +172,14 @@ func warnIfInsecure(cfg *config) {
 		return
 	}
 	host := strings.Trim(u.Hostname(), "[]")
-	if u.Scheme == "http" && !localhostHosts[host] {
-		cfg.logger.Log(context.Background(), LevelWarn,
-			"openwa: baseURL uses insecure http:// — the API key is sent in cleartext; use https:// in production",
-			"host", host)
+	if u.Scheme != "http" || localhostHosts[host] {
+		return
 	}
+	if _, isNop := cfg.logger.(nopLogger); isNop {
+		fmt.Fprintf(os.Stderr, "%s (host: %s)\n", insecureWarning, host)
+		return
+	}
+	cfg.logger.Log(context.Background(), LevelWarn, insecureWarning, "host", host)
 }
 
 // Do issues a raw request against the API and decodes the JSON response into

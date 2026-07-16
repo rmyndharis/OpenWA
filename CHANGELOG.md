@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WithUserAgent`, `WithHeader`, `WithInsecureHTTP`). Errors are typed: match the sentinels with
   `errors.Is` (`ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
   `ErrRateLimited`, `ErrNotImplemented`) or unwrap the concrete `*APIError` with `errors.As`. Retries
-  are opt-in (`WithRetry`), honour `Retry-After`, rewind request bodies via `GetBody`, and are skipped
-  for non-idempotent methods on network errors so a dropped connection cannot replay a send. Redirects
+  are opt-in (`WithRetry`), honour `Retry-After`, and rewind request bodies via `GetBody`. Because the
+  API has no idempotency key, a `POST` is never replayed after a network error, and on a retryable
+  status only for `429`/`503` — which prove the gateway declined the request before acting on it —
+  since a `500`/`502`/`504` can arrive after the message was already sent. Redirects
   are never followed, so the bearer-equivalent `X-API-Key` is never re-sent to a redirect target. A
   `TestRouting` table asserts the exact method and path of every service call, and the suite runs in CI
   (`gofmt`/`go vet`/`go test -race`) on both SDK and server-contract changes, so route drift fails at

@@ -1,5 +1,7 @@
 package openwa
 
+import "time"
+
 // StatusContact is the poster of a status entry (from a GET list).
 type StatusContact struct {
 	ID       string `json:"id"`
@@ -16,8 +18,10 @@ type StatusRecord struct {
 	MediaURL        string        `json:"mediaUrl,omitempty"`
 	BackgroundColor string        `json:"backgroundColor,omitempty"`
 	Font            *int          `json:"font,omitempty"`
-	Timestamp       any           `json:"timestamp,omitempty"`
-	ExpiresAt       any           `json:"expiresAt,omitempty"`
+	// The server types these as Date, which serializes to RFC 3339, so
+	// time.Time decodes them directly. Zero when the server omits the field.
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 }
 
 // StatusListResponse is the {"statuses": [...]} envelope returned by GET
@@ -30,9 +34,9 @@ type StatusListResponse struct {
 // It intentionally differs from StatusRecord: the POST response has statusId +
 // timing, no contact/media.
 type StatusResult struct {
-	StatusID  string `json:"statusId"`
-	Timestamp any    `json:"timestamp,omitempty"`
-	ExpiresAt any    `json:"expiresAt,omitempty"`
+	StatusID  string    `json:"statusId"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 }
 
 // SendTextStatusRequest posts a text status. Recipients is required.

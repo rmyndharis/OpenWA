@@ -253,6 +253,87 @@ func TestRetryPolicy(t *testing.T) {
 	}
 }
 
+// statusTransport always replies with the same status, counting attempts.
+type statusTransport struct {
+	status int
+	calls  int32
+}
+
+func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	atomic.AddInt32(&t.calls, 1)
+	if req.Body != nil {
+		io.Copy(io.Discard, req.Body)
+	}
+	return &http.Response{
+		StatusCode: t.status,
+		Body:       io.NopCloser(strings.NewReader(`{"statusCode":500,"message":"boom","error":"Internal"}`)),
+		Header:     http.Header{},
+		Request:    req,
+	}, nil
+}
+
+// A 500/502/504 can be returned after the gateway already sent the message, so
+// replaying a POST on those would double-send. Only 429/503 — which prove the
+// server declined before acting — may retry a non-idempotent request.
+func TestRetryDoesNotReplayPostOnAmbiguousStatus(t *testing.T) {
+	for _, status := range []int{500, 502, 504} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			rt := &statusTransport{status: status}
+			c := newTestClient(t, rt, WithRetry(RetryPolicy{
+				MaxRetries: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
+				RetryableStatuses: []int{429, 500, 502, 503, 504},
+			}))
+
+			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if rt.calls != 1 {
+				t.Fatalf("POST on %d must not be replayed: got %d attempts, want 1", status, rt.calls)
+			}
+		})
+	}
+}
+
+// The same statuses ARE retried for an idempotent method — the conservative
+// rule must not blunt retries where replay is safe.
+func TestRetryStillReplaysIdempotentOnAmbiguousStatus(t *testing.T) {
+	rt := &statusTransport{status: 500}
+	c := newTestClient(t, rt, WithRetry(RetryPolicy{
+		MaxRetries: 2, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
+		RetryableStatuses: []int{429, 500, 502, 503, 504},
+	}))
+
+	_, err := c.Sessions.List(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if rt.calls != 3 {
+		t.Fatalf("GET on 500 should retry: got %d attempts, want 3", rt.calls)
+	}
+}
+
+// 429/503 mean the server declined before acting, so a POST may still retry.
+func TestRetryReplaysPostOnBackpressure(t *testing.T) {
+	for _, status := range []int{429, 503} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			rt := &statusTransport{status: status}
+			c := newTestClient(t, rt, WithRetry(RetryPolicy{
+				MaxRetries: 2, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
+				RetryableStatuses: []int{429, 500, 502, 503, 504},
+			}))
+
+			_, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{ChatID: "x", Text: "y"})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if rt.calls != 3 {
+				t.Fatalf("POST on %d is backpressure and should retry: got %d attempts, want 3", status, rt.calls)
+			}
+		})
+	}
+}
+
 func TestMiddlewarePipeline(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `[]`}
 	var hits int32
@@ -502,6 +583,70 @@ func TestBulkAudioSerializesPTT(t *testing.T) {
 		if j := strings.Index(audioBlock[i:], "}"); j >= 0 && strings.Contains(audioBlock[i:i+j], `"caption"`) {
 			t.Fatalf("bulk media block must not emit caption; got: %s", raw)
 		}
+	}
+}
+
+// capturingLogger records what the SDK logs.
+type capturingLogger struct{ msgs []string }
+
+func (l *capturingLogger) Log(_ context.Context, _ string, msg string, _ ...any) {
+	l.msgs = append(l.msgs, msg)
+}
+
+// The insecure-http warning must reach an injected logger...
+func TestInsecureHTTPWarnsInjectedLogger(t *testing.T) {
+	lg := &capturingLogger{}
+	if _, err := New("http://wa.example.com:2785", "k", WithLogger(lg)); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if len(lg.msgs) != 1 || !strings.Contains(lg.msgs[0], "insecure http://") {
+		t.Fatalf("expected an insecure-http warning, got %v", lg.msgs)
+	}
+}
+
+// ...and must stay silent for https, localhost, or when explicitly suppressed.
+func TestInsecureHTTPWarningSuppressed(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		opts []Option
+	}{
+		{"https", "https://wa.example.com", nil},
+		{"localhost", "http://localhost:2785", nil},
+		{"loopback ip", "http://127.0.0.1:2785", nil},
+		{"explicitly allowed", "http://wa.example.com", []Option{WithInsecureHTTP()}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lg := &capturingLogger{}
+			if _, err := New(tc.url, "k", append([]Option{WithLogger(lg)}, tc.opts...)...); err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if len(lg.msgs) != 0 {
+				t.Fatalf("expected no warning, got %v", lg.msgs)
+			}
+		})
+	}
+}
+
+// The server types status timestamps as Date, which serializes to RFC 3339.
+func TestStatusTimestampsDecodeRFC3339(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"statuses":[{"id":"s1","contact":{"id":"62@c.us"},"timestamp":"2026-07-17T10:30:00.000Z","expiresAt":"2026-07-18T10:30:00.000Z"}]}`}
+	c := newTestClient(t, rt)
+
+	out, err := c.Status.List(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("Status.List: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1 status, got %d", len(out))
+	}
+	got := out[0]
+	if want := time.Date(2026, 7, 17, 10, 30, 0, 0, time.UTC); !got.Timestamp.Equal(want) {
+		t.Fatalf("Timestamp = %v, want %v", got.Timestamp, want)
+	}
+	if want := time.Date(2026, 7, 18, 10, 30, 0, 0, time.UTC); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("ExpiresAt = %v, want %v", got.ExpiresAt, want)
 	}
 }
 

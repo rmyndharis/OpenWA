@@ -3,7 +3,7 @@ package openwa
 import "context"
 
 // AuthService validates the configured API key.
-// Backed by src/modules/auth/auth.controller.ts.
+// Backed by src/modules/auth/auth-validate.controller.ts.
 type AuthService struct{ client *Client }
 
 // Validate confirms the API key is valid and returns its role.

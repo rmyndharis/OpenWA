@@ -170,6 +170,9 @@ go get github.com/rmyndharis/OpenWA/sdk/go
 ```go
 import (
     "context"
+    "fmt"
+    "log"
+
     openwa "github.com/rmyndharis/OpenWA/sdk/go"
 )
 
@@ -197,10 +200,13 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
 - **Use HTTPS in production.** The API key is sent as `X-API-Key` on every
   request and is bearer-equivalent — never send it over plaintext `http://`
   outside local development.
-- **No automatic retries.** A failed request raises/throws immediately; wrap
-  calls in your own backoff if you need retries (especially for `429`). The
-  injectable transport (`fetch` / `transport` / `httpClient`) is the extension
-  point for retry or observability middleware.
+- **No automatic retries by default.** A failed request raises/throws
+  immediately; wrap calls in your own backoff if you need retries (especially
+  for `429`). The injectable transport (`fetch` / `transport` / `httpClient`) is
+  the extension point for retry or observability middleware. The Go client is
+  the exception: it ships an opt-in policy (`WithRetry(DefaultRetryPolicy())`)
+  that handles `429`/`5xx`, honors `Retry-After`, and rewinds request bodies —
+  still off unless you ask for it.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
 - **Default per-request timeout** is 30s (configurable). Path segments (chat /
