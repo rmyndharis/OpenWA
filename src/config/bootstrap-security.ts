@@ -71,6 +71,24 @@ export function isUpgradeInsecureRequestsEnabled(cspEnv?: string, nodeEnv?: stri
 }
 
 /**
+ * Whether a boot is likely walking into the #731 blank-dashboard trap: production serves the bundled
+ * UI with `upgrade-insecure-requests` on, so a browser reaching it over plain HTTP silently upgrades
+ * the UI's own script fetches to https:// and renders a blank page. The server never sees the failed
+ * request (it dies in the browser), so a boot warning is the only pointer we can give.
+ *
+ * This cannot distinguish direct-HTTP (broken) from behind-a-TLS-proxy (correct) — Express `trust
+ * proxy` is off, so at boot there is no signal either way. It deliberately fires for both; the
+ * warning text tells a proxied operator to ignore it.
+ */
+export function isDashboardCspUpgradeTrapLikely(env: {
+  nodeEnv?: string;
+  cspEnv?: string;
+  dashboardServed: boolean;
+}): boolean {
+  return env.dashboardServed && isUpgradeInsecureRequestsEnabled(env.cspEnv, env.nodeEnv);
+}
+
+/**
  * Request body-size cap (DoS hardening). Default is media-aware (base64 sends ride in the JSON body).
  * A value the body-size parser can't understand (e.g. 'unlimited', 'none', a typo) resolves to a null
  * limit downstream, which SILENTLY DISABLES the cap — so an unparseable value falls back to the default

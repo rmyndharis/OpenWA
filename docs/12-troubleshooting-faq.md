@@ -156,6 +156,39 @@ docker compose pull            # Get latest image
 docker compose up -d
 ```
 
+### Issue: Dashboard Renders a Blank White Screen
+
+**Symptoms:**
+- The API is healthy (`curl http://<host>:2785/api/health` returns `200`) but the dashboard is blank
+- The startup log says `🖥️ Dashboard: serving bundled UI at …` — the UI *is* being served
+- The browser console shows script-loading errors; DevTools → Network shows the `/assets/*.js`
+  requests going to `https://` even though you opened the page over `http://`
+- You reach the instance directly over plain HTTP (a host:port allocation, a private network, a
+  panel like Pterodactyl) rather than through a TLS-terminating reverse proxy
+
+**Cause:** In production OpenWA sends the CSP `upgrade-insecure-requests` directive, which tells the
+browser to upgrade every sub-resource fetch to HTTPS. That is correct behind a TLS proxy. Over plain
+HTTP the browser upgrades the dashboard's own script requests to `https://`, the non-TLS server
+cannot answer them, no JavaScript runs, and React never mounts — a blank page. The failure happens
+in the browser, so the server log stays clean.
+
+**Solution:**
+
+```bash
+# Opt out, then fully restart the container (not just reload)
+CSP_UPGRADE_INSECURE_REQUESTS=false
+
+# Confirm it actually reached the process
+docker compose exec openwa printenv NODE_ENV CSP_UPGRADE_INSECURE_REQUESTS
+```
+
+A production boot that serves the dashboard with the opt-out unset prints a warning naming this
+setting. If you are behind a TLS proxy, ignore that warning — the directive is doing its job.
+
+> The alternative is to front OpenWA with a TLS-terminating reverse proxy (the shipped
+> `docker-compose.yml` topology), which serves the dashboard over HTTPS and makes the upgrade a
+> no-op.
+
 ### Issue: Session Won't Connect
 
 **Symptoms:**

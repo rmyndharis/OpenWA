@@ -19,6 +19,7 @@ import {
   isSwaggerEnabled,
   isValidationErrorDetailEnabled,
   isUpgradeInsecureRequestsEnabled,
+  isDashboardCspUpgradeTrapLikely,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
@@ -259,9 +260,14 @@ async function bootstrap() {
   const port = process.env.PORT || 2785;
   await app.listen(port);
 
-  console.log(`🚀 OpenWA is running on: http://localhost:${port}`);
+  // Advertise the configured public URL, matching the AuthService banner (auth.service.ts). A bare
+  // `localhost` literal here contradicted that banner and read as "the UI is pinned to localhost",
+  // sending #731 chasing BASE_URL/BIND_HOST/API_PORT instead of the real cause.
+  const publicUrl = process.env.BASE_URL || `http://localhost:${port}`;
+
+  console.log(`🚀 OpenWA is running on: ${publicUrl}`);
   if (swaggerEnabled) {
-    console.log(`📚 Swagger docs: http://localhost:${port}/api/docs`);
+    console.log(`📚 Swagger docs: ${publicUrl}/api/docs`);
   }
 
   // Make the dashboard-serving outcome explicit so a missing build (no UI on `/`)
@@ -269,11 +275,30 @@ async function bootstrap() {
   if (!dashboardServingEnabled) {
     console.log('🖥️  Dashboard: serving disabled (SERVE_DASHBOARD=false); API only');
   } else if (dashboardBuildPresent) {
-    console.log(`🖥️  Dashboard: serving bundled UI at http://localhost:${port}`);
+    console.log(`🖥️  Dashboard: serving bundled UI at ${publicUrl}`);
   } else {
     console.warn(
       `⚠️  Dashboard: no build at ${DASHBOARD_DIST} - UI disabled (API still serves /api). ` +
         'Run `npm run build:all` to bundle it, or use the Vite dev server (`npm run dev`).',
+    );
+  }
+
+  // The upgrade-insecure-requests trap (#731): the browser upgrades the UI's own script fetches to
+  // https and a non-TLS server can't answer them, so the dashboard renders blank with nothing in the
+  // server log. We can't tell a TLS proxy from direct HTTP at boot (`trust proxy` is off), so this
+  // fires for both and the text says who should ignore it.
+  if (
+    isDashboardCspUpgradeTrapLikely({
+      nodeEnv: process.env.NODE_ENV,
+      cspEnv: process.env.CSP_UPGRADE_INSECURE_REQUESTS,
+      dashboardServed: dashboardServingEnabled && dashboardBuildPresent,
+    })
+  ) {
+    console.warn(
+      '⚠️  Dashboard: CSP upgrade-insecure-requests is ON (production default). If this instance is ' +
+        "reached over plain HTTP, the browser will upgrade the UI's scripts to https:// and the " +
+        'dashboard will render blank. Behind a TLS proxy? Ignore this. Serving direct HTTP? Set ' +
+        'CSP_UPGRADE_INSECURE_REQUESTS=false.',
     );
   }
 }

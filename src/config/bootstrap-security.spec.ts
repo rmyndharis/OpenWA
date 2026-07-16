@@ -3,6 +3,7 @@ import {
   isSwaggerEnabled,
   isValidationErrorDetailEnabled,
   isUpgradeInsecureRequestsEnabled,
+  isDashboardCspUpgradeTrapLikely,
   resolveBodyLimit,
   assertNoDefaultSecretsInProduction,
   isApiKeyPepperMissingInProduction,
@@ -61,6 +62,23 @@ describe('isUpgradeInsecureRequestsEnabled', () => {
   it('treats any non-"true"/"false" value as unset (falls back to NODE_ENV)', () => {
     expect(isUpgradeInsecureRequestsEnabled('', 'production')).toBe(true);
     expect(isUpgradeInsecureRequestsEnabled('1', 'development')).toBe(false);
+  });
+});
+
+describe('isDashboardCspUpgradeTrapLikely', () => {
+  it('flags a production instance serving the dashboard with the opt-out unset (#731)', () => {
+    expect(isDashboardCspUpgradeTrapLikely({ nodeEnv: 'production', dashboardServed: true })).toBe(true);
+  });
+  it('stays quiet once the operator opts out', () => {
+    expect(isDashboardCspUpgradeTrapLikely({ nodeEnv: 'production', cspEnv: 'false', dashboardServed: true })).toBe(
+      false,
+    );
+  });
+  it('stays quiet when no dashboard is served (API-only: no UI to break)', () => {
+    expect(isDashboardCspUpgradeTrapLikely({ nodeEnv: 'production', dashboardServed: false })).toBe(false);
+  });
+  it('stays quiet outside production, where the directive is already off', () => {
+    expect(isDashboardCspUpgradeTrapLikely({ nodeEnv: 'development', dashboardServed: true })).toBe(false);
   });
 });
 

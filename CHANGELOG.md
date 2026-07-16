@@ -163,6 +163,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Where no request was made, no code is shown rather than a fabricated one. This is what made a plain
   `500` get reported as a mystery `400` in #750. Fixes #750.
 
+- **A production boot that serves the dashboard over plain HTTP now warns about the CSP upgrade that
+  blanks it.** In production OpenWA emits `upgrade-insecure-requests`, which is correct behind a
+  TLS-terminating reverse proxy — the shipped `docker-compose.yml` topology — but silently breaks a
+  direct-HTTP deployment: the browser upgrades the dashboard's own script fetches to `https://`, the
+  non-TLS server cannot answer them, no JavaScript runs, and the UI renders a blank white screen. The
+  failure happens entirely in the browser, so the server log stayed clean and the operator had nothing
+  to go on; the existing `CSP_UPGRADE_INSECURE_REQUESTS=false` opt-out was documented only under
+  `.env.example`'s "Developer settings" heading, where a production operator had no reason to look.
+  Boot now names the setting when the trap is possible, `.env.example` documents it under Security with
+  the symptom spelled out, and `docs/12-troubleshooting-faq.md` gains a "Dashboard renders a blank white
+  screen" entry. The warning cannot distinguish direct HTTP from a TLS proxy at boot (Express
+  `trust proxy` is off), so it fires for both and tells a proxied operator to ignore it. The CSP default
+  is unchanged. (#731)
+- **The startup banner now advertises `BASE_URL` instead of a hardcoded `localhost`.** The
+  `🚀 running on`, `📚 Swagger docs`, and `🖥️ Dashboard` lines printed `http://localhost:${PORT}` as a
+  literal, regardless of where the instance was actually reachable — contradicting the `AuthService`
+  banner directly above them, which already honoured `BASE_URL`. Two adjacent log lines could therefore
+  report different URLs for the same server, which read as "the UI is pinned to localhost" and sent #731
+  chasing `BASE_URL`/`BIND_HOST`/`API_PORT` rather than the actual cause. (#731)
+
 - **The dashboard now clears a message deleted for everyone while the thread is open (whatsapp-web.js).**
   `message.revoked` carries `revokedId` — the id of the original deleted message, which whatsapp-web.js
   resolves separately from the event's own `id` — but the dashboard's WebSocket projection dropped the
