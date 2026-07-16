@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **v0.8.18's whatsapp-web.js id-rename fix also restored the Chats page (docs only).** The v0.8.18 entry
+  credits that fix with repairing inbound media downloads, message ids, acks, reply quoting, and reactions,
+  but never mentions `GET /sessions/{id}/chats` — which the same patch repaired as well. The rename broke the
+  injected read of each chat's last-received message key, and because every chat resolves through a single
+  `Promise.all`, one unreadable key rejected the entire request, so the dashboard's Chats page returned
+  `500 Internal server error` on every load while the rest of the dashboard kept working from stored data.
+  Operators on v0.8.17 hitting that symptom found nothing in the release notes matching it and so had no
+  reason to upgrade. No behavior change, and no change to which release carries the fix — it is still
+  v0.8.18. Refs #753, #757.
+
 - **Swagger now agrees with the engine capability matrix on status and catalog (docs only).** Eight
   operations were describing something other than what they do, and the drift ran in both directions.
   The three status-post routes were labelled "(Baileys only)" — stale since #714 wired them on
