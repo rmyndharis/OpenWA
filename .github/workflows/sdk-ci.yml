@@ -28,6 +28,9 @@ jobs:
           cache-dependency-path: sdk/javascript/package-lock.json
       - run: npm ci
       - run: npm test
+      # The build tsconfigs exclude test/, and vitest strips types without checking them, so the
+      # type-level wire contract in test/*.test-d.ts only gates if tsc runs over test/ too (#754).
+      - run: npm run typecheck
       - run: npm run build
       - run: npm run smoke # dual CJS+ESM consumable — must run after build
 
@@ -73,3 +76,25 @@ jobs:
           java-version: '17'
           cache: maven
       - run: mvn -B verify
+
+  go:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # the go.mod minimum, so CI gates what the SDK claims to support
+          cache: false # stdlib-only, no go.sum to cache
+      - name: gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo 'Unformatted files:'
+            gofmt -l .
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race ./...
