@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Official Go SDK (`sdk/go`).** Hand-written, stdlib-only (no third-party dependencies) Go client
+  covering the user-facing API surface, joining the JavaScript/Python/PHP/Java clients. Entry point is
+  `openwa.New(baseURL, apiKey, opts...)`, which returns a concurrency-safe `*Client` whose exported
+  fields group the API by domain (`Sessions`, `Messages`, `Contacts`, `Groups`, `Webhooks`, `Chats`,
+  `Status`, `Labels`, `Channels`, `Catalog`, `Templates`, `Health`, `Search`, `Auth`). Every network
+  method is context-first; configuration and dependency injection go through functional options
+  (`WithHTTPClient`, `WithTransport`, `WithLogger`, `WithRetry`, `WithMiddleware`, `WithTimeout`,
+  `WithUserAgent`, `WithHeader`, `WithInsecureHTTP`). Errors are typed: match the sentinels with
+  `errors.Is` (`ErrBadRequest`, `ErrUnauthorized`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`,
+  `ErrRateLimited`, `ErrNotImplemented`) or unwrap the concrete `*APIError` with `errors.As`. Retries
+  are opt-in (`WithRetry`), honour `Retry-After`, rewind request bodies via `GetBody`, and are skipped
+  for non-idempotent methods on network errors so a dropped connection cannot replay a send. Redirects
+  are never followed, so the bearer-equivalent `X-API-Key` is never re-sent to a redirect target. A
+  `TestRouting` table asserts the exact method and path of every service call, and the suite runs in CI
+  (`gofmt`/`go vet`/`go test -race`) on both SDK and server-contract changes, so route drift fails at
+  test time. Requires Go 1.22+. Thanks @Revelts.
+
 ### Changed
 
 ### Fixed
