@@ -91,6 +91,7 @@ import {
   replaceMessageById,
   updateMessageById,
   removeMessageById,
+  findRevokedIndex,
   type ChatMessageView,
 } from './chatMessages.ts';
 
@@ -196,4 +197,39 @@ test('removeMessageById is a no-op when id is not present', () => {
   const before = [msg({ id: 'm-1' })];
   const after = removeMessageById(before, 'missing');
   assert.deepEqual(after, before);
+});
+
+// message.revoked carries TWO candidate ids: `id` and `revokedId` (the original deleted message,
+// when the engine could resolve it). Match on either — see findRevokedIndex for why not `?? `.
+
+test('findRevokedIndex matches the original via revokedId when it differs from id (wwebjs)', () => {
+  const list = [msg({ id: 'row-1', waMessageId: 'ORIGINAL' })];
+  assert.equal(findRevokedIndex(list, { id: 'REVOKE_NOTIF', revokedId: 'ORIGINAL' }), 0);
+});
+
+test('findRevokedIndex still matches when id === revokedId (Baileys — guards the working path)', () => {
+  const list = [msg({ id: 'row-1', waMessageId: 'ORIGINAL' })];
+  assert.equal(findRevokedIndex(list, { id: 'ORIGINAL', revokedId: 'ORIGINAL' }), 0);
+});
+
+test('findRevokedIndex matches on id when revokedId is absent (original not in the engine store)', () => {
+  const list = [msg({ id: 'row-1', waMessageId: 'ORIGINAL' })];
+  assert.equal(findRevokedIndex(list, { id: 'ORIGINAL' }), 0);
+});
+
+test('findRevokedIndex matches the DB row id, not just waMessageId', () => {
+  const list = [msg({ id: 'row-1', waMessageId: 'ORIGINAL' })];
+  assert.equal(findRevokedIndex(list, { id: 'row-1' }), 0);
+});
+
+test('findRevokedIndex returns -1 when neither id matches', () => {
+  const list = [msg({ id: 'row-1', waMessageId: 'ORIGINAL' })];
+  assert.equal(findRevokedIndex(list, { id: 'REVOKE_NOTIF', revokedId: 'OTHER' }), -1);
+});
+
+test('findRevokedIndex ignores an undefined revokedId rather than matching a row with no waMessageId', () => {
+  // A row whose waMessageId is undefined must not be matched by an absent revokedId (undefined ===
+  // undefined would otherwise revoke an arbitrary bubble).
+  const list = [msg({ id: 'row-1', waMessageId: undefined })];
+  assert.equal(findRevokedIndex(list, { id: 'REVOKE_NOTIF' }), -1);
 });

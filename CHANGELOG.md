@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The dashboard now clears a message deleted for everyone while the thread is open (whatsapp-web.js).**
+  `message.revoked` carries `revokedId` — the id of the original deleted message, which whatsapp-web.js
+  resolves separately from the event's own `id` — but the dashboard's WebSocket projection dropped the
+  field and matched its message cache on `id` alone. Persistence was always correct (the backend keys
+  its `UPDATE` on `revokedId`), and webhook/API consumers already received the field; only the live
+  dashboard view was affected, where `staleTime: Infinity` meant an already-open thread kept rendering
+  the deleted message's original text until a reload, reconnect, or cache eviction. The projection now
+  forwards `revokedId`, and the cache lookup matches on either candidate id (against both the row id
+  and `waMessageId`), which keeps the Baileys path — where the two ids are identical — unchanged. When
+  whatsapp-web.js cannot resolve the original (it is no longer in its local store) `revokedId` is
+  absent and the lookup falls back to `id`, as before. Refs #755.
+
 ### Security
 
 ## [0.8.18] - 2026-07-17

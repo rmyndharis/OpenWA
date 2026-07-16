@@ -44,6 +44,11 @@ interface MessageReactionEvent {
 interface MessageRevokedEvent {
   sessionId: string;
   id: string;
+  /**
+   * Id of the ORIGINAL deleted message. Optional: whatsapp-web.js can only resolve it when the
+   * original is still in its local store, and Baileys sets it identical to `id`.
+   */
+  revokedId?: string;
   chatId: string;
   from: string;
   to: string;
@@ -218,6 +223,9 @@ export function useWebSocket(events: WebSocketEvents = {}) {
           events.onMessageRevoked?.({
             sessionId,
             id: String(data.id),
+            // Not String()-coerced like its neighbours: the field is optional on the wire, and
+            // String(undefined) would yield the truthy literal "undefined" and defeat the fallback.
+            revokedId: typeof data.revokedId === 'string' ? data.revokedId : undefined,
             chatId: String(data.chatId),
             from: String(data.from),
             to: String(data.to),
