@@ -25,7 +25,7 @@
     "dashboard:ci": "cd dashboard && npm ci",
     "dashboard:dev": "cd dashboard && npm run dev",
     "dashboard:build": "cd dashboard && npm run build",
-    "postinstall": "node -e \"if (require('fs').existsSync('dashboard')) require('child_process').spawnSync('npm run dashboard:install', { stdio: 'inherit', shell: true });\"",
+    "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process'); if (fs.existsSync('dashboard')) cp.spawnSync('npm run dashboard:install', { stdio: 'inherit', shell: true }); if (fs.existsSync('scripts/patch-wwebjs-201832.js')) cp.spawnSync(process.execPath, ['scripts/patch-wwebjs-201832.js', '--best-effort'], { stdio: 'inherit' });\"",
     "check:versions": "node scripts/check-doc-versions.mjs",
     "openapi:export": "ts-node scripts/export-openapi.ts openapi.json",
     "openapi:check": "ts-node scripts/export-openapi.ts /tmp/openapi.generated.json && diff -u openapi.json /tmp/openapi.generated.json",

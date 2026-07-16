@@ -141,11 +141,25 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
 }
 
 if (require.main === module) {
+  // `--best-effort` (used by the postinstall hook) warns instead of failing. The image build runs
+  // without it: there, an unpatched whatsapp-web.js must abort the build rather than ship broken.
+  // Locally the same failure is only a degraded dev install — `patch` may not exist at all (Windows
+  // without WSL), and a Baileys-only user has no reason to care — so breaking `npm install` over it
+  // would be worse than the bug.
+  const bestEffort = process.argv.includes('--best-effort');
+  const target = process.argv.find(a => !a.startsWith('--') && a !== process.argv[0] && a !== process.argv[1]);
   try {
-    const target = process.argv[2] || DEFAULT_WWJS;
-    const res = applyBackport(target);
+    const res = applyBackport(target || DEFAULT_WWJS);
     console.log(`patch-wwebjs-201832: ${res.skipped ? `skipped — ${res.reason}` : res.note}`);
   } catch (e) {
+    if (bestEffort) {
+      console.warn(
+        `patch-wwebjs-201832: skipped — ${e.message}\n` +
+          '  Inbound media/message ids may be broken on current WhatsApp Web builds (#747).\n' +
+          '  The published Docker image applies this automatically; see scripts/patch-wwebjs-201832.js.',
+      );
+      return;
+    }
     console.error(`patch-wwebjs-201832: ${e.message}`);
     process.exit(1);
   }

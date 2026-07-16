@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -5,8 +6,9 @@ import * as path from 'path';
 // The patcher is a CommonJS build script (scripts/*.js); import it with a typed
 // shape so the spec stays under the strict lint rules.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { applyBackport } = require('../../../scripts/patch-wwebjs-201832') as {
+const { applyBackport, DEFAULT_PATCH: PATCH_FILE } = require('../../../scripts/patch-wwebjs-201832') as {
   applyBackport: (wwjsDir: string, patchFile?: string) => { skipped: boolean; reason?: string; note?: string };
+  DEFAULT_PATCH: string;
 };
 
 const WWJS_SRC = path.join(__dirname, '..', '..', '..', 'node_modules', 'whatsapp-web.js');
@@ -23,11 +25,38 @@ const WWJS_SRC = path.join(__dirname, '..', '..', '..', 'node_modules', 'whatsap
 describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => {
   const tmpDirs: string[] = [];
 
+  /**
+   * A pristine (unpatched) copy of the installed whatsapp-web.js.
+   *
+   * The install itself is not a reliable fixture: `postinstall` applies this same backport, so
+   * node_modules is patched on a normal `npm install` but pristine in the Docker builder stage
+   * (which installs before `scripts/` is copied). Reverse the constructor rewrites on the copy so
+   * every case starts from the same known-unpatched shape either way.
+   */
   function copyWwjs(): string {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-backport-'));
     tmpDirs.push(tmp);
     const copy = path.join(tmp, 'whatsapp-web.js');
     fs.cpSync(WWJS_SRC, copy, { recursive: true });
+
+    const baseJs = path.join(copy, 'src', 'structures', 'Base.js');
+    if (!/static _normalizeId/.test(fs.readFileSync(baseJs, 'utf8'))) return copy; // already pristine
+
+    // Reverse-apply the same diff rather than hand-unpicking it: symmetric with the forward path, and
+    // it stays correct by construction if the patch file changes. Exits 1 on the Contact.js hunk that
+    // was never applied in the first place — expected, hence the ignored status.
+    try {
+      execFileSync(
+        'patch',
+        ['-p1', '-d', copy, '-R', '--no-backup-if-mismatch', '-f', '-F0', '--ignore-whitespace', '-i', PATCH_FILE],
+        { stdio: 'pipe' },
+      );
+    } catch (e) {
+      if ((e as { status?: number }).status !== 1) throw e;
+    }
+    for (const rej of ['src/structures/Contact.js.rej']) {
+      fs.rmSync(path.join(copy, rej), { force: true });
+    }
     return copy;
   }
 

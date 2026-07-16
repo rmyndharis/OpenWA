@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future whatsapp-web.js release ships the fix, so it is a stopgap, not a fork.
   Fixes #747.
 
+- **Source installs get the whatsapp-web.js backport too, not just the Docker image.**
+  `npm install` now applies it from `postinstall`, so the local-development setup in
+  the README is no longer stuck with broken media downloads. It is best-effort
+  there: a machine without a `patch` binary (Windows outside WSL) or a
+  Baileys-only setup gets a warning rather than a failed install. The image build
+  still treats the same failure as fatal.
+
 - **Reactions stay attributable on the renamed-id builds too.** `Reaction` assigns
   its keys straight through, so it is the one structure upstream's normalization
   doesn't reach; the adapter now reads the renamed field directly and falls back to
