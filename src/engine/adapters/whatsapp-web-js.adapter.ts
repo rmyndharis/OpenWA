@@ -997,10 +997,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.sendResolved(chatId, to =>
       mentions?.length ? this.client!.sendMessage(to, text, { mentions }) : this.client!.sendMessage(to, text),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -1052,10 +1049,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       }),
     );
 
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async getContacts(): Promise<Contact[]> {
@@ -1156,10 +1150,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       address: location.address || '',
     });
     const msg = await this.sendResolved(chatId, to => this.client!.sendMessage(to, loc));
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
@@ -1173,10 +1164,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         parseVCards: true,
       }),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -1202,10 +1190,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         sendMediaAsSticker: true,
       }),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult> {
@@ -1224,10 +1209,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.sendResolved(chatId, to =>
       this.client!.sendMessage(to, new Poll(poll.name, poll.options, pollOptions)),
     );
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult> {
@@ -1245,10 +1227,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
     // accepts an explicit target (#583 R1).
     const msg = await this.sendResolved(chatId, to => quotedMsg.reply(text, to));
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
@@ -1288,7 +1267,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         }
       }
       if (sent) {
-        return { id: sent.id._serialized, timestamp: sent.timestamp };
+        return this.toMessageResult(sent);
       }
     } catch (error) {
       this.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
@@ -1833,6 +1812,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       return new MessageMedia(media.mimetype, media.data, media.filename);
     }
     return new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
+  }
+
+  /**
+   * Build the `MessageResult` for a send from whatever whatsapp-web.js hands back.
+   *
+   * `client.sendMessage()` can RESOLVE with `undefined` instead of throwing, and it collapses two
+   * opposite outcomes into that one value (`Client.js:1558`): the chat could not be resolved so nothing
+   * was sent (`if (!chat) return null`, `Client.js:1539`), or the message went out and only its id could
+   * not be read back (`Msg.get` miss, `Injected/Utils.js:585`). Nothing here can tell those apart, so an
+   * absent message is reported as a failed send: a false negative is visible and retryable, while
+   * claiming delivery for a message that never left is not recoverable. wwebjs's own typings hide the
+   * case entirely — `index.d.ts` declares `Promise<Message>`, so `strict` never flagged these reads.
+   *
+   * A `Message` instance is different: wwebjs only builds one from a real message model, so its presence
+   * proves the send happened. An id it cannot read there means "sent, id unknown" and carries the empty
+   * sentinel `forwardMessage` already returns — which `saveOutgoingMessage` stores as NULL rather than a
+   * fabricated id that a later ack could mis-match.
+   */
+  private toMessageResult(msg: Message | undefined): MessageResult {
+    if (!msg) {
+      throw new Error(
+        'the engine returned no message for this send, so it may not have been delivered — check the chat before retrying',
+      );
+    }
+    const id = msg.id as unknown as SerializedWid | undefined;
+    return { id: id?._serialized ?? id?.$1 ?? '', timestamp: msg.timestamp };
   }
 
   private toStatusResult(msg: Message | undefined): StatusResult {

@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatsapp-web.js cannot resolve the original (it is no longer in its local store) `revokedId` is
   absent and the lookup falls back to `id`, as before. Refs #755.
 
+- **A send whose message can't be read back no longer crashes, and never claims a delivery it can't
+  prove.** `whatsapp-web.js`'s `Client.sendMessage()` can *resolve* with `undefined` instead of
+  throwing, while its typings declare `Promise<Message>` — so the adapter's `msg.id._serialized` reads
+  surfaced as an opaque `TypeError: Cannot read properties of undefined (reading 'id')` and a 500, at
+  seven send sites. All of them now route through one helper that distinguishes the two cases the
+  dependency collapses into that single `undefined`: no message at all is reported as a failed send
+  (it is genuinely ambiguous whether anything was dispatched, and a retryable false negative beats
+  claiming a delivery that never happened), whereas a message whose id is merely unreadable reports
+  the empty no-id sentinel `forwardMessage` already used — never a synthesised id. An empty id is now
+  normalized to NULL inside `saveOutgoingMessage`, so it can't collide on the non-partial
+  `(sessionId, waMessageId)` unique index and silently drop a bulk row. Refs #757.
+
 ### Security
 
 ## [0.8.18] - 2026-07-17

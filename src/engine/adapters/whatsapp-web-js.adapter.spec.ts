@@ -2003,3 +2003,60 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     expect(calls).toEqual(['bad', 'good']);
   });
 });
+
+/**
+ * The send contract when whatsapp-web.js cannot hand back a usable message (#757).
+ *
+ * `Client.sendMessage` RESOLVES with `undefined` rather than throwing, collapsing two opposite outcomes
+ * into one value (`Client.js:1558`), and its typings claim `Promise<Message>` — so nothing upstream of
+ * these tests catches a regression here.
+ */
+describe('WhatsAppWebJsAdapter send-result contract', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('reports a send as failed when the engine resolves without a message', async () => {
+    // The dangerous case: `undefined` means EITHER the chat never resolved and nothing was sent, OR the
+    // message went out and only its id was unreadable. Indistinguishable here — so this must not be
+    // reported as success. A false negative is retryable; a 201 for a message that never left is not.
+    const sendMessage = jest.fn().mockResolvedValue(undefined);
+
+    await expect(readyAdapter({ sendMessage }).sendTextMessage('621@c.us', 'hi')).rejects.toThrow(
+      /may not have been delivered/,
+    );
+    // Regression guard: the old code dereferenced `msg.id` and surfaced an opaque TypeError instead.
+    await expect(readyAdapter({ sendMessage }).sendTextMessage('621@c.us', 'hi')).rejects.not.toThrow(TypeError);
+  });
+
+  it('returns the empty no-id sentinel when the message exists but its id is unreadable', async () => {
+    // A Message instance proves the send happened, so an unreadable id is unambiguously "sent, id
+    // unknown" — the shape a future WhatsApp Web re-mangle of `$1` would produce. Never fabricate one.
+    const sendMessage = jest.fn().mockResolvedValue({ id: { someFutureName: 'x' }, timestamp: 1700000000 });
+
+    const res = await readyAdapter({ sendMessage }).sendTextMessage('621@c.us', 'hi');
+
+    expect(res).toEqual({ id: '', timestamp: 1700000000 });
+  });
+
+  it('reads a renamed $1 id when the dependency has not normalized it', async () => {
+    const sendMessage = jest.fn().mockResolvedValue({ id: { $1: 'true_621@c.us_ABC' }, timestamp: 1700000001 });
+
+    const res = await readyAdapter({ sendMessage }).sendTextMessage('621@c.us', 'hi');
+
+    expect(res).toEqual({ id: 'true_621@c.us_ABC', timestamp: 1700000001 });
+  });
+
+  it('passes a healthy id straight through', async () => {
+    const sendMessage = jest
+      .fn()
+      .mockResolvedValue({ id: { _serialized: 'true_621@c.us_XYZ' }, timestamp: 1700000002 });
+
+    const res = await readyAdapter({ sendMessage }).sendTextMessage('621@c.us', 'hi');
+
+    expect(res).toEqual({ id: 'true_621@c.us_XYZ', timestamp: 1700000002 });
+  });
+});

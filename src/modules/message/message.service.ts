@@ -524,7 +524,13 @@ export class MessageService {
     const session = await this.sessionService.findOne(sessionId);
     const message = this.messageRepository.create({
       sessionId,
-      waMessageId: data.waMessageId,
+      // An engine that sent a message but could not read its id back reports an empty id (see the
+      // whatsapp-web.js adapter's `toMessageResult`). Store NULL rather than '': the
+      // (sessionId, waMessageId) unique index is not partial, so a second id-less send in the same
+      // session collides on '' while NULLs stay exempt — and in the bulk path that violation is
+      // swallowed into a warning, losing the row silently. Normalizing at this one chokepoint covers
+      // every caller instead of relying on each to remember.
+      waMessageId: data.waMessageId || undefined,
       chatId: data.chatId,
       from: session?.phone || 'me',
       to: data.chatId,
@@ -565,8 +571,9 @@ export class MessageService {
    * `message:failed`. Log and return success instead.
    */
   private async persistSentState(message: Message, result: MessageResult): Promise<MessageResponseDto> {
-    // A forward whose engine couldn't recover the sent copy's id returns an empty id — leave waMessageId
-    // unset (NULL) so no ack mis-matches it. Every other send path carries a real id.
+    // A send whose engine couldn't read the sent message's id back reports an empty id — a forward that
+    // can't recover the copy, or a WhatsApp Web build that renamed the id field out from under the
+    // engine. Leave waMessageId unset (NULL) so no ack mis-matches it.
     if (result.id) message.waMessageId = result.id;
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;

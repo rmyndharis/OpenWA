@@ -969,4 +969,28 @@ describe('MessageService', () => {
       expect(mockEngine.deleteMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', false);
     });
   });
+
+  /**
+   * The empty id is the engine's "sent, but I couldn't read the id back" signal (#757). It has to reach
+   * the DB as NULL: UQ_messages_sessionId_waMessageId is NOT partial, so '' collides with the next
+   * id-less send in the same session, while NULLs stay exempt. In the bulk path that violation is
+   * swallowed into a warning, so the row would vanish with nothing surfacing.
+   */
+  describe('saveOutgoingMessage id normalization (#757)', () => {
+    it('stores an empty engine id as NULL rather than an empty string', async () => {
+      await service.saveOutgoingMessage('sess-1', { waMessageId: '', chatId: '621@c.us', type: 'text' });
+
+      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: undefined }));
+    });
+
+    it('leaves a real id untouched', async () => {
+      await service.saveOutgoingMessage('sess-1', {
+        waMessageId: 'true_621@c.us_ABC',
+        chatId: '621@c.us',
+        type: 'text',
+      });
+
+      expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: 'true_621@c.us_ABC' }));
+    });
+  });
 });
