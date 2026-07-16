@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Inbound media download, message ids, acks, and reply quoting restored**
+  (whatsapp-web.js `id._serialized` → `id.$1` rename). WhatsApp Web build 2.3000.x
+  (rolled out ~2026-07-14) renamed the internal serialized message-id property
+  from `id._serialized` to `id.$1`, which broke whatsapp-web.js 1.34.7's
+  `downloadMedia()`, message-id extraction, ack tracking, and quoted-message
+  resolution for every bot at once. The production Docker image now backports
+  upstream fix [#201832](https://github.com/wwebjs/whatsapp-web.js/pull/201832)
+  (`Base._normalizeId`) into the installed dependency at build time via
+  `scripts/patch-wwebjs-201832.js`. The patcher applies the real upstream diff
+  (with a loud-fail guard against version skew) and auto-disables the moment a
+  future whatsapp-web.js release ships the fix, so it is a stopgap, not a fork.
+  Fixes #747.
+
 - **Engine start timeouts now return a diagnostic 504 instead of a bare 500.** Two
   `POST /api/sessions/:id/start` failure modes previously escaped to NestJS's default handler as a
   meaningless `500 Internal Server Error`: (1) the **auth-timeout** — whatsapp-web.js throws the

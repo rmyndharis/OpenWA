@@ -72,6 +72,7 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     dumb-init \
     gosu \
+    patch \
     curl \
     procps \
     && rm -rf /var/lib/apt/lists/*
@@ -87,8 +88,13 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+# Backport upstream whatsapp-web.js#201832 (id._serialized -> id.$1 normalization,
+# broken by WA Web 2.3000.x ~2026-07-14) into the installed dep at build time.
+# The patcher self-disables once whatsapp-web.js ships the fix upstream.
+COPY scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch ./scripts/
+
+# Install production dependencies only, then apply the backport patcher (needs `patch`).
+RUN npm ci --omit=dev && node scripts/patch-wwebjs-201832.js && npm cache clean --force
 
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
 # arm64: use Debian's chromium installed above (CfT has no linux-arm64 build).
