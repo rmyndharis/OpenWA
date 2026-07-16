@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future whatsapp-web.js release ships the fix, so it is a stopgap, not a fork.
   Fixes #747.
 
+- **Reactions stay attributable on the renamed-id builds too.** `Reaction` assigns
+  its keys straight through, so it is the one structure upstream's normalization
+  doesn't reach; the adapter now reads the renamed field directly and falls back to
+  the empty no-id sentinel instead of passing `undefined` on.
+
+- **A reaction with no message id no longer updates an arbitrary message.**
+  `applyReaction` looked the message up by an id that could be `undefined`, and
+  TypeORM drops an undefined condition from the where-clause rather than matching
+  nothing — so the lookup found an unrelated row and emitted its reactions under
+  the incoming event. The id is now checked before the query. Latent since
+  reactions were added; only reachable when an engine can't resolve the id.
+
 - **Engine start timeouts now return a diagnostic 504 instead of a bare 500.** Two
   `POST /api/sessions/:id/start` failure modes previously escaped to NestJS's default handler as a
   meaningless `500 Internal Server Error`: (1) the **auth-timeout** — whatsapp-web.js throws the

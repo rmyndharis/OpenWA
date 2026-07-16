@@ -1451,6 +1451,21 @@ describe('SessionService', () => {
       expect(stored.metadata?.reactions).toEqual({ alice: '👍', bob: '🎉' });
     });
 
+    it('drops a reaction with no message id instead of letting it match an arbitrary row', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      // An engine that can't resolve the reacted message's id passes `''` (the no-id sentinel). It must
+      // never reach findOne: TypeORM drops an empty/undefined condition from the where-clause, so the
+      // lookup would match some other message and emit ITS reactions under this event.
+      (messageRepository.findOne as jest.Mock).mockClear();
+      (messageRepository.update as jest.Mock).mockClear();
+
+      callbacks.onMessageReaction!({ messageId: '', chatId: 'c', senderId: 'alice', reaction: '👍' });
+      for (let i = 0; i < 3; i++) await flush();
+
+      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(messageRepository.update).not.toHaveBeenCalled();
+    });
+
     it('persists a reaction via a scoped metadata update, never a full-row save (protects ack status)', async () => {
       const callbacks = await startAndCaptureCallbacks();
       // The row was already advanced to DELIVERED by a concurrent ack. A full-row save(msg) would

@@ -21,47 +21,94 @@ const WWJS_SRC = path.join(__dirname, '..', '..', '..', 'node_modules', 'whatsap
  * or drifts on a future whatsapp-web.js bump, these tests fail loudly.
  */
 describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => {
+  const tmpDirs: string[] = [];
+
   function copyWwjs(): string {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-backport-'));
+    tmpDirs.push(tmp);
     const copy = path.join(tmp, 'whatsapp-web.js');
     fs.cpSync(WWJS_SRC, copy, { recursive: true });
     return copy;
   }
 
-  it('self-removes (no-ops) once the upstream fix is already present', () => {
+  afterAll(() => {
+    for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('self-removes (no-ops) once the installed dep normalizes ids itself', () => {
     const dir = copyWwjs();
-    const baseJs = path.join(dir, 'src', 'structures', 'Base.js');
-    fs.writeFileSync(baseJs, fs.readFileSync(baseJs, 'utf8') + '\nstatic _normalizeId(){}\n');
+    const msgJs = path.join(dir, 'src', 'structures', 'Message.js');
+    fs.writeFileSync(
+      msgJs,
+      fs.readFileSync(msgJs, 'utf8').replace('this.id = data.id', 'this.id = Base._normalizeId(data.id)'),
+    );
 
     const res = applyBackport(dir);
 
     expect(res.skipped).toBe(true);
-    // The Message constructor is left untouched (we only injected the marker).
-    const msg = fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8');
-    expect(msg).toContain('this.id = data.id');
+    // Chat.js is left untouched — proof the patcher stood down rather than re-applying.
+    expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Chat.js'), 'utf8')).toContain('this.id = data.id');
   });
 
-  it('applies the backport and restores id._serialized across the Message path', () => {
+  it('applies the backport across every id-normalization site', () => {
     const dir = copyWwjs();
 
     const res = applyBackport(dir);
 
     expect(res.skipped).toBe(false);
-    const base = fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8');
-    const msg = fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8');
-    // Root normalization helper + the load-bearing constructor reassignment that
-    // OpenWA's ~40 `msg.id._serialized` reads depend on.
-    expect(base).toContain('static _normalizeId');
-    expect(msg).toContain('this.id = Base._normalizeId(data.id)');
+    const read = (rel: string): string => fs.readFileSync(path.join(dir, rel), 'utf8');
+    // Root helper + the load-bearing Message constructor that OpenWA's ~40
+    // `msg.id._serialized` reads depend on, plus every sibling structure.
+    expect(read('src/structures/Base.js')).toContain('static _normalizeId');
+    expect(read('src/structures/Message.js')).toContain('this.id = Base._normalizeId(data.id)');
+    for (const f of ['Chat', 'Contact', 'Channel', 'Broadcast', 'GroupNotification']) {
+      expect(read(`src/structures/${f}.js`)).toContain('this.id = Base._normalizeId(data.id)');
+    }
+    expect(read('src/structures/ClientInfo.js')).toContain('this.wid = Base._normalizeId(data.wid)');
     // from/to/author fallbacks (OpenWA reads these as chat/sender strings).
-    expect(msg).toMatch(/data\.from\._serialized \|\| data\.from\.\$1/);
-    // Contact hunk #1 (constructor) applies even though hunk #2 (LID-block)
-    // rejects — so contacts get normalized ids too.
-    const contact = fs.readFileSync(path.join(dir, 'src', 'structures', 'Contact.js'), 'utf8');
-    expect(contact).toContain('this.id = Base._normalizeId(data.id)');
-    // The one expected reject is cleaned up; no .rej files leak into the image.
-    const structDir = path.join(dir, 'src', 'structures');
-    expect(fs.readdirSync(structDir).some(f => f.endsWith('.rej'))).toBe(false);
+    expect(read('src/structures/Message.js')).toMatch(/data\.from\._serialized \|\| data\.from\.\$1/);
+  });
+
+  it('leaves no patch artifacts in the image', () => {
+    const dir = copyWwjs();
+
+    applyBackport(dir);
+
+    // GNU patch writes `<file>.~1~` backups of pre-patch source on any offset/reject
+    // (BSD patch does not — which is why this must be asserted, not eyeballed on macOS).
+    // Rejects are cleaned too. Anything left here would ship in the production image.
+    const leftovers: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        if (e.name === 'node_modules') continue;
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/(\.rej|\.orig|~)$/.test(e.name)) leftovers.push(path.relative(dir, full));
+      }
+    };
+    walk(dir);
+    expect(leftovers).toEqual([]);
+  });
+
+  it('normalizes a $1-only id while leaving a healthy id untouched', () => {
+    const dir = copyWwjs();
+    applyBackport(dir);
+
+    // The load-bearing invariant, exercised rather than grepped: on an affected
+    // build `_serialized` is synthesized from `$1`; on a healthy build the id must
+    // pass through byte-for-byte (identity), so unaffected users see no change.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Base = require(path.join(dir, 'src', 'structures', 'Base.js')) as {
+      _normalizeId: (id: unknown) => { _serialized?: string };
+    };
+
+    const affected = { $1: 'true_123@c.us_ABC', remote: '123@c.us', fromMe: true, id: 'ABC' };
+    expect(Base._normalizeId(affected)._serialized).toBe('true_123@c.us_ABC');
+    // Sibling fields survive the copy — OpenWA reads id.remote / id.id downstream.
+    expect(Base._normalizeId(affected)).toMatchObject({ remote: '123@c.us', fromMe: true, id: 'ABC' });
+
+    const healthy = { _serialized: 'true_123@c.us_XYZ', remote: '123@c.us' };
+    expect(Base._normalizeId(healthy)).toBe(healthy); // identity — same reference, not a copy
   });
 
   it('aborts loudly on unexpected version skew', () => {
@@ -70,9 +117,8 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     // is NOT in the expected-reject set -> the patcher must throw rather than
     // ship a partially patched whatsapp-web.js.
     const msgJs = path.join(dir, 'src', 'structures', 'Message.js');
-    const src = fs.readFileSync(msgJs, 'utf8').replace('this.id = data.id', 'this.id = DATA_ID_MOVED');
-    fs.writeFileSync(msgJs, src);
+    fs.writeFileSync(msgJs, fs.readFileSync(msgJs, 'utf8').replace('this.id = data.id', 'this.id = DATA_ID_MOVED'));
 
-    expect(() => applyBackport(dir)).toThrow();
+    expect(() => applyBackport(dir)).toThrow(/version skew/);
   });
 });

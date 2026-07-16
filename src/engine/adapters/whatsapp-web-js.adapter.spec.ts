@@ -1452,6 +1452,68 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
   });
 });
 
+describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web builds)', () => {
+  const wireReactionHandler = (): { onMessageReaction: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-reaction-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageReaction = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageReaction };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    return { onMessageReaction, client };
+  };
+
+  const reactionArg = (mock: jest.Mock): { messageId: string; chatId: string } => {
+    const calls = mock.mock.calls as Array<[{ messageId: string; chatId: string }]>;
+    return calls[0][0];
+  };
+
+  const emitReaction = (client: EventEmitter, msgId: unknown): void => {
+    client.emit('message_reaction', {
+      msgId,
+      id: { remote: 'peer@c.us' },
+      reaction: '👍',
+      senderId: 'peer@c.us',
+    });
+  };
+
+  it('reads _serialized on a healthy WA Web build', () => {
+    const { onMessageReaction, client } = wireReactionHandler();
+
+    emitReaction(client, { _serialized: 'REACTED_MSG' });
+
+    expect(reactionArg(onMessageReaction).messageId).toBe('REACTED_MSG');
+  });
+
+  it('falls back to $1 on a build that renamed _serialized (#747)', () => {
+    const { onMessageReaction, client } = wireReactionHandler();
+
+    // `Reaction` passes its keys straight through, so upstream's id normalization never reaches it —
+    // this fallback is the only thing keeping reactions attributable on an affected build.
+    emitReaction(client, { $1: 'REACTED_MSG_RENAMED' });
+
+    expect(reactionArg(onMessageReaction).messageId).toBe('REACTED_MSG_RENAMED');
+  });
+
+  it('emits the empty no-id sentinel rather than undefined when neither field resolves', () => {
+    const { onMessageReaction, client } = wireReactionHandler();
+
+    emitReaction(client, {});
+
+    // Never undefined: downstream looks the message up by this id, and TypeORM drops an undefined
+    // condition from the where-clause — which would match an unrelated row.
+    expect(reactionArg(onMessageReaction).messageId).toBe('');
+  });
+});
+
 describe('WhatsAppWebJsAdapter message_revoke_everyone (forwards the original deleted id as revokedId)', () => {
   const wireRevokeHandler = (): { onMessageRevoked: jest.Mock; client: EventEmitter } => {
     const adapter = new WhatsAppWebJsAdapter({

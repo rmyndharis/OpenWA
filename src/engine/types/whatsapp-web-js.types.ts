@@ -6,9 +6,16 @@ import { Chat, Client, Message } from 'whatsapp-web.js';
 
 /**
  * A WhatsApp ID (Wid) as serialized by whatsapp-web.js, e.g. `{ _serialized: '120363xxx@g.us' }`.
+ *
+ * WA Web build 2.3000.x (~2026-07-14) renamed this property to the minifier-mangled `$1`, breaking
+ * every `_serialized` read at once (#747). The image build backports upstream's id normalization
+ * (`scripts/patch-wwebjs-201832.js`), which restores `_serialized` on the structures it covers — but
+ * `Reaction` is not one of them, so `$1` is declared here for the callsites that must read it
+ * directly. Both are optional: exactly one is present depending on the WA Web build.
  */
 export interface SerializedWid {
   _serialized?: string;
+  $1?: string;
 }
 
 /**

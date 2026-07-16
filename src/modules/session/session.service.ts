@@ -1255,6 +1255,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   private async applyReaction(id: string, event: ReactionEvent): Promise<void> {
     try {
+      // Guard the lookup key before it reaches TypeORM: `findOne` DROPS an undefined condition from
+      // the where-clause rather than matching nothing, so an engine that couldn't resolve the reacted
+      // message's id would silently match an arbitrary row and clobber/emit its reactions. `!msg` is
+      // no protection against that — the row it finds is real, just the wrong one.
+      if (!event.messageId) return;
+
       const msg = await this.messageRepository.findOne({ where: { sessionId: id, waMessageId: event.messageId } });
       if (!msg) return;
 

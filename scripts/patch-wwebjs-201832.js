@@ -36,14 +36,31 @@ const DEFAULT_PATCH = path.join(__dirname, 'wwebjs-201832.patch');
 // The single hunk expected to reject on 1.34.7 (targets absent LID-block code).
 const EXPECTED_REJECTS = new Set(['src/structures/Contact.js.rej']);
 
-function findRej(root, dir = root) {
+// Every normalization site the backport must land, so a hunk that fails to apply can never pass
+// unnoticed. `patch` always writes a .rej for a hunk it couldn't place, but a hunk placed at the
+// WRONG offset would be silent — these assertions are what close that gap.
+const REQUIRED_SITES = [
+  ['src/structures/Base.js', /static _normalizeId\(id\)/],
+  ['src/structures/Message.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/Chat.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/Contact.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/Channel.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/Broadcast.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/GroupNotification.js', /this\.id = Base\._normalizeId\(data\.id\)/],
+  ['src/structures/ClientInfo.js', /this\.wid = Base\._normalizeId\(data\.wid\)/],
+];
+
+/** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */
+const ARTIFACT_RE = /(\.rej|\.orig|~)$/;
+
+function findArtifacts(root, dir = root) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name === '.git') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...findRej(root, full));
-    } else if (entry.name.endsWith('.rej')) {
+      out.push(...findArtifacts(root, full));
+    } else if (ARTIFACT_RE.test(entry.name)) {
       out.push(path.relative(root, full));
     }
   }
@@ -55,47 +72,67 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   if (!fs.existsSync(baseJs)) {
     throw new Error(`whatsapp-web.js not found at ${wwjsDir}`);
   }
-  // Self-removal: upstream already shipped the fix.
-  if (/_normalizeId/.test(fs.readFileSync(baseJs, 'utf8'))) {
-    return { skipped: true, reason: 'Base._normalizeId already present (upstream fixed)' };
+  // Self-removal: once the installed whatsapp-web.js normalizes ids itself, this backport steps
+  // aside. Detect on the id-normalizing READ in the Message constructor rather than on Base.js's
+  // helper: Message.js is the load-bearing site (OpenWA reads `msg.id._serialized` in ~40 places),
+  // and keying off Base.js alone would treat a half-patched tree — helper present, constructor not —
+  // as "already fixed" and ship it. Matched loosely (`Base._normalizeId(` OR an inline `$1` fallback)
+  // so a future upstream release that fixes this differently still stands the patcher down.
+  const msgJs = path.join(wwjsDir, 'src', 'structures', 'Message.js');
+  const msgSrc = fs.readFileSync(msgJs, 'utf8');
+  if (/_normalizeId\(|\.\$1/.test(msgSrc)) {
+    return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };
   }
 
   // Apply the real upstream diff via `patch` (no git-discovery interference).
-  // --ignore-whitespace absorbs a trivial context-indent mismatch in GroupChat.js.
-  // `patch` exits non-zero if any hunk is rejected; the expected Contact reject is
-  // inspected below.
+  // Flags, each load-bearing:
+  //   --no-backup-if-mismatch  GNU patch defaults to writing `<file>.~1~` backups for every file
+  //                            whose hunks needed an offset or rejected — 328K of pre-patch source
+  //                            that would otherwise ship in the image. (`-V none` does NOT do this;
+  //                            it only picks the backup *style*.) BSD patch has no such default,
+  //                            which is why this is invisible on macOS and only bites in Debian CI.
+  //   -F0                      No fuzz: a hunk must match exactly, never slide onto a similar-looking
+  //                            neighbouring block. Fuzzed application would be silent — invisible to
+  //                            both the reject-set check and the assertions below.
+  //   --ignore-whitespace      Absorbs a trivial context-indent mismatch in GroupChat.js.
+  //   -f -N                    Never prompt; `-f` also forces already-applied hunks to reject loudly
+  //                            rather than be skipped silently.
+  // With these, GNU and BSD patch produce byte-identical trees, so a local macOS run faithfully
+  // reproduces the Debian image build.
   try {
     execFileSync(
       'patch',
-      ['-p1', '-d', wwjsDir, '-V', 'none', '-N', '-f', '--ignore-whitespace', '-i', patchFile],
+      ['-p1', '-d', wwjsDir, '--no-backup-if-mismatch', '-N', '-f', '-F0', '--ignore-whitespace', '-i', patchFile],
       { stdio: 'pipe' },
     );
-  } catch (_) {
-    // expected: Contact.js hunk #2 rejects on 1.34.7; the reject set is verified below
+  } catch (e) {
+    // `patch` exits 1 when hunks reject — expected here (Contact.js hunk #2), and the reject set is
+    // verified below. Anything else (2 = serious trouble, ENOENT = `patch` not installed) is a real
+    // failure: rethrow it rather than let the assertions below misreport it as version skew.
+    if (e.status !== 1) {
+      const detail = e.stderr ? String(e.stderr).trim() : e.message;
+      throw new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
+    }
   }
 
-  const rej = findRej(wwjsDir);
-  const unexpected = rej.filter((r) => !EXPECTED_REJECTS.has(r));
+  const artifacts = findArtifacts(wwjsDir);
+  const unexpected = artifacts.filter(a => !EXPECTED_REJECTS.has(a));
   if (unexpected.length) {
     throw new Error(
-      `unexpected reject(s) — version skew vs the backport base: ${unexpected.join(', ')}. ` +
+      `unexpected patch artifact(s) — version skew vs the backport base: ${unexpected.join(', ')}. ` +
         'Re-evaluate scripts/wwebjs-201832.patch against the installed whatsapp-web.js.',
     );
   }
 
-  // Verify the load-bearing normalization sites actually took.
-  const read = (rel) => fs.readFileSync(path.join(wwjsDir, rel), 'utf8');
-  const baseSrc = read('src/structures/Base.js');
-  const msgSrc = read('src/structures/Message.js');
-  if (!/static _normalizeId/.test(baseSrc)) {
-    throw new Error('Base.js was not patched (static _normalizeId missing) — aborting.');
-  }
-  if (!/this\.id = Base\._normalizeId\(data\.id\)/.test(msgSrc)) {
-    throw new Error('Message.js constructor was not patched — aborting.');
+  // Verify EVERY normalization site landed — a hunk placed at a wrong offset leaves no .rej.
+  for (const [rel, marker] of REQUIRED_SITES) {
+    if (!marker.test(fs.readFileSync(path.join(wwjsDir, rel), 'utf8'))) {
+      throw new Error(`${rel} was not patched (missing ${marker}) — aborting rather than ship a partial backport.`);
+    }
   }
 
   // Clean up the expected .rej (Contact.js hunk #2 intentionally dropped).
-  for (const r of rej) fs.unlinkSync(path.join(wwjsDir, r));
+  for (const a of artifacts) fs.unlinkSync(path.join(wwjsDir, a));
 
   return {
     skipped: false,
