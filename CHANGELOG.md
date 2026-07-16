@@ -42,6 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatsapp-web.js cannot resolve the original (it is no longer in its local store) `revokedId` is
   absent and the lookup falls back to `id`, as before. Refs #755.
 
+- **A failed group creation now reports why it failed.** `whatsapp-web.js` signals a failed
+  `createGroup` by *resolving* with a plain string (`'CreateGroupError: …'`) instead of throwing, and
+  its typings say so (`Promise<CreateGroupResult | string>`) — but the adapter cast that union away and
+  read `.gid` off the string, so the reason upstream gave us was replaced by an opaque
+  `TypeError`. The union is handled, and an unreadable group id now fails loudly rather than being
+  coerced through `String()` into the literal id `"undefined"`. The status is unchanged (the group
+  genuinely wasn't created, so it was always a 500); the error text is now the real one.
+
+- **An ack whose message id can't be read is dropped instead of silently advancing nothing.** On a
+  WhatsApp Web build that renames the id field (#747), the id reached the status `UPDATE` as
+  `undefined`, which TypeORM sends as `waMessageId = NULL` — matching no row, since `x = NULL` is never
+  true. The ack advanced nothing, burned its one-shot retry, and left only a misleading "no status row
+  advanced" line behind. It is now dropped at the adapter boundary, where the reason is still visible.
+
 - **A send whose message can't be read back no longer crashes, and never claims a delivery it can't
   prove.** `whatsapp-web.js`'s `Client.sendMessage()` can *resolve* with `undefined` instead of
   throwing, while its typings declare `Promise<Message>` — so the adapter's `msg.id._serialized` reads

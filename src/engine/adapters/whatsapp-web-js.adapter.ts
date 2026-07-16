@@ -596,9 +596,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
 
     this.client.on('message_ack', (msg, ack) => {
+      // An unreadable id (a WhatsApp Web build renaming the field, as in #747) would reach the ack
+      // UPDATE as undefined, which TypeORM sends as `waMessageId = NULL` — matching nothing, since
+      // `x = NULL` is never true. The ack then silently advances no row AND burns its one-shot retry,
+      // so the message stays at SENT with only a misleading "no status row advanced" in the log. Drop
+      // it here, where the reason is still visible. (Note this differs from the reaction path below,
+      // where `findOne` DROPS an undefined key instead of nulling it and matches an arbitrary row.)
+      const ackId = (msg.id as unknown as SerializedWid | undefined)?._serialized;
+      if (!ackId) {
+        this.logger.warn('Dropping an ack whose message id could not be read', { ack });
+        return;
+      }
       // Map the whatsapp-web.js MessageAck integer to the neutral DeliveryStatus here, at the
       // adapter boundary, so no downstream consumer ever sees engine-specific ack codes.
-      this.callbacks.onMessageAck?.(msg.id._serialized, wwebjsAckToDeliveryStatus(ack));
+      this.callbacks.onMessageAck?.(ackId, wwebjsAckToDeliveryStatus(ack));
     });
 
     this.client.on('message_revoke_everyone', (after, before) => {
@@ -1316,7 +1327,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
     const result = await this.client!.createGroup(name, participantIds);
 
-    const groupId = String((result as unknown as GroupCreateResult).gid._serialized);
+    // whatsapp-web.js reports a failed creation by RESOLVING with a plain string
+    // ('CreateGroupError: …', Client.js:2376) rather than throwing, and its own typings say so
+    // (`Promise<CreateGroupResult | string>`). Reading `.gid` straight off that string threw an opaque
+    // TypeError and discarded the reason upstream actually gave us; surface it instead.
+    if (typeof result === 'string') {
+      throw new Error(result);
+    }
+    const gid = (result as unknown as GroupCreateResult).gid as SerializedWid | undefined;
+    const groupId = gid?._serialized ?? gid?.$1;
+    // A group id is not ack-safe the way a message id is: there is no empty-sentinel equivalent, and any
+    // placeholder would be handed back as a real, addressable group. Fail instead of inventing one.
+    if (!groupId) {
+      throw new Error('the group was created but its id could not be read');
+    }
     return {
       id: groupId,
       name: name,

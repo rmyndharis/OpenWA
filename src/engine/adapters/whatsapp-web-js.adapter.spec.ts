@@ -2060,3 +2060,82 @@ describe('WhatsAppWebJsAdapter send-result contract', () => {
     expect(res).toEqual({ id: 'true_621@c.us_XYZ', timestamp: 1700000002 });
   });
 });
+
+describe('WhatsAppWebJsAdapter message_ack (unreadable id)', () => {
+  const wireAckHandler = (): { onMessageAck: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-ack-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageAck = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageAck };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    return { onMessageAck, client };
+  };
+
+  it('forwards the ack on a healthy build', () => {
+    const { onMessageAck, client } = wireAckHandler();
+
+    client.emit('message_ack', { id: { _serialized: 'ACKED_MSG' } }, 3);
+
+    expect(onMessageAck).toHaveBeenCalledWith('ACKED_MSG', expect.any(String));
+  });
+
+  it('drops an ack whose id cannot be read instead of passing undefined on', () => {
+    // An undefined id reaches the ack UPDATE as `waMessageId = NULL`, which matches nothing (`x = NULL`
+    // is never true in SQL). The ack would advance no row and still burn its one-shot retry, leaving the
+    // message at SENT with only a misleading "no status row advanced" in the log.
+    const { onMessageAck, client } = wireAckHandler();
+
+    client.emit('message_ack', { id: { someFutureName: 'x' } }, 3);
+
+    expect(onMessageAck).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsAppWebJsAdapter createGroup (failure shapes)', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it("surfaces the engine's reason when creation fails", async () => {
+    // whatsapp-web.js RESOLVES with a plain string on failure rather than throwing (Client.js:2376).
+    // Reading `.gid` off it produced an opaque TypeError and threw the actual reason away.
+    const createGroup = jest
+      .fn()
+      .mockResolvedValue('CreateGroupError: An unknown error occupied while creating a group');
+
+    await expect(readyAdapter({ createGroup }).createGroup('team', ['628123@c.us'])).rejects.toThrow(
+      /CreateGroupError/,
+    );
+  });
+
+  it('never returns a placeholder when the group id cannot be read', async () => {
+    // The old `String(gid._serialized)` coerced an unreadable id into the literal string "undefined"
+    // and handed it back as a real, addressable group id.
+    const createGroup = jest.fn().mockResolvedValue({ gid: { someFutureName: 'x' } });
+
+    const call = readyAdapter({ createGroup }).createGroup('team', ['628123@c.us']);
+
+    await expect(call).rejects.toThrow(/id could not be read/);
+    await expect(call).rejects.not.toThrow(/undefined/);
+  });
+
+  it('returns the group on success', async () => {
+    const createGroup = jest.fn().mockResolvedValue({ gid: { _serialized: '120363000@g.us' } });
+
+    const res = await readyAdapter({ createGroup }).createGroup('team', ['628123@c.us', '628124@c.us']);
+
+    expect(res).toEqual({ id: '120363000@g.us', name: 'team', participantsCount: 2 });
+  });
+});
