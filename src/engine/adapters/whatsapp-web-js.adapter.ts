@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { InternalServerErrorException } from '@nestjs/common';
 import { Client, LocalAuth, MessageMedia, MessageTypes, WAState, type Message } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
@@ -1869,11 +1870,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   /**
-   * The status-post counterpart of `toMessageResult`, and it answers to the same rule for the same
-   * reason: `sendMessage('status@broadcast', …)` reaches the identical `Client.js` path, so an absent
-   * message is the identical ambiguity (nothing posted vs. posted-but-unreadable) and must not be
-   * reported as success. It previously fabricated one — `new Date()` for a status that may never have
-   * existed, behind a `201`.
+   * The status-post counterpart of `toMessageResult`, but its absent-message case is *narrower* than a
+   * send's. `Injected/Utils.js` builds the status model and returns it from the `isStatus` branch before
+   * ever reaching the `Msg.get` miss that makes an ordinary send ambiguous — so the only way back with no
+   * message is `Client.js`'s `if (!chat) return null`, i.e. nothing was posted at all. Not an ambiguity:
+   * a plain failure, which was previously dressed up as a `201` carrying a `new Date()` invented for a
+   * status that never existed.
+   *
+   * Thrown as an `InternalServerErrorException` rather than a bare `Error` because there is no global
+   * exception filter (see `message-not-found.error.spec.ts`), so a bare `Error` reaches the caller as
+   * `{"statusCode":500,"message":"Internal server error"}` — and unlike a send, which routes its message
+   * into the `message:failed` hook, HTTP is the only consumer a status post has. The same 500, with the
+   * reason surviving.
    *
    * A present `Message` proves the post happened, so an id it cannot read there carries the same empty
    * sentinel `toMessageResult` uses. Read `$1` before falling back to it (#747): the sentinel means
@@ -1882,7 +1890,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    */
   private toStatusResult(msg: Message | undefined): StatusResult {
     if (!msg) {
-      throw new Error(
+      throw new InternalServerErrorException(
         'the engine returned no message for this status post, so it may not have been published — check your status before retrying',
       );
     }

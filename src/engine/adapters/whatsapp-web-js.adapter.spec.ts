@@ -15,7 +15,7 @@ import {
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
 import * as qrcode from 'qrcode';
-import { UnprocessableEntityException } from '@nestjs/common';
+import { InternalServerErrorException, UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
@@ -1145,6 +1145,10 @@ describe('WhatsAppWebJsAdapter status methods', () => {
       const adapter = readyAdapter({ sendMessage });
       const call =
         method === 'postTextStatus' ? adapter.postTextStatus('hello', options) : adapter[method](media, options);
+      // Assert the TYPE, not just the text: a bare Error is a 500 whose body says only "Internal server
+      // error" (no global filter — see message-not-found.error.spec.ts), which would silently discard
+      // the reason this throw exists to deliver.
+      await expect(call).rejects.toBeInstanceOf(InternalServerErrorException);
       await expect(call).rejects.toThrow(/may not have been published/);
     },
   );
