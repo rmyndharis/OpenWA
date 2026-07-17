@@ -645,9 +645,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     this.client.on('message_reaction', reaction => {
       try {
-        // `Reaction` assigns its keys straight through (`this.msgId = data.parentMsgKey`), so it is the
-        // one structure upstream's id normalization doesn't reach — on a WA Web build that renamed
-        // `_serialized` to `$1` (#747), `msgId._serialized` is undefined even with the backport applied.
+        // `Reaction` assigns its keys straight through (`this.msgId = data.parentMsgKey`), which
+        // upstream's id normalization doesn't reach: it covers structure constructors and `msg.id`,
+        // not keys assigned straight through (`Message.protocolMessageKey` and `Reaction.id` are the
+        // same pattern). On a WA Web build that renamed `_serialized` to `$1` (#747),
+        // `msgId._serialized` is undefined even with the backport applied.
         // Read `$1` as a fallback, and fall back again to `''` (the same no-id sentinel Baileys uses)
         // rather than pass undefined on: `applyReaction` looks the message up by this id, and TypeORM
         // DROPS an undefined condition from the where-clause — which would match an arbitrary row and
