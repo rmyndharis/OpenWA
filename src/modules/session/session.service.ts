@@ -829,7 +829,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
             const dbMessage = this.messageRepository.create({
               sessionId: id,
-              waMessageId: incoming.id,
+              // Mirror saveOutgoingMessage's chokepoint: an engine that received a message but could
+              // not read its id back reports the empty sentinel, and NULL is what the non-partial
+              // (sessionId, waMessageId) unique index exempts — `''` would collide the second such
+              // message and lose the row.
+              waMessageId: incoming.id || undefined,
               chatId: incoming.chatId,
               chatName,
               from: incoming.from,

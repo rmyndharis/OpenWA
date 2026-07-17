@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `500 Internal server error` on every load while the rest of the dashboard kept working from stored data.
   Operators on v0.8.17 hitting that symptom found nothing in the release notes matching it and so had no
   reason to upgrade. No behavior change, and no change to which release carries the fix — it is still
-  v0.8.18. Refs #753, #757.
+  v0.8.18. The chat-list site was first reported here by @SkywardLab in #748.
+  Refs #748, #753, #757.
 
 - **Typed SDK response models now match the status, label, and channel payloads the server actually
   returns.** The status, label, and channel routes hand back the engine-neutral shape from
@@ -109,6 +110,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — that signal existed all along and is now written down. No behavior change. Refs #738.
 
 ### Fixed
+
+- **Inbound messages keep their id on a WhatsApp Web build that renamed the field.** The id-rename
+  sweep (#762/#765/#773) taught the send, ack and status paths to read `$1` when `_serialized` is
+  absent, but missed the busiest path of all: `buildIncomingMessageBase`, which runs on every message
+  that arrives (`onMessage`) and every message the account sends from a linked phone
+  (`onMessage_create`). It read `msg.id._serialized` unguarded — and its parameter type declared the
+  id as `{ _serialized: string }`, so the renamed field was not merely unread but *unreachable*
+  without a cast, and the `id: string` it produced was `undefined` at runtime. On an affected build
+  without the build-time backport applied, every inbound message reached the webhook, the WebSocket
+  and the database with no id: nothing to dedup on, nothing to quote in a reply, nothing for an ack
+  to match. The id now falls back to `$1`, and an id readable by neither name reports the same empty
+  sentinel the send path uses — normalized to NULL at the persist chokepoint, mirroring
+  `saveOutgoingMessage`, because the non-partial `(sessionId, waMessageId)` unique index exempts NULL
+  but would collide the second `''`.
 - **Logs CSV export truncated at 200 rows.** The export loop requested 500-row pages and treated any
   short page as the last one, but `GET /audit` clamps `limit` to `MAX_AUDIT_PAGE_SIZE` (200) — so the
   first page always looked short and every export stopped at 200 rows regardless of how much history

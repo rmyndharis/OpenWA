@@ -29,6 +29,20 @@ describe('buildIncomingMessageBase', () => {
     expect(r.isLidSender).toBeUndefined(); // a normal @c.us sender is not flagged
   });
 
+  it('reads a renamed `$1` id when the dependency has not normalized it (#747)', () => {
+    // The live inbound path. Without this, every arriving message on a renamed build carries
+    // `id: undefined` — no dedup key, no reply target, nothing to match an ack against.
+    const r = buildIncomingMessageBase({ ...base, id: { $1: 'MSG_RENAMED' } });
+    expect(r.id).toBe('MSG_RENAMED');
+  });
+
+  it('reports an unreadable id as the empty sentinel rather than undefined', () => {
+    // `''` means "received, id unreadable" and is normalized to NULL at the persist chokepoint.
+    // `undefined` would type-lie about `IncomingMessage.id: string`.
+    const r = buildIncomingMessageBase({ ...base, id: {} });
+    expect(r.id).toBe('');
+  });
+
   it('flags a 1:1 sender identified by an @lid privacy id (#263)', () => {
     const r = buildIncomingMessageBase({ ...base, from: '111@lid' });
     expect(r.isLidSender).toBe(true);

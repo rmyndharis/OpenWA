@@ -1,4 +1,5 @@
 import { IncomingMessage, MessageContact, MessageType } from '../interfaces/whatsapp-engine.interface';
+import type { SerializedWid } from '../types/whatsapp-web-js.types';
 
 /**
  * Map a whatsapp-web.js `MessageTypes` token to the engine-neutral {@link MessageType}, so no
@@ -44,7 +45,13 @@ export function mapWwebjsMessageType(raw: string): MessageType {
  * unit-testable without constructing a full wwebjs `Message`.
  */
 export interface RawMessageFields {
-  id: { _serialized: string };
+  /**
+   * Typed as the raw wid rather than `{ _serialized: string }`: a WA Web build that renamed the field
+   * to `$1` (#747) leaves `_serialized` undefined, and the old type made that state unrepresentable —
+   * so `$1` could not even be read without a cast, and the unsound `id: string` it fed was `undefined`
+   * at runtime on every inbound message.
+   */
+  id: SerializedWid;
   from: string;
   to: string;
   body: string;
@@ -69,7 +76,12 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
   // for an incoming message it's the reverse. So the chat is `to` when fromMe, else `from`.
   const chatId = msg.fromMe ? msg.to : msg.from;
   const incoming: IncomingMessage = {
-    id: msg.id._serialized,
+    // Read `$1` before giving up, as the send/ack/status paths do (#762/#765/#773). This runs on the
+    // LIVE inbound path (`onMessage`/`onMessageCreate`), so on a renamed build without the build-time
+    // backport every arriving message otherwise carries `id: undefined`. The empty sentinel means
+    // "received, id unreadable" and is normalized to NULL where it is persisted — never to `''`, which
+    // the non-partial (sessionId, waMessageId) unique index would collide the second such message on.
+    id: msg.id._serialized ?? msg.id.$1 ?? '',
     from: msg.from,
     to: msg.to,
     chatId,
