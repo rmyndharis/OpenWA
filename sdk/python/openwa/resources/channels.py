@@ -9,7 +9,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .._http import quote_segment
-from ..types import ChannelMessageQuery, ChannelRecord, MessageRecord, SubscribeChannelRequest, SuccessResult
+from ..types import (
+    ChannelMessageQuery,
+    ChannelMessageRecord,
+    ChannelRecord,
+    SubscribeChannelRequest,
+    SuccessResult,
+)
 
 if TYPE_CHECKING:
     from .._http import HttpExecutor
@@ -27,7 +33,7 @@ class ChannelsResource:
 
     def messages(
         self, session_id: str, channel_id: str, query: ChannelMessageQuery | None = None
-    ) -> list[MessageRecord]:
+    ) -> list[ChannelMessageRecord]:
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/channels/{quote_segment(channel_id)}/messages", query=query
         )

@@ -28,8 +28,8 @@ func (s *ChannelsService) Get(ctx context.Context, sessionID, channelID string) 
 }
 
 // Messages returns recent messages from a channel.
-func (s *ChannelsService) Messages(ctx context.Context, sessionID, channelID string, query *ChannelMessageQuery) ([]MessageRecord, error) {
-	var out []MessageRecord
+func (s *ChannelsService) Messages(ctx context.Context, sessionID, channelID string, query *ChannelMessageQuery) ([]ChannelMessageRecord, error) {
+	var out []ChannelMessageRecord
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(channelID)+"/messages", valuesOf(query), nil, &out)
 	return out, err
 }

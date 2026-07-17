@@ -503,15 +503,31 @@ export interface DeleteChatRequest {
 // ── Status / Stories ──────────────────────────────────────────────
 
 /**
- * Weak shape returned by the GET status endpoints (`list`/`fromContact`).
- * The server payload there is loose/different; fields are all optional.
+ * One status/story from the GET status endpoints (`list`/`fromContact`), which answer a
+ * `{ statuses: [...] }` envelope. Mirrors the backend `Status` — the engine payload is returned
+ * as-is, with no DTO in between.
  */
 export interface StatusRecord {
-  id?: string;
-  statusId?: string;
-  type?: string;
-  body?: string | null;
-  timestamp?: string | number;
+  id: string;
+  /** Whose story this is. */
+  contact: {
+    id: Jid;
+    name?: string;
+    pushName?: string;
+  };
+  type: 'text' | 'image' | 'video';
+  /** Text body for a text status, caption for an image/video one. */
+  caption?: string;
+  // Declared by the backend `Status`, but no engine populates them on a read yet: whatsapp-web.js
+  // maps neither, and Baileys does not support reading statuses at all. Present for forward
+  // compatibility — do not expect them on a response today.
+  mediaUrl?: string;
+  backgroundColor?: string;
+  font?: number;
+  /** ISO 8601 timestamp of the post. */
+  timestamp: string;
+  /** ISO 8601 expiry — 24h after `timestamp`. */
+  expiresAt: string;
 }
 
 /**
@@ -611,11 +627,12 @@ export type UpdateTemplateRequest = Partial<CreateTemplateRequest>;
 
 // ── Label (WhatsApp Business) ─────────────────────────────────────
 
+/** Mirrors the backend `Label` — returned by the engine as-is, with no DTO in between. */
 export interface LabelRecord {
   id: string;
   name: string;
-  color?: string;
-  colorHex?: string;
+  /** Label colour as a hex string, e.g. `#25D366`. */
+  hexColor: string;
 }
 
 export interface AddLabelRequest {
@@ -624,13 +641,33 @@ export interface AddLabelRequest {
 
 // ── Channel / Newsletter ──────────────────────────────────────────
 
+/** Mirrors the backend `Channel` — returned by the engine as-is, with no DTO in between. */
 export interface ChannelRecord {
   id: Jid;
-  name?: string;
-  description?: string | null;
+  name: string;
+  description?: string;
+  /** Invite code from the channel link. */
+  inviteCode?: string;
   subscriberCount?: number;
-  pictureUrl?: string | null;
-  role?: string;
+  /** Channel picture URL. Populated by Baileys; whatsapp-web.js omits it. */
+  picture?: string;
+  verified?: boolean;
+  /** Channel creation time as reported by the engine. Populated by Baileys; whatsapp-web.js omits it. */
+  createdAt?: number;
+}
+
+/**
+ * A message read live from a channel by `channels.messages()`. This is the engine payload
+ * (backend `ChannelMessage`), NOT the persisted {@link MessageRecord} — that endpoint reads
+ * WhatsApp directly and never touches the message store.
+ */
+export interface ChannelMessageRecord {
+  id: string;
+  body: string;
+  /** Unix timestamp in seconds. */
+  timestamp: number;
+  hasMedia: boolean;
+  mediaUrl?: string;
 }
 
 export interface ChannelMessageQuery {

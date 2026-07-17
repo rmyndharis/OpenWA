@@ -5,8 +5,8 @@ import static com.rmyndharis.openwa.http.Http.encodeSegment;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.ChannelMessageQuery;
+import com.rmyndharis.openwa.model.ChannelMessageRecord;
 import com.rmyndharis.openwa.model.ChannelRecord;
-import com.rmyndharis.openwa.model.MessageRecord;
 import com.rmyndharis.openwa.model.SubscribeChannelRequest;
 import com.rmyndharis.openwa.model.SuccessResult;
 import java.util.List;
@@ -40,13 +40,13 @@ public final class ChannelsResource {
     }
 
     /** Get recent messages from a channel. */
-    public List<MessageRecord> messages(String sessionId, String channelId, ChannelMessageQuery query) {
+    public List<ChannelMessageRecord> messages(String sessionId, String channelId, ChannelMessageQuery query) {
         return client.requestList(
             HttpMethod.GET,
             "/api/sessions/" + encodeSegment(sessionId) + "/channels/" + encodeSegment(channelId) + "/messages",
             query,
             null,
-            MessageRecord.class);
+            ChannelMessageRecord.class);
     }
 
     /** Subscribe to a channel using its invite code. Requires an OPERATOR-level key. */

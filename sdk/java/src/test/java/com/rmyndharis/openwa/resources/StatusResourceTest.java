@@ -10,6 +10,7 @@ import com.rmyndharis.openwa.model.SendImageStatusRequest;
 import com.rmyndharis.openwa.model.SendTextStatusRequest;
 import com.rmyndharis.openwa.model.SendVideoStatusRequest;
 import com.rmyndharis.openwa.model.StatusMediaInput;
+import com.rmyndharis.openwa.model.StatusRecord;
 import com.rmyndharis.openwa.support.MockTransport;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,24 @@ class StatusResourceTest {
         status.list("s");
         assertEquals("http://h/api/sessions/s/status", tx.lastRequest().url());
         assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    /** Guards the wire contract: the backend `Status` carries contact/caption/expiresAt, never statusId/body (#754). */
+    @Test
+    void listDeserializesTheStatusWireShape() {
+        tx.respond(
+            200,
+            "{\"statuses\":[{\"id\":\"s1\",\"contact\":{\"id\":\"628@c.us\",\"pushName\":\"Ana\"},"
+                + "\"type\":\"image\",\"caption\":\"hi\",\"timestamp\":\"2026-01-01T00:00:00.000Z\","
+                + "\"expiresAt\":\"2026-01-02T00:00:00.000Z\"}]}");
+        StatusRecord record = status.list("s").statuses().get(0);
+        assertEquals("s1", record.id());
+        assertEquals("628@c.us", record.contact().id());
+        assertEquals("Ana", record.contact().pushName());
+        assertEquals("image", record.type());
+        assertEquals("hi", record.caption());
+        assertEquals("2026-01-01T00:00:00.000Z", record.timestamp());
+        assertEquals("2026-01-02T00:00:00.000Z", record.expiresAt());
     }
 
     @Test

@@ -9,8 +9,8 @@ import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   ChannelMessageQuery,
+  ChannelMessageRecord,
   ChannelRecord,
-  MessageRecord,
   SubscribeChannelRequest,
   SuccessResult,
 } from '../types.js';
@@ -35,8 +35,8 @@ export class ChannelsResource {
   }
 
   /** Get recent messages from a channel. */
-  messages(sessionId: string, channelId: string, query?: ChannelMessageQuery): Promise<MessageRecord[]> {
-    return this.client.request<MessageRecord[]>({
+  messages(sessionId: string, channelId: string, query?: ChannelMessageQuery): Promise<ChannelMessageRecord[]> {
+    return this.client.request<ChannelMessageRecord[]>({
       method: 'GET',
       path: `/api/sessions/${encodeSegment(sessionId)}/channels/${encodeSegment(channelId)}/messages`,
       query,

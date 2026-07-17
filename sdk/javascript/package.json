@@ -22,7 +22,7 @@
         "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json',JSON.stringify({type:'commonjs'}))\"",
         "prepublishOnly": "npm run build",
         "dev": "tsc -p tsconfig.esm.json --watch",
-        "test": "vitest run",
+        "test": "tsc --noEmit && vitest run",
         "test:watch": "vitest",
         "smoke": "node scripts/smoke.mjs",
         "typecheck": "tsc --noEmit"

@@ -660,3 +660,62 @@ func TestContextCancel(t *testing.T) {
 		t.Fatal("expected context cancellation error")
 	}
 }
+
+// The channel routes return the engine-neutral Channel verbatim (no DTO), so the record must carry
+// inviteCode/picture/verified/createdAt and must not invent pictureUrl/role (#754).
+func TestChannelListDecodesWireShape(t *testing.T) {
+	rt := &recordTransport{
+		status: 200,
+		body: `[{"id":"123@newsletter","name":"News","description":"d","inviteCode":"abc123",` +
+			`"subscriberCount":7,"picture":"https://x/p.jpg","verified":true,"createdAt":1700000000}]`,
+	}
+	c := newTestClient(t, rt)
+
+	got, err := c.Channels.List(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("Channels.List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 channel, got %d", len(got))
+	}
+	ch := got[0]
+	if ch.InviteCode == nil || *ch.InviteCode != "abc123" {
+		t.Errorf("InviteCode: %+v", ch.InviteCode)
+	}
+	if ch.Picture == nil || *ch.Picture != "https://x/p.jpg" {
+		t.Errorf("Picture: %+v", ch.Picture)
+	}
+	if ch.Verified == nil || !*ch.Verified {
+		t.Errorf("Verified: %+v", ch.Verified)
+	}
+	if ch.CreatedAt == nil || *ch.CreatedAt != 1700000000 {
+		t.Errorf("CreatedAt: %+v", ch.CreatedAt)
+	}
+}
+
+// Channel messages are the live engine payload, not the persisted MessageRecord (#754).
+func TestChannelMessagesDecodeEngineShape(t *testing.T) {
+	rt := &recordTransport{
+		status: 200,
+		body:   `[{"id":"m1","body":"hi","timestamp":1700000000,"hasMedia":true,"mediaUrl":"https://x/m.jpg"}]`,
+	}
+	c := newTestClient(t, rt)
+
+	got, err := c.Channels.Messages(context.Background(), "s1", "123@newsletter", nil)
+	if err != nil {
+		t.Fatalf("Channels.Messages: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 message, got %d", len(got))
+	}
+	msg := got[0]
+	if msg.ID != "m1" || msg.Body != "hi" || msg.Timestamp != 1700000000 {
+		t.Errorf("scalar decode: %+v", msg)
+	}
+	if !msg.HasMedia {
+		t.Errorf("HasMedia: %+v", msg.HasMedia)
+	}
+	if msg.MediaURL != "https://x/m.jpg" {
+		t.Errorf("MediaURL: %q", msg.MediaURL)
+	}
+}

@@ -40,6 +40,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reason to upgrade. No behavior change, and no change to which release carries the fix — it is still
   v0.8.18. Refs #753, #757.
 
+- **Typed SDK response models now match the status, label, and channel payloads the server actually
+  returns.** The status, label, and channel routes hand back the engine-neutral shape from
+  `whatsapp-engine.interface.ts` verbatim — no DTO, no remap — but the record types the typed SDKs
+  declare for them were hand-written and never bound to that contract, so they advertised fields the
+  server never sends while omitting most of the ones it does. `StatusRecord` gains
+  `contact`/`caption`/`expiresAt` (plus the declared-but-not-yet-populated
+  `mediaUrl`/`backgroundColor`/`font`) and drops the never-sent `statusId`/`body`; `LabelRecord`
+  replaces `color`/`colorHex` with the real `hexColor`; `ChannelRecord` gains
+  `inviteCode`/`picture`/`verified`/`createdAt` and drops the never-sent `pictureUrl`/`role`; and
+  channel messages get a dedicated `ChannelMessageRecord` (`id`/`body`/`timestamp`/`hasMedia`/`mediaUrl`)
+  instead of being typed as the persisted `MessageRecord`, which that endpoint never returns — it reads
+  WhatsApp live. This mirrors how `ChatHistoryMessage` already models the live `messages.history()`
+  payload. Status timestamps are typed as the ISO 8601 strings they serialize to rather than
+  `Date`/`Object`. JavaScript, Python, and Java needed all four corrections; Go needed the two channel
+  ones (its status and label models were already right). The PHP SDK is array-based and unaffected.
+  ⚠️ **Breaking (typed SDK consumers):** every field named here was one the server has never sent (always
+  `undefined`/`null`), so the code reading it was already broken at runtime; it now fails to compile.
+  `label.color`/`label.colorHex` → `label.hexColor`; `channel.pictureUrl` → `channel.picture`;
+  `status.statusId` → `status.id`; `status.body` → `status.caption`. `channel.role` has no successor —
+  the server has no such field, so drop the read. Conversely the
+  real fields (`status.contact`, `channel.inviteCode`, `message.hasMedia`, …) were previously compile
+  errors and now resolve. Nothing caught this before: these controllers declare no `@ApiResponse` type,
+  so `openapi.json` carries no response schema for them and `openapi:check` had nothing to diff, while
+  the SDK suites mocked the transport and asserted URLs only. A type-level wire contract
+  (`sdk/javascript/test/wire-contract.test-d.ts`, gated by `tsc` in the JavaScript SDK's `npm test`) plus
+  per-model decode guards in the Java and Go suites now pin the models to the engine shapes. Refs #754.
+
 - **Swagger now agrees with the engine capability matrix on status and catalog (docs only).** Eight
   operations were describing something other than what they do, and the drift ran in both directions.
   The three status-post routes were labelled "(Baileys only)" — stale since #714 wired them on
