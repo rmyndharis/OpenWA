@@ -1605,6 +1605,24 @@ describe('WhatsAppWebJsAdapter message_revoke_everyone (forwards the original de
     expect(revoked.id).toBe('REVOKE_NOTIF_2');
     expect(revoked.revokedId).toBeUndefined();
   });
+
+  it('reads renamed `$1` ids on both sides (#747)', () => {
+    // `revokedId` needs this even on a patched tree: Client.js overwrites the normalized id with a raw
+    // spread of `protocolMessageKey`, which neither normalization layer touches. Losing it strands the
+    // revocation — the UPDATE matches no row and the deleted body stays in the DB.
+    const { onMessageRevoked, client } = wireRevokeHandler();
+
+    client.emit(
+      'message_revoke_everyone',
+      { id: { $1: 'REVOKE_NOTIF_RENAMED' }, from: 'peer@c.us', to: 'me@c.us', timestamp: 1700000072 },
+      { id: { $1: 'ORIGINAL_RENAMED' } },
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const revoked = onMessageRevoked.mock.calls[0][0] as { id: string; revokedId?: string };
+    expect(revoked.id).toBe('REVOKE_NOTIF_RENAMED');
+    expect(revoked.revokedId).toBe('ORIGINAL_RENAMED');
+  });
 });
 
 describe('outbound mentions (#530)', () => {

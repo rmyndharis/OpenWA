@@ -22,7 +22,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 ## Unwired-capability inventory
 
-24 of the 71 interface methods are `not-available` on at least one adapter (31 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
+14 of the 71 interface methods are `not-available` on at least one adapter (19 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
 
 ### Channels / Newsletter
 
@@ -147,6 +147,6 @@ These are honestly out of reach of a clean adapter wiring because the installed 
 ## Snapshot summary
 
 - **71** interface methods, **142** adapter-cells (71 × 2 engines).
-- **111** supported cells; **31** not-available cells across **24** methods.
-- Of the 31 not-available cells: **17 adapter-gaps** (fixable) + **14 library-limitations** + **0 uncertain**.
-- **5 phantom-support corrections** in this re-frame (wwjs catalog + status-read methods that stubbed without throwing are now honestly `not-available`).
+- **123** supported cells; **19** not-available cells across **14** methods.
+- Of the 19 not-available cells: **5 adapter-gaps** (fixable) + **14 library-limitations** + **0 uncertain**.
+- **3 phantom-support rows** (wwjs `getCatalog`/`getProducts`/`getProduct` — they stub without throwing, so the drift gate's throw-heuristic cannot see them; the matrix is the source of truth for these).

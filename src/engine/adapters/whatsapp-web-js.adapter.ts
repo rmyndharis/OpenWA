@@ -627,9 +627,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         // ORIGINAL deleted message (when whatsapp-web.js has it in the local store).
         // We forward `before.id` as `revokedId` so consumers can reconcile the
         // deleted message in their own storage.
+        // Both ids read `$1` before giving up (#747). `revokedId` needs it even on a patched tree:
+        // `Client.js` overwrites the normalized id with a raw spread of `protocolMessageKey`
+        // (`revoked_msg.id = { ...message.protocolMessageKey }`), and that key is normalized by
+        // neither the structure constructor nor the injected serializer — so this is the one place a
+        // patched build still hands us a raw MsgKey. Losing it strands the revocation: the UPDATE
+        // falls back to the notification's own id, matches no row, and the deleted body stays put.
+        const afterId = after.id as unknown as SerializedWid | undefined;
+        const beforeId = before?.id as unknown as SerializedWid | undefined;
         const payload: RevokedMessage = {
-          id: after.id._serialized,
-          revokedId: before?.id?._serialized,
+          id: afterId?._serialized ?? afterId?.$1 ?? '',
+          revokedId: beforeId?._serialized ?? beforeId?.$1,
           chatId: after.from === selfWid ? after.to : after.from,
           from: after.from,
           to: after.to,
@@ -1616,7 +1624,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
     const messages = await channel.fetchMessages({ limit });
     return (messages ?? []).map(msg => ({
-      id: String(typeof msg.id === 'object' ? msg.id._serialized : msg.id),
+      // Read `$1` before the sentinel (#747), and don't `String()` the object branch: that turned an
+      // unreadable id into the literal "undefined" rather than the empty sentinel every other path
+      // uses. Read-only endpoint — never persisted, never ack-matched — so `''` carries no collision
+      // risk here; it just means "id unreadable".
+      id: (typeof msg.id === 'object' ? (msg.id?._serialized ?? msg.id?.$1) : msg.id) || '',
       body: String(msg.body || ''),
       timestamp: Number(msg.timestamp),
       hasMedia: Boolean(msg.hasMedia),
@@ -1789,7 +1801,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       for (const msg of broadcast.msgs) {
         const ts = new Date(msg.timestamp * 1000);
         statuses.push({
-          id: msg.id._serialized,
+          // `deleteStatus` takes this id as its revoke handle, so losing it to the rename makes a
+          // listed status unactionable (#747). The contact id above is a Wid and is unaffected.
+          id: ((msg.id as unknown as SerializedWid)?._serialized ?? (msg.id as unknown as SerializedWid)?.$1) || '',
           contact: contactSummary,
           type: msg.type === MessageTypes.IMAGE ? 'image' : msg.type === MessageTypes.VIDEO ? 'video' : 'text',
           ...(msg.body ? { caption: msg.body } : {}),

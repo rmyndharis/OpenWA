@@ -162,7 +162,6 @@ services:
       - RATE_LIMIT_TTL=${RATE_LIMIT_TTL:-60}
       - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
       # Plugins
-      - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
       - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}

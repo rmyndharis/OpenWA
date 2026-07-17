@@ -1184,7 +1184,7 @@ flowchart TB
 | **Community** | Large | Large |
 | **Multi-device** | ✅ | ✅ |
 | **QR Code** | ✅ | ✅ |
-| **Phone Link** | ❌ | ✅ |
+| **Phone Link** | ✅ | ✅ |
 | **Maintenance** | Active | Active |
 
 ### Benefits of Abstraction

@@ -3,7 +3,7 @@
 Official client libraries for the [OpenWA](https://github.com/rmyndharis/OpenWA)
 WhatsApp API Gateway.
 
-All four SDKs are **hand-written** against the exact API surface (paths, DTOs,
+All five SDKs are **hand-written** against the exact API surface (paths, DTOs,
 response shapes) and **unit-tested with mocked HTTP transports** that assert on
 the precise request URL, method, and body — so drift is caught at test time.
 The wire types live in a dedicated module (`types.ts` / `types.py` / `model/`)
@@ -20,7 +20,7 @@ hand-written resource methods.
 
 ## Coverage
 
-All three SDKs expose the same fluent resource surface:
+All five SDKs expose the same fluent resource surface:
 
 | Resource   | Methods                                                                                                                                                                                |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

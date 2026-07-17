@@ -71,7 +71,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'not-available', rootCause: 'adapter-gap' },
     evidence:
-      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) + getCollections (business.d.ts:11) — adapter unwired (returns Product[]+cursor, not Catalog metadata; medium-confidence shape synthesis); wwjs index.d.ts has NO Client.getCatalog (0 hits), adapter stubs to null @whatsapp-web-js.adapter.ts:1895',
+      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) + getCollections (business.d.ts:11) — adapter unwired (returns Product[]+cursor, not Catalog metadata; medium-confidence shape synthesis); wwjs index.d.ts has NO Client.getCatalog (0 hits), adapter stubs to null @WhatsAppWebJsAdapter.getCatalog',
   },
   getChannelById: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getChannelMessages: {
@@ -133,13 +133,13 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'not-available', rootCause: 'adapter-gap' },
     evidence:
-      'baileys only getCatalog (Socket/business.d.ts:7); getProduct = getCatalog then find-by-id (compose-and-filter, loads whole page; medium-confidence); wwjs no Client.getProduct — only page-internal getProductMetadata (Utils.js:1253), not a public Client fn; adapter stubs to null @whatsapp-web-js.adapter.ts:1911',
+      'baileys only getCatalog (Socket/business.d.ts:7); getProduct = getCatalog then find-by-id (compose-and-filter, loads whole page; medium-confidence); wwjs no Client.getProduct — only page-internal getProductMetadata (Utils.js:1253), not a public Client fn; adapter stubs to null @WhatsAppWebJsAdapter.getProduct',
   },
   getProducts: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
     baileys: { status: 'not-available', rootCause: 'adapter-gap' },
     evidence:
-      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) → {products, nextPageCursor} — adapter unwired; wwjs no Client.getProducts in index.d.ts (0 hits); adapter stubs to empty @whatsapp-web-js.adapter.ts:1902',
+      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) → {products, nextPageCursor} — adapter unwired; wwjs no Client.getProducts in index.d.ts (0 hits); adapter stubs to empty @WhatsAppWebJsAdapter.getProducts',
   },
   getProfilePicture: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getPushName: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },

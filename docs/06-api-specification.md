@@ -2235,7 +2235,7 @@ Get business catalog info for the session's WhatsApp Business account.
 }
 ```
 
-Returns `null` when the account has no catalog (catalog is a WhatsApp Business-only feature; non-business accounts may yield `null`). The response is the raw `engine.getCatalog()` return — no envelope.
+**Not implemented on any engine.** whatsapp-web.js returns `null` unconditionally (it has no native Catalog API and the adapter stubs without calling the client); Baileys raises `501`. The shape below documents the contract, not a response you can obtain today. The response is the raw `engine.getCatalog()` return — no envelope.
 
 **Errors:** `401` missing/invalid API key · `404` `Session <sessionId> not found or not connected` · `500` engine error
 
@@ -2346,13 +2346,18 @@ Send a product message (catalog product card) to a chat. Note: this route lives 
 }
 ```
 
-**Response** `201`
+**Response** `501` — always (not implemented)
 
 ```json
-{ "id": "true_6281234567890@c.us_3EB0...", "timestamp": 1719331200 }
+{
+  "statusCode": 501,
+  "message": "Operation not supported by the active engine: sendProduct",
+  "error": "Not Implemented"
+}
 ```
 
-`timestamp` is an epoch number (seconds).
+No engine implements this. whatsapp-web.js and Baileys both raise `EngineNotSupportedError`, so the
+route cannot return a success body on any deployment; it is documented here because it is mounted.
 
 **Errors:** `400` missing `chatId`/`productId`, wrong types, or any field not on the DTO · `401` missing/invalid API key · `403` API-key role below OPERATOR · `404` `Session <sessionId> not found or not connected` · `500` engine error
 
@@ -2382,13 +2387,18 @@ Send the business catalog link to a chat. Note: this route lives under the `/mes
 }
 ```
 
-**Response** `201`
+**Response** `501` — always (not implemented)
 
 ```json
-{ "id": "true_6281234567890@c.us_3EB0...", "timestamp": 1719331200 }
+{
+  "statusCode": 501,
+  "message": "Operation not supported by the active engine: sendCatalog",
+  "error": "Not Implemented"
+}
 ```
 
-`timestamp` is an epoch number (seconds).
+No engine implements this. whatsapp-web.js and Baileys both raise `EngineNotSupportedError`, so the
+route cannot return a success body on any deployment; it is documented here because it is mounted.
 
 **Errors:** `400` missing/invalid `chatId` or any non-DTO field · `401` missing/invalid API key · `403` API-key role below OPERATOR · `404` `Session <sessionId> not found or not connected` · `500` engine error
 
@@ -2762,7 +2772,7 @@ Same `{ statuses }` wrapper and `Status` shape as the list-all route.
 
 #### POST /api/sessions/:sessionId/status/send-text
 
-Post a text status (story) to the session's status feed. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
+Post a text status (story) to the session's status feed. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience.
 
 **Auth:** API key (OPERATOR)
 
@@ -2777,7 +2787,7 @@ Post a text status (story) to the session's status feed. **Baileys engine only**
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | text | string | yes | — | Status text body |
-| recipients | string[] | yes | 1–256 items, each matching `^\d+@(c\.us\|lid)$` | JIDs of the contacts permitted to view the status (passed as `statusJidList` to the engine). Empty array → `400` |
+| recipients | string[] | yes | 1–256 items, each matching `^\d+@(c\.us\|lid)$` | JIDs of the contacts permitted to view the status. **Honored on Baileys only** (passed as `statusJidList`); whatsapp-web.js ignores the allow-list and broadcasts to the account's status-privacy audience. Empty array → `400` |
 | backgroundColor | string | no | 6-digit hex color matching `^#[0-9A-Fa-f]{6}$` | e.g. `#25D366`; bad value → `backgroundColor must be a hex color (e.g., #25D366)` |
 | font | integer | no | integer `0`–`5` | Font index |
 
@@ -2801,11 +2811,11 @@ Returns the engine `StatusResult` directly (no wrapper). POST default status is 
 
 **Sender-side caveat:** the posting account's own phone may display a "waiting for this status update" notice in its status feed; this is cosmetic — recipients view the status normally.
 
-**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients, bad `backgroundColor`/`font`), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; WA Web removed `WAWebStatusGatingUtils.canCheckStatusRankingPosterGating` around 2026-04-30, so the wwebjs path is upstream-blocked — see #455)
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients, bad `backgroundColor`/`font`), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
 
 #### POST /api/sessions/:sessionId/status/send-image
 
-Post an image status (story) from a URL or base64 payload. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
+Post an image status (story) from a URL or base64 payload. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience.
 
 **Auth:** API key (OPERATOR)
 
@@ -2846,11 +2856,11 @@ Returns the engine `StatusResult` directly. POST default status is `201`.
 
 **Recipient JIDs:** `@c.us` (regular phone) recipients are reliable. `@lid` (privacy-id) recipients are best-effort and unverified — prefer `@c.us` where the phone number is known. **Sender-side caveat:** the posting account's own phone may show a "waiting for this status update" notice; recipients view it normally.
 
-**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; see `send-text` and #455)
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
 
 #### POST /api/sessions/:sessionId/status/send-video
 
-Post a video status (story) from a URL or base64 payload. **Baileys engine only** — a whatsapp-web.js session returns `501` (see Errors).
+Post a video status (story) from a URL or base64 payload. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience.
 
 **Auth:** API key (OPERATOR)
 
@@ -2891,7 +2901,7 @@ Returns the engine `StatusResult` directly. POST default status is `201`.
 
 **Recipient JIDs:** `@c.us` (regular phone) recipients are reliable. `@lid` (privacy-id) recipients are best-effort and unverified — prefer `@c.us` where the phone number is known. **Sender-side caveat:** the posting account's own phone may show a "waiting for this status update" notice; recipients view it normally.
 
-**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected · `501` the session is on the whatsapp-web.js engine (status posting is Baileys-only; see `send-text` and #455)
+**Errors:** `400` validation failure (unknown body field, missing/empty `recipients`, a JID not matching `@c.us`/`@lid`, or more than 256 recipients), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role · `404` session not found / not connected
 
 #### DELETE /api/sessions/:sessionId/status/:statusId
 

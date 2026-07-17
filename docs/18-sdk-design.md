@@ -9,12 +9,14 @@ OpenWA ships five official, hand-written client libraries for the REST API. They
 | JavaScript / TypeScript | [`@rmyndharis/openwa`](https://www.npmjs.com/package/@rmyndharis/openwa) | `npm install @rmyndharis/openwa` | Dual ESM + CJS, bundled `.d.ts` types, Node 18+ |
 | Python | [`rmyndharis-openwa`](https://pypi.org/project/rmyndharis-openwa/) | `pip install rmyndharis-openwa` | Synchronous (httpx), PEP 561 typed, Python 3.9+ |
 | PHP | [`rmyndharis/openwa`](https://packagist.org/packages/rmyndharis/openwa) | `composer require rmyndharis/openwa` | Synchronous (Guzzle 7), PSR-4, PHP 8.1+ |
+| Java | [`com.rmyndharis:openwa`](https://central.sonatype.com/artifact/com.rmyndharis/openwa) | Maven Central | Sync, `java.net.http`. See [`sdk/java/README.md`](../sdk/java/README.md). |
+| Go | [`github.com/rmyndharis/OpenWA/sdk/go`](../sdk/go) | `go get` | Stdlib-only, no third-party deps. See [`sdk/go/README.md`](../sdk/go/README.md). |
 
 > The import names differ from the dist names where the ecosystem requires it. Python installs `rmyndharis-openwa` but imports `openwa`; the client class is `OpenWAClient` in JS/Python and `OpenWA\Client` in PHP.
 
 ### Design Principles
 
-- **One client, fluent resources.** A single client object (`OpenWAClient` / `OpenWA\Client`) exposes every resource as a property — `client.messages.sendText(...)`, `client.sessions.start(...)`. All three SDKs expose the **same** resource surface; only the language idioms differ (camelCase methods + objects in JS/PHP, snake_case methods + dicts in Python).
+- **One client, fluent resources.** A single client object (`OpenWAClient` / `OpenWA\Client`) exposes every resource as a property — `client.messages.sendText(...)`, `client.sessions.start(...)`. All five SDKs expose the **same** resource surface; only the language idioms differ (camelCase methods + objects in JS/PHP/Java, snake_case methods + dicts in Python, exported fields + structs in Go).
 - **It is a request/response client, not an event SDK.** There is no WebSocket, EventEmitter, or `client.on(...)`. To receive inbound messages and acks, register a webhook (the `webhooks` resource) and host your own receiver, or connect to the real-time Socket.IO API directly (see [API Specification §6.5](./06-api-specification.md)).
 - **Typed errors.** Non-2xx responses raise/throw a typed error mapped from the HTTP status (`401/403/404/409/429/501`), plus a timeout error — all `instanceof`/`catch`-checkable. See each language's Error Handling subsection.
 - **Injectable transport.** The HTTP layer is replaceable (`fetch` in JS, an `httpx` transport in Python, a Guzzle client in PHP) — the extension point for retry/observability middleware and for testing without the network.
@@ -22,7 +24,7 @@ OpenWA ships five official, hand-written client libraries for the REST API. They
 
 ### Resource Coverage
 
-All three SDKs expose the same fluent surface:
+All five SDKs expose the same fluent surface:
 
 | Resource | Methods |
 | --- | --- |
@@ -898,13 +900,15 @@ For installation and node-by-node configuration, see the dedicated [n8n Integrat
 
 ### Versioning
 
-The three SDKs are versioned **independently of the gateway** and of each other, each following SemVer. They are currently published at `0.1.0` while the gateway is at `0.7.3`; an SDK version does **not** track the gateway version. Pin the SDK version your code is tested against and treat a major SDK bump as potentially breaking.
+The five SDKs are versioned **independently of the gateway** and of each other, each following SemVer. An SDK version does **not** track the gateway version — check the registry for the current one rather than inferring it from the gateway's. Pin the SDK version your code is tested against and treat a major SDK bump as potentially breaking.
 
 | SDK | Registry | Package |
 | --- | --- | --- |
 | JavaScript/TypeScript | npm | `@rmyndharis/openwa` |
 | Python | PyPI | `rmyndharis-openwa` |
 | PHP | Packagist | `rmyndharis/openwa` |
+| Java | Maven Central | `com.rmyndharis:openwa` |
+| Go | (none — module path) | `github.com/rmyndharis/OpenWA/sdk/go` |
 
 ### Contract-drift protection
 
@@ -925,4 +929,4 @@ cd sdk/python && python -m pytest -q
 cd sdk/php && composer install && ./vendor/bin/phpunit
 ```
 
-CI runs all three suites (path-filtered to `sdk/**`). The PHP package is mirrored to its own Packagist repository via a `git subtree split`, and that mirror publish is gated on the PHP tests passing, so a broken SDK cannot auto-publish. Bump the version, update the SDK's CHANGELOG, run the suite above, then tag/publish to the relevant registry.
+CI runs all five suites (`sdk-ci.yml`), path-filtered to `sdk/**` plus the server-side contract surfaces the SDKs are written against — `src/**/dto/**`, `src/**/*.controller.ts`, `src/**/*.service.ts` and `whatsapp-engine.interface.ts` — so a change to the wire contract re-runs them. The PHP package is mirrored to its own Packagist repository via a `git subtree split`, and that mirror publish is gated on the PHP tests passing, so a broken SDK cannot auto-publish. Bump the version, update the SDK's CHANGELOG, run the suite above, then tag/publish to the relevant registry.

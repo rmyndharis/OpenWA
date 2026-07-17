@@ -105,7 +105,8 @@ export interface WwjsChannelData {
  * Channel message data.
  */
 export interface WwjsChannelMessage {
-  id: { _serialized: string } | string;
+  /** `SerializedWid`, not `{ _serialized: string }`: the latter makes the `$1` rename unreadable. */
+  id: SerializedWid | string;
   body?: string;
   type?: string;
   timestamp?: number;

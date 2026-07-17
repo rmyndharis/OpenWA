@@ -81,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty page with a warn log) and Baileys raises `501`; the sends are `501` on both. Every real response
   is now documented and the summaries name the gap. The matrix's own header claimed five whatsapp-web.js
   entries were `not-available` while two of the five it named said `supported` two lines below; it is
-  three, and the stale adapter line references in the catalog evidence now point at the real stubs. No
+  three, and the stale adapter line references in the catalog evidence now cite the symbols instead, so they cannot drift again. No
   behavior change; `openapi.json` regenerated.
 
 - **The send-response Swagger text now matches the prose it was corrected alongside (docs only).** The
@@ -110,6 +110,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — that signal existed all along and is now written down. No behavior change. Refs #738.
 
 ### Fixed
+
+- **A deleted message is cleared again on a WhatsApp Web build that renamed the id field.** The rename
+  sweep reached the send, ack, status and inbound paths but not `message_revoke_everyone`, which read
+  both ids unguarded. `revokedId` needed the fallback even on a patched install: whatsapp-web.js
+  overwrites the normalized id with a raw spread of the revocation's `protocolMessageKey`, and that key
+  is normalized by neither the structure constructor nor the injected serializer — so it is the one
+  place a fully patched build still hands back a raw key. Without it the id arrived undefined, the
+  update fell back to the notification's own id, matched no row, and the deleted message's text stayed
+  in the database and on the dashboard while WhatsApp showed it as deleted. The status listing
+  (`collectStatuses`) and channel-message reads had the same gap: a status whose id was lost could not
+  be revoked by `deleteStatus`, and a channel message reported the literal string `"undefined"` as its
+  id rather than the empty sentinel. The channel-message type declared the id in a shape that made the
+  renamed field unreadable without a cast, the same defect corrected on the inbound path.
+
+- **Documentation corrected where it contradicted the code.** `docs/06` told whatsapp-web.js operators —
+  the default engine — that posting a status returns `501`, which has been untrue since #714 wired it;
+  the shipped OpenAPI schema and the adapter both say otherwise. In the other direction it promised that
+  the `recipients` allow-list restricts who sees a status, which holds on Baileys but not on
+  whatsapp-web.js, where the list is ignored and the status reaches the account's whole status-privacy
+  audience with no error — the one drift here that could surprise someone about who read their status.
+  The catalog routes documented success bodies no engine can return (both sends always `501`; the reads
+  are stubs that return `null`/empty unconditionally). `docs/03` marked Phone Link unavailable on
+  whatsapp-web.js though the adapter has implemented it since #552. `docs/18` and `sdk/README.md` still
+  described three or four SDKs, listed three of five in their tables, omitted Maven Central entirely, and
+  pinned a gateway version last true at 0.7.3. The capability-matrix summary counts were stale
+  (recomputed from the matrix itself: 123 supported, 19 not-available across 14 methods), and its catalog
+  evidence now cites symbols rather than line numbers, which had drifted twice in two releases.
+
+- **`PLUGINS_ENABLED` removed from `.env.example` and the compose file.** It was documented, plumbed into
+  the container, and read by nothing — an operator setting it to `false` still got the full plugin
+  surface. The flag is gone rather than wired: the plugins module is `@Global()` and eight non-plugin
+  files inject its providers, so a genuine opt-out is a change of its own, not a release-eve edit. All
+  plugin routes remain ADMIN-only.
 
 - **Inbound messages keep their id on a WhatsApp Web build that renamed the field.** The id-rename
   sweep (#762/#765/#773) taught the send, ack and status paths to read `$1` when `_serialized` is
