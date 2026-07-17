@@ -141,7 +141,7 @@ async function bootstrap() {
           // font files from fonts.gstatic.com). Now that NestJS serves the dashboard under this CSP,
           // allow those origins or the @import'd fonts are blocked and the UI falls back to system fonts.
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-          scriptSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
           // `blob:` is needed for the outgoing image-attachment preview, which the dashboard renders
           // from a URL.createObjectURL(file) blob before the message is sent (Chats.tsx).
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
