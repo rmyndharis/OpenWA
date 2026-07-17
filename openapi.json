@@ -3860,7 +3860,7 @@
             "description": "Text status posted to the specified recipients."
           }
         },
-        "summary": "Post a text status (Baileys only)",
+        "summary": "Post a text status",
         "tags": [
           "status"
         ]
@@ -3894,7 +3894,7 @@
             "description": "Image status posted to the specified recipients."
           }
         },
-        "summary": "Post an image status (Baileys only)",
+        "summary": "Post an image status",
         "tags": [
           "status"
         ]
@@ -3928,7 +3928,7 @@
             "description": "Video status posted to the specified recipients."
           }
         },
-        "summary": "Post a video status (Baileys only)",
+        "summary": "Post a video status",
         "tags": [
           "status"
         ]
@@ -3981,10 +3981,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Business catalog metadata for the session."
+            "description": "Always null on whatsapp-web.js: catalog reads are not implemented on either engine."
+          },
+          "501": {
+            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
           }
         },
-        "summary": "Get business catalog info",
+        "summary": "Get business catalog info (not implemented by any engine)",
         "tags": [
           "catalog"
         ]
@@ -4027,10 +4030,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Paginated list of catalog products."
+            "description": "Always an empty page on whatsapp-web.js: catalog reads are not implemented on either engine."
+          },
+          "501": {
+            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
           }
         },
-        "summary": "List catalog products",
+        "summary": "List catalog products (not implemented by any engine)",
         "tags": [
           "catalog"
         ]
@@ -4059,10 +4065,13 @@
         ],
         "responses": {
           "200": {
-            "description": "The requested catalog product."
+            "description": "Always null on whatsapp-web.js: catalog reads are not implemented on either engine."
+          },
+          "501": {
+            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
           }
         },
-        "summary": "Get a specific product",
+        "summary": "Get a specific product (not implemented by any engine)",
         "tags": [
           "catalog"
         ]
@@ -4092,11 +4101,11 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Product message sent."
+          "501": {
+            "description": "Not supported by the active engine: no engine can send product messages."
           }
         },
-        "summary": "Send a product message",
+        "summary": "Send a product message (not supported by any engine)",
         "tags": [
           "catalog"
         ]
@@ -4126,11 +4135,11 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Catalog link sent."
+          "501": {
+            "description": "Not supported by the active engine: no engine can send catalog links."
           }
         },
-        "summary": "Send catalog link",
+        "summary": "Send catalog link (not supported by any engine)",
         "tags": [
           "catalog"
         ]

@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Swagger now agrees with the engine capability matrix on status and catalog (docs only).** The drift
+  ran in both directions. The three status-post routes were still labelled "(Baileys only)" — stale since
+  #714 wired them on whatsapp-web.js, and contradicted by the matrix, which has listed both engines as
+  `supported` ever since; the label told whatsapp-web.js users a working endpoint was unavailable to
+  them. In the other direction, the three catalog reads documented a plain `200` as though they returned
+  data, while the matrix marks all three `not-available` on both engines: whatsapp-web.js stubs them
+  (returning `null`/an empty page with a warn log) and Baileys raises `501`. Both real responses are now
+  documented, and the summaries say the capability is unimplemented — matching how the catalog *send*
+  routes next to them were already annotated. The matrix's own header claimed five whatsapp-web.js
+  entries were `not-available` while two of the five it named said `supported` two lines below; it is
+  three, and the stale adapter line references in the catalog evidence now point at the real stubs. No
+  behavior change; `openapi.json` regenerated.
+
 - **Corrected the send-response documentation (docs only).** The guidance added in #739 overstated what a
   stalled send tells you: it said a message resting at `sent` for a recipient you have never reached is
   "almost certainly a number that is not on WhatsApp." That inference does not hold in the other

@@ -27,7 +27,7 @@ export class StatusController {
 
   @Post('send-text')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Post a text status (Baileys only)' })
+  @ApiOperation({ summary: 'Post a text status' })
   @ApiResponse({ status: 201, description: 'Text status posted to the specified recipients.' })
   async sendTextStatus(@Param('sessionId') sessionId: string, @Body() dto: SendTextStatusDto) {
     return this.statusService.postTextStatus(sessionId, dto.text, {
@@ -39,7 +39,7 @@ export class StatusController {
 
   @Post('send-image')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Post an image status (Baileys only)' })
+  @ApiOperation({ summary: 'Post an image status' })
   @ApiResponse({ status: 201, description: 'Image status posted to the specified recipients.' })
   async sendImageStatus(@Param('sessionId') sessionId: string, @Body() dto: SendImageStatusDto) {
     return this.statusService.postImageStatus(sessionId, dto.image, {
@@ -50,7 +50,7 @@ export class StatusController {
 
   @Post('send-video')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Post a video status (Baileys only)' })
+  @ApiOperation({ summary: 'Post a video status' })
   @ApiResponse({ status: 201, description: 'Video status posted to the specified recipients.' })
   async sendVideoStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVideoStatusDto) {
     return this.statusService.postVideoStatus(sessionId, dto.video, {
