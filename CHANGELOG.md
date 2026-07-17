@@ -81,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untouched, since failing `npm install` outright is the trade the flag exists to avoid. Both fixes are
   regression-tested, including the `--best-effort` path.
 
+- **A status post no longer claims success it cannot prove, and no longer throws away a readable id.**
+  #762 established that `whatsapp-web.js` can *resolve* `undefined` instead of throwing, and that
+  reporting that as success is unrecoverable — so a send with no message back now fails loudly. Status
+  posts reach the identical `Client.js` path but were left on the old behavior: they returned **201**
+  with an empty `statusId` and a `new Date()` invented on the spot, for a status that may never have been
+  published. They now fail the same way sends do. Separately, the id was read only as `_serialized`, so
+  on a build that renamed the field to `$1` (#747) a status that posted perfectly well came back with
+  `statusId: ""` — and since `deleteStatus` takes that id as its revoke handle, the status could never be
+  taken down. The rename fallback the send path has since #762 is now applied here too. The same
+  fallback is added to the ack listener, where an unreadable id previously stranded a message at `sent`
+  forever — including the `failed` ack that is the only signal a send was rejected. Baileys is unaffected:
+  its send and status paths already agree with each other.
+
 - **The Message Tester no longer invents HTTP status codes.** Its result banner rendered one of two
   hardcoded strings — `200 OK - Success` or `400 - Failed` — for every outcome, in all eleven locales.
   Neither number was ever read from the response. Send routes return **201**, not 200, so the success
