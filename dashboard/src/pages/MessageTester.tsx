@@ -368,9 +368,11 @@ export function MessageTester() {
                     <span>{t('messageTester.failedLabel')}</span>
                   </>
                 )}
-                {/* `.mono` keeps the code LTR inside an RTL container (ar/he) via the shared rule in
-                    index.css, so the bidi algorithm doesn't reorder it against the translated label. */}
-                {response.status !== undefined && <span className="mono">HTTP {response.status}</span>}
+                {/* `<code>` earns both halves from index.css with no new rule: a monospace face, and the
+                    LTR isolation that stops the bidi algorithm reordering the number against an RTL label
+                    (ar/he). The `.mono` class only carries the second — its monospacing lives on compound
+                    selectors like `.detail-value.mono`, which a bare span never matches. */}
+                {response.status !== undefined && <code>HTTP {response.status}</code>}
               </div>
 
               <div className="response-details">

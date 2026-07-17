@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three, and the stale adapter line references in the catalog evidence now point at the real stubs. No
   behavior change; `openapi.json` regenerated.
 
+- **The send-response Swagger text now matches the prose it was corrected alongside (docs only).** The
+  `messageId` description still asserted that a message to a number not on WhatsApp "never delivers" —
+  the same unevidenced claim about WhatsApp's behavior that was retracted from `docs/06` in the same
+  change that edited this string. It now says what the prose says: the outcome reaches you
+  asynchronously, if at all. `openapi.json` regenerated.
+
+- **The Message Tester's status code renders in monospace.** It was emitted as `<span class="mono">`,
+  but every monospace rule in the dashboard hangs off a compound selector (`.detail-value.mono`), which
+  a bare span never matches — so the class contributed only the RTL direction isolation it was chosen
+  for, and nothing else. A plain `<code>` earns both from the existing global rules with no new CSS.
+
 - **Corrected the send-response documentation (docs only).** The guidance added in #739 overstated what a
   stalled send tells you: it said a message resting at `sent` for a recipient you have never reached is
   "almost certainly a number that is not on WhatsApp." That inference does not hold in the other
