@@ -549,8 +549,8 @@
     "sending": "שולח...",
     "viewOnly": "צפייה בלבד",
     "responseEmpty": "יש לשלוח הודעה כדי לראות את תגובת ה-API",
-    "successLabel": "200 OK - הצלחה",
-    "failedLabel": "400 - נכשל",
+    "successLabel": "הצלחה",
+    "failedLabel": "נכשל",
     "response": {
       "timestamp": "חותמת זמן",
       "messageId": "מזהה הודעה",

@@ -548,8 +548,8 @@
     "sending": "పంపుతోంది...",
     "viewOnly": "చూడటానికి మాత్రమే",
     "responseEmpty": "API రెస్పాన్స్ చూడటానికి ఒక సందేశాన్ని పంపండి",
-    "successLabel": "200 OK - విజయం",
-    "failedLabel": "400 - విఫలమైంది",
+    "successLabel": "విజయం",
+    "failedLabel": "విఫలమైంది",
     "response": {
       "timestamp": "సమయము",
       "messageId": "సందేశం ID",

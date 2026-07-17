@@ -548,8 +548,8 @@
     "sending": "Invio in corso...",
     "viewOnly": "Sola Visualizzazione",
     "responseEmpty": "Invia un messaggio per vedere la risposta delle API",
-    "successLabel": "200 OK - Successo",
-    "failedLabel": "400 - Fallito",
+    "successLabel": "Successo",
+    "failedLabel": "Fallito",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "ID Messaggio",

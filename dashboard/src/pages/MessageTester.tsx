@@ -13,6 +13,10 @@ interface ApiResponse {
   messageId?: string;
   timestamp: string;
   error?: string;
+  // The real HTTP status, carried on the Error by `request()` in services/api.ts. Absent when no
+  // request was made (the recipient pre-check below short-circuits) — the panel then shows the
+  // outcome without a code rather than inventing one.
+  status?: number;
 }
 
 const messageTypes = ['text', 'image', 'video', 'audio', 'document'] as const;
@@ -167,6 +171,7 @@ export function MessageTester() {
         success: false,
         timestamp: new Date().toISOString(),
         error: err instanceof Error ? err.message : t('messageTester.sendFailed'),
+        status: err instanceof Error ? (err as Error & { status?: number }).status : undefined,
       });
     } finally {
       setIsLoading(false);
@@ -363,6 +368,9 @@ export function MessageTester() {
                     <span>{t('messageTester.failedLabel')}</span>
                   </>
                 )}
+                {/* `.mono` keeps the code LTR inside an RTL container (ar/he) via the shared rule in
+                    index.css, so the bidi algorithm doesn't reorder it against the translated label. */}
+                {response.status !== undefined && <span className="mono">HTTP {response.status}</span>}
               </div>
 
               <div className="response-details">

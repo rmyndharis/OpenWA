@@ -503,8 +503,8 @@
     "sending": "Enviando...",
     "viewOnly": "Somente leitura",
     "responseEmpty": "Envie uma mensagem para ver a resposta da API",
-    "successLabel": "200 OK - Sucesso",
-    "failedLabel": "400 - Falhou",
+    "successLabel": "Sucesso",
+    "failedLabel": "Falhou",
     "response": {
       "timestamp": "Data/Hora",
       "messageId": "ID da mensagem",

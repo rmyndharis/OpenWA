@@ -548,8 +548,8 @@
     "sending": "正在发送...",
     "viewOnly": "仅查看",
     "responseEmpty": "发送消息后即可查看 API 响应",
-    "successLabel": "200 OK - 成功",
-    "failedLabel": "400 - 失败",
+    "successLabel": "成功",
+    "failedLabel": "失败",
     "response": {
       "timestamp": "时间戳",
       "messageId": "消息 ID",

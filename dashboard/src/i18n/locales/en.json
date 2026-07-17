@@ -548,8 +548,8 @@
     "sending": "Sending...",
     "viewOnly": "View Only",
     "responseEmpty": "Send a message to see the API response",
-    "successLabel": "200 OK - Success",
-    "failedLabel": "400 - Failed",
+    "successLabel": "Success",
+    "failedLabel": "Failed",
     "response": {
       "timestamp": "Timestamp",
       "messageId": "Message ID",

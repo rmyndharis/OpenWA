@@ -548,8 +548,8 @@
     "sending": "Envoi...",
     "viewOnly": "Lecture seule",
     "responseEmpty": "Envoyez un message pour voir la réponse de l'API",
-    "successLabel": "200 OK - Succès",
-    "failedLabel": "400 - Échec",
+    "successLabel": "Succès",
+    "failedLabel": "Échec",
     "response": {
       "timestamp": "Horodatage",
       "messageId": "ID du message",

@@ -548,8 +548,8 @@
     "sending": "보내는 중...",
     "viewOnly": "읽기 전용",
     "responseEmpty": "메시지를 보내면 API 응답이 여기에 표시됩니다",
-    "successLabel": "200 OK - 성공",
-    "failedLabel": "400 - 실패",
+    "successLabel": "성공",
+    "failedLabel": "실패",
     "response": {
       "timestamp": "타임스탬프",
       "messageId": "메시지 ID",

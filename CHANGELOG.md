@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Message Tester no longer invents HTTP status codes.** Its result banner rendered one of two
+  hardcoded strings — `200 OK - Success` or `400 - Failed` — for every outcome, in all eleven locales.
+  Neither number was ever read from the response. Send routes return **201**, not 200, so the success
+  banner was wrong on every successful send; and *any* failure displayed `400`, including a server 500
+  and the recipient pre-check that short-circuits in the browser without issuing a request at all. The
+  banner now states the outcome and, when a request actually reached the gateway, the real status the
+  gateway returned — which `services/api.ts` already attaches to the error for exactly this purpose.
+  Where no request was made, no code is shown rather than a fabricated one. This is what made a plain
+  `500` get reported as a mystery `400` in #750. Fixes #750.
+
 - **The dashboard now clears a message deleted for everyone while the thread is open (whatsapp-web.js).**
   `message.revoked` carries `revokedId` — the id of the original deleted message, which whatsapp-web.js
   resolves separately from the event's own `id` — but the dashboard's WebSocket projection dropped the

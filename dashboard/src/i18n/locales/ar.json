@@ -552,8 +552,8 @@
     "sending": "جارٍ الإرسال...",
     "viewOnly": "للعرض فقط",
     "responseEmpty": "أرسل رسالة لرؤية استجابة API",
-    "successLabel": "200 OK - نجاح",
-    "failedLabel": "400 - فشل",
+    "successLabel": "نجاح",
+    "failedLabel": "فشل",
     "response": {
       "timestamp": "الوقت",
       "messageId": "معرّف الرسالة",
