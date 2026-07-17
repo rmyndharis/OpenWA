@@ -54,11 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twelve files `patch` writes, one after the `Message.js` the stand-down check keys on. A run that died in
   that window left a tree where every assertion passed, so each later run stood down as healthy while the
   primary normalizer was permanently absent — the exact latch the check exists to prevent. `Client.js` and
-  `GroupChat.js` normalize ids too and were likewise unasserted; all three are now covered. Separately,
-  the half-patched error was the only one of the four not marked as leaving a partial tree, so
-  `--best-effort` — the `npm install` path — downgraded it to a warning and exited 0, waving through the
-  one tree that flag's own contract says it must never accept. Both are regression-tested, including the
-  `--best-effort` path.
+  `GroupChat.js` normalize ids too and were likewise unasserted; all three are now covered. The Docker
+  image build runs the patcher directly, so it now fails the build on such a tree instead of shipping it.
+  Separately, the half-patched error was the only one of the four not marked as leaving a partial tree, so
+  `--best-effort` downgraded it to a warning; it now exits non-zero like the other three. Note this makes
+  the tree *reported* on the `npm install` path rather than rejected there — the `postinstall` hook
+  discards the patcher's exit code, so the install still succeeds; that is pre-existing and deliberately
+  untouched, since failing `npm install` outright is the trade the flag exists to avoid. Both fixes are
+  regression-tested, including the `--best-effort` path.
 
 - **The Message Tester no longer invents HTTP status codes.** Its result banner rendered one of two
   hardcoded strings — `200 OK - Success` or `400 - Failed` — for every outcome, in all eleven locales.
