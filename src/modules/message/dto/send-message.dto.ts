@@ -124,7 +124,9 @@ export class MessageResponseDto {
       'an unregistered recipient synchronously, so a message to a number that is not on WhatsApp still ' +
       'returns 201 with a valid messageId but never delivers. To confirm a number is on WhatsApp before ' +
       'sending, use GET /api/sessions/{sessionId}/contacts/check/{number}; track real delivery via the ' +
-      'message `status` field (sent → delivered → read).',
+      'message `status` field (sent → delivered → read, or failed if WhatsApp reports an error for it). ' +
+      'A message resting at `sent` is not diagnostic on its own: a registered recipient whose device has ' +
+      'not come online since the send stays at `sent` too.',
     example: 'true_628123456789@c.us_3EB0123456789',
   })
   messageId: string;

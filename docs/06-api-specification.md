@@ -165,12 +165,18 @@ The contract is engine-neutral: pass neutral `@c.us` WIDs and the active engine 
 
 ### Send response: `201` means accepted, not delivered
 
-Every send route returns **HTTP 201** with `{ "messageId", "timestamp" }` as soon as the gateway hands the message to the WhatsApp client. This confirms the send was *accepted* — it does **not** confirm the recipient received it. Two consequences worth knowing:
+Single-recipient send routes under `/messages` return **HTTP 201** with `{ "messageId", "timestamp" }` as soon as the gateway hands the message to the WhatsApp client. This confirms the send was *accepted* — it does **not** confirm the recipient received it. Two routes differ: `POST send-bulk` returns **202** with a batch envelope (`{ batchId, status, totalMessages, … }`), and the `status/send-*` routes return **201** with `{ statusId, timestamp, expiresAt }` — a `statusId`, not a `messageId`, and an ISO timestamp rather than epoch seconds.
 
-1. **WhatsApp does not reject an unregistered recipient synchronously.** A message to a number that is not on WhatsApp still returns `201` with a valid `messageId`, but never delivers (it sits at a single grey tick and may surface an error in the chat). This is the most common cause of a "successful send that never arrived" for a number you have not messaged before.
+Two consequences worth knowing:
+
+1. **WhatsApp does not reject an unregistered recipient synchronously.** A message to a number that is not on WhatsApp still returns `201` with a valid `messageId`. Whether it later delivers, stalls, or is reported as an error reaches you asynchronously, if at all.
 2. **There is no synchronous delivery confirmation on either engine** (whatsapp-web.js or Baileys), so the `201` cannot be made to mean "delivered."
 
-**Before sending to a new number**, confirm it is a registered WhatsApp account with `GET /api/sessions/:sessionId/contacts/check/:number` (returns `{ exists, whatsappId }`; see the Contacts reference). For real delivery state, track the stored message's `status`, which advances asynchronously through `sent → delivered → read` (or `failed`) as WhatsApp sends acks — see the message shape under the Messages reference. A message that stays at `sent` indefinitely for a recipient you have never reached is almost certainly a number that is not on WhatsApp.
+**Before sending to a new number**, you can confirm it is a registered WhatsApp account with `GET /api/sessions/:sessionId/contacts/check/:number` (returns `{ exists, whatsappId }`; see the Contacts reference).
+
+**For real delivery state**, track the stored message's `status`, which advances asynchronously as WhatsApp sends acks: `sent → delivered → read`, or `failed` when WhatsApp reports an error for the message — which also dispatches a `message.failed` webhook. See the message shape under the Messages reference.
+
+A message resting at `sent` is **not** diagnostic on its own. It means no ack has advanced it yet, and a registered recipient whose device has not come online since the send stays at `sent` indefinitely too — that is the designed behavior, not a fault. Use `contacts/check` to tell an unregistered number apart from a registered one that simply has not received yet.
 
 ## 6.4 REST API Reference
 
@@ -711,7 +717,7 @@ Delete a session.
 
 ### 6.4.2 Messages
 
-All routes are mounted under `/api/sessions/:sessionId/messages`. Reads (`GET` history, batch status, reactions) accept any valid API key (including VIEWER). All write/send routes require **API key (OPERATOR)** or higher. Send routes return `MessageResponseDto { messageId, timestamp }` (`timestamp` is an epoch **number** in seconds; there is no `status` field). The global ValidationPipe runs `whitelist` + `forbidNonWhitelisted`, so any body field not listed below is rejected with `400`.
+All routes are mounted under `/api/sessions/:sessionId/messages`. Reads (`GET` history, batch status, reactions) accept any valid API key (including VIEWER). All write/send routes require **API key (OPERATOR)** or higher. Single-recipient send routes return `MessageResponseDto { messageId, timestamp }` (`timestamp` is an epoch **number** in seconds; there is no `status` field); `POST send-bulk` instead returns `202` with `BulkMessageResponseDto`. The global ValidationPipe runs `whitelist` + `forbidNonWhitelisted`, so any body field not listed below is rejected with `400`.
 
 #### GET /api/sessions/:sessionId/messages
 

@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Corrected the send-response documentation (docs only).** The guidance added in #739 overstated what a
+  stalled send tells you: it said a message resting at `sent` for a recipient you have never reached is
+  "almost certainly a number that is not on WhatsApp." That inference does not hold in the other
+  direction — a *registered* recipient whose device has not come online since the send stays at `sent`
+  indefinitely too, by design, so the state is not diagnostic on its own. The unevidenced claim that an
+  unregistered recipient is "the most common cause" of a send that never arrives is gone, as is the
+  description of what the message looks like in a WhatsApp client, which is not ours to assert. The
+  section also claimed *every* send route returns `201` with `{ messageId, timestamp }`; `POST send-bulk`
+  returns `202` with a batch envelope, and the `status/send-*` routes return a `statusId` and an ISO
+  timestamp rather than a `messageId` and epoch seconds. Both exceptions are now stated where the rule
+  is. Finally, the documented `status` lifecycle omitted its terminal error state: WhatsApp reporting an
+  error for a message advances it to `failed` and dispatches a `message.failed` webhook, on both engines
+  — that signal existed all along and is now written down. No behavior change. Refs #738.
+
 ### Fixed
 
 - **The dashboard now clears a message deleted for everyone while the thread is open (whatsapp-web.js).**
