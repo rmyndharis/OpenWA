@@ -21,7 +21,7 @@
     "lucide-react": "^1.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-i18next": "^17.0.9",
+    "react-i18next": "^17.0.10",
     "react-is": "^19.2.7",
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.2",
@@ -39,7 +39,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.7.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.63.0",
-    "vite": "^8.1.4"
+    "typescript-eslint": "^8.64.0",
+    "vite": "^8.1.5"
   }
 }
