@@ -112,7 +112,7 @@ jobs:
         working-directory: sdk/go
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.22' # the go.mod minimum, so CI gates what the SDK claims to support
           cache: false # stdlib-only, no go.sum to cache
