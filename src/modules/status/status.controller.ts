@@ -28,7 +28,12 @@ export class StatusController {
   @Post('send-text')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post a text status' })
-  @ApiResponse({ status: 201, description: 'Text status posted to the specified recipients.' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Text status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
+      "to the account's status-privacy audience.",
+  })
   async sendTextStatus(@Param('sessionId') sessionId: string, @Body() dto: SendTextStatusDto) {
     return this.statusService.postTextStatus(sessionId, dto.text, {
       recipients: dto.recipients,
@@ -40,7 +45,12 @@ export class StatusController {
   @Post('send-image')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post an image status' })
-  @ApiResponse({ status: 201, description: 'Image status posted to the specified recipients.' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
+      "to the account's status-privacy audience.",
+  })
   async sendImageStatus(@Param('sessionId') sessionId: string, @Body() dto: SendImageStatusDto) {
     return this.statusService.postImageStatus(sessionId, dto.image, {
       recipients: dto.recipients,
@@ -51,7 +61,12 @@ export class StatusController {
   @Post('send-video')
   @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Post a video status' })
-  @ApiResponse({ status: 201, description: 'Video status posted to the specified recipients.' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
+      "to the account's status-privacy audience.",
+  })
   async sendVideoStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVideoStatusDto) {
     return this.statusService.postVideoStatus(sessionId, dto.video, {
       recipients: dto.recipients,

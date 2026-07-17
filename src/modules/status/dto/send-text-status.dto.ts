@@ -32,7 +32,10 @@ export class SendTextStatusDto {
   font?: number;
 
   @ApiProperty({
-    description: 'Recipient JIDs (1–256). WhatsApp Status is not posted to a group — use @c.us or @lid individuals.',
+    description:
+      'Recipient JIDs (1–256). WhatsApp Status is not posted to a group — use @c.us or @lid individuals. ' +
+      'Honored on the Baileys engine only: whatsapp-web.js ignores this allow-list and broadcasts to the ' +
+      "account's status-privacy audience.",
     type: String,
     isArray: true,
     example: ['628123456789@c.us'],

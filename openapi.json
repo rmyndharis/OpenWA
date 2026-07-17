@@ -3857,7 +3857,7 @@
         },
         "responses": {
           "201": {
-            "description": "Text status posted to the specified recipients."
+            "description": "Text status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
           }
         },
         "summary": "Post a text status",
@@ -3891,7 +3891,7 @@
         },
         "responses": {
           "201": {
-            "description": "Image status posted to the specified recipients."
+            "description": "Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
           }
         },
         "summary": "Post an image status",
@@ -3925,7 +3925,7 @@
         },
         "responses": {
           "201": {
-            "description": "Video status posted to the specified recipients."
+            "description": "Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
           }
         },
         "summary": "Post a video status",
@@ -6763,7 +6763,7 @@
             "maximum": 5
           },
           "recipients": {
-            "description": "Recipient JIDs (1–256). WhatsApp Status is not posted to a group — use @c.us or @lid individuals.",
+            "description": "Recipient JIDs (1–256). WhatsApp Status is not posted to a group — use @c.us or @lid individuals. Honored on the Baileys engine only: whatsapp-web.js ignores this allow-list and broadcasts to the account's status-privacy audience.",
             "example": [
               "628123456789@c.us"
             ],
@@ -6818,7 +6818,7 @@
             "maxLength": 1024
           },
           "recipients": {
-            "description": "Recipient JIDs (1–256), @c.us or @lid.",
+            "description": "Recipient JIDs (1–256), @c.us or @lid. Honored on the Baileys engine only: whatsapp-web.js ignores this allow-list and broadcasts to the account's status-privacy audience.",
             "example": [
               "628123456789@c.us"
             ],
@@ -6853,7 +6853,7 @@
             "maxLength": 1024
           },
           "recipients": {
-            "description": "Recipient JIDs (1–256), @c.us or @lid.",
+            "description": "Recipient JIDs (1–256), @c.us or @lid. Honored on the Baileys engine only: whatsapp-web.js ignores this allow-list and broadcasts to the account's status-privacy audience.",
             "example": [
               "628123456789@c.us"
             ],

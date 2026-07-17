@@ -47,7 +47,9 @@ export class SendImageStatusDto {
   caption?: string;
 
   @ApiProperty({
-    description: 'Recipient JIDs (1–256), @c.us or @lid.',
+    description:
+      'Recipient JIDs (1–256), @c.us or @lid. Honored on the Baileys engine only: whatsapp-web.js ignores ' +
+      "this allow-list and broadcasts to the account's status-privacy audience.",
     type: String,
     isArray: true,
     example: ['628123456789@c.us'],
@@ -75,7 +77,9 @@ export class SendVideoStatusDto {
   caption?: string;
 
   @ApiProperty({
-    description: 'Recipient JIDs (1–256), @c.us or @lid.',
+    description:
+      'Recipient JIDs (1–256), @c.us or @lid. Honored on the Baileys engine only: whatsapp-web.js ignores ' +
+      "this allow-list and broadcasts to the account's status-privacy audience.",
     type: String,
     isArray: true,
     example: ['628123456789@c.us'],
