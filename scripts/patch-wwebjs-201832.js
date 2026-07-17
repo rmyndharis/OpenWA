@@ -39,6 +39,14 @@ const EXPECTED_REJECTS = new Set(['src/structures/Contact.js.rej']);
 // Every normalization site the backport must land, so a hunk that fails to apply can never pass
 // unnoticed. `patch` always writes a .rej for a hunk it couldn't place, but a hunk placed at the
 // WRONG offset would be silent — these assertions are what close that gap.
+//
+// This list must cover every file the patch normalizes, not just the structure constructors, because
+// the skip branch below uses it to decide a half-patched tree apart from an upstream fix. `patch`
+// applies the diff in file order and Utils.js is applied LAST, one file after Message.js — which is
+// what the skip branch keys on. Omitting a file here means a run that died in that window leaves a
+// tree where every assertion passes, so every later run stands down and the missing site latches in
+// permanently. One entry per file: `siteLanded` resolves a file's marker with `.find`, so a second
+// entry for the same path would never be read.
 const REQUIRED_SITES = [
   ['src/structures/Base.js', /static _normalizeId\(id\)/],
   ['src/structures/Message.js', /this\.id = Base\._normalizeId\(data\.id\)/],
@@ -48,6 +56,11 @@ const REQUIRED_SITES = [
   ['src/structures/Broadcast.js', /this\.id = Base\._normalizeId\(data\.id\)/],
   ['src/structures/GroupNotification.js', /this\.id = Base\._normalizeId\(data\.id\)/],
   ['src/structures/ClientInfo.js', /this\.wid = Base\._normalizeId\(data\.wid\)/],
+  // The browser-side normalizer every inbound message crosses on its way to Node — the site the
+  // structure constructors above cannot cover, and the last file the patch writes.
+  ['src/util/Injected/Utils.js', /_serialized: msg\.id\.\$1/],
+  ['src/Client.js', /res\.gid\._serialized \|\| res\.gid\.\$1/],
+  ['src/structures/GroupChat.js', /pWid\._serialized \|\| pWid\.\$1/],
 ];
 
 /** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */
@@ -60,10 +73,11 @@ function siteLanded(wwjsDir, rel) {
 }
 
 /**
- * Flag an error raised once `patch` has started writing. `--best-effort` degrades on a pre-flight failure
- * (no `patch` binary — nothing ran, tree untouched) but must never swallow one of these: `patch` applies
- * hunks as it goes, so failing mid-apply leaves whatsapp-web.js half-patched — which the self-disable
- * check above reads as healthy, latching the broken tree in on every later run.
+ * Flag an error raised against a tree that is no longer pristine — either this run wrote to it, or a
+ * previous run left it half-patched. `--best-effort` degrades on a pre-flight failure (no `patch`
+ * binary — nothing ran, tree untouched) but must never swallow one of these: `patch` applies hunks as
+ * it goes, so failing mid-apply leaves whatsapp-web.js half-patched — which the self-disable check
+ * above reads as healthy, latching the broken tree in on every later run.
  */
 function partialTree(err) {
   err.leftPartialTree = true;
@@ -105,11 +119,16 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
     // run does not. Proving the tree is whole is what tells the two apart.
     const missing = REQUIRED_SITES.filter(([rel]) => !siteLanded(wwjsDir, rel));
     if (missing.length) {
-      throw new Error(
-        'whatsapp-web.js is PARTIALLY patched — Message.js normalizes ids but ' +
-          `${missing.map(([rel]) => rel).join(', ')} did not land. A previous run left the tree half-patched; ` +
-          'it cannot repair itself. Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) ' +
-          'and re-run. If the installed version genuinely ships its own fix, drop this backport instead.',
+      // `partialTree`, so `--best-effort` cannot warn past this. The tree this detects is precisely the
+      // one that flag must never wave through: half-patched, self-disable reading it as healthy, and
+      // unrepairable by any later run.
+      throw partialTree(
+        new Error(
+          'whatsapp-web.js is PARTIALLY patched — Message.js normalizes ids but ' +
+            `${missing.map(([rel]) => rel).join(', ')} did not land. A previous run left the tree half-patched; ` +
+            'it cannot repair itself. Reinstall the dependency (`rm -rf node_modules/whatsapp-web.js && npm ci`) ' +
+            'and re-run. If the installed version genuinely ships its own fix, drop this backport instead.',
+        ),
       );
     }
     return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };

@@ -77,9 +77,24 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     const res = applyBackport(dir);
 
     expect(res.skipped).toBe(true);
-    // Injected/Utils.js carries no REQUIRED_SITES marker, so it stays byte-identical only if the patcher
-    // truly stood down. Re-applying would reject every already-applied hunk and leave artifacts behind.
+    // Re-applying would reject every already-applied hunk and leave artifacts behind, so a byte-identical
+    // Injected/Utils.js is what proves the patcher truly stood down rather than quietly ran again.
     expect(fs.readFileSync(injected, 'utf8')).toBe(before);
+  });
+
+  it('refuses to stand down when only the last-applied file is missing', () => {
+    const dir = copyWwjs();
+    const injected = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+    const pristine = fs.readFileSync(injected, 'utf8');
+    applyBackport(dir);
+    // `patch` writes in diff order and Injected/Utils.js is the LAST of the twelve files, one after
+    // Message.js — which is what the stand-down check keys on. A run that died in that window leaves
+    // exactly this tree: every structure constructor normalizes, so the tree reads as healthy, while the
+    // browser-side normalizer every inbound message crosses never landed. Asserting only the structure
+    // files would wave it through and latch it in for good.
+    fs.writeFileSync(injected, pristine);
+
+    expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Injected\/Utils\.js/);
   });
 
   it('refuses to stand down on a half-patched tree', () => {
@@ -184,6 +199,23 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
 
       expect(res.status).toBe(1);
       expect(res.stderr).toMatch(/version skew/);
+    });
+
+    it('still fails on a tree an earlier run left half-patched', () => {
+      const dir = copyWwjs();
+      const injected = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+      const pristine = fs.readFileSync(injected, 'utf8');
+      applyBackport(dir);
+      fs.writeFileSync(injected, pristine);
+
+      // This run writes nothing itself — it only detects a tree an earlier run broke. Degrading on that
+      // is the one thing the flag must never do: it would warn, exit 0, and hand the strict run a tree
+      // whose stand-down check reads as healthy. The trade this flag makes is an UNPATCHED dep, never a
+      // half-patched one.
+      const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], { encoding: 'utf8' });
+
+      expect(res.status).toBe(1);
+      expect(res.stderr).toMatch(/PARTIALLY patched/);
     });
 
     it('degrades when `patch` is not installed, leaving the tree pristine', () => {
