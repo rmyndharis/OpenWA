@@ -6,13 +6,14 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { json, urlencoded, Request } from 'express';
 import { AppModule } from './../src/app.module';
+import { applyGlobalValidation } from './../src/config/app-validation';
 import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service';
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
 import { IntegrationDeliveryFailure } from './../src/modules/integration/entities/integration-delivery-failure.entity';
@@ -69,8 +70,7 @@ describe('Integration Fabric ingress (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     // Mirror main.ts's raw-body wiring: the ingress controller reads req.rawBody (stashed by this
     // verify callback) so the HMAC would be checked over the EXACT bytes the provider signed. Nest's
     // testing module does not install this on its own — it's manual bootstrap()-only wiring in main.ts.
@@ -81,7 +81,14 @@ describe('Integration Fabric ingress (e2e)', () => {
         },
       }),
     );
-    app.use(urlencoded({ extended: true }));
+    app.use(
+      urlencoded({
+        extended: true,
+        verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
+          req.rawBody = buf;
+        },
+      }),
+    );
     await app.init();
 
     instanceRepo = app.get(getRepositoryToken(PluginInstance, 'data'));
@@ -134,6 +141,20 @@ describe('Integration Fabric ingress (e2e)', () => {
       .set('X-Chatwoot-Delivery', 'delivery-http-1')
       .set('Content-Type', 'application/json')
       .send(raw);
+
+    expect(res.status).toBe(202);
+    expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);
+  });
+
+  it('verifies form-urlencoded deliveries against their exact wire bytes', async () => {
+    const formRaw = 'event=message_created&account_id=42';
+    const formSignature = 'sha256=' + createHmac('sha256', secret).update(formRaw).digest('hex');
+    const res = await request(app.getHttpServer())
+      .post(INGRESS_PATH)
+      .set('X-Chatwoot-Signature', formSignature)
+      .set('X-Chatwoot-Delivery', 'delivery-form-1')
+      .set('Content-Type', 'application/x-www-form-urlencoded')
+      .send(formRaw);
 
     expect(res.status).toBe(202);
     expect(dispatchWebhookForInstance).toHaveBeenCalledTimes(1);

@@ -23,8 +23,14 @@ import {
 } from 'lucide-react';
 import type { ApiKey } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useApiKeysQuery, useCreateApiKeyMutation, useDeleteApiKeyMutation, useRevokeApiKeyMutation } from '../hooks/queries';
+import {
+  useApiKeysQuery,
+  useCreateApiKeyMutation,
+  useDeleteApiKeyMutation,
+  useRevokeApiKeyMutation,
+} from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 import { copyToClipboard } from '../utils/clipboard';
 import './ApiKeys.css';
 
@@ -44,6 +50,7 @@ const columnHelper = createColumnHelper<ApiKey>();
 
 export function ApiKeys() {
   const { t } = useTranslation();
+  const toast = useToast();
   useDocumentTitle(t('apiKeys.title'));
   const { data: apiKeys = [], isLoading: loading, isError: apiKeysError } = useApiKeysQuery();
   const createMutation = useCreateApiKeyMutation();
@@ -75,6 +82,7 @@ export function ApiKeys() {
       setNewKey({ name: '', role: 'operator' });
     } catch (err) {
       console.error('Failed to create:', err);
+      toast.error(t('apiKeys.createBtn'), err instanceof Error ? err.message : t('common.unknownError'));
     }
   };
 
@@ -83,6 +91,7 @@ export function ApiKeys() {
       await revokeMutation.mutateAsync(id);
     } catch (err) {
       console.error('Failed to revoke:', err);
+      toast.error(t('apiKeys.actions.revoke'), err instanceof Error ? err.message : t('common.unknownError'));
     }
   };
 
@@ -91,6 +100,7 @@ export function ApiKeys() {
       await deleteMutation.mutateAsync(id);
     } catch (err) {
       console.error('Failed to delete:', err);
+      toast.error(t('apiKeys.actions.delete'), err instanceof Error ? err.message : t('common.unknownError'));
     }
   };
 
@@ -367,9 +377,7 @@ export function ApiKeys() {
           <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>
-                {confirmAction.type === 'delete'
-                  ? t('apiKeys.confirm.deleteTitle')
-                  : t('apiKeys.confirm.revokeTitle')}
+                {confirmAction.type === 'delete' ? t('apiKeys.confirm.deleteTitle') : t('apiKeys.confirm.revokeTitle')}
               </h2>
               <button className="btn-icon" onClick={() => setConfirmAction(null)}>
                 <X size={20} />
@@ -382,9 +390,7 @@ export function ApiKeys() {
               <p className="confirm-message">
                 <Trans
                   i18nKey={
-                    confirmAction.type === 'delete'
-                      ? 'apiKeys.confirm.deleteMessage'
-                      : 'apiKeys.confirm.revokeMessage'
+                    confirmAction.type === 'delete' ? 'apiKeys.confirm.deleteMessage' : 'apiKeys.confirm.revokeMessage'
                   }
                   values={{ name: confirmAction.name }}
                   components={{ strong: <strong /> }}
@@ -396,9 +402,7 @@ export function ApiKeys() {
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={confirmAndExecute}>
-                {confirmAction.type === 'delete'
-                  ? t('apiKeys.confirm.delete')
-                  : t('apiKeys.confirm.revoke')}
+                {confirmAction.type === 'delete' ? t('apiKeys.confirm.delete') : t('apiKeys.confirm.revoke')}
               </button>
             </div>
           </div>

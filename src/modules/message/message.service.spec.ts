@@ -876,6 +876,30 @@ describe('MessageService', () => {
         expect.objectContaining({ data: 'https://example.com/img.jpg' }),
       );
     });
+
+    it('strips a data-URI prefix before passing base64 bytes to the engine', async () => {
+      await service.sendImage('sess-1', {
+        chatId: '628123456789@c.us',
+        base64: 'data:image/png;base64,QUJD',
+        mimetype: 'image/png',
+      });
+
+      expect(mockEngine.sendImageMessage).toHaveBeenCalledWith(
+        '628123456789@c.us',
+        expect.objectContaining({ data: 'QUJD' }),
+      );
+    });
+
+    it('rejects a data URI with no encoded payload', async () => {
+      await expect(
+        service.sendImage('sess-1', {
+          chatId: '628123456789@c.us',
+          base64: 'data:image/png;base64,',
+          mimetype: 'image/png',
+        }),
+      ).rejects.toThrow('Either url or base64 must be provided');
+      expect(mockEngine.sendImageMessage).not.toHaveBeenCalled();
+    });
   });
 
   // ── reactToMessage / deleteMessage ────────────────────────────────

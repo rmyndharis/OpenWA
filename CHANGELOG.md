@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `GET /api/settings` no longer returns the incorrect, always-zero `general.sessionTimeout` field. Clients
+  reading that admin-only field should remove the read; no equivalent session timeout exists.
+- Java SDK callers sending audio/voice notes now pass `SendAudioRequest` to `sendAudio`; other media sends
+  continue to use `SendMediaRequest`. Bulk media uses the nested `BulkMediaRequest` type.
+- The PHP SDK's configured `timeout` now applies to every request, including calls made through an injected
+  Guzzle client; pass `timeout` explicitly when a different bound is required.
+
+### Fixed
+
+- Preserve plugin state across package updates, make data/storage backup and restore cover both engine
+  auth stores plus generated secrets, and preserve message `chatName` during data import.
+- Bound webhook and integration redrive work, make Redis throttling atomic, guard stale engine teardown,
+  and make media precedence, data-URI normalization, limits, and omission markers consistent across engines.
+- Audit API-key authorization changes, protect the final usable admin, and align action-style POST routes
+  with their documented HTTP `200` responses.
+- Correct ingress method/verification/dedup metadata, dashboard session-state visibility and plugin config
+  fallback, SDK timeout/type parity, metrics types, deployment configuration forwarding, and CI contract gates.
+
 ## [0.8.19] - 2026-07-17
 
 ### Added

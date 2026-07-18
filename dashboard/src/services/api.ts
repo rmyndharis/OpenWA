@@ -25,7 +25,16 @@ if (API_ORIGIN) warnIfInsecureHttpUrl(API_ORIGIN, 'VITE_API_URL');
 export interface Session {
   id: string;
   name: string;
-  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected' | 'failed';
+  status:
+    | 'created'
+    | 'idle'
+    | 'initializing'
+    | 'connecting'
+    | 'authenticating'
+    | 'qr_ready'
+    | 'ready'
+    | 'disconnected'
+    | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;
@@ -306,7 +315,7 @@ export interface SaveConfigPayload {
 }
 
 export interface Settings {
-  general: { apiBaseUrl: string; sessionTimeout: number; autoReconnect: boolean; debugMode: boolean };
+  general: { apiBaseUrl: string; autoReconnect: boolean; debugMode: boolean };
   api: { rateLimit: number; rateLimitWindow: number; enableDocs: boolean };
   notifications: { emailEnabled: boolean; notificationEmail: string; webhookAlerts: boolean };
 }

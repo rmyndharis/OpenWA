@@ -79,6 +79,7 @@ export function groupTools(group: GroupService): ToolDescriptor[] {
       name: 'GroupSetSubject',
       description: 'Change the group name/subject. Requires OPERATOR role.',
       tier: 'write',
+      destructive: true,
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({
@@ -95,6 +96,7 @@ export function groupTools(group: GroupService): ToolDescriptor[] {
       name: 'GroupSetDescription',
       description: 'Change the group description. Pass empty string to clear it. Requires OPERATOR role.',
       tier: 'write',
+      destructive: true,
       requiredRole: ApiKeyRole.OPERATOR,
       sessionScoped: true,
       inputSchema: z.object({

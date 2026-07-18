@@ -118,7 +118,6 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'RATE_LIMIT_SHORT_TTL',
     'RATE_LIMIT_MEDIUM_TTL',
     'RATE_LIMIT_LONG_TTL',
-    'WEBHOOK_MAX_RETRIES',
     'WEBHOOK_RETRY_DELAY',
     'DATABASE_POOL_SIZE',
     'DATABASE_STATEMENT_TIMEOUT_MS',
@@ -127,6 +126,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'REDIS_CONNECT_TIMEOUT_MS',
     'MAX_CONCURRENT_SESSIONS', // 0 = unlimited
     'INGRESS_INSTANCE_TTL',
+    'WEBHOOK_DISPATCH_MAX_QUEUED',
   ]) {
     checkNonNegativeInt(key);
   }

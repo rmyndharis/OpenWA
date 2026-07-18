@@ -107,7 +107,20 @@ class SendMediaRequest(TypedDict, total=False):
     mimetype: str
     filename: str
     caption: str
+
+
+class SendAudioRequest(SendMediaRequest, total=False):
     ptt: bool  # audio only: send as a WhatsApp voice note (PTT)
+
+
+class BulkMediaRequest(TypedDict, total=False):
+    """Nested bulk media; chatId lives on the parent and caption on content."""
+
+    url: str
+    base64: str
+    mimetype: str
+    filename: str
+    ptt: bool
 
 
 class SendLocationRequest(TypedDict, total=False):
@@ -269,10 +282,10 @@ class ReactionRecord(TypedDict, total=False):
 
 class BulkMessageContent(TypedDict, total=False):
     text: str
-    image: SendMediaRequest
-    video: SendMediaRequest
-    audio: SendMediaRequest
-    document: SendMediaRequest
+    image: BulkMediaRequest
+    video: BulkMediaRequest
+    audio: BulkMediaRequest
+    document: BulkMediaRequest
     caption: str
 
 

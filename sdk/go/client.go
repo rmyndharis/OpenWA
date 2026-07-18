@@ -122,13 +122,9 @@ func New(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	}
 	if cfg.httpClient != nil {
 		hc.Jar = cfg.httpClient.Jar
-		if cfg.httpClient.Timeout > 0 {
+		if cfg.httpClient.Timeout > 0 && !cfg.timeoutSet {
 			hc.Timeout = cfg.httpClient.Timeout
 		}
-	}
-	// An explicit WithTimeout always wins.
-	if cfg.timeout > 0 {
-		hc.Timeout = cfg.timeout
 	}
 
 	c := &Client{

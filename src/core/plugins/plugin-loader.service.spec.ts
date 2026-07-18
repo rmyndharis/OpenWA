@@ -552,7 +552,11 @@ describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () =>
       sandboxHosts: Map<string, { dispatchWebhook: jest.Mock }>;
     };
     internals.plugins.set('chatwoot-adapter', {
-      manifest: { id: 'chatwoot-adapter', sessionScoped: true },
+      manifest: {
+        id: 'chatwoot-adapter',
+        sessionScoped: true,
+        ingress: [{ route: 'chatwoot', signature: { scheme: 'none' } }],
+      },
       config: { baseUrl: 'base', accountId: 1 },
       sessionConfig: { 'sess-1': { baseUrl: 'https://tenant1' } },
     });
@@ -563,6 +567,7 @@ describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () =>
       pluginId: 'chatwoot-adapter',
       instanceId: 'acct1',
       route: 'chatwoot',
+      method: 'PATCH',
       deliveryId: 'd1',
       sessionId: 'sess-1',
       payload: { headers: {}, query: {}, body: '', rawBody: '' },
@@ -572,7 +577,11 @@ describe('PluginLoaderService.dispatchWebhookForInstance config delivery', () =>
     expect(dispatchWebhook).toHaveBeenCalledTimes(1);
     // Session override (tenant1) merged over the base — this is what makes an instance multi-tenant.
     expect(dispatchWebhook).toHaveBeenCalledWith(
-      expect.objectContaining({ config: { baseUrl: 'https://tenant1', accountId: 1 } }),
+      expect.objectContaining({
+        config: { baseUrl: 'https://tenant1', accountId: 1 },
+        method: 'PATCH',
+        verified: false,
+      }),
     );
   });
 });

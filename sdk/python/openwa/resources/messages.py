@@ -25,6 +25,7 @@ from ..types import (
     SendBulkRequest,
     SendContactRequest,
     SendLocationRequest,
+    SendAudioRequest,
     SendMediaRequest,
     SendTemplateRequest,
     SendTextRequest,
@@ -51,7 +52,7 @@ class MessagesResource:
     def send_video(self, session_id: str, body: SendMediaRequest) -> MessageResponse:
         return self._send_media(session_id, "send-video", body)
 
-    def send_audio(self, session_id: str, body: SendMediaRequest) -> MessageResponse:
+    def send_audio(self, session_id: str, body: SendAudioRequest) -> MessageResponse:
         return self._send_media(session_id, "send-audio", body)
 
     def send_document(self, session_id: str, body: SendMediaRequest) -> MessageResponse:

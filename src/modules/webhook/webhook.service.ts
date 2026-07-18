@@ -78,7 +78,10 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     // Bound fan-out: cap how many matching webhooks are delivered CONCURRENTLY for one event. Without
     // it, an event matching N webhooks opens N outbound sockets at once. Default 16
     // (WEBHOOK_DISPATCH_CONCURRENCY).
-    this.dispatchLimiter = new ConcurrencyLimiter(this.configService.get<number>('webhook.dispatchConcurrency', 16));
+    this.dispatchLimiter = new ConcurrencyLimiter(
+      this.configService.get<number>('webhook.dispatchConcurrency', 16),
+      this.configService.get<number>('webhook.dispatchMaxQueued', 1000),
+    );
   }
 
   /**
@@ -307,66 +310,96 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const occurredAt = new Date().toISOString();
     const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
+    const recordUndelivered = async (
+      webhook: Webhook,
+      deliveryId: string,
+      idempotencyKey: string,
+      error: unknown,
+      action: string,
+    ): Promise<void> => {
+      const lastError = redactSsrfError(error, this.logger, 'webhook dispatch');
+      await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+        webhookId: webhook.id,
+        sessionId,
+        event,
+        url: webhook.url,
+        idempotencyKey,
+        deliveryId,
+        attempts: 0,
+        lastStatusCode: null,
+        lastError,
+      });
+      incrementWebhookDeliveryFailures();
+      try {
+        await this.hookManager.execute(
+          'webhook:error',
+          { sessionId, event, webhookId: webhook.id, deliveryId, error: lastError },
+          { sessionId, source: 'WebhookService' },
+        );
+      } catch (hookError) {
+        this.logger.error('webhook:error hook failed while reporting an undelivered webhook', String(hookError), {
+          webhookId: webhook.id,
+          deliveryId,
+          action: 'webhook_error_hook_failed',
+        });
+      }
+      this.logger.error(`Webhook ${webhook.id} was not dispatched`, lastError, {
+        webhookId: webhook.id,
+        deliveryId,
+        action,
+      });
+    };
+
     // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
     // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
     // recursive retry with backoff sleeps).
-    const deliverOne = async (webhook: Webhook): Promise<void> => {
-      // Generate unique delivery ID for each webhook
-      const deliveryId = generateDeliveryId();
+    const deliverOne = async (webhook: Webhook, deliveryId: string, idempotencyKey: string): Promise<void> => {
+      let finalPayload: WebhookPayload;
+      let headers: Record<string, string>;
+      try {
+        const payload: WebhookPayload = {
+          event,
+          timestamp: new Date().toISOString(),
+          sessionId,
+          idempotencyKey,
+          deliveryId,
+          // Give each webhook its own copy of the event data: a webhook:before hook that mutates
+          // payload.data in place would otherwise bleed that change into sibling webhooks.
+          data: structuredClone(data),
+        };
 
-      // Salt the base key with webhook.id so two DISTINCT webhooks subscribed to the same event (e.g.
-      // duplicate URLs) get DISTINCT idempotency keys — otherwise a receiver dedup'ing purely on the
-      // header would drop the sibling delivery as a replay. webhook.id is constant across retries of
-      // THIS webhook (incl. the queue-add→direct fallback), so its key stays stable.
-      const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
+        const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
+          'webhook:before',
+          { sessionId, event, payload },
+          { sessionId, source: 'WebhookService' },
+        );
 
-      const payload: WebhookPayload = {
-        event,
-        timestamp: new Date().toISOString(),
-        sessionId,
-        idempotencyKey,
-        deliveryId,
-        // Give each webhook its own copy of the event data: a webhook:before hook that mutates
-        // payload.data in place would otherwise bleed that change into every later webhook for this
-        // event (they all shared one object reference).
-        data: structuredClone(data),
-      };
+        if (!shouldContinue) {
+          this.logger.debug(`Webhook dispatch cancelled by plugin for ${event}`, {
+            webhookId: webhook.id,
+            action: 'webhook_cancelled_by_plugin',
+          });
+          return;
+        }
 
-      // Execute hook before webhook dispatch - plugins can modify payload
-      const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
-        'webhook:before',
-        { sessionId, event, payload },
-        { sessionId, source: 'WebhookService' },
-      );
+        // Null/undefined hook results mean "no override", matching an object without payload.
+        finalPayload = (hookResult as { payload?: WebhookPayload } | null | undefined)?.payload ?? payload;
+        finalPayload.idempotencyKey = idempotencyKey;
+        finalPayload.deliveryId = deliveryId;
 
-      if (!shouldContinue) {
-        this.logger.debug(`Webhook dispatch cancelled by plugin for ${event}`, {
-          webhookId: webhook.id,
-          action: 'webhook_cancelled_by_plugin',
-        });
+        headers = {
+          ...this.sanitizeCustomHeaders(webhook.headers),
+          'Content-Type': 'application/json',
+          'User-Agent': 'OpenWA-Webhook/1.0.0',
+          'X-OpenWA-Event': event,
+          'X-OpenWA-Idempotency-Key': idempotencyKey,
+          'X-OpenWA-Delivery-Id': deliveryId,
+          'X-OpenWA-Retry-Count': '0',
+        };
+      } catch (error) {
+        await recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_preflight_failed');
         return;
       }
-
-      // Use the plugin-modified payload, falling back to the original if a before-hook returned a
-      // result without a `payload` key — otherwise we'd POST an `undefined` body.
-      const finalPayload = (hookResult as { payload?: WebhookPayload }).payload ?? payload;
-
-      // The idempotency + delivery ids are server-generated and are the documented dedup key
-      // (receivers dedupe on the X-OpenWA-Idempotency-Key header). Re-assert them onto the post-hook
-      // payload so a webhook:before plugin can't desync the signed body field from the header.
-      finalPayload.idempotencyKey = idempotencyKey;
-      finalPayload.deliveryId = deliveryId;
-
-      // Build headers — custom headers FIRST so the system headers below always win.
-      const headers: Record<string, string> = {
-        ...this.sanitizeCustomHeaders(webhook.headers),
-        'Content-Type': 'application/json',
-        'User-Agent': 'OpenWA-Webhook/1.0.0',
-        'X-OpenWA-Event': event,
-        'X-OpenWA-Idempotency-Key': idempotencyKey,
-        'X-OpenWA-Delivery-Id': deliveryId,
-        'X-OpenWA-Retry-Count': '0',
-      };
 
       // Use queue if available, otherwise fallback to direct delivery
       if (this.queueEnabled && this.webhookQueue) {
@@ -498,7 +531,20 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     // Bound fan-out: deliver to all matching webhooks concurrently, but cap in-flight deliveries at
     // WEBHOOK_DISPATCH_CONCURRENCY so an event matching many webhooks (or slow receivers) can't open an
     // unbounded number of outbound sockets at once. allSettled preserves the per-webhook isolation.
-    const tasks = matchingWebhooks.map(webhook => this.dispatchLimiter.run(() => deliverOne(webhook)));
+    const tasks = matchingWebhooks.map(webhook => {
+      const deliveryId = generateDeliveryId();
+      // Salt per webhook so sibling subscriptions cannot collide at the receiver's dedup boundary.
+      const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
+      return this.dispatchLimiter
+        .run(() => deliverOne(webhook, deliveryId, idempotencyKey))
+        .catch(async error => {
+          if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
+            await recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_capacity_exceeded');
+            return;
+          }
+          throw error;
+        });
+    });
     await Promise.allSettled(tasks);
   }
 

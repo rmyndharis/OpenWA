@@ -156,15 +156,23 @@ services:
       - REDIS_PORT=${REDIS_PORT:-}
       # Webhook
       - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10000}
-      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
       - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-5000}
-      # Rate Limit
-      - RATE_LIMIT_TTL=${RATE_LIMIT_TTL:-60}
-      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - WEBHOOK_DISPATCH_CONCURRENCY=${WEBHOOK_DISPATCH_CONCURRENCY:-16}
+      - WEBHOOK_DISPATCH_MAX_QUEUED=${WEBHOOK_DISPATCH_MAX_QUEUED:-1000}
+      # Rate limits. Blank values are cleared before lower-priority generated config is loaded.
+      - RATE_LIMIT_SHORT_TTL=${RATE_LIMIT_SHORT_TTL:-}
+      - RATE_LIMIT_SHORT_LIMIT=${RATE_LIMIT_SHORT_LIMIT:-}
+      - RATE_LIMIT_MEDIUM_TTL=${RATE_LIMIT_MEDIUM_TTL:-}
+      - RATE_LIMIT_MEDIUM_LIMIT=${RATE_LIMIT_MEDIUM_LIMIT:-}
+      - RATE_LIMIT_LONG_TTL=${RATE_LIMIT_LONG_TTL:-}
+      - RATE_LIMIT_LONG_LIMIT=${RATE_LIMIT_LONG_LIMIT:-}
       # Plugins
       - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
+      - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
       # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
       - DOCKER_HOST=tcp://docker-proxy:2375
     volumes:

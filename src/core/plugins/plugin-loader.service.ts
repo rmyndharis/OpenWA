@@ -624,6 +624,11 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     // provisioning wrote) so the ingress handler reads it as ctx.config — this is what makes a minted
     // instance multi-tenant. Best-effort: an unresolved plugin just yields undefined (base config only).
     const plugin = this.plugins.get(d.pluginId);
+    const route = plugin?.manifest.ingress?.find(candidate => candidate.route === d.route);
+    // Reaching dispatch means every authenticating scheme already passed host verification. A route
+    // explicitly configured with scheme:none is unauthenticated and must never be labelled verified.
+    // Missing/hot-swapped route metadata fails closed.
+    const verified = route ? route.signature.scheme !== 'none' : false;
     const instance = await this.getPluginInstanceService().resolve(d.pluginId, d.instanceId);
     const config = plugin
       ? resolvePluginConfig(
@@ -636,12 +641,12 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     const result = await host.dispatchWebhook({
       instanceId: d.instanceId,
       route: d.route,
-      method: 'POST',
+      method: d.method ?? 'POST',
       headers: d.payload.headers,
       query: d.payload.query,
       body: d.payload.body,
       rawBody: d.payload.rawBody,
-      verified: true,
+      verified,
       deliveryId: d.deliveryId,
       sessionId: d.sessionId,
       config,

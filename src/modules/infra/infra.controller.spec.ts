@@ -23,6 +23,7 @@ jest.mock('fs', () => {
     chmodSync: jest.fn(),
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
+    createReadStream: jest.fn(() => jest.requireActual<typeof import('stream')>('stream').Readable.from([])),
   };
 });
 
@@ -95,6 +96,25 @@ describe('InfraController.importStorage filePath validation (Vuln 3)', () => {
       BadRequestException,
     );
     expect(storage.importFromStream).not.toHaveBeenCalled();
+  });
+
+  it('guards and opens the same cwd-resolved path returned by storage export', async () => {
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/export.tar.gz');
+    (fs.createReadStream as jest.Mock).mockClear();
+    const storage = {
+      importFromStream: jest.fn().mockResolvedValue(3),
+      getCurrentStorageType: jest.fn(() => 'local'),
+    };
+    try {
+      const result = await buildController(storage).importStorage({ filePath: 'data/exports/export.tar.gz' });
+      expect(fs.createReadStream).toHaveBeenCalledWith('/srv/openwa/data/exports/export.tar.gz');
+      expect(storage.importFromStream).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ imported: true, count: 3, storageType: 'local' });
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
   });
 });
 
@@ -525,6 +545,7 @@ describe('InfraController.importData round-trips export-data (no silent message/
         sessionId: 's1',
         waMessageId: 'WA1',
         chatId: 'c1@s.whatsapp.net',
+        chatName: 'Support Chat',
         from: 'a@s.whatsapp.net',
         to: 'b@s.whatsapp.net',
         body: 'hello',
@@ -569,6 +590,7 @@ describe('InfraController.importData round-trips export-data (no silent message/
     const m = await ds.getRepository(Message).findOneByOrFail({ id: 'm1' });
     expect(m.body).toBe('hello');
     expect(m.waMessageId).toBe('WA1');
+    expect(m.chatName).toBe('Support Chat');
     expect(m.from).toBe('a@s.whatsapp.net');
     expect(m.to).toBe('b@s.whatsapp.net');
     expect(m.metadata).toEqual({ ack: 2 });

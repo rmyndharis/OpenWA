@@ -160,7 +160,7 @@ test('mergeOrAppend does not mutate the input array', () => {
 });
 
 test('replaceMessageById swaps the entry with matching id', () => {
-  const before = [msg({ id: 'temp-1', status: 'sending' }), msg({ id: 'm-2' })];
+  const before = [msg({ id: 'temp-1', status: 'pending' }), msg({ id: 'm-2' })];
   const after = replaceMessageById(before, 'temp-1', msg({ id: 'real-1', status: 'sent' }));
   assert.equal(after.length, 2);
   assert.equal(after[0].id, 'real-1');
@@ -174,7 +174,7 @@ test('replaceMessageById is a no-op when oldId is not present', () => {
 });
 
 test('updateMessageById applies a partial patch by id', () => {
-  const before = [msg({ id: 'm-1', status: 'sending' })];
+  const before = [msg({ id: 'm-1', status: 'pending' })];
   const after = updateMessageById(before, 'm-1', { status: 'failed' });
   assert.equal(after[0].status, 'failed');
   assert.equal(after[0].body, 'hello');  // other fields unchanged

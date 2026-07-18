@@ -101,9 +101,8 @@ export class OpenWAClient {
   }
 
   /**
-   * Shared media-send helper used by the image/video/audio/document/sticker
-   * methods, which all share the {@link SendMediaRequest} shape and only differ
-   * by their path segment.
+   * Shared transport helper for image/video/audio/document/sticker sends. Public resource methods
+   * expose the narrower per-route request types (including audio-only `ptt`).
    */
   sendMedia(sessionId: string, segment: string, body: SendMediaRequest): Promise<MessageResponse> {
     return this.request<MessageResponse>({

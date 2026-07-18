@@ -143,14 +143,20 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   guard still applies, and the payload is intentionally not bound to a DTO so strict validation cannot
   reject unknown provider fields.
 - **Replay and duplication.** A signed-timestamp tolerance rejects stale deliveries, and
-  `(instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id collapses
-  at-least-once delivery to exactly-once processing.
-- **Tenancy scoping.** Every ingress artifact — secret, dedup store, ordering lane, dead-letter row — is
+  `(instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id provides
+  best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
+  to its signed `webhook-id`; other handlers must remain idempotent because arbitrary provider headers
+  are not authenticated by every scheme.
+- **Tenancy scoping.** Every durable ingress artifact — secret, dedup store, and dead-letter row — is
   partitioned by instance, and downstream capability calls carry the instance's resolved session scope, so
   a cross-tenant send is blocked host-side.
-- **Fail-closed by construction.** A missing, wrong, or stale signature, or an empty raw body, all reject.
-  The only unconditional-accept path is an explicit `scheme: "none"` an adapter must declare in its
-  manifest.
+- **Fail-closed by construction.** No request — including an empty-body request — is accepted by an
+  authenticating scheme without the correct per-instance secret. HMAC and Standard Webhooks bind body
+  integrity; `shared-secret` authenticates only the caller header and does not bind the body.
+  `scheme: "none"` is the only unauthenticated path.
+- **Raw-body content types.** Signature verification observes exact bytes for `application/json` and
+  `application/x-www-form-urlencoded`. Plain text, XML, octet streams, and non-UTF JSON charsets are not
+  supported ingress body formats and fail verification/content handling rather than being re-serialized.
 - **Egress.** The only outbound path remains the existing SSRF-guarded `ctx.net.fetch`, scoped to the
   manifest's allowed hosts.
 - **Re-entrancy.** A reply issued *inside* an ingress handler seeds the in-flight hook set, so an adapter's
@@ -158,13 +164,13 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 
 ## 25.7 Scale and durability
 
-Persist-before-acknowledge; at-least-once collapsed to exactly-once via deduplication and the queue job
-id; best-effort per-conversation ordering via an advisory lock (P1) — strict FIFO is not preserved across a queue retry or a redrive (inbound arrives over unordered HTTP and is a reconcile trigger, not an ordered source of truth); per-instance fairness via a token bucket
-that sheds a noisy tenant at the edge (P1); a dead-letter record with a redrive endpoint (P1). All shared
-state lives in Redis and PostgreSQL rather than in per-plugin files or the in-memory hook bus, so the
-design can scale to multiple nodes later without re-plumbing (the initial implementation runs on a single
-node). When the queue is disabled, ingress degrades to inline dispatch after persisting, mirroring the
-existing outbound webhook fallback.
+Persist-before-acknowledge; best-effort de-duplication keyed by a stable provider delivery id and queue
+job id; per-instance fairness via a token bucket; and a dead-letter record with bounded redrive. On the
+queued worker path, an **in-process** per-conversation lock prevents concurrent starts for the same lane;
+strict FIFO is not preserved across retry/redrive, and the lock is single-node state rather than Redis or
+PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
+serialize concurrent same-conversation deliveries. Providers already deliver over unordered,
+at-least-once HTTP, so plugin handlers must be idempotent and treat ingress as a reconciliation trigger.
 
 ## 25.8 The Integration SDK (v1)
 

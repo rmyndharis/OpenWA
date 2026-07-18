@@ -14,6 +14,8 @@ export interface IngressJobData {
   pluginId: string;
   instanceId: string;
   route: string;
+  // Optional for backward compatibility with jobs and DLQ rows persisted before method forwarding.
+  method?: string;
   deliveryId: string;
   sessionId?: string;
   // Best-effort provider conversation id, extracted host-side from the manifest's conversationId
@@ -81,7 +83,12 @@ export class IngressProcessor extends WorkerHost {
           lastError: errorMessage,
           // Persist the FULL ingress payload (route + headers/rawBody) so P1 redrive is
           // self-contained and never has to re-read ingress_events.
-          payload: { route: d.route, providerConversationId: d.providerConversationId, ingress: d.payload },
+          payload: {
+            route: d.route,
+            method: d.method,
+            providerConversationId: d.providerConversationId,
+            ingress: d.payload,
+          },
           redriven: false,
         });
       }

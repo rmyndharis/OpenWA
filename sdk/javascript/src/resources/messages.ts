@@ -24,6 +24,7 @@ import type {
   SendBulkRequest,
   SendContactRequest,
   SendLocationRequest,
+  SendAudioRequest,
   SendMediaRequest,
   SendTemplateRequest,
   SendTextRequest,
@@ -62,7 +63,7 @@ export class MessagesResource {
   }
 
   /** Send an audio file (url or base64). */
-  sendAudio(sessionId: string, body: SendMediaRequest): Promise<MessageResponse> {
+  sendAudio(sessionId: string, body: SendAudioRequest): Promise<MessageResponse> {
     return this.client.sendMedia(sessionId, 'send-audio', body);
   }
 

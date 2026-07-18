@@ -26,6 +26,7 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
   let pluginsDir: string;
   let loader: PluginLoaderService;
   let service: PluginsService;
+  let pluginStorage: PluginStorageService;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-svc-'));
@@ -34,12 +35,8 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     const config = {
       get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
     } as unknown as ConfigService;
-    loader = new PluginLoaderService(
-      config,
-      new HookManager(),
-      new PluginStorageService(config),
-      {} as unknown as ModuleRef,
-    );
+    pluginStorage = new PluginStorageService(config);
+    loader = new PluginLoaderService(config, new HookManager(), pluginStorage, {} as unknown as ModuleRef);
     service = new PluginsService(loader, config);
   });
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -95,6 +92,21 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     expect(loader.getPlugin('svc-plg')?.config).toEqual({ apiKey: 'secret-123' });
     expect(fs.existsSync(path.join(pluginsDir, 'svc-plg', 'index.js'))).toBe(true);
     expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false); // backup cleaned up
+  });
+
+  it('preserves ctx.storage state across an in-place package update', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    const storage = pluginStorage.createPluginStorage('svc-plg');
+    await storage.set('cursor', { lastId: 'msg-42' });
+
+    await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+
+    expect(await storage.get('cursor')).toEqual({ lastId: 'msg-42' });
+    const stateFile = fs.readdirSync(path.join(pluginsDir, 'svc-plg')).find(name => /^key-.*\.json$/.test(name));
+    expect(stateFile).toBeDefined();
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(path.join(pluginsDir, 'svc-plg', stateFile as string)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('updatePackage rejects a package whose id does not match', async () => {

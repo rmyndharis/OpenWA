@@ -301,7 +301,15 @@ export function Infrastructure() {
     try {
       const payload = {
         database: { ...dbConfig },
-        redis: { enabled: redisEnabled, ...redisConfig },
+        // `connected` is runtime-only status, not persisted configuration. Keep it out of the
+        // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
+        redis: {
+          enabled: redisEnabled,
+          builtIn: redisConfig.builtIn,
+          host: redisConfig.host,
+          port: redisConfig.port,
+          password: redisConfig.password,
+        },
         queue: { enabled: queueEnabled },
         storage: { ...storageConfig },
         // Only send `type` once we actually know it — either the radio seeded from the running engine

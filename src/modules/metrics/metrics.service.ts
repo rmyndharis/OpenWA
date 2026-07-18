@@ -90,13 +90,13 @@ export class MetricsService {
       lines.push(`openwa_sessions{status="${this.escapeLabel(status)}"} ${count}`);
     }
 
-    lines.push('# HELP openwa_messages_total Total messages by direction.');
-    lines.push('# TYPE openwa_messages_total counter');
+    lines.push('# HELP openwa_messages_total Current stored messages by direction.');
+    lines.push('# TYPE openwa_messages_total gauge');
     lines.push(`openwa_messages_total{direction="outgoing"} ${overview.messages.sent}`);
     lines.push(`openwa_messages_total{direction="incoming"} ${overview.messages.received}`);
 
-    lines.push('# HELP openwa_messages_failed_total Total messages in FAILED state.');
-    lines.push('# TYPE openwa_messages_failed_total counter');
+    lines.push('# HELP openwa_messages_failed_total Current stored messages in FAILED state.');
+    lines.push('# TYPE openwa_messages_failed_total gauge');
     lines.push(`openwa_messages_failed_total ${overview.messages.failed}`);
 
     lines.push(

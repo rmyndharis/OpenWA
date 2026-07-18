@@ -303,6 +303,49 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
 
       expect(() => gateway.evictApiKey('k1')).not.toThrow();
     });
+
+    it('evicts a passive socket once its cached API key expires', async () => {
+      authService.validateApiKey.mockResolvedValue({
+        id: 'k1',
+        name: 'k',
+        allowedSessions: null,
+        expiresAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      const sock = makeSocket({ apiKey: 'good' });
+      await gateway.handleConnection(asSocket(sock));
+
+      (gateway as unknown as { sweepExpiredApiKeys: (now: number) => void }).sweepExpiredApiKeys(
+        Date.parse('2026-01-01T00:00:01Z'),
+      );
+
+      expect(sock.disconnect).toHaveBeenCalledWith(true);
+      expect(sock.emit).toHaveBeenCalledWith(
+        'message',
+        expect.objectContaining({ code: 'UNAUTHORIZED', message: 'API key has expired' }),
+      );
+    });
+
+    it('keeps sockets with no expiry or a future expiry', async () => {
+      const noExpiry = makeSocket({ apiKey: 'a' });
+      const future = { ...makeSocket({ apiKey: 'b' }), id: 'sock-2' };
+      authService.validateApiKey
+        .mockResolvedValueOnce({ id: 'k1', name: 'a', allowedSessions: null, expiresAt: null })
+        .mockResolvedValueOnce({
+          id: 'k2',
+          name: 'b',
+          allowedSessions: null,
+          expiresAt: new Date('2026-01-02T00:00:00Z'),
+        });
+      await gateway.handleConnection(asSocket(noExpiry));
+      await gateway.handleConnection(asSocket(future));
+
+      (gateway as unknown as { sweepExpiredApiKeys: (now: number) => void }).sweepExpiredApiKeys(
+        Date.parse('2026-01-01T00:00:00Z'),
+      );
+
+      expect(noExpiry.disconnect).not.toHaveBeenCalled();
+      expect(future.disconnect).not.toHaveBeenCalled();
+    });
   });
 });
 

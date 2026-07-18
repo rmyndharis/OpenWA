@@ -1096,9 +1096,7 @@ Always returns `501` — settings are read-only at runtime. ADMIN key required (
 
 ```bash
 curl -X PUT "$BASE/api/settings" \
-  -H "X-API-Key: $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{ "general": { "sessionTimeout": 10 } }'
+  -H "X-API-Key: $API_KEY"
 ```
 
 ### 07.13 Administration (Infrastructure, Plugins, MCP)
@@ -1260,7 +1258,8 @@ curl "$BASE/api/plugins/chat-flow" \
 
 #### GET /api/plugins/:id/config-ui
 
-Fetch a plugin's sandboxed config-UI HTML (for an iframe srcdoc).
+Fetch a plugin's sandboxed config-UI HTML. The dashboard renders it in an opaque-origin iframe,
+uses a `postMessage` bridge for config, and retains any schema form as a fallback.
 
 ```bash
 curl "$BASE/api/plugins/chat-flow/config-ui" \

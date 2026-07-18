@@ -6,13 +6,14 @@ jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 // BEFORE AppModule is imported, mirroring integration-instance.e2e-spec.ts's env-first pattern.
 process.env.ALLOW_DEV_API_KEY = 'true';
 
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { applyGlobalValidation } from '../src/config/app-validation';
 import { Message, MessageDirection } from '../src/modules/message/entities/message.entity';
 import { AddMessagesFts1782400000000 } from '../src/database/migrations/1782400000000-AddMessagesFts';
 import { SearchController } from '../src/modules/search/search.controller';
@@ -38,8 +39,7 @@ describe('GET /api/search (e2e)', () => {
   beforeAll(async () => {
     const moduleFixture = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     await app.init();
 
     // The FTS migration is gated behind migrationsRun (off under DATABASE_SYNCHRONIZE=true), so apply

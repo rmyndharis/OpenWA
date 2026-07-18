@@ -14,6 +14,7 @@ describe('SettingsController', () => {
   it('GET /settings returns the environment-derived settings', () => {
     const settings = new SettingsController(configStub).get();
     expect(settings).toHaveProperty('general');
+    expect(settings.general).not.toHaveProperty('sessionTimeout');
     expect(settings).toHaveProperty('api');
     expect(settings).toHaveProperty('notifications');
   });

@@ -105,8 +105,7 @@ describe('KeyRateLimiter', () => {
     expect(() => rl.check('b')).not.toThrow();
   });
 
-  // FIX 3(a): expired buckets must be pruned so the Map does not grow unboundedly
-  it('prunes empty buckets: Map is empty after all windows expire', () => {
+  it('drops stale timestamps within a bucket when that key is checked again', () => {
     let now = 0;
     const rl = new KeyRateLimiter(5, 1000, () => now);
 
@@ -140,9 +139,32 @@ describe('KeyRateLimiter', () => {
     // Access the private field via casting to verify the Map state.
     const map = (rl as unknown as { hits: Map<string, number[]> }).hits;
 
+    expect(map.size).toBe(1000);
+
     // Every bucket must have exactly 1 timestamp (the last fresh hit).
     for (const [, timestamps] of map) {
       expect(timestamps).toHaveLength(1);
     }
+  });
+
+  it('caps distinct keys with LRU eviction', () => {
+    const rl = new KeyRateLimiter(5, 1000, () => 0, 3);
+    rl.check('a');
+    rl.check('b');
+    rl.check('c');
+    rl.check('a'); // touch a; b is now least recently used
+    rl.check('d');
+
+    const map = (rl as unknown as { hits: Map<string, number[]> }).hits;
+    expect([...map.keys()]).toEqual(['c', 'a', 'd']);
+  });
+
+  it('touches a throttled key so eviction cannot reset an active abuser', () => {
+    const rl = new KeyRateLimiter(1, 1000, () => 0, 2);
+    rl.check('abuser');
+    rl.check('other');
+    expect(() => rl.check('abuser')).toThrow(/rate limit/i);
+    rl.check('new');
+    expect(() => rl.check('abuser')).toThrow(/rate limit/i);
   });
 });

@@ -128,11 +128,11 @@ export function isApiKeyPepperMissingInProduction(nodeEnv?: string, apiKeyPepper
   return nodeEnv === 'production' && !apiKeyPepper?.trim();
 }
 
-/** A built-in S3 endpoint is the bundled MinIO (host `minio`) — or unset (the built-in default). An
- * external endpoint (e.g. s3.amazonaws.com) is reachable, so its credentials are never exempted. */
+/** A built-in S3 endpoint is the bundled MinIO (host `minio`). An unset endpoint means the standard
+ * AWS regional endpoint, so it is external and its credentials must never be exempted. */
 function isInternalS3Endpoint(endpoint?: string): boolean {
   const e = endpoint?.trim();
-  if (!e) return true;
+  if (!e) return false;
   try {
     return new URL(e).hostname === 'minio';
   } catch {

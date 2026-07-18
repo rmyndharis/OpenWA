@@ -20,6 +20,7 @@ import com.rmyndharis.openwa.model.SendBulkRequest;
 import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
 import com.rmyndharis.openwa.model.SendMediaRequest;
+import com.rmyndharis.openwa.model.SendAudioRequest;
 import com.rmyndharis.openwa.model.SendTemplateRequest;
 import com.rmyndharis.openwa.model.SendTextRequest;
 import com.rmyndharis.openwa.model.SuccessResult;
@@ -68,7 +69,7 @@ public final class MessagesResource {
     }
 
     /** Send an audio file (url or base64). */
-    public MessageResponse sendAudio(String sessionId, SendMediaRequest body) {
+    public MessageResponse sendAudio(String sessionId, SendAudioRequest body) {
         return sendMedia(sessionId, "send-audio", body);
     }
 
@@ -214,7 +215,7 @@ public final class MessagesResource {
     // ── Internal ───────────────────────────────────────────────────────
 
     /** POST {@code /messages/send-<kind>} for the five media send helpers. */
-    private MessageResponse sendMedia(String sessionId, String kind, SendMediaRequest body) {
+    private MessageResponse sendMedia(String sessionId, String kind, Object body) {
         return client.request(
             HttpMethod.POST,
             "/api/sessions/" + encodeSegment(sessionId) + "/messages/" + kind,

@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -173,6 +173,13 @@ export class AuthService implements OnModuleInit {
   async update(id: string, dto: UpdateApiKeyDto): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
 
+    const removesOrSchedulesLastAdmin =
+      (dto.role !== undefined && dto.role !== ApiKeyRole.ADMIN) ||
+      (dto.expiresAt !== undefined && dto.expiresAt !== null);
+    if (removesOrSchedulesLastAdmin) {
+      await this.assertNotLastUsableAdmin(apiKey);
+    }
+
     // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
     // allowedIps, allowedSessions, or expiry can widen or restrict what an already-connected WebSocket
     // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
@@ -209,6 +216,7 @@ export class AuthService implements OnModuleInit {
 
   async delete(id: string): Promise<void> {
     const apiKey = await this.findOne(id);
+    await this.assertNotLastUsableAdmin(apiKey);
     // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
     this.pendingUsage.delete(id);
     await this.apiKeyRepository.remove(apiKey);
@@ -221,6 +229,7 @@ export class AuthService implements OnModuleInit {
 
   async revoke(id: string): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
+    await this.assertNotLastUsableAdmin(apiKey);
     // A revoked key fails validation before its next flush, so its accumulator would orphan —
     // drop it here.
     this.pendingUsage.delete(id);
@@ -230,6 +239,23 @@ export class AuthService implements OnModuleInit {
     // key keeps receiving events on already-subscribed sockets until they happen to disconnect.
     this.evictActiveSockets(id, 'revoked');
     return saved;
+  }
+
+  private async assertNotLastUsableAdmin(target: ApiKey): Promise<void> {
+    const now = new Date();
+    const targetIsUsableAdmin =
+      target.role === ApiKeyRole.ADMIN && target.isActive && (!target.expiresAt || target.expiresAt > now);
+    if (!targetIsUsableAdmin) return;
+
+    const otherUsableAdmins = await this.apiKeyRepository.count({
+      where: [
+        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: IsNull() },
+        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: MoreThan(now) },
+      ],
+    });
+    if (otherUsableAdmins === 0) {
+      throw new ConflictException('Cannot remove the last active admin key');
+    }
   }
 
   /**

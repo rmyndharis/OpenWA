@@ -474,7 +474,12 @@ CREATE INDEX "IDX_audit_logs_sessionId" ON audit_logs(session_id);
 CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs(created_at);
 ```
 
-**Audit actions** are an enum (`AuditAction`) spanning API-key lifecycle (`api_key_created`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`), session lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`, `session_deleted`, `session_qr_generated`, `session_connected`, `session_disconnected`), messages (`message_sent`, `message_failed`), and webhooks (`webhook_created`, `webhook_deleted`, `webhook_triggered`, `webhook_failed`).
+**Audit actions** are an enum (`AuditAction`) spanning API-key lifecycle (`api_key_created`,
+`api_key_updated`, `api_key_used`, `api_key_revoked`, `api_key_deleted`, `api_key_auth_failed`), session
+lifecycle (`session_created`, `session_started`, `session_stopped`, `session_force_killed`,
+`session_deleted`, `session_qr_generated`, `session_connected`, `session_disconnected`), messages
+(`message_sent`, `message_failed`), and webhooks (`webhook_created`, `webhook_deleted`,
+`webhook_triggered`, `webhook_failed`).
 
 > [!NOTE]
 > Audit-log retention is automatic: see [§5.7 Data Retention](#57-data-retention). Other event types (session logs, webhook delivery logs, API access logs) are surfaced via structured application logging, not dedicated database tables.
@@ -735,6 +740,7 @@ async cleanup(olderThanDays = 30): Promise<number> {
 
 > [!NOTE]
 > This section is **operational guidance**, not a built-in feature. OpenWA ships no scheduler, encryption step, or S3 uploader for backups — the diagram and script below are a recommended setup you wire up externally (cron, your host's backup tooling, etc.). For SQLite, back up the `./data/*.sqlite` files (including `./data/main.sqlite`); for PostgreSQL, use `pg_dump`. The JSON export/import endpoints in §5.1 are a portability path, not a backup mechanism.
+> The authoritative full-system backup is [`scripts/backup.sh`](../scripts/backup.sh), documented in the [operational runbook](./11-operational-runbooks.md#runbook-database-backup); it also captures engine auth state, including `BAILEYS_AUTH_DIR` for Baileys.
 
 ### Backup Components
 

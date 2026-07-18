@@ -12,13 +12,14 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { json, urlencoded, Request } from 'express';
 import { AppModule } from './../src/app.module';
+import { applyGlobalValidation } from './../src/config/app-validation';
 import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service';
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
 
@@ -61,8 +62,7 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     app.use(
       json({
         verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
@@ -70,7 +70,14 @@ describe('Ingress per-instance fairness throttle (e2e)', () => {
         },
       }),
     );
-    app.use(urlencoded({ extended: true }));
+    app.use(
+      urlencoded({
+        extended: true,
+        verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
+          req.rawBody = buf;
+        },
+      }),
+    );
     await app.init();
 
     instanceRepo = app.get(getRepositoryToken(PluginInstance, 'data'));

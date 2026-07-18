@@ -21,12 +21,11 @@
  * `evidence` (present only when at least one adapter is `not-available`) cites the library symbol(s)
  * that were inspected, so an engineer can open the exact file and start wiring immediately.
  *
- * This is a SNAPSHOT. `engine-parity.spec.ts` regenerates the supported/not-available *classification*
- * from the live adapter method bodies (a method is "not-available" if it throws
- * EngineNotSupportedError / ChannelMediaNotSupportedError) and fails on drift, so a parity change
- * cannot land without deliberately updating this matrix (and docs/engine-capability-matrix.md). The
- * `rootCause`/`evidence` fields are hand-curated, source-traced annotations; they are NOT regenerated
- * by the spec and are updated by hand as adapters are wired or libraries change.
+ * This is a SNAPSHOT. `engine-parity.spec.ts` enforces exact matrix-key↔interface-method correspondence
+ * and the throw-invariants it can observe in live adapter method bodies. It does not read the operator
+ * documentation and cannot classify non-throwing phantom stubs. The `status`, `rootCause`, and
+ * `evidence` fields therefore remain hand-curated, source-traced annotations that must be reviewed as
+ * adapters are wired or libraries change.
  *
  * NOTE on phantom support: the drift gate's throw-heuristic cannot see adapter methods that silently
  * stub (return null/[] + a warn log) without throwing. The matrix BELOW is the source-of-truth: three

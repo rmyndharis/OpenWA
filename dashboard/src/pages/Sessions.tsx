@@ -311,8 +311,8 @@ export function Sessions() {
     const matchesStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
-      (statusFilter === 'inactive' && ['created', 'idle', 'disconnected'].includes(s.status)) ||
-      (statusFilter === 'connecting' && ['initializing', 'connecting', 'qr_ready'].includes(s.status));
+      (statusFilter === 'inactive' && ['created', 'idle', 'disconnected', 'failed'].includes(s.status)) ||
+      (statusFilter === 'connecting' && ['initializing', 'connecting', 'authenticating', 'qr_ready'].includes(s.status));
     return matchesSearch && matchesStatus;
   });
 

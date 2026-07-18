@@ -536,6 +536,25 @@ func TestWithTimeoutZeroUsesDefault(t *testing.T) {
 	}
 }
 
+func TestInjectedHTTPClientTimeoutIsHonoredUnlessWithTimeoutIsExplicit(t *testing.T) {
+	injected := &http.Client{Timeout: 45 * time.Second}
+	c, err := New("http://localhost:2785", "k", WithHTTPClient(injected))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if c.timeout != 45*time.Second {
+		t.Fatalf("injected timeout = %s, want 45s", c.timeout)
+	}
+
+	c, err = New("http://localhost:2785", "k", WithHTTPClient(injected), WithTimeout(5*time.Second))
+	if err != nil {
+		t.Fatalf("New explicit: %v", err)
+	}
+	if c.timeout != 5*time.Second {
+		t.Fatalf("explicit timeout = %s, want 5s", c.timeout)
+	}
+}
+
 func TestBulkMediaContentOmitsChatID(t *testing.T) {
 	// The bulk media block must not emit a chatId key — the outer item carries
 	// it, and BulkMediaDto rejects a stray empty one via forbidNonWhitelisted.

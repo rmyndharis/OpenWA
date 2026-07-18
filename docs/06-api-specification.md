@@ -447,7 +447,7 @@ Start a session and initialize the WhatsApp connection.
 
 No request body.
 
-**Response** `201`
+**Response** `200`
 
 ```json
 {
@@ -464,7 +464,7 @@ No request body.
 }
 ```
 
-Returned via `transformSession`. Status typically transitions to `initializing` / `qr_ready`. Note: Swagger declares `200`, but with no `@HttpCode` override the runtime status is **`201`** (NestJS POST default).
+Returned via `transformSession`. Status typically transitions to `initializing` / `qr_ready`.
 
 **Errors:** `400` session already started / already starting · `401` · `403` · `404` not found
 
@@ -482,7 +482,7 @@ Stop a session and disconnect WhatsApp.
 
 No request body.
 
-**Response** `201`
+**Response** `200`
 
 ```json
 {
@@ -499,7 +499,7 @@ No request body.
 }
 ```
 
-Returned via `transformSession`; status typically becomes `disconnected`. Swagger declares `200`; runtime status is **`201`**.
+Returned via `transformSession`; status typically becomes `disconnected`.
 
 **Errors:** `401` · `403` · `404` not found
 
@@ -517,7 +517,7 @@ Force-kill a stuck session (SIGKILL the wedged engine, then tear it down).
 
 No request body.
 
-**Response** `201`
+**Response** `200`
 
 ```json
 {
@@ -534,7 +534,7 @@ No request body.
 }
 ```
 
-Returned via `transformSession`. Swagger declares `200`; runtime status is **`201`**.
+Returned via `transformSession`.
 
 **Errors:** `401` · `403` · `404` not found
 
@@ -592,13 +592,13 @@ Mark a chat as read/seen.
 { "chatId": "1234567890@c.us" }
 ```
 
-**Response** `201`
+**Response** `200`
 
 ```json
 { "success": true }
 ```
 
-Swagger declares `200`; runtime status is **`201`**.
+Returns HTTP `200`, matching the OpenAPI contract.
 
 **Errors:** `400` validation, or session not started · `401` · `403` · `404` session not found
 
@@ -624,13 +624,13 @@ Mark a chat as unread.
 { "chatId": "1234567890@c.us" }
 ```
 
-**Response** `201`
+**Response** `200`
 
 ```json
 { "success": true }
 ```
 
-Swagger declares `200`; runtime status is **`201`**.
+Returns HTTP `200`, matching the OpenAPI contract.
 
 **Errors:** `400` validation, or session not started · `401` · `403` · `404` session not found
 
@@ -656,13 +656,13 @@ Delete a chat from the chat list (e.g. a group you have left).
 { "chatId": "1234567890-123@g.us" }
 ```
 
-**Response** `201`
+**Response** `200`
 
 ```json
 { "success": true }
 ```
 
-Swagger declares `200`; runtime status is **`201`**.
+Returns HTTP `200`, matching the OpenAPI contract.
 
 **Errors:** `400` validation, or session not started · `401` · `403` · `404` session not found
 
@@ -689,13 +689,13 @@ Send a typing/recording presence indicator to a chat (or clear it with `paused`)
 { "chatId": "1234567890@c.us", "state": "typing" }
 ```
 
-**Response** `201`
+**Response** `200`
 
 ```json
 { "success": true }
 ```
 
-Always returns `{ "success": true }` (the service returns void; the controller hardcodes `true`). Swagger declares `200`; runtime status is **`201`**.
+Always returns `{ "success": true }` (the service returns void; the controller hardcodes `true`).
 
 **Errors:** `400` validation, or session not started · `401` · `403` · `404` session not found
 
@@ -2664,13 +2664,13 @@ Add a label to a chat.
 { "labelId": "5" }
 ```
 
-**Response** `201`
+**Response** `200`
 
 ```json
 { "success": true }
 ```
 
-The handler always returns the literal `{ "success": true }`. NestJS POST default status is `201` (the Swagger doc says `200`; the runtime code is `201`).
+The handler always returns the literal `{ "success": true }`.
 
 **Errors:** `400` validation failure (missing/empty/non-string `labelId`, or any unknown body field — strict whitelist), or session is not started · `401` missing/invalid API key · `403` key lacks `OPERATOR` role
 
@@ -3362,7 +3362,7 @@ Returns the updated key (no plaintext).
 }
 ```
 
-**Errors:** `400` validation (incl. `forbidNonWhitelisted` for unknown fields such as `isActive`) · `401` missing/invalid key · `403` key role below ADMIN · `404` not found
+**Errors:** `400` validation (incl. `forbidNonWhitelisted` for unknown fields such as `isActive`) · `401` missing/invalid key · `403` key role below ADMIN · `404` not found · `409` change would remove the last usable admin key
 
 #### POST /api/auth/api-keys/:id/revoke
 
@@ -3378,7 +3378,7 @@ Revoke (deactivate) an API key without deleting it. No request body required.
 
 **Response** `200` — `ApiKeyResponseDto`
 
-Sets `isActive` to `false` and returns the key. Default POST status `200` (no `@HttpCode` override). After revoke, the key fails validation with `401 "API key is revoked"`.
+Sets `isActive` to `false` and returns the key with explicit HTTP `200`. After revoke, the key fails validation with `401 "API key is revoked"`.
 
 ```json
 {
@@ -3392,7 +3392,7 @@ Sets `isActive` to `false` and returns the key. Default POST status `200` (no `@
 }
 ```
 
-**Errors:** `401` missing/invalid key · `403` key role below ADMIN · `404` not found
+**Errors:** `401` missing/invalid key · `403` key role below ADMIN · `404` not found · `409` target is the last usable admin key
 
 #### DELETE /api/auth/api-keys/:id
 
@@ -3410,7 +3410,7 @@ Permanently delete an API key (hard delete). Also drops any un-flushed usage acc
 
 `@HttpCode(204)` — no response body.
 
-**Errors:** `401` missing/invalid key · `403` key role below ADMIN · `404` `"API key with id '<id>' not found"`
+**Errors:** `401` missing/invalid key · `403` key role below ADMIN · `404` `"API key with id '<id>' not found"` · `409` target is the last usable admin key
 
 #### POST /api/auth/validate
 
@@ -3522,10 +3522,10 @@ openwa_sessions_active 2
 # TYPE openwa_sessions gauge
 openwa_sessions{status="ready"} 2
 openwa_sessions{status="disconnected"} 1
-# TYPE openwa_messages_total counter
+# TYPE openwa_messages_total gauge
 openwa_messages_total{direction="outgoing"} 1280
 openwa_messages_total{direction="incoming"} 940
-# TYPE openwa_messages_failed_total counter
+# TYPE openwa_messages_failed_total gauge
 openwa_messages_failed_total 4
 ```
 
@@ -3639,8 +3639,7 @@ Get application settings (environment-derived; `general`/`api`/`notifications` g
 {
   "general": {
     "apiBaseUrl": "http://localhost:2785",
-    "sessionTimeout": 0,
-    "autoReconnect": false,
+    "autoReconnect": true,
     "debugMode": false
   },
   "api": {
@@ -3656,7 +3655,7 @@ Get application settings (environment-derived; `general`/`api`/`notifications` g
 }
 ```
 
-Notes: raw return of an in-memory `Settings` object built once in the controller constructor from `ConfigService` (snapshotted at construction, not re-read per request). `general.sessionTimeout` is `floor(webhook.timeout / 60000)` minutes; `api.rateLimitWindow` is in ms; `enableDocs`/`notifications.*` are partly hardcoded (`enableDocs: true`, `emailEnabled: false`, `notificationEmail: ''`, `webhookAlerts: true`).
+Notes: raw return of an in-memory `Settings` object built once in the controller constructor from `ConfigService` (snapshotted at construction, not re-read per request). `api.rateLimitWindow` is in ms. `enableDocs` reflects the `ENABLE_SWAGGER` gate (enabled by default outside production; disabled by default in production unless explicitly enabled). Only `notifications.*` is currently hardcoded (`emailEnabled: false`, `notificationEmail: ''`, `webhookAlerts: true`).
 
 **Errors:** `401` — missing/invalid `X-API-Key` · `403` — API key lacks the ADMIN role.
 
@@ -3818,12 +3817,12 @@ Merge-save infrastructure config to `data/.env.generated` (a `0600` secret file)
 
 **Auth:** API key (ADMIN)
 
-**Request body** — `SaveConfigDto` (plain interface, **not** class-validated; only `engine.type` and CR/LF safety are enforced)
+**Request body** — `SaveConfigDto` (recursively class-validated; unknown or mistyped fields are rejected)
 
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | `database` | object | No | — | DB section (see nested) |
-| `database.type` | `'sqlite' \| 'postgres'` | No | — | `sqlite` drops stale postgres keys; `postgres` writes connection keys |
+| `database.type` | `'sqlite' \| 'postgres'` | If `database` is present | enum | `sqlite` drops stale postgres keys; `postgres` writes connection keys |
 | `database.builtIn` | boolean | No | — | When `true`+postgres, forces the bundled `postgres` container creds + pushes `postgres` Docker profile |
 | `database.host` / `.port` / `.username` / `.database` | string | No | `port` is a string | External postgres connection (defaults `localhost`/`5432`/`postgres`/`openwa`) |
 | `database.password` | string | No | secret | Empty/omitted keeps the existing stored secret |
@@ -3832,10 +3831,9 @@ Merge-save infrastructure config to `data/.env.generated` (a `0600` secret file)
 | `database.sslRejectUnauthorized` | boolean | No | — | Only written when `sslEnabled` is true; default true |
 | `redis.enabled` / `.builtIn` | boolean | No | — | `builtIn`+enabled forces `redis` container + profile |
 | `redis.host` / `.port` | string | No | `port` is a string | Defaults `localhost`/`6379` |
-| `redis.username` | string | No | — | Redis ACL username |
 | `redis.password` | string | No | secret | Empty keeps existing |
 | `queue.enabled` | boolean | No | — | Writes `QUEUE_ENABLED` |
-| `storage.type` | `'local' \| 's3'` | No | — | `local` drops stale S3 keys; `s3` drops `STORAGE_LOCAL_PATH` |
+| `storage.type` | `'local' \| 's3'` | If `storage` is present | enum | `local` drops stale S3 keys; `s3` drops `STORAGE_LOCAL_PATH` |
 | `storage.builtIn` | boolean | No | — | `true`+s3 uses bundled MinIO defaults + pushes `minio` profile |
 | `storage.localPath` | string | No | — | Default `./data/media` |
 | `storage.s3Bucket` / `.s3Region` / `.s3Endpoint` | string | No | — | External S3 |
@@ -3861,9 +3859,10 @@ Merge-save infrastructure config to `data/.env.generated` (a `0600` secret file)
 { "message": "Configuration saved. Server restart required.", "saved": true, "envPath": "data/.env.generated", "profiles": ["postgres", "redis"] }
 ```
 
-This route **always returns HTTP 200**, even on failure: write/IO errors are caught and returned as `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. The only true `400` cases are an unknown `engine.type` or any value containing `\r`/`\n`. `profiles` lists newly-required Docker profiles.
+Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. DTO validation, an unknown engine type, and CR/LF injection are real HTTP `400` responses. `profiles` lists newly-required Docker profiles.
 
-**Errors:** `400` unknown `engine.type` / CR-LF in a value · `401` · `403`
+**Errors:** `400` unknown/mistyped body field, missing nested `database.type`/`storage.type`, unknown
+`engine.type`, or CR-LF in a value · `401` · `403`
 
 ---
 
@@ -3873,7 +3872,7 @@ Request a graceful server restart, optionally orchestrating Docker profiles (add
 
 **Auth:** API key (ADMIN)
 
-**Request body** — optional inline type (plain interface, not class-validated)
+**Request body** — optional `RestartDto` (class-validated; unknown fields and non-string array members reject)
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -4015,7 +4014,7 @@ Import storage files from a `tar.gz` located inside the `data/` directory.
 
 **Auth:** API key (ADMIN)
 
-**Request body** — inline `{ filePath: string }` (plain interface, not class-validated; path-safety enforced manually)
+**Request body** — `ImportStorageDto` (class-validated; path-safety is additionally enforced manually)
 
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
@@ -4121,7 +4120,8 @@ Get a single plugin by id.
 
 #### GET /api/plugins/:id/config-ui
 
-Serve a plugin's sandboxed config-UI entry HTML (for an iframe `srcdoc`).
+Serve a plugin's sandboxed config-UI entry HTML (for an opaque-origin iframe `srcdoc`; the dashboard
+applies its document-specific CSP nonce to inline scripts and keeps any declared schema form available as fallback).
 
 **Auth:** API key (ADMIN)
 

@@ -3,7 +3,7 @@
 // webhook Worker's @Processor connection) see the configured values rather than pre-dotenv defaults.
 import './config/load-env';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, ShutdownSignal } from '@nestjs/common';
+import { ShutdownSignal } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
@@ -13,11 +13,12 @@ import { LoggerService, LogLevel, createLogger } from './common/services/logger.
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
+import { applyGlobalValidation } from './config/app-validation';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
+import { injectDashboardCspNonce } from './config/dashboard-csp';
 import {
   resolveCorsPolicy,
   isSwaggerEnabled,
-  isValidationErrorDetailEnabled,
   isUpgradeInsecureRequestsEnabled,
   isDashboardCspUpgradeTrapLikely,
   resolveBodyLimit,
@@ -27,6 +28,9 @@ import {
 import { BullBoardAuthMiddleware } from './common/security/bull-board-auth.middleware';
 import { AuthService } from './modules/auth/auth.service';
 import { Request, Response, NextFunction, json, urlencoded } from 'express';
+import { randomBytes } from 'crypto';
+import { readFileSync } from 'fs';
+import { extname, join } from 'path';
 
 async function bootstrap() {
   // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset/invalid → INFO.
@@ -93,7 +97,17 @@ async function bootstrap() {
       },
     }),
   );
-  app.use(urlencoded({ extended: true, limit: bodyLimit }));
+  app.use(
+    urlencoded({
+      extended: true,
+      limit: bodyLimit,
+      // Form-encoded webhook providers also sign the exact wire bytes. Use the same capture contract
+      // as json(); other content types remain unsupported rather than installing a global catch-all.
+      verify: (req: Request & { rawBody?: Buffer }, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
 
   // Assign a request id to every inbound request (X-Request-ID), echo it on the response, and run
   // the whole downstream chain inside its scope so every log line + audit row carries it.
@@ -131,6 +145,13 @@ async function bootstrap() {
     });
   }
 
+  // Give every response a CSP nonce. A bundled dashboard document receives its own value in a meta
+  // element below; plugin config UIs copy it only onto inline scripts in their opaque sandboxed iframe.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    res.locals.cspNonce = randomBytes(18).toString('base64url');
+    next();
+  });
+
   // Enhanced Security Headers
   app.use(
     helmet({
@@ -141,7 +162,7 @@ async function bootstrap() {
           // font files from fonts.gstatic.com). Now that NestJS serves the dashboard under this CSP,
           // allow those origins or the @import'd fonts are blocked and the UI falls back to system fonts.
           styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-          scriptSrc: ["'self'"],
+          scriptSrc: ["'self'", (_req, res) => `'nonce-${(res as Response).locals.cspNonce as string}'`],
           // `blob:` is needed for the outgoing image-attachment preview, which the dashboard renders
           // from a URL.createObjectURL(file) blob before the message is sent (Chats.tsx).
           imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
@@ -174,6 +195,31 @@ async function bootstrap() {
     }),
   );
 
+  // Serve SPA documents dynamically so the nonce embedded in this exact document matches its CSP
+  // response header. A shared cookie is deliberately avoided: a second dashboard tab could overwrite
+  // it and make the first tab's srcdoc scripts fail CSP. Assets and Nest-owned routes fall through.
+  if (dashboardServingEnabled && dashboardBuildPresent) {
+    const dashboardIndex = readFileSync(join(DASHBOARD_DIST, 'index.html'), 'utf8');
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const excluded =
+        req.path.startsWith('/api/') ||
+        req.path === '/api' ||
+        req.path.startsWith('/socket.io/') ||
+        req.path === '/socket.io' ||
+        req.path.startsWith('/mcp/') ||
+        req.path === '/mcp' ||
+        req.path.startsWith('/assets/');
+      const documentRequest =
+        req.method === 'GET' &&
+        !excluded &&
+        ((req.headers.accept ?? '').includes('text/html') || extname(req.path) === '');
+      if (!documentRequest) return next();
+
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html').send(injectDashboardCspNonce(dashboardIndex, res.locals.cspNonce as string));
+    });
+  }
+
   // CORS Configuration (#221 hardening)
   const corsPolicy = resolveCorsPolicy(process.env.CORS_ORIGINS, process.env.NODE_ENV);
   if (process.env.NODE_ENV === 'production' && corsPolicy.origins.length === 0 && !corsPolicy.allowAnyOrigin) {
@@ -205,23 +251,8 @@ async function bootstrap() {
     maxAge: 86400, // 24 hours
   });
 
-  // Global prefix
-  app.setGlobalPrefix('api');
-
-  // Enhanced Validation pipe with security options
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true, // Strip properties not in DTO
-      forbidNonWhitelisted: true, // Throw error on unknown properties
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-      // Hide field-level validation messages by default in production (so a 400 doesn't reflect the DTO
-      // shape back); opt in with VALIDATION_ERROR_DETAIL=true to debug an SDK/integration against prod.
-      disableErrorMessages: !isValidationErrorDetailEnabled(process.env.VALIDATION_ERROR_DETAIL, process.env.NODE_ENV),
-    }),
-  );
+  // Shared production/e2e prefix and DTO validation contract.
+  applyGlobalValidation(app);
 
   // Swagger documentation. ENABLE_SWAGGER wins; otherwise default on outside production, off in
   // production (the API schema is reconnaissance surface — production opts in with ENABLE_SWAGGER=true).
@@ -303,4 +334,7 @@ async function bootstrap() {
   }
 }
 
-void bootstrap();
+bootstrap().catch((err: unknown) => {
+  createLogger('Bootstrap').error('Fatal error during bootstrap', err instanceof Error ? err.stack : String(err));
+  process.exitCode = 1;
+});

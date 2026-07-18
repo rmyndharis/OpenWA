@@ -8,7 +8,6 @@ import { isSwaggerEnabled } from '../../config/bootstrap-security';
 interface Settings {
   general: {
     apiBaseUrl: string;
-    sessionTimeout: number;
     autoReconnect: boolean;
     debugMode: boolean;
   };
@@ -38,7 +37,6 @@ export class SettingsController {
         // The real advertised base URL (BASE_URL — the same value the startup banner and ingress URLs
         // use), not a hardcoded localhost guess that ignores the operator's configured host.
         apiBaseUrl: process.env.BASE_URL || `http://localhost:${port}`,
-        sessionTimeout: Math.floor(this.configService.get<number>('webhook.timeout', 300000) / 60000),
         // The engine auto-reconnects on a transient disconnect by default (there is no global off
         // switch; reconnection is bounded per-session by RECONNECT_MAX_ATTEMPTS). Reporting a hardcoded
         // `false` for a non-existent `engine.autoReconnect` key was actively misleading.

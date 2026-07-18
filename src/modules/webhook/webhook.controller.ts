@@ -72,6 +72,7 @@ export class WebhookController {
 
   @Post(':id/test')
   @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Test a webhook by sending a test payload' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'id', description: 'Webhook ID' })

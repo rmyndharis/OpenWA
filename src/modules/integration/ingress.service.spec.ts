@@ -1,5 +1,6 @@
 import { IngressService, extractConversationId } from './ingress.service';
 import { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import { createHmac } from 'node:crypto';
 
 function deps(overrides: Record<string, unknown> = {}) {
   return {
@@ -45,8 +46,52 @@ describe('IngressService.handle', () => {
     const svc = new IngressService(d);
     const res = await svc.handle(req);
     expect(d.events.recordOrSkip).toHaveBeenCalled();
-    expect(d.enqueue).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'd1' }), 'd1');
+    expect(d.enqueue).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'd1', method: 'POST' }), 'd1');
     expect(res.status).toBe(202);
+  });
+
+  it('uses the signed webhook-id as the default Standard Webhooks dedup key', async () => {
+    const rawKey = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+    const secret = `v1,whsec_${rawKey.toString('base64')}`;
+    const body = '{}';
+    const timestamp = '1000';
+    const webhookId = 'msg_signed_1';
+    const signature = 'v1,' + createHmac('sha256', rawKey).update(`${webhookId}.${timestamp}.${body}`).digest('base64');
+    const d = deps({
+      instances: {
+        resolve: jest.fn().mockResolvedValue({
+          id: 'chatwoot:acct1',
+          pluginId: 'chatwoot',
+          instanceId: 'acct1',
+          secret,
+          enabled: true,
+          sessionScope: 'sess-1',
+          verifyToken: null,
+        }),
+      },
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'chatwoot',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'standard-webhooks' },
+      }),
+      now: () => 1_000_000,
+    });
+
+    const res = await new IngressService(d).handle({
+      ...req,
+      rawBody: body,
+      headers: {
+        'webhook-id': webhookId,
+        'webhook-timestamp': timestamp,
+        'webhook-signature': signature,
+      },
+    });
+
+    expect(res.status).toBe(202);
+    expect(d.events.recordOrSkip).toHaveBeenCalledWith(expect.objectContaining({ providerDeliveryId: webhookId }));
+    expect(d.enqueue).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: webhookId }), webhookId);
   });
 
   it('short-circuits a duplicate delivery with 200 and no enqueue', async () => {

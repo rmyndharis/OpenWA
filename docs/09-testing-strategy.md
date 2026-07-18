@@ -8,10 +8,10 @@ test layout and the expected testing workflow for contributors.
 
 | Area               | Current state                                                                                               |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| Backend unit tests | 158 source-controlled `*.spec.ts` files under `src/`                                                        |
-| E2E smoke tests    | 8 source-controlled `*.e2e-spec.ts` files under `test/`                                                     |
-| Dashboard checks   | ESLint, i18n parity, React/Vite build, and 10 source-controlled Node test files                             |
-| SDK checks         | Path-filtered JavaScript, Python, PHP, and Java SDK CI with 28 source-controlled SDK test files             |
+| Backend unit tests | Source-controlled `*.spec.ts` files under `src/`; use the inventory commands below                          |
+| E2E smoke tests    | Source-controlled `*.e2e-spec.ts` files under `test/`; use the inventory commands below                     |
+| Dashboard checks   | ESLint, test type-check, i18n parity, React/Vite build, and source-controlled Node tests                    |
+| SDK checks         | Path-filtered JavaScript, Python, PHP, Java, and Go SDK CI                                                  |
 | PostgreSQL checks  | Dedicated CI job builds migrations and runs `npm run test:pg-smoke` against PostgreSQL 16                   |
 | Coverage gate      | Jest global thresholds plus stricter thresholds for security, auth, engine-adapter, and integration modules |
 
@@ -22,8 +22,8 @@ the test inventory, and use the test commands in the next section for pass/fail 
 rg --files -g '*.spec.ts' src | wc -l
 rg --files -g '*.e2e-spec.ts' test | wc -l
 rg --files -g '*.test.ts' dashboard/src | wc -l
-rg --files sdk/javascript/test sdk/python/tests sdk/php/tests sdk/java/src/test \
-  | rg '(\.test\.ts$|test_.*\.py$|Test\.php$|Test\.java$)' \
+rg --files sdk/javascript/test sdk/python/tests sdk/php/tests sdk/java/src/test sdk/go \
+  | rg '(\.test\.ts$|test_.*\.py$|Test\.php$|Test\.java$|_test\.go$)' \
   | wc -l
 npm test -- --runInBand
 npm run test:e2e -- --runInBand
@@ -40,8 +40,11 @@ npm --prefix dashboard run test:unit
 | `npm run test:e2e`                                                | Run smoke-level e2e tests from `test/`                                  |
 | `npm run test:pg-smoke`                                           | Run the PostgreSQL migration and UUID-default smoke test                |
 | `npm run lint`                                                    | Run backend ESLint with type-aware rules                                |
+| `npx tsc --noEmit -p tsconfig.json`                               | Type-check backend source, unit specs, and e2e specs                    |
+| `npm run openapi:check`                                           | Verify the committed OpenAPI snapshot                                   |
 | `npm run check:versions`                                          | Verify documentation and package version consistency                    |
 | `cd dashboard && npm run lint`                                    | Run dashboard ESLint                                                    |
+| `cd dashboard && npm run typecheck`                               | Type-check dashboard test files                                         |
 | `cd dashboard && npm run test:unit`                               | Run dashboard pure utility/unit tests                                   |
 | `cd dashboard && npm run i18n:check`                              | Verify dashboard locale key parity                                      |
 | `cd dashboard && npm run build`                                   | Type-check and build the dashboard                                      |
@@ -49,6 +52,7 @@ npm --prefix dashboard run test:unit
 | `cd sdk/python && pytest`                                         | Run the Python SDK tests                                                |
 | `cd sdk/php && ./vendor/bin/phpunit`                              | Run the PHP SDK tests                                                   |
 | `cd sdk/java && mvn -B verify`                                    | Run the Java SDK tests                                                  |
+| `cd sdk/go && go vet ./... && go test -race ./...`                | Vet and race-test the Go SDK                                            |
 
 ## 9.3 Backend Unit Tests
 
@@ -161,12 +165,12 @@ Main CI is defined in `.github/workflows/ci.yml`.
 
 | Job             | Checks                                                                                          |
 | --------------- | ----------------------------------------------------------------------------------------------- |
-| `lint`          | `npm audit --audit-level=critical`, backend ESLint, formatting check, version consistency check |
+| `lint`          | security audit, backend ESLint, full-program TypeScript check, formatting, version consistency, OpenAPI snapshot |
 | `test`          | backend coverage run, e2e smoke tests, Codecov upload                                           |
-| `test-postgres` | real PostgreSQL 16 service, backend build, `npm run test:pg-smoke`                              |
-| `dashboard`     | dashboard install, lint, unit tests, i18n parity, build                                         |
+| `test-postgres` | real PostgreSQL 16 service, backend build, migration smoke, and PostgreSQL FTS provider spec     |
+| `dashboard`     | dashboard install, lint, test type-check, unit tests, i18n parity, build                         |
 | `build`         | backend build after lint/test/dashboard jobs pass                                               |
-| `docker`        | multi-arch Docker build and push on branch pushes                                               |
+| `docker`        | multi-arch Docker build on pushes and pull requests; publish only where workflow permissions allow |
 
 SDK CI is defined in `.github/workflows/sdk-ci.yml` and is path-filtered to SDK sources plus server
 contract surfaces that SDKs mirror (`src/**/dto/**` and the engine interface). It runs:
@@ -175,6 +179,7 @@ contract surfaces that SDKs mirror (`src/**/dto/**` and the engine interface). I
 - Python SDK tests with `pytest`.
 - PHP SDK tests with PHPUnit.
 - Java SDK tests with Maven.
+- Go SDK formatting, `go vet`, and race-enabled tests at the declared Go floor.
 
 Release tags run `.github/workflows/release.yml`. The release gate verifies the tag matches
 `package.json`, checks documented version consistency, runs backend tests with coverage, builds the
@@ -249,7 +254,8 @@ Live WhatsApp checks require an operator-owned account and should not be part of
 ## 9.9 Known Gaps
 
 - No default CI job exercises a real WhatsApp connection.
-- No default CI job exercises real PostgreSQL, Redis, S3/MinIO, or Docker socket proxy integration.
+- The default `test` job uses SQLite; a dedicated `test-postgres` CI job exercises PostgreSQL 16.
+- No default CI job exercises real Redis, S3/MinIO, or Docker socket proxy integration.
 - Performance testing is not automated.
 - Dashboard browser/visual UI tests are not currently automated; dashboard pure utility tests run via `npm --prefix dashboard run test:unit`.
 

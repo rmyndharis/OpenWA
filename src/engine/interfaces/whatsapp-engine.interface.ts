@@ -106,7 +106,7 @@ export interface IncomingMessage {
     mimetype: string;
     filename?: string;
     data?: string; // base64; absent when the payload was omitted (see `omitted`)
-    /** True when the media exceeded the inbound size cap and the blob was dropped (envelope kept). */
+    /** True when the media blob was dropped due to a size cap, timeout, or concurrency saturation. */
     omitted?: boolean;
     /** Decoded byte size of the media; always set when `omitted` is true. */
     sizeBytes?: number;

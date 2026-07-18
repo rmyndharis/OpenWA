@@ -11,6 +11,24 @@ interface ThrottlerRecord {
   timeToBlockExpire: number;
 }
 
+// Increment, arm (or repair) the fixed-window TTL, and read it in one Redis operation. Re-arming
+// PTTL<0 also heals counters stranded by older non-atomic implementations.
+const INCREMENT_WITH_TTL_LUA = `
+local hits = redis.call('INCR', KEYS[1])
+local ttl = redis.call('PTTL', KEYS[1])
+if hits == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+  ttl = redis.call('PTTL', KEYS[1])
+elseif ttl < 0 then
+  -- A TTL-less key can only be legacy/corrupt state. Treat its accumulated count as void so an old
+  -- stranded over-limit value cannot impose a fresh full-window block when it is repaired.
+  redis.call('SET', KEYS[1], 1, 'PX', ARGV[1])
+  hits = 1
+  ttl = redis.call('PTTL', KEYS[1])
+end
+return {hits, ttl}
+`;
+
 /**
  * Redis-backed ThrottlerStorage for @nestjs/throttler v6 — persists hit counts to Redis so rate
  * limits aggregate across replicas (behind a load balancer) instead of being per-process.
@@ -35,16 +53,14 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
   ): Promise<ThrottlerRecord> {
     const redisKey = `openwa:throttle:${throttlerName}:${key}`;
     try {
-      const hits = await this.redis.incr(redisKey);
-      if (hits === 1) {
-        // First hit in the window sets the TTL; subsequent hits inherit it (fixed window from first hit).
-        await this.redis.pexpire(redisKey, ttl);
-      }
-      const ttlMs = await this.redis.pttl(redisKey);
+      const [hits, ttlMs] = (await this.redis.eval(INCREMENT_WITH_TTL_LUA, 1, redisKey, String(ttl))) as [
+        number,
+        number,
+      ];
       const isBlocked = hits > limit;
       return {
         totalHits: hits,
-        timeToExpire: Math.ceil(ttlMs / 1000),
+        timeToExpire: ttlMs > 0 ? Math.ceil(ttlMs / 1000) : 0,
         isBlocked,
         timeToBlockExpire: isBlocked ? Math.ceil(blockDuration / 1000) : 0,
       };

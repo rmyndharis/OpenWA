@@ -19,6 +19,7 @@ import com.rmyndharis.openwa.model.SendBulkRequest;
 import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
 import com.rmyndharis.openwa.model.SendMediaRequest;
+import com.rmyndharis.openwa.model.SendAudioRequest;
 import com.rmyndharis.openwa.model.SendTemplateRequest;
 import com.rmyndharis.openwa.model.SendTextRequest;
 import com.rmyndharis.openwa.support.MockTransport;
@@ -78,7 +79,7 @@ class MessagesResourceTest {
     void sendAudioResolvesToSendAudioPath() {
         tx.respond(200, MSG);
         client.messages.sendAudio(
-            "s", SendMediaRequest.builder().chatId("628@c.us").url("http://audio-url").ptt(true).build());
+            "s", SendAudioRequest.builder().chatId("628@c.us").url("http://audio-url").ptt(true).build());
         assertEquals("http://h/api/sessions/s/messages/send-audio", tx.lastRequest().url());
         assertTrue(tx.lastRequest().body().contains("audio-url"));
     }

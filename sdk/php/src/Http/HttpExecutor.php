@@ -81,6 +81,9 @@ class HttpExecutor
         // http_errors disabled so we translate status into typed SDK exceptions).
         $options = [
             'http_errors' => false,
+            // Per-request options override injected Guzzle client defaults, so the SDK's configured
+            // timeout is enforced consistently on both default and caller-supplied clients.
+            'timeout' => $this->timeout,
             // Never auto-follow redirects: doing so would re-send the X-API-Key
             // header to the redirect target (potentially a different origin).
             'allow_redirects' => false,

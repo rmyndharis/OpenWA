@@ -347,7 +347,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       resolveBounded(null);
     });
     const media = await boundedReady;
-    if (!media) return undefined;
+    if (!media) {
+      return {
+        mimetype: data?.mimetype ?? '',
+        filename: data?.filename || undefined,
+        omitted: true,
+        sizeBytes: declared,
+      };
+    }
     const capped = capInboundMedia({
       mimetype: media.mimetype,
       filename: media.filename || undefined,
@@ -404,6 +411,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
       // hang on some setups, #251). Opt-in: unset leaves whatsapp-web.js to auto-select.
       const versionPin = await resolveWebVersionPin();
+      if (this.tearingDown) {
+        this.setStatus(EngineStatus.DISCONNECTED);
+        return;
+      }
       if (versionPin) {
         this.logger.log(`Pinning WhatsApp Web version ${versionPin.webVersion}`);
       }
@@ -441,6 +452,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       });
 
       this.setupEventHandlers();
+      if (this.tearingDown) {
+        this.client = null;
+        this.setStatus(EngineStatus.DISCONNECTED);
+        return;
+      }
       await this.client.initialize();
     } catch (error) {
       this.setStatus(EngineStatus.FAILED);
@@ -822,10 +838,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   private beginClientTeardown(): Client | null {
+    this.tearingDown = true;
     const client = this.client;
     if (!client) return null;
 
-    this.tearingDown = true;
     this.clearReadyReconcile();
     if (this.status !== EngineStatus.DISCONNECTED) {
       this.setStatus(EngineStatus.DISCONNECTED);

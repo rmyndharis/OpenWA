@@ -51,6 +51,7 @@ export class StatusController {
       'Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
       "to the account's status-privacy audience.",
   })
+  @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
   async sendImageStatus(@Param('sessionId') sessionId: string, @Body() dto: SendImageStatusDto) {
     return this.statusService.postImageStatus(sessionId, dto.image, {
       recipients: dto.recipients,
@@ -67,6 +68,7 @@ export class StatusController {
       'Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
       "to the account's status-privacy audience.",
   })
+  @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
   async sendVideoStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVideoStatusDto) {
     return this.statusService.postVideoStatus(sessionId, dto.video, {
       recipients: dto.recipients,

@@ -16,12 +16,12 @@ export class RedriveController {
   @Post(':pluginId/:instanceId/redrive')
   @ApiResponse({
     status: 201,
-    description: 'Dead-lettered ingress deliveries for the instance re-dispatched. Returns the count redriven.',
+    description: 'One bounded batch of dead-lettered ingress deliveries re-dispatched, with remaining depth.',
   })
   redriveInstance(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
-  ): Promise<{ redriven: number }> {
+  ): Promise<{ redriven: number; remaining: number; batchSize: number }> {
     return this.redrive.redriveInstance(pluginId, instanceId);
   }
 }

@@ -425,7 +425,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const engine = this.engines.get(id);
       if (engine) {
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        this.engines.delete(id);
+        if (this.isLiveEngine(id, engine)) this.engines.delete(id);
       }
 
       // Execute hook BEFORE delete so plugins can access session data
@@ -562,7 +562,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
-          this.engines.delete(id);
+          if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
         }
       }
       return this.findOne(id);
@@ -1380,7 +1380,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const oldEngine = this.engines.get(id);
       if (oldEngine) {
         await this.teardownEngineSafely(id, oldEngine, e => e.destroy(), 'destroy');
-        this.engines.delete(id);
+        if (this.isLiveEngine(id, oldEngine)) this.engines.delete(id);
       }
 
       // Re-initialize
@@ -1403,7 +1403,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
-          this.engines.delete(id);
+          if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
         }
         return;
       }
@@ -1449,7 +1449,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.engines.get(id);
     if (engine) {
       await this.teardownEngineSafely(id, engine, e => e.disconnect(), 'disconnect');
-      this.engines.delete(id);
+      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
     }
 
     this.logger.log(`Session stopped: ${session.name}`, {
@@ -1476,7 +1476,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.engines.get(id);
     if (engine) {
       await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-      this.engines.delete(id);
+      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
     }
 
     this.logger.warn(`Session force-killed: ${session.name}`, {

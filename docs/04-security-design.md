@@ -443,7 +443,12 @@ app.use(helmet({
 
 ### What Gets Logged
 
-> **Reality check:** audit entries are persisted to the `audit_logs` table, but **only session-lifecycle actions are emitted today** (`session_created` / `session_started` / `session_stopped` / `session_force_killed` / `session_deleted` / `session_qr_generated`). The `AuditAction` enum also defines `api_key_auth_failed`, `message_sent`, and `webhook_*`, but **no code path emits them** (there is no global audit interceptor) — so failed auth, message sends, and webhook changes are **not** in the audit log yet (a tracked enhancement). Failed authentication currently surfaces only as a `logger.warn` in the application log. The diagram below is the intended coverage.
+> **Reality check:** persisted audit coverage currently includes API-key create/update/revoke/delete
+> (updates carry before/after authorization state), rejected authentication, session lifecycle, and
+> integration-instance creation, secret rotation, deletion, and scope-binding bridge failures. Enum
+> members for API-key use, connection transitions, message sends, and webhook lifecycle are explicitly
+> registered as intentionally unemitted; application logs cover those operational events until dedicated
+> audit callsites are added. There is no global audit interceptor.
 
 ```mermaid
 flowchart TB

@@ -12,6 +12,7 @@
             "schema": {
               "enum": [
                 "api_key_created",
+                "api_key_updated",
                 "api_key_used",
                 "api_key_revoked",
                 "api_key_deleted",
@@ -212,6 +213,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The change would remove the last usable admin key."
           }
         },
         "summary": "Update API key (admin only)",
@@ -234,6 +238,9 @@
         "responses": {
           "204": {
             "description": "API key deleted"
+          },
+          "409": {
+            "description": "The key is the last usable admin key."
           }
         },
         "summary": "Delete API key (admin only)",
@@ -265,6 +272,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The key is the last usable admin key."
           }
         },
         "summary": "Revoke API key (admin only)",
@@ -2481,7 +2491,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "string"
+                "$ref": "#/components/schemas/SaveConfigDto"
               }
             }
           }
@@ -2501,6 +2511,16 @@
       "post": {
         "operationId": "InfraController_requestRestart",
         "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Server will restart with new profiles"
@@ -3892,6 +3912,9 @@
         "responses": {
           "201": {
             "description": "Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
+          },
+          "413": {
+            "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
           }
         },
         "summary": "Post an image status",
@@ -3926,6 +3949,9 @@
         "responses": {
           "201": {
             "description": "Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
+          },
+          "413": {
+            "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
           }
         },
         "summary": "Post a video status",
@@ -4962,7 +4988,7 @@
         ],
         "responses": {
           "201": {
-            "description": "Dead-lettered ingress deliveries for the instance re-dispatched. Returns the count redriven."
+            "description": "One bounded batch of dead-lettered ingress deliveries re-dispatched, with remaining depth."
           }
         },
         "tags": [
@@ -6679,6 +6705,169 @@
           }
         }
       },
+      "DatabaseConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgres"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "poolSize": {
+            "type": "number"
+          },
+          "sslEnabled": {
+            "type": "boolean"
+          },
+          "sslRejectUnauthorized": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "RedisConfigDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "QueueConfigDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "StorageConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "localPath": {
+            "type": "string"
+          },
+          "s3Bucket": {
+            "type": "string"
+          },
+          "s3Region": {
+            "type": "string"
+          },
+          "s3AccessKey": {
+            "type": "string"
+          },
+          "s3SecretKey": {
+            "type": "string"
+          },
+          "s3Endpoint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "EngineConfigDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "headless": {
+            "type": "boolean"
+          },
+          "sessionDataPath": {
+            "type": "string"
+          },
+          "browserArgs": {
+            "type": "string"
+          }
+        }
+      },
+      "SaveConfigDto": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "$ref": "#/components/schemas/DatabaseConfigDto"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/RedisConfigDto"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueConfigDto"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfigDto"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/EngineConfigDto"
+          }
+        }
+      },
+      "RestartDto": {
+        "type": "object",
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profilesToRemove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "CreateGroupDto": {
         "type": "object",
         "properties": {
@@ -6791,7 +6980,7 @@
           "base64": {
             "type": "string",
             "description": "Base64-encoded media. Requires mimetype.",
-            "example": "data:image/jpeg;base64,..."
+            "example": "/9j/4AAQSkZJRg..."
           },
           "mimetype": {
             "type": "string",
