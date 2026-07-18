@@ -2265,3 +2265,164 @@ describe('WhatsAppWebJsAdapter createGroup (failure shapes)', () => {
     expect(res).toEqual({ id: '120363000@g.us', name: 'team', participantsCount: 2 });
   });
 });
+
+describe('WhatsAppWebJsAdapter puppeteer death detection (browser/page silent death)', () => {
+  type PuppeteerFakeClient = EventEmitter & {
+    getState: jest.Mock;
+    pupBrowser: EventEmitter;
+    pupPage: EventEmitter;
+    destroy?: jest.Mock;
+  };
+
+  const wireAdapter = (
+    overrides: { status?: EngineStatus; tearingDown?: boolean; client?: Partial<PuppeteerFakeClient> } = {},
+  ): { adapter: WhatsAppWebJsAdapter; client: PuppeteerFakeClient; onDisconnected: jest.Mock } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-pup-death',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupBrowser: new EventEmitter(),
+      pupPage: new EventEmitter(),
+      ...overrides.client,
+    }) as PuppeteerFakeClient;
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+    (adapter as unknown as { status: EngineStatus }).status = overrides.status ?? EngineStatus.READY;
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = overrides.tearingDown ?? false;
+    (adapter as unknown as { attachPuppeteerLifecycleListeners: () => void }).attachPuppeteerLifecycleListeners();
+    return { adapter, client, onDisconnected };
+  };
+
+  it('reports the browser process closing or crashing as a disconnect', () => {
+    const { adapter, client, onDisconnected } = wireAdapter();
+
+    client.pupBrowser.emit('disconnected');
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Browser process closed or crashed');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('reports a renderer crash (page error) as a disconnect', () => {
+    const { adapter, client, onDisconnected } = wireAdapter();
+
+    client.pupPage.emit('error', new Error('Page crashed!'));
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page crashed');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('reports the page being closed as a disconnect', () => {
+    const { adapter, client, onDisconnected } = wireAdapter();
+
+    client.pupPage.emit('close');
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page closed');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('does not double-report when page error and browser disconnected fire together', () => {
+    const { client, onDisconnected } = wireAdapter();
+
+    client.pupPage.emit('error', new Error('Page crashed!'));
+    client.pupBrowser.emit('disconnected');
+    client.pupPage.emit('close');
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page crashed');
+  });
+
+  it.each([
+    ['pupBrowser', 'disconnected'],
+    ['pupPage', 'error'],
+    ['pupPage', 'close'],
+  ] as const)('ignores %s %s during an intentional teardown', (handle, event) => {
+    const { client, onDisconnected } = wireAdapter({ tearingDown: true });
+
+    client[handle].emit(event, new Error('boom'));
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+  });
+
+  it('ignores the death events once the status is already DISCONNECTED', () => {
+    const { client, onDisconnected } = wireAdapter({ status: EngineStatus.DISCONNECTED });
+
+    client.pupBrowser.emit('disconnected');
+    client.pupPage.emit('error', new Error('boom'));
+    client.pupPage.emit('close');
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+  });
+
+  it('ignores the browser disconnected event raised by a deliberate disconnect()', async () => {
+    const destroy = jest.fn().mockResolvedValue(undefined);
+    const { adapter, client, onDisconnected } = wireAdapter({ client: { destroy } });
+
+    await adapter.disconnect(); // sets tearingDown + DISCONNECTED, then destroys the client
+    client.pupBrowser.emit('disconnected');
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsAppWebJsAdapter.probeLiveness (session watchdog probe)', () => {
+  const adapterWith = (client: unknown, status: EngineStatus = EngineStatus.READY): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = status;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  it('resolves true when getState() reports CONNECTED', async () => {
+    const adapter = adapterWith({ getState: jest.fn().mockResolvedValue(WAState.CONNECTED) });
+
+    await expect(adapter.probeLiveness()).resolves.toBe(true);
+  });
+
+  it('resolves false when getState() rejects (page already gone)', async () => {
+    const adapter = adapterWith({ getState: jest.fn().mockRejectedValue(new Error('Target closed')) });
+
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+  });
+
+  it('resolves false when getState() reports a non-CONNECTED state', async () => {
+    const adapter = adapterWith({ getState: jest.fn().mockResolvedValue(WAState.OPENING) });
+
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+  });
+
+  it('resolves false without touching the client when the adapter is not READY', async () => {
+    const getState = jest.fn();
+    const adapter = adapterWith({ getState }, EngineStatus.AUTHENTICATING);
+
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+    expect(getState).not.toHaveBeenCalled();
+  });
+
+  it('resolves false when there is no client', async () => {
+    await expect(adapterWith(null).probeLiveness()).resolves.toBe(false);
+  });
+
+  it('resolves false when getState() hangs past the 10s timeout, leaving no dangling timer', async () => {
+    jest.useFakeTimers();
+    try {
+      const adapter = adapterWith({ getState: jest.fn().mockReturnValue(new Promise<never>(() => {})) });
+
+      const probe = adapter.probeLiveness();
+      const assertion = expect(probe).resolves.toBe(false);
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      await assertion;
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

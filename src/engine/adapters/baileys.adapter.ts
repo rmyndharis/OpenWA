@@ -115,7 +115,9 @@ function createBaileysLogger(): BaileysLogger {
 }
 
 export class BaileysAdapter implements IWhatsAppEngine {
-  private static readonly MAX_RECONNECT_ATTEMPTS = 5;
+  /** A close this long after the previous close means the connection had been healthy in between —
+   *  the backoff counter restarts from scratch instead of inheriting an old incident's attempts. */
+  private static readonly RECONNECT_STABILITY_RESET_MS = 5 * 60_000;
 
   private readonly logger = createLogger('BaileysAdapter');
   // Bound concurrent inbound media downloads: each materialises a full decrypted buffer in heap, so an
@@ -141,6 +143,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private connectedAt = 0;
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  /** Date.now() of the last close that scheduled a reconnect — input to the stability reset. */
+  private lastConnectionCloseAt = 0;
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   private lib?: typeof BaileysLib;
 
@@ -370,34 +374,69 @@ export class BaileysAdapter implements IWhatsAppEngine {
         return;
       }
 
-      // Recoverable (e.g. restartRequired right after pairing, transient drop) — reconnect with backoff.
+      if (statusCode === (this.lib?.DisconnectReason.connectionReplaced ?? 440)) {
+        // Another live instance took over this account (whatsmeow StreamReplaced). Reconnecting
+        // would fight it — two instances endlessly replacing each other — so this is terminal:
+        // the operator stops the other instance, then starts this session again (onError = terminal
+        // + evict in the session service). Auth state is NOT cleared: the link itself is still valid.
+        this.setStatus(EngineStatus.FAILED);
+        this.callbacks.onError?.(
+          'Connection replaced by another instance (440) — stop the other instance, then start this session again',
+        );
+        return;
+      }
+
+      // Every other close (408/411/428/500/503/515/undefined) is transient: reconnect with capped
+      // backoff and NO attempt ceiling (whatsmeow/evolution-api style) — a long network outage must
+      // not kill the session. The counter resets on 'open' and via the stability window below.
       // Do NOT fire onDisconnected here; this is a transient drop, not a terminal disconnect.
       // connect() calls setStatus(INITIALIZING) which fires onStateChanged — that is the correct signal.
       this.logger.log('Baileys connection dropped; reconnecting', { statusCode });
 
-      // I4: capped exponential backoff with in-flight timer guard.
-      if (this.reconnectAttempts >= BaileysAdapter.MAX_RECONNECT_ATTEMPTS) {
-        this.setStatus(EngineStatus.FAILED);
-        this.callbacks.onError?.(`reconnect attempts exhausted (${this.reconnectAttempts})`);
-        return;
-      }
-      this.reconnectAttempts += 1;
-      const delay = Math.min(30_000, 1_000 * 2 ** (this.reconnectAttempts - 1));
-      // Guard: if a timer is already pending, don't stack another one.
+      // Duplicate close while a reconnect timer is already pending — ignore it WITHOUT burning an
+      // attempt (Baileys can emit more than one close per drop; the increment must come after this).
       if (this.reconnectTimer) {
         return;
       }
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = undefined;
-        if (this.intentionalClose) {
-          return; // stopped while waiting — abort
-        }
-        void this.connect().catch(err => {
-          this.setStatus(EngineStatus.FAILED);
-          this.callbacks.onError?.(err instanceof Error ? err.message : String(err));
-        });
-      }, delay);
+
+      // Stability reset: a close >5 min after the previous one means the connection had been
+      // healthy in between — start the backoff fresh instead of inheriting the old counter.
+      const now = Date.now();
+      if (now - this.lastConnectionCloseAt > BaileysAdapter.RECONNECT_STABILITY_RESET_MS) {
+        this.reconnectAttempts = 0;
+      }
+      this.lastConnectionCloseAt = now;
+      this.scheduleReconnect();
     }
+  }
+
+  /**
+   * Schedule the next reconnect attempt with capped exponential backoff (1 s doubling up to a 60 s
+   * cap, plus up to 1 s jitter). Deliberately NO attempt ceiling: transient drops retry forever —
+   * only loggedOut (401) and connectionReplaced (440) are terminal. A connect() failure inside the
+   * attempt is just a failed attempt: warn and schedule the next one.
+   */
+  private scheduleReconnect(): void {
+    if (this.intentionalClose || this.reconnectTimer) {
+      return;
+    }
+    this.reconnectAttempts += 1;
+    const delay = Math.min(60_000, 1_000 * 2 ** (this.reconnectAttempts - 1)) + Math.floor(Math.random() * 1000);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.intentionalClose) {
+        return; // stopped while waiting — abort
+      }
+      void this.connect().catch(err => {
+        // A failed attempt (e.g. fetchLatestBaileysVersion offline mid-outage) is NOT terminal —
+        // the outage may outlast any fixed attempt budget, so schedule the following attempt.
+        this.logger.warn('Baileys reconnect attempt failed; will retry', {
+          attempt: this.reconnectAttempts,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        this.scheduleReconnect();
+      });
+    }, delay);
   }
 
   /** Render the raw Baileys QR ref to a PNG data URL, then publish it (mirrors the whatsapp-web.js engine). */
@@ -483,6 +522,16 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   getStatus(): EngineStatus {
     return this.status;
+  }
+
+  /**
+   * Cheap local liveness check for the session watchdog. Genuine dead-connection detection is owned
+   * by Baileys' built-in keepalive, which surfaces a close event (408) within ~35 s of a silent
+   * drop and drives the reconnect path above — so READY + a live socket is sufficient here.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async probeLiveness(): Promise<boolean> {
+    return this.status === EngineStatus.READY && this.sock != null;
   }
 
   getQRCode(): string | null {

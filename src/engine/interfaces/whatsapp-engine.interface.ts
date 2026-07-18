@@ -454,6 +454,15 @@ export interface IWhatsAppEngine {
 
   // Status
   getStatus(): EngineStatus;
+  /**
+   * Active liveness probe: performs a real round-trip against the engine's connection and
+   * resolves true only when the session is genuinely alive. Implementations must treat probe
+   * failure/timeout as "dead" — a wedged connection can keep reporting READY (cached status),
+   * so getStatus() alone is not proof of life. Optional: engines whose transport already
+   * self-detects death (e.g. Baileys keepalive emits a close event within ~35s) may return a
+   * cheap local check. Polled periodically by the session watchdog.
+   */
+  probeLiveness?(): Promise<boolean>;
   getQRCode(): string | null;
   /** Request an 8-char pairing code to link via phone number instead of scanning the QR. */
   requestPairingCode(phoneNumber: string): Promise<string>;

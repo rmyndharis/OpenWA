@@ -3,7 +3,12 @@ import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { NotFoundException, ConflictException, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SessionService, ACK_RECONCILE_DELAY_MS } from './session.service';
+import {
+  SessionService,
+  ACK_RECONCILE_DELAY_MS,
+  SESSION_WATCHDOG_INTERVAL_MS,
+  SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
+} from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -796,6 +801,115 @@ describe('SessionService', () => {
     });
   });
 
+  describe('scheduleReconnect (reconnect policy)', () => {
+    type PolicyInternals = {
+      reconnectStates: Map<
+        string,
+        {
+          attempts: number;
+          timer: NodeJS.Timeout | null;
+          maxAttempts: number;
+          baseDelay: number;
+          lastAttemptAt?: number;
+        }
+      >;
+      sessionErrors: Map<string, string>;
+      scheduleReconnect: (id: string, session: Session) => void;
+      executeReconnect: (...args: unknown[]) => Promise<void>;
+    };
+    const internals = (): PolicyInternals => service as unknown as PolicyInternals;
+
+    it('keeps scheduling past the old 5-attempt budget by default (unlimited), the backoff parking at the 1h cap', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        // What start() seeds when session.config sets no maxReconnectAttempts.
+        const state = { attempts: 0, timer: null, maxAttempts: Number.POSITIVE_INFINITY, baseDelay: 5000 };
+        i.reconnectStates.set('sess-uuid-1', state);
+        const exec = jest.spyOn(i, 'executeReconnect').mockResolvedValue(undefined);
+
+        // Twelve consecutive disconnects — the pre-fix default (5) would have wedged FAILED at the
+        // 6th; with the unlimited default every one schedules another attempt.
+        for (let k = 0; k < 12; k++) {
+          i.scheduleReconnect('sess-uuid-1', createMockSession());
+        }
+
+        expect(state.attempts).toBe(12);
+        expect(i.sessionErrors.has('sess-uuid-1')).toBe(false); // never terminally FAILED
+        expect(jest.getTimerCount()).toBe(1); // still exactly one pending timer
+
+        // The 12th schedule computed its delay with attempts=11: 5000*2^11 ≈ 10.24M ms, clamped to
+        // the 1h cap — the timer fires exactly at the cap, not earlier.
+        jest.advanceTimersByTime(3_599_999);
+        expect(exec).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(1);
+        expect(exec).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('resets the attempt budget after a 5-minute stable stretch (transient drops must not accrue)', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        const state = {
+          attempts: 4,
+          timer: null,
+          maxAttempts: Number.POSITIVE_INFINITY,
+          baseDelay: 5000,
+          lastAttemptAt: Date.now(),
+        };
+        i.reconnectStates.set('sess-uuid-1', state);
+        const exec = jest.spyOn(i, 'executeReconnect').mockResolvedValue(undefined);
+
+        // A drop 299s after the last attempt is still the same bad stretch: the budget keeps accruing.
+        jest.advanceTimersByTime(299_999);
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+        expect(state.attempts).toBe(5); // 4 -> 5, no reset
+
+        // ≥5 min since the last attempt means the session demonstrably stayed up — the budget
+        // restarts at 0 (the first schedule's 80s timer fires during this advance; irrelevant here).
+        jest.advanceTimersByTime(300_000);
+        i.scheduleReconnect('sess-uuid-1', createMockSession());
+        expect(state.attempts).toBe(1);
+
+        // ...so the backoff restarts at the base delay (~5s), not 2^4 × base (80s).
+        const callsBefore = exec.mock.calls.length;
+        jest.advanceTimersByTime(4_999);
+        expect(exec.mock.calls.length).toBe(callsBefore);
+        jest.advanceTimersByTime(1_001);
+        expect(exec.mock.calls.length).toBe(callsBefore + 1);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('still wedges FAILED once an EXPLICIT cap is exhausted', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+        const state = { attempts: 2, timer: null, maxAttempts: 3, baseDelay: 5000 };
+        i.reconnectStates.set('sess-uuid-1', state);
+
+        i.scheduleReconnect('sess-uuid-1', createMockSession()); // attempt 3/3 still schedules
+        expect(state.attempts).toBe(3);
+        expect(i.sessionErrors.has('sess-uuid-1')).toBe(false);
+
+        i.scheduleReconnect('sess-uuid-1', createMockSession()); // budget exhausted → terminal FAILED
+        expect(state.attempts).toBe(3); // no further attempt consumed
+        expect(i.sessionErrors.get('sess-uuid-1')).toMatch(/Reconnection failed after 3 attempts/);
+        expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.FAILED });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('start() stale reconnect timer', () => {
     it('cancels a pending reconnect timer before recreating the engine', async () => {
       const i = service as unknown as {
@@ -986,6 +1100,181 @@ describe('SessionService', () => {
         expect(i.reconnectStates.get('sess-uuid-2')!.attempts).toBe(1); // an attempt was scheduled
         jest.advanceTimersByTime(120000);
         expect(exec).toHaveBeenCalled();
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('liveness watchdog', () => {
+    type WatchdogInternals = {
+      engines: Map<string, unknown>;
+      reconnectStates: Map<
+        string,
+        { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }
+      >;
+      livenessFailures: Map<string, number>;
+      watchdogTimer: NodeJS.Timeout | null;
+      scheduleReconnect: (id: string, session: Session) => void;
+    };
+    const internals = (): WatchdogInternals => service as unknown as WatchdogInternals;
+
+    // Auto-start is OFF in these tests — the watchdog must start regardless.
+    const originalFlag = process.env.AUTO_START_SESSIONS;
+    beforeEach(() => {
+      delete process.env.AUTO_START_SESSIONS;
+    });
+    afterEach(() => {
+      if (originalFlag === undefined) delete process.env.AUTO_START_SESSIONS;
+      else process.env.AUTO_START_SESSIONS = originalFlag;
+    });
+
+    const seedReadySession = (engine: unknown): void => {
+      internals().engines.set('sess-uuid-1', engine);
+      internals().reconnectStates.set('sess-uuid-1', {
+        attempts: 0,
+        timer: null,
+        maxAttempts: Number.POSITIVE_INFINITY,
+        baseDelay: 5000,
+      });
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+    };
+
+    it('treats a READY engine failing the probe twice in a row as a disconnect (webhook + WS + DISCONNECTED + reconnect)', async () => {
+      jest.useFakeTimers();
+      try {
+        const engine = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.READY),
+          probeLiveness: jest.fn().mockResolvedValue(false),
+        };
+        seedReadySession(engine);
+        const scheduleSpy = jest.spyOn(internals(), 'scheduleReconnect');
+
+        await service.onApplicationBootstrap();
+
+        // Tick 1: the first failure stays below the 2-consecutive-failures threshold — nothing happens.
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS);
+        expect(scheduleSpy).not.toHaveBeenCalled();
+        expect(repository.update).not.toHaveBeenCalledWith('sess-uuid-1', {
+          status: SessionStatus.DISCONNECTED,
+        });
+
+        // Tick 2: the second CONSECUTIVE failure routes through the exact engine-disconnect path.
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS);
+        expect(scheduleSpy).toHaveBeenCalledWith('sess-uuid-1', expect.objectContaining({ id: 'sess-uuid-1' }));
+        expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
+        expect(webhookService.dispatch).toHaveBeenCalledWith(
+          'sess-uuid-1',
+          'session.disconnected',
+          expect.objectContaining({ reason: 'liveness probe failed (watchdog)' }),
+        );
+        expect(eventsGateway.emitSessionDisconnected).toHaveBeenCalledWith('sess-uuid-1', {
+          reason: 'liveness probe failed (watchdog)',
+        });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('resets the failure counter after a successful probe (no disconnect from non-consecutive failures)', async () => {
+      jest.useFakeTimers();
+      try {
+        const engine = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.READY),
+          // fail → succeed → fail: never two IN A ROW, so the session must survive all three ticks.
+          probeLiveness: jest
+            .fn()
+            .mockResolvedValueOnce(false)
+            .mockResolvedValueOnce(true)
+            .mockResolvedValueOnce(false),
+        };
+        seedReadySession(engine);
+        const scheduleSpy = jest.spyOn(internals(), 'scheduleReconnect');
+
+        await service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS * 3);
+
+        expect(engine.probeLiveness).toHaveBeenCalledTimes(3);
+        expect(scheduleSpy).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalledWith(
+          'sess-uuid-1',
+          'session.disconnected',
+          expect.anything(),
+        );
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('skips engines that are not READY and engines that do not implement probeLiveness', async () => {
+      jest.useFakeTimers();
+      try {
+        const notReady = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.INITIALIZING),
+          probeLiveness: jest.fn().mockResolvedValue(false),
+        };
+        // READY but no probe method: the watchdog must feature-detect and leave it to engine events.
+        const noProbe = { getStatus: jest.fn().mockReturnValue(EngineStatus.READY) };
+        internals().engines.set('sess-not-ready', notReady);
+        internals().engines.set('sess-no-probe', noProbe);
+
+        await service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS * 2);
+
+        expect(notReady.probeLiveness).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalledWith(
+          expect.anything(),
+          'session.disconnected',
+          expect.anything(),
+        );
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('counts a hung probe (timeout) as a failure and clears it on the next successful probe', async () => {
+      jest.useFakeTimers();
+      try {
+        const engine = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.READY),
+          probeLiveness: jest
+            .fn()
+            .mockImplementationOnce(() => new Promise<boolean>(() => undefined)) // hangs → probe timeout
+            .mockResolvedValueOnce(true),
+        };
+        seedReadySession(engine);
+
+        await service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS); // tick 1: probe hangs
+        expect(internals().livenessFailures.get('sess-uuid-1')).toBeUndefined(); // not counted yet
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_PROBE_TIMEOUT_MS); // 15s → timeout failure
+        expect(internals().livenessFailures.get('sess-uuid-1')).toBe(1);
+
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS); // tick 2: success
+        expect(internals().livenessFailures.get('sess-uuid-1')).toBeUndefined(); // counter reset
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('clears the watchdog timer in onModuleDestroy (idempotent, no open handle)', async () => {
+      jest.useFakeTimers();
+      try {
+        await service.onApplicationBootstrap();
+        expect(internals().watchdogTimer).not.toBeNull();
+        expect(jest.getTimerCount()).toBe(1); // the interval itself
+
+        await service.onModuleDestroy();
+        expect(internals().watchdogTimer).toBeNull();
+        expect(jest.getTimerCount()).toBe(0);
+
+        await expect(service.onModuleDestroy()).resolves.toBeUndefined(); // safe to call twice
       } finally {
         jest.clearAllTimers();
         jest.useRealTimers();
@@ -2783,9 +3072,12 @@ describe('SessionService', () => {
   describe('onApplicationBootstrap', () => {
     const originalFlag = process.env.AUTO_START_SESSIONS;
 
-    afterEach(() => {
+    afterEach(async () => {
       if (originalFlag === undefined) delete process.env.AUTO_START_SESSIONS;
       else process.env.AUTO_START_SESSIONS = originalFlag;
+      // Bootstrap always starts the (unref'd) liveness watchdog interval now — clear it so no
+      // timer outlives the test.
+      await service.onModuleDestroy();
     });
 
     it('does nothing when AUTO_START_SESSIONS is not enabled', async () => {

@@ -404,8 +404,10 @@ import { resolveReconnectConfig } from './session.service';
 
 describe('resolveReconnectConfig', () => {
   it('keeps reconnect settings finite and bounded', () => {
+    // Invalid maxReconnectAttempts falls back to the default: unlimited retries (the backoff
+    // parks at the 1h cap); an invalid baseDelay is clamped up to the 1s minimum.
     expect(resolveReconnectConfig({ maxReconnectAttempts: 'bad', reconnectBaseDelay: -1 })).toEqual({
-      maxAttempts: 5,
+      maxAttempts: Number.POSITIVE_INFINITY,
       baseDelay: 1000,
     });
   });

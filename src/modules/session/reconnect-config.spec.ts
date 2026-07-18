@@ -2,18 +2,20 @@ import { resolveReconnectConfig, clampReconnectDelay } from './session.service';
 
 // an OPERATOR-supplied session.config flows into the reconnect backoff math unchecked.
 // config:{reconnectBaseDelay:'x'} makes the delay NaN -> setTimeout(fn, NaN) fires at 0 (relaunch
-// storm); config:{maxReconnectAttempts:'x'} makes the terminal guard `n >= NaN` always false, so the
-// loop never caps. These helpers coerce + clamp the config so the math is always finite and bounded.
+// storm); config:{maxReconnectAttempts:'x'} would poison the terminal guard (`n >= NaN` is always
+// false). These helpers coerce + clamp the config so the math is always finite and bounded.
 describe('resolveReconnectConfig', () => {
-  it('uses the 5000ms / 5-attempt defaults for absent or empty config', () => {
-    expect(resolveReconnectConfig(null)).toEqual({ baseDelay: 5000, maxAttempts: 5 });
-    expect(resolveReconnectConfig({})).toEqual({ baseDelay: 5000, maxAttempts: 5 });
+  it('defaults to a 5000ms base delay and UNLIMITED attempts for absent or empty config', () => {
+    // A long-lived session must keep retrying forever (the backoff parks at the 1h cap) instead of
+    // dying permanently after ~2.5 minutes like the old 5-attempt default did.
+    expect(resolveReconnectConfig(null)).toEqual({ baseDelay: 5000, maxAttempts: Number.POSITIVE_INFINITY });
+    expect(resolveReconnectConfig({})).toEqual({ baseDelay: 5000, maxAttempts: Number.POSITIVE_INFINITY });
   });
 
-  it('falls back to defaults for non-numeric (NaN) values', () => {
+  it('falls back to the defaults for non-numeric (NaN) values', () => {
     expect(resolveReconnectConfig({ reconnectBaseDelay: 'x', maxReconnectAttempts: 'y' })).toEqual({
       baseDelay: 5000,
-      maxAttempts: 5,
+      maxAttempts: Number.POSITIVE_INFINITY,
     });
   });
 
@@ -26,7 +28,7 @@ describe('resolveReconnectConfig', () => {
     expect(resolveReconnectConfig({ reconnectBaseDelay: 0 }).baseDelay).toBe(1000);
   });
 
-  it('clamps maxAttempts to the 0..20 range and floors fractions', () => {
+  it('clamps an explicit maxAttempts to the 0..20 range and floors fractions', () => {
     expect(resolveReconnectConfig({ maxReconnectAttempts: 999 }).maxAttempts).toBe(20);
     expect(resolveReconnectConfig({ maxReconnectAttempts: -3 }).maxAttempts).toBe(0);
     expect(resolveReconnectConfig({ maxReconnectAttempts: 3.9 }).maxAttempts).toBe(3);

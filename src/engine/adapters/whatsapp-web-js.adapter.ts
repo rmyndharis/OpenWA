@@ -459,6 +459,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         return;
       }
       await this.client.initialize();
+      // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
+      // browser leaves the client looking READY forever ("silent death"). Attach death listeners
+      // to the puppeteer handles so a dead browser surfaces as a normal disconnect → reconnect.
+      this.attachPuppeteerLifecycleListeners();
     } catch (error) {
       this.setStatus(EngineStatus.FAILED);
       const reason = error instanceof Error ? error.message : String(error);
@@ -732,6 +736,39 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
   }
 
+  /**
+   * Attach to the loosely-typed whatsapp-web.js puppeteer handles (same cast pattern as
+   * isClientRuntimeReady/forceDestroy). whatsapp-web.js itself never listens to these, so without
+   * this a dead Chromium is invisible: browser process death, renderer crash ("Aw Snap"), and a
+   * closed tab all mean the session is gone, no matter what status the client still reports.
+   */
+  private attachPuppeteerLifecycleListeners(): void {
+    if (!this.client) return;
+    const { pupBrowser, pupPage } = this.client as unknown as {
+      pupBrowser?: { on: (event: 'disconnected', cb: () => void) => void };
+      pupPage?: { on: (event: 'error' | 'close', cb: () => void) => void };
+    };
+    pupBrowser?.on('disconnected', () => this.handlePuppeteerDeath('Browser process closed or crashed'));
+    pupPage?.on('error', () => this.handlePuppeteerDeath('Page crashed'));
+    pupPage?.on('close', () => this.handlePuppeteerDeath('Page closed'));
+  }
+
+  /**
+   * Route a Chromium/page death (detected via the puppeteer handles) through the exact same path as
+   * the client's own 'disconnected' event. A deliberate teardown also fires the browser's
+   * 'disconnected', and a real crash usually fires page 'error' and browser 'disconnected' together
+   * — so ignore calls during teardown or once the status already is DISCONNECTED/FAILED (first
+   * signal wins, no double-report).
+   */
+  private handlePuppeteerDeath(reason: string): void {
+    if (this.tearingDown || this.status === EngineStatus.DISCONNECTED || this.status === EngineStatus.FAILED) {
+      return;
+    }
+    this.clearReadyReconcile();
+    this.setStatus(EngineStatus.DISCONNECTED);
+    this.callbacks.onDisconnected?.(reason);
+  }
+
   private markReadyFromClientInfo(): void {
     if ([EngineStatus.READY, EngineStatus.DISCONNECTED, EngineStatus.FAILED].includes(this.status)) return;
     this.clearReadyReconcile();
@@ -960,6 +997,33 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   getStatus(): EngineStatus {
     return this.status;
+  }
+
+  /**
+   * Active liveness probe for the session watchdog: race a real getState() round-trip against a 10s
+   * timeout. Probe failure or timeout means dead — a wedged page can keep reporting CONNECTED
+   * (whatsapp-web.js #5728), so turning consecutive probe failures into a reconnect decision stays
+   * the calling watchdog's job.
+   */
+  async probeLiveness(): Promise<boolean> {
+    if (this.status !== EngineStatus.READY || !this.client) return false;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const state = await Promise.race([
+        this.client.getState(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('liveness probe timed out')), 10_000);
+          timeout.unref?.();
+        }),
+      ]);
+      return state === WAState.CONNECTED;
+    } catch {
+      return false;
+    } finally {
+      // Never leave the timeout dangling when getState() settles first (Jest open-handle hygiene).
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   getQRCode(): string | null {

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-lived sessions no longer die permanently after hours of uptime. A dead whatsapp-web.js
+  Chromium (browser process exit, renderer crash, or closed page) is now detected through the
+  puppeteer lifecycle handles and driven through the standard disconnect → reconnect pipeline, and
+  a session watchdog probes READY engines every 60 seconds, treating two consecutive liveness-probe
+  failures as a disconnect. The reconnect budget is now unlimited by default (exponential backoff
+  capped at 1 hour, counter reset after 5 stable minutes) instead of a terminal failure after 5
+  attempts; explicit `maxReconnectAttempts` (`0` = disabled, clamped to 1–20) is unchanged. On the
+  Baileys engine, `connectionReplaced` (440) is now terminal instead of fighting the other instance,
+  duplicate close events no longer burn retry attempts, and a failed reconnect attempt no longer
+  fails the session.
+
 ## [0.9.0] - 2026-07-18
 
 ### Added

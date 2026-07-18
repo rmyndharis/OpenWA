@@ -54,6 +54,8 @@ interface ReconnectState {
   timer: NodeJS.Timeout | null;
   maxAttempts: number;
   baseDelay: number;
+  /** When the last attempt was scheduled (epoch ms) — feeds the stability reset in scheduleReconnect. */
+  lastAttemptAt?: number;
 }
 
 // Reconnect-backoff bounds. An OPERATOR-supplied session.config feeds this math, so the values
@@ -64,6 +66,23 @@ const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
 const RECONNECT_DELAY_CAP_MS = 3_600_000;
 /**
+ * A reconnect-attempt budget covers one CONTINUOUS bad stretch: once this much time has passed
+ * since the last scheduled attempt the session demonstrably stayed up, so `attempts` resets to 0.
+ * Without it a long-lived session would slowly accrue attempts toward an explicit cap across
+ * unrelated transient drops and one day wedge FAILED for no current reason.
+ */
+const RECONNECT_STABILITY_RESET_MS = 300_000;
+/**
+ * Session liveness watchdog. The engine layer is event-driven, so an engine that dies WITHOUT
+ * firing an event (a silent Chromium crash) is never noticed: the row sits READY forever and never
+ * reconnects. Every INTERVAL the watchdog actively probes each READY engine (feature-detected
+ * `probeLiveness`, raced against TIMEOUT); MAX_FAILURES consecutive failures route the session
+ * through the exact engine-disconnect path.
+ */
+export const SESSION_WATCHDOG_INTERVAL_MS = 60_000;
+export const SESSION_WATCHDOG_PROBE_TIMEOUT_MS = 15_000;
+export const SESSION_WATCHDOG_MAX_FAILURES = 2;
+/**
  * Delay before retrying an ack UPDATE that matched 0 rows. A fast delivered/read ack can arrive before
  * the send's 2nd save (which writes waMessageId) has committed, so the first UPDATE finds no row. One
  * retry after this delay closes that race; the forward-only transition guard keeps it idempotent.
@@ -72,8 +91,10 @@ export const ACK_RECONCILE_DELAY_MS = 750;
 
 const clampNumber = (n: number, min: number, max: number): number => Math.min(Math.max(n, min), max);
 
-/** Coerce + clamp the untyped session.config reconnect knobs to finite, bounded values. Defaults
- *  (5000ms / 5 attempts) are preserved; a legitimate `maxReconnectAttempts: 0` (disable) is kept. */
+/** Coerce + clamp the untyped session.config reconnect knobs to finite, bounded values. Defaults are
+ *  a 5000ms base delay and UNLIMITED attempts (`Infinity`): a long-lived session must keep retrying
+ *  (the backoff parks at the 1h cap) instead of dying permanently after ~2.5 minutes. An EXPLICIT
+ *  `maxReconnectAttempts: 0` (disable) is preserved, and 1..20 clamps as before. */
 export function resolveReconnectConfig(
   config: { maxReconnectAttempts?: unknown; reconnectBaseDelay?: unknown } | null,
 ): { maxAttempts: number; baseDelay: number } {
@@ -84,9 +105,9 @@ export function resolveReconnectConfig(
     RECONNECT_BASE_DELAY_MAX_MS,
   );
   const attemptsRaw = Number(config?.maxReconnectAttempts);
-  const maxAttempts = Math.floor(
-    clampNumber(Number.isFinite(attemptsRaw) ? attemptsRaw : 5, 0, RECONNECT_MAX_ATTEMPTS_CAP),
-  );
+  const maxAttempts = Number.isFinite(attemptsRaw)
+    ? Math.floor(clampNumber(attemptsRaw, 0, RECONNECT_MAX_ATTEMPTS_CAP))
+    : Number.POSITIVE_INFINITY;
   return { maxAttempts, baseDelay };
 }
 
@@ -153,6 +174,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
+
+  // Consecutive liveness-probe failures per session (watchdog). Reset on a successful probe, on a
+  // non-READY tick, on onReady, and when the threshold routes the session to the disconnect path.
+  private readonly livenessFailures = new Map<string, number>();
+
+  // The single watchdog interval handle. Unref'd so it never keeps the process alive on its own;
+  // cleared (and nulled) in onModuleDestroy, so teardown stays idempotent.
+  private watchdogTimer: NodeJS.Timeout | null = null;
 
   // Last session.status value broadcast per session. Some engines signal one transition via BOTH
   // onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards both the WS emit
@@ -225,6 +254,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   async onApplicationBootstrap(): Promise<void> {
+    // Start the liveness watchdog FIRST: it must run even when auto-start is disabled (sessions can
+    // be started via the API at any time), so it can't sit behind the auto-start early-return below.
+    this.startWatchdog();
+
     if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
 
     const sessions = await this.sessionRepository.find({
@@ -261,6 +294,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   async onModuleDestroy(): Promise<void> {
+    // Stop the watchdog FIRST (before any teardown below can hang): no new probe/disconnect handling
+    // may start mid-shutdown. Nulling the handle keeps a second onModuleDestroy call safe.
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    this.livenessFailures.clear();
+
     // Stop reconnect timers FIRST so nothing reschedules mid-teardown, and so this always runs even
     // if an engine.destroy() below hangs or throws.
     for (const [, state] of this.reconnectStates) {
@@ -743,6 +784,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         if (reconnectState) {
           reconnectState.attempts = 0;
         }
+        // A fresh READY stretch starts the watchdog's failure budget clean too.
+        this.livenessFailures.delete(id);
         this.sessionErrors.delete(id);
 
         void this.sessionRepository
@@ -1117,29 +1160,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       },
       onDisconnected: (reason: string): void => {
         if (!this.isLiveEngine(id, engine)) return;
-        this.logger.warn(`Session disconnected: ${reason}`, {
-          sessionId: id,
-          reason,
-          action: 'disconnected',
-        });
-
-        void this.webhookService.dispatch(id, 'session.disconnected', { sessionId: id, reason });
-        this.eventsGateway.emitSessionDisconnected(id, { reason });
-
-        // Execute hook for disconnected event
-        void this.hookManager.execute(
-          'session:disconnected',
-          { reason },
-          {
-            sessionId: id,
-            source: 'Engine',
-          },
-        );
-
-        void this.updateStatus(id, SessionStatus.DISCONNECTED);
-
-        // Attempt to reconnect
-        this.scheduleReconnect(id, session);
+        // Shared with the liveness watchdog (see handleEngineDisconnected). The handler re-reads the
+        // session row itself — this closure's `session` snapshot can be stale by the time a
+        // disconnect lands — so the reconnect always re-initializes from the current row.
+        void this.handleEngineDisconnected(id, reason);
       },
       onStateChanged: (engineState: EngineStatus): void => {
         if (!this.isLiveEngine(id, engine)) return;
@@ -1342,6 +1366,142 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     void this.webhookService.dispatch(id, 'message.edited', editedPayload);
   }
 
+  /**
+   * Shared disconnect handling for BOTH the engine's onDisconnected callback and the liveness
+   * watchdog: notify consumers (webhook + WS + hook), persist DISCONNECTED, then schedule a
+   * reconnect. The session row is re-read here rather than trusting a caller-held snapshot — the
+   * watchdog detects death long after the last state change, and even the callback's closure
+   * snapshot can be stale — so the reconnect always re-initializes from the current row. Never
+   * throws: a DB hiccup must not turn a disconnect into an unhandled rejection.
+   */
+  private async handleEngineDisconnected(id: string, reason: string): Promise<void> {
+    this.logger.warn(`Session disconnected: ${reason}`, {
+      sessionId: id,
+      reason,
+      action: 'disconnected',
+    });
+
+    void this.webhookService.dispatch(id, 'session.disconnected', { sessionId: id, reason });
+    this.eventsGateway.emitSessionDisconnected(id, { reason });
+
+    // Execute hook for disconnected event
+    void this.hookManager.execute(
+      'session:disconnected',
+      { reason },
+      {
+        sessionId: id,
+        source: 'Engine',
+      },
+    );
+
+    void this.updateStatus(id, SessionStatus.DISCONNECTED);
+
+    let session: Session | null;
+    try {
+      session = await this.sessionRepository.findOne({ where: { id } });
+    } catch (err) {
+      this.logger.error('Failed to reload the session for reconnect scheduling', String(err), {
+        sessionId: id,
+        action: 'reconnect_schedule_error',
+      });
+      return;
+    }
+    // A session deleted just before this ran has nothing left to reconnect; skip it.
+    if (!session) return;
+
+    // Attempt to reconnect
+    this.scheduleReconnect(id, session);
+  }
+
+  /** Start the liveness watchdog (idempotent). One unref'd interval probes every registered engine. */
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+    this.watchdogTimer = setInterval(() => {
+      // allSettled inside the tick keeps a failing session from ever throwing into the timer.
+      void this.runWatchdogTick();
+    }, SESSION_WATCHDOG_INTERVAL_MS);
+    // The watchdog must never keep the process alive on its own.
+    this.watchdogTimer.unref();
+  }
+
+  /** Probe all live engines in parallel; a slow/failed probe must not delay or abort the others. */
+  private async runWatchdogTick(): Promise<void> {
+    // Mid-shutdown the disconnect path would schedule a reconnect racing onModuleDestroy's teardown
+    // (same guard as scheduleReconnect) — leave the sessions to the drain instead.
+    if (this.shutdownService?.isShuttingDown()) {
+      return;
+    }
+    await Promise.allSettled([...this.engines].map(([id, engine]) => this.probeSessionLiveness(id, engine)));
+  }
+
+  /**
+   * Actively probe one engine. Only READY sessions are expected to answer (anything else is owned by
+   * the QR/reconnect flows); engines without `probeLiveness` keep relying on engine events alone.
+   * MAX_FAILURES consecutive failures treat the session exactly like an engine-reported disconnect.
+   */
+  private async probeSessionLiveness(id: string, engine: IWhatsAppEngine): Promise<void> {
+    if (engine.getStatus() !== EngineStatus.READY) {
+      // Not expected to answer right now — and any accrued failures belong to a previous READY
+      // stretch, so the next one starts clean.
+      this.livenessFailures.delete(id);
+      return;
+    }
+    // Feature-detect: an engine whose transport already self-detects death may skip the probe.
+    if (typeof engine.probeLiveness !== 'function') {
+      return;
+    }
+
+    // A wedged connection can hang the probe itself, so race it against a timeout; a timeout or a
+    // probe error both count as "not proven alive".
+    let alive: boolean;
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      alive = await Promise.race([
+        engine.probeLiveness(),
+        new Promise<never>((_, reject) => {
+          probeTimer = setTimeout(
+            () => reject(new Error('liveness probe timed out')),
+            SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } catch {
+      alive = false;
+    } finally {
+      if (probeTimer) clearTimeout(probeTimer);
+    }
+
+    // The session may have been stopped/restarted (engine superseded) while the probe was in flight;
+    // a stale result must not touch it (mirrors the isLiveEngine gate on engine callbacks).
+    if (!this.isLiveEngine(id, engine)) {
+      return;
+    }
+
+    if (alive) {
+      this.livenessFailures.delete(id);
+      return;
+    }
+
+    const failures = (this.livenessFailures.get(id) ?? 0) + 1;
+    if (failures < SESSION_WATCHDOG_MAX_FAILURES) {
+      this.livenessFailures.set(id, failures);
+      this.logger.warn('Liveness probe failed; will treat the session as dead after repeated failures', {
+        sessionId: id,
+        failures,
+        action: 'watchdog_probe_failed',
+      });
+      return;
+    }
+
+    this.livenessFailures.delete(id);
+    this.logger.warn('Liveness probe failed repeatedly; handling the session as disconnected', {
+      sessionId: id,
+      failures,
+      action: 'watchdog_disconnect',
+    });
+    await this.handleEngineDisconnected(id, 'liveness probe failed (watchdog)');
+  }
+
   private scheduleReconnect(id: string, session: Session): void {
     // Don't launch a fresh engine (Chromium) mid-shutdown: a disconnect during the drain window would
     // otherwise schedule a reconnect that races onModuleDestroy's teardown and could orphan a browser.
@@ -1354,6 +1514,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     const state = this.reconnectStates.get(id);
     if (!state) return;
+
+    // Stability reset: the attempt budget covers one CONTINUOUS bad stretch. When the session stayed
+    // up ≥5 min since the last scheduled attempt it demonstrably recovered, so the next drop
+    // restarts the budget — unrelated transient drops must not accrue toward an explicit cap over
+    // the session's lifetime.
+    if (state.lastAttemptAt !== undefined && Date.now() - state.lastAttemptAt >= RECONNECT_STABILITY_RESET_MS) {
+      state.attempts = 0;
+    }
 
     if (state.attempts >= state.maxAttempts) {
       this.logger.error(`Max reconnect attempts reached for session: ${session.name}`, undefined, {
@@ -1376,15 +1544,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     // Exponential backoff: baseDelay * 2^attempts (with jitter), clamped finite + within
-    // setTimeout's safe range so the timer can't overflow and fire immediately.
+    // setTimeout's safe range so the timer can't overflow and fire immediately. With the default
+    // unlimited budget the delay parks at RECONNECT_DELAY_CAP_MS once the exponent outgrows it.
     const delay = clampReconnectDelay(
       state.baseDelay * Math.pow(2, state.attempts) + Math.random() * 1000,
       state.baseDelay,
     );
     state.attempts++;
+    state.lastAttemptAt = Date.now();
 
+    const maxAttemptsLabel = Number.isFinite(state.maxAttempts) ? String(state.maxAttempts) : '∞';
     this.logger.log(
-      `Scheduling reconnect attempt ${state.attempts}/${state.maxAttempts} in ${Math.round(delay / 1000)}s`,
+      `Scheduling reconnect attempt ${state.attempts}/${maxAttemptsLabel} in ${Math.round(delay / 1000)}s`,
       {
         sessionId: id,
         attempt: state.attempts,
