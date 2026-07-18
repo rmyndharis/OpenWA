@@ -1,5 +1,18 @@
-import { Controller, Get, Put, Post, Body, BadRequestException, HttpException, Optional } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Put,
+  Post,
+  Body,
+  BadRequestException,
+  HttpException,
+  HttpCode,
+  HttpStatus,
+  Optional,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -47,46 +60,203 @@ interface InfraStatus {
   };
 }
 
-interface SaveConfigDto {
-  database?: {
-    type: 'sqlite' | 'postgres';
-    builtIn?: boolean;
-    host?: string;
-    port?: string;
-    username?: string;
-    password?: string;
-    database?: string;
-    schema?: string;
-    poolSize?: number;
-    sslEnabled?: boolean;
-    sslRejectUnauthorized?: boolean;
-  };
-  redis?: {
-    enabled?: boolean;
-    builtIn?: boolean;
-    host?: string;
-    port?: string;
-    password?: string;
-  };
-  queue?: {
-    enabled?: boolean;
-  };
-  storage?: {
-    type: 'local' | 's3';
-    builtIn?: boolean;
-    localPath?: string;
-    s3Bucket?: string;
-    s3Region?: string;
-    s3AccessKey?: string;
-    s3SecretKey?: string;
-    s3Endpoint?: string;
-  };
-  engine?: {
-    type?: string;
-    headless?: boolean;
-    sessionDataPath?: string;
-    browserArgs?: string;
-  };
+class DatabaseConfigDto {
+  @ApiProperty({ enum: ['sqlite', 'postgres'] })
+  @IsIn(['sqlite', 'postgres'])
+  type!: 'sqlite' | 'postgres';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  builtIn?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  host?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  port?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  password?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  database?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  schema?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  poolSize?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  sslEnabled?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  sslRejectUnauthorized?: boolean;
+}
+
+class RedisConfigDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  builtIn?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  host?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  port?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  password?: string;
+}
+
+class QueueConfigDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+}
+
+class StorageConfigDto {
+  @ApiProperty({ enum: ['local', 's3'] })
+  @IsIn(['local', 's3'])
+  type!: 'local' | 's3';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  builtIn?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  localPath?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  s3Bucket?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  s3Region?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  s3AccessKey?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  s3SecretKey?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  s3Endpoint?: string;
+}
+
+class EngineConfigDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  headless?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sessionDataPath?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  browserArgs?: string;
+}
+
+class SaveConfigDto {
+  @ApiPropertyOptional({ type: () => DatabaseConfigDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DatabaseConfigDto)
+  database?: DatabaseConfigDto;
+
+  @ApiPropertyOptional({ type: () => RedisConfigDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RedisConfigDto)
+  redis?: RedisConfigDto;
+
+  @ApiPropertyOptional({ type: () => QueueConfigDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => QueueConfigDto)
+  queue?: QueueConfigDto;
+
+  @ApiPropertyOptional({ type: () => StorageConfigDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StorageConfigDto)
+  storage?: StorageConfigDto;
+
+  @ApiPropertyOptional({ type: () => EngineConfigDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => EngineConfigDto)
+  engine?: EngineConfigDto;
+}
+
+class RestartDto {
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  profiles?: string[];
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  profilesToRemove?: string[];
 }
 
 // Database migration types for export/import
@@ -129,6 +299,7 @@ interface MessageRow {
   sessionId: string;
   waMessageId: string | null;
   chatId: string;
+  chatName: string | null;
   from: string;
   to: string;
   body: string | null;
@@ -549,7 +720,7 @@ export class InfraController {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Save infrastructure configuration to .env file' })
   @ApiResponse({ status: 200, description: 'Configuration saved' })
-  @ApiBody({ description: 'Configuration to save' })
+  @ApiBody({ description: 'Configuration to save', type: SaveConfigDto })
   saveConfig(@Body() config: SaveConfigDto): { message: string; saved: boolean; envPath: string; profiles: string[] } {
     try {
       const profiles: string[] = [];
@@ -760,10 +931,12 @@ export class InfraController {
     }
   }
   @Post('restart')
+  @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Request server restart with Docker orchestration' })
   @ApiResponse({ status: 200, description: 'Server will restart with new profiles' })
-  async requestRestart(@Body() body?: { profiles?: string[]; profilesToRemove?: string[] }): Promise<{
+  @ApiBody({ required: false, type: RestartDto })
+  async requestRestart(@Body() body?: RestartDto): Promise<{
     message: string;
     restarting: boolean;
     profiles: string[];
@@ -1018,6 +1191,7 @@ export class InfraController {
   }
 
   @Post('import-data')
+  @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Import data to Data DB (replaces existing data)' })
   @ApiBody({
@@ -1176,13 +1350,14 @@ export class InfraController {
         for (const msg of data.tables.messages) {
           try {
             await queryRunner.query(
-              `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
               [
                 msg.id,
                 msg.sessionId,
                 msg.waMessageId ?? null,
                 msg.chatId,
+                msg.chatName ?? null,
                 msg.from,
                 msg.to,
                 msg.body ?? null,
@@ -1563,6 +1738,7 @@ export class InfraController {
   }
 
   @Post('storage/import')
+  @HttpCode(HttpStatus.OK)
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Import storage files from tar.gz' })
   @ApiBody({ description: 'Path to tar.gz file to import' })
@@ -1573,17 +1749,20 @@ export class InfraController {
     const { filePath } = body;
 
     // `filePath` is fully caller-controlled. Restrict it to the app's data
-    // directory so it cannot point at arbitrary files on the host.
+    // directory so it cannot point at arbitrary files on the host. Resolve once against the
+    // same cwd-relative base used by exportStorage, then use that exact path for both the guard
+    // and the file sink.
     const dataDir = path.join(process.cwd(), 'data');
-    if (!filePath || !isPathWithin(dataDir, filePath)) {
+    const resolved = path.resolve(process.cwd(), filePath || '');
+    if (!filePath || !isPathWithin(dataDir, resolved)) {
       throw new BadRequestException('filePath must reference a file inside the data directory');
     }
 
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(resolved)) {
       throw new BadRequestException(`File not found: ${filePath}`);
     }
 
-    const readStream = fs.createReadStream(filePath);
+    const readStream = fs.createReadStream(resolved);
     const count = await this.storageService.importFromStream(readStream);
 
     return {

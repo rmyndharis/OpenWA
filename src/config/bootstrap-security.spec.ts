@@ -176,8 +176,21 @@ describe('assertNoDefaultSecretsInProduction', () => {
         s3AccessKey: 'minioadmin',
         s3SecretKey: 'minioadmin',
         minioBuiltIn: 'true',
+        s3Endpoint: 'http://minio:9000',
       }),
     ).not.toThrow();
+  });
+
+  it('does not treat an unset S3 endpoint as the bundled MinIO endpoint', () => {
+    expect(() =>
+      assertNoDefaultSecretsInProduction({
+        nodeEnv: 'production',
+        storageType: 's3',
+        s3AccessKey: 'minioadmin',
+        s3SecretKey: 'minioadmin',
+        minioBuiltIn: 'true',
+      }),
+    ).toThrow(/S3_ACCESS_KEY, S3_SECRET_KEY/);
   });
 
   it('still refuses an EXTERNAL Postgres with a default password even when MinIO is built-in', () => {

@@ -27,6 +27,7 @@ import { HookManager } from '../../core/hooks';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { Session } from '../session/entities/session.entity';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 
 function createMockWebhook(overrides: Partial<Webhook> = {}): Webhook {
   return {
@@ -429,6 +430,34 @@ describe('WebhookService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(5);
     });
 
+    it('records a durable failure when the bounded dispatch queue is full', async () => {
+      const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
+      const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([wA, wB]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (service as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(1, 0);
+
+      let release: (value: unknown) => void = () => undefined;
+      mockFetch.mockImplementation(() => new Promise(resolve => (release = resolve)));
+
+      const pending = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      for (let i = 0; i < 20 && mockFetch.mock.calls.length === 0; i++) await new Promise(r => setImmediate(r));
+      release({ ok: true, status: 200 });
+      await pending;
+
+      expect(failureRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webhookId: 'wh-b',
+          attempts: 0,
+          lastError: 'ConcurrencyLimiter queue full',
+        }),
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('salts each sibling webhook with a distinct idempotency key so one receiver cannot dedupe out another', async () => {
       const wA = createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] });
       const wB = createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] });
@@ -468,6 +497,20 @@ describe('WebhookService', () => {
       const callArgs = mockFetch.mock.calls[0] as [unknown, { body: string }];
       const body = JSON.parse(callArgs[1].body) as WebhookPayload;
       expect(body).not.toBeUndefined();
+      expect(body.event).toBe('message.received');
+      expect(body.data).toEqual({ from: '628123456789@c.us' });
+    });
+
+    it('falls back to the original payload when a before-hook returns null data', async () => {
+      const webhook = createMockWebhook({ events: ['message.received'] });
+      (repository.find as jest.Mock).mockResolvedValue([webhook]);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: null });
+
+      await service.dispatch('sess-1', 'message.received', { from: '628123456789@c.us' });
+
+      const callArgs = mockFetch.mock.calls[0] as [unknown, { body: string }];
+      const body = JSON.parse(callArgs[1].body) as WebhookPayload;
       expect(body.event).toBe('message.received');
       expect(body.data).toEqual({ from: '628123456789@c.us' });
     });

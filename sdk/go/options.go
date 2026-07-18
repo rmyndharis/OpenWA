@@ -17,6 +17,7 @@ type config struct {
 	baseURL       string
 	apiKey        string
 	timeout       time.Duration
+	timeoutSet    bool
 	httpClient    *http.Client
 	baseTransport http.RoundTripper
 	logger        Logger
@@ -35,7 +36,10 @@ type Option func(*config)
 // WithTimeout sets the per-request timeout. Zero uses DefaultTimeout. The
 // timeout also bounds retries, since it is enforced via the request context.
 func WithTimeout(d time.Duration) Option {
-	return func(c *config) { c.timeout = d }
+	return func(c *config) {
+		c.timeout = d
+		c.timeoutSet = true
+	}
 }
 
 // WithHTTPClient injects a fully-configured *http.Client (connection pool,

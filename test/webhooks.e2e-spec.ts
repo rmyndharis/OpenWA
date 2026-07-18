@@ -5,12 +5,13 @@ import http from 'http';
 import crypto from 'crypto';
 import { AddressInfo } from 'net';
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
@@ -77,8 +78,7 @@ describe('Webhooks (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     await app.init();
 
     webhookService = app.get(WebhookService);
@@ -336,7 +336,7 @@ describe('Webhooks (e2e)', () => {
       const res = await request(app.getHttpServer())
         .post(`/api/sessions/${session}/webhooks/${created.id as string}/test`)
         .set('X-API-Key', apiKey)
-        .expect(201);
+        .expect(200);
 
       expect((res.body as { success: boolean }).success).toBe(true);
       await waitFor(() => received.length === 1);

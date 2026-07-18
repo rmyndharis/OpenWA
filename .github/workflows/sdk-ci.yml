@@ -7,10 +7,29 @@ name: SDK CI
 on:
   push:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/**/*.controller.ts', 'src/**/*.service.ts', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+    paths:
+      [
+        'sdk/**',
+        '.github/workflows/sdk-ci.yml',
+        'src/**/dto/**',
+        'src/**/*.controller.ts',
+        'src/**/*.service.ts',
+        'src/engine/interfaces/whatsapp-engine.interface.ts',
+      ]
   pull_request:
     branches: [main, develop]
-    paths: ['sdk/**', '.github/workflows/sdk-ci.yml', 'src/**/dto/**', 'src/**/*.controller.ts', 'src/**/*.service.ts', 'src/engine/interfaces/whatsapp-engine.interface.ts']
+    paths:
+      [
+        'sdk/**',
+        '.github/workflows/sdk-ci.yml',
+        'src/**/dto/**',
+        'src/**/*.controller.ts',
+        'src/**/*.service.ts',
+        'src/engine/interfaces/whatsapp-engine.interface.ts',
+      ]
+
+permissions:
+  contents: read
 
 jobs:
   javascript:
@@ -35,8 +54,12 @@ jobs:
       - run: npm run smoke # dual CJS+ESM consumable — must run after build
 
   python:
-    name: Python SDK
+    name: Python SDK (${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.12']
     defaults:
       run:
         working-directory: sdk/python
@@ -44,13 +67,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
       - run: pip install -e '.[dev]'
       - run: pytest
 
   php:
-    name: PHP SDK
+    name: PHP SDK (${{ matrix.php }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2']
     defaults:
       run:
         working-directory: sdk/php
@@ -58,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: ${{ matrix.php }}
       - run: composer install --no-interaction --no-progress
       - run: ./vendor/bin/phpunit
 

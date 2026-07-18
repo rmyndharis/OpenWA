@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
-import { assertBase64WithinMediaCap } from './media-cap.util';
+import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
@@ -174,7 +174,7 @@ export class MessageService {
       body: finalDto.caption || '',
       type: 'image',
       metadata: {
-        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: finalDto.base64 || finalDto.url },
+        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
 
@@ -198,7 +198,7 @@ export class MessageService {
       body: finalDto.caption || '',
       type: 'video',
       metadata: {
-        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: finalDto.base64 || finalDto.url },
+        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
 
@@ -231,7 +231,7 @@ export class MessageService {
       chatId: finalDto.chatId,
       type: finalDto.ptt ? 'voice' : 'audio',
       metadata: {
-        media: { mimetype: audioDto.mimetype, filename: finalDto.filename, data: finalDto.base64 || finalDto.url },
+        media: { mimetype: audioDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
 
@@ -255,7 +255,7 @@ export class MessageService {
       body: finalDto.caption || finalDto.filename || '',
       type: 'document',
       metadata: {
-        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: finalDto.base64 || finalDto.url },
+        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
 
@@ -417,7 +417,7 @@ export class MessageService {
       chatId: finalDto.chatId,
       type: 'sticker',
       metadata: {
-        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: finalDto.base64 || finalDto.url },
+        media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
 
@@ -685,17 +685,18 @@ export class MessageService {
   }
 
   private buildMediaInput(dto: SendMediaMessageDto): MediaInput {
-    if (!dto.url && !dto.base64) {
+    const base64 = stripBase64DataUri(dto.base64);
+    if (!dto.url && !base64) {
       throw new BadRequestException('Either url or base64 must be provided');
     }
 
-    if (dto.base64 && !dto.mimetype) {
+    if (base64 && !dto.mimetype) {
       throw new BadRequestException('mimetype is required when using base64 data');
     }
 
     // Bound an outbound base64 payload to the same byte cap as URL/inbound media, before it is
     // persisted or handed to the engine. URL media is already capped while streaming.
-    assertBase64WithinMediaCap(dto.base64);
+    assertBase64WithinMediaCap(base64);
 
     return {
       mimetype: dto.mimetype || 'application/octet-stream',
@@ -703,7 +704,7 @@ export class MessageService {
       // `url` (e.g. a Swagger/example default left in the body) must not be fetched in its place.
       // Aligns the send selection with the base64-first persisted metadata and the url field's
       // `@ValidateIf((o) => !o.base64)` (which skips @IsUrl when base64 is present) — #670.
-      data: dto.base64 || dto.url!,
+      data: base64 || dto.url!,
       filename: dto.filename,
       caption: dto.caption,
       mentions: dto.mentions,

@@ -198,7 +198,8 @@
   color: var(--primary);
 }
 
-.dashboard .status-pill.connecting{
+.dashboard .status-pill.connecting,
+.dashboard .status-pill.authenticating{
   background: rgba(245, 158, 11, 0.15);
   color: var(--warning);
 }
@@ -206,6 +207,11 @@
 .dashboard .status-pill.disconnected{
   background: var(--bg-light);
   color: var(--text-muted);
+}
+
+.dashboard .status-pill.failed{
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error);
 }
 
 .dashboard .last-active{

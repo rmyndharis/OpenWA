@@ -159,6 +159,25 @@ describe('OpenWAClient', () => {
     await expect(c.sessions.list()).rejects.toBeInstanceOf(OpenWATimeoutError);
   });
 
+  it('keeps the timeout armed while reading a stalled response body', async () => {
+    const stalledBodyFetch: FetchLike = async (_url, init) => {
+      const signal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal?.addEventListener('abort', () => {
+            const error = new Error('body aborted');
+            error.name = 'AbortError';
+            controller.error(error);
+          });
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', timeoutMs: 5, fetch: stalledBodyFetch });
+
+    await expect(c.sessions.list()).rejects.toBeInstanceOf(OpenWATimeoutError);
+  });
+
   it('keeps X-API-Key winning over defaultHeaders', async () => {
     const t = new MockTransport().on('GET', '/api/sessions', { body: [] });
     const c = new OpenWAClient({

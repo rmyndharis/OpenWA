@@ -238,7 +238,8 @@ export function mountMcpServer(
   };
 
   const adapter = httpAdapter as unknown as { post: (path: string, ...handlers: RequestHandler[]) => unknown };
-  // ipThrottle runs BEFORE express.json()/handler so an unauthenticated flood is rejected before any body
-  // parsing or DB lookup.
+  // The route throttle gates the auth DB lookup and per-request MCP server/transport construction. The
+  // process-wide capped json() in main.ts runs first for all routes; this route-level parser is a
+  // defensive fallback and no-ops once the global parser has consumed the body.
   adapter.post(basePath, createIpThrottle(ipRateLimiter), express.json(), handler);
 }

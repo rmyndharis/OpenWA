@@ -243,6 +243,8 @@ export interface PluginIngressRoute {
   mode: 'async' | 'sync-reply';
   signature: IngressSignatureSpec;
   challenge?: IngressChallengeSpec;
+  /** Reserved/advisory compatibility field. Authenticity is currently verified by the host according
+   *  to `signature`; the worker does not perform an additional `self` verification pass. */
   verify: 'core' | 'self';
   maxBodyBytes: number;
   // Optional: where the provider's conversation id lives, so the host can compute a per-conversation

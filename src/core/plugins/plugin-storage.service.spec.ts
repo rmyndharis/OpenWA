@@ -91,17 +91,17 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(await storage.list()).toContain('legacy');
   });
 
-  it('migrates a legacy plain-key file off on the next set (no stale shadow copy)', async () => {
+  it('keeps a legacy plain-key file on set but reads the encoded value first', async () => {
     const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
     const legacyFile = path.join(pluginDataDir, 'legacy.json');
     fs.writeFileSync(legacyFile, JSON.stringify({ old: true }));
 
     await storage.set('legacy', { fresh: true });
 
-    expect(fs.existsSync(legacyFile)).toBe(false); // stale legacy copy removed
+    expect(fs.existsSync(legacyFile)).toBe(true); // never unlink outside the service-owned key-* namespace
     expect(await storage.get('legacy')).toEqual({ fresh: true });
     const jsonFiles = fs.readdirSync(pluginDataDir).filter(f => f.endsWith('.json'));
-    expect(jsonFiles).toHaveLength(1); // only the encoded file remains
+    expect(jsonFiles).toHaveLength(2);
   });
 
   it('deletes a legacy plain-key file', async () => {
@@ -112,6 +112,21 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
 
     expect(fs.existsSync(path.join(pluginDataDir, 'legacy.json'))).toBe(false);
     expect(await storage.get('legacy')).toBeNull();
+  });
+
+  it('never treats manifest.json or package.json as legacy storage files', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    const manifestPath = path.join(pluginDataDir, 'manifest.json');
+    const packagePath = path.join(pluginDataDir, 'package.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ id: pluginId }));
+    fs.writeFileSync(packagePath, JSON.stringify({ name: pluginId }));
+
+    expect(await storage.get('manifest')).toBeNull();
+    await storage.set('manifest', { pluginState: true });
+    await storage.delete('manifest');
+
+    expect(JSON.parse(fs.readFileSync(manifestPath, 'utf8'))).toEqual({ id: pluginId });
+    expect(JSON.parse(fs.readFileSync(packagePath, 'utf8'))).toEqual({ name: pluginId });
   });
 
   it('does not mangle a literal legacy filename that happens to start with "key-"', async () => {

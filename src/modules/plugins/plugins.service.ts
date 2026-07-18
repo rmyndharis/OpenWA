@@ -426,6 +426,18 @@ export class PluginsService {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, entry.data);
       }
+      // ctx.storage files share the package directory under shipped defaults. Restore service-owned
+      // state from the backup unless the new package explicitly supplied that exact path. Copy (rather
+      // than move) so the rollback below still has a complete original directory.
+      const packagePaths = new Set(entries.map(entry => entry.relPath));
+      for (const entry of fs.readdirSync(backup, { withFileTypes: true })) {
+        if (!entry.isFile() || !/^key-[A-Za-z0-9_-]+\.json$/.test(entry.name) || packagePaths.has(entry.name)) {
+          continue;
+        }
+        const stateFile = path.join(dir, entry.name);
+        fs.copyFileSync(path.join(backup, entry.name), stateFile);
+        fs.chmodSync(stateFile, 0o600);
+      }
       this.pluginLoader.loadPlugin(dir);
       if (wasEnabled) {
         await this.pluginLoader.enablePlugin(id);

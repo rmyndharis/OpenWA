@@ -18,13 +18,7 @@ export type Jid = string;
 
 /** Session lifecycle status. */
 export type SessionStatus =
-  | 'created'
-  | 'initializing'
-  | 'qr_ready'
-  | 'authenticating'
-  | 'ready'
-  | 'disconnected'
-  | 'failed';
+  'created' | 'initializing' | 'qr_ready' | 'authenticating' | 'ready' | 'disconnected' | 'failed';
 
 /** Minimal success envelope returned by some state-changing endpoints. */
 export interface SuccessResult {
@@ -108,7 +102,20 @@ export interface SendMediaRequest {
   filename?: string;
   /** Max 1024 chars. */
   caption?: string;
+}
+
+export interface SendAudioRequest extends SendMediaRequest {
   /** Audio only: send as a WhatsApp voice note (PTT). Server defaults mimetype to audio/ogg; codecs=opus. */
+  ptt?: boolean;
+}
+
+/** Nested media payload accepted by bulk sends; chatId lives on the parent and caption on content. */
+export interface BulkMediaRequest {
+  url?: string;
+  base64?: string;
+  mimetype?: string;
+  filename?: string;
+  /** Only the audio member consumes this flag. */
   ptt?: boolean;
 }
 
@@ -258,10 +265,10 @@ export type BulkMessageType = 'text' | 'image' | 'video' | 'audio' | 'document';
 
 export interface BulkMessageContent {
   text?: string;
-  image?: SendMediaRequest;
-  video?: SendMediaRequest;
-  audio?: SendMediaRequest;
-  document?: SendMediaRequest;
+  image?: BulkMediaRequest;
+  video?: BulkMediaRequest;
+  audio?: BulkMediaRequest;
+  document?: BulkMediaRequest;
   caption?: string;
 }
 

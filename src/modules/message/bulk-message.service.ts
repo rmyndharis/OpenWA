@@ -14,7 +14,7 @@ import { MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
 import { MessageService } from './message.service';
 import { HookManager } from '../../core/hooks';
-import { assertBase64WithinMediaCap } from './media-cap.util';
+import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderTemplate } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -95,6 +95,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     const orphaned = await this.batchRepository.find({ where: { status: BatchStatus.PROCESSING } });
     for (const batch of orphaned) {
       batch.status = BatchStatus.FAILED;
+      this.stripBatchMediaPayloads(batch.messages);
       await this.batchRepository.save(batch);
     }
     if (orphaned.length > 0) {
@@ -115,10 +116,13 @@ export class BulkMessageService implements OnApplicationBootstrap {
     // its base64 payloads) is persisted into the batch row. Mirrors the single-send cap in
     // MessageService.buildMediaInput.
     for (const { content } of dto.messages) {
-      assertBase64WithinMediaCap(content?.image?.base64);
-      assertBase64WithinMediaCap(content?.video?.base64);
-      assertBase64WithinMediaCap(content?.audio?.base64);
-      assertBase64WithinMediaCap(content?.document?.base64);
+      for (const media of [content?.image, content?.video, content?.audio, content?.document]) {
+        const base64 = stripBase64DataUri(media?.base64);
+        if (media?.base64 !== undefined && !base64 && !media.url) {
+          throw new BadRequestException('Either url or base64 must be provided for bulk media');
+        }
+        assertBase64WithinMediaCap(base64);
+      }
     }
 
     const batchId = dto.batchId || `batch_${randomUUID().split('-')[0]}`;
@@ -137,7 +141,6 @@ export class BulkMessageService implements OnApplicationBootstrap {
     if (maxConcurrentBatches > 0 && this.inFlightBatches >= maxConcurrentBatches) {
       throw new BadRequestException(`Too many bulk batches in progress (max ${maxConcurrentBatches}); retry shortly`);
     }
-
     const options = {
       delayBetweenMessages: dto.options?.delayBetweenMessages ?? 3000,
       randomizeDelay: dto.options?.randomizeDelay ?? true,
@@ -163,11 +166,19 @@ export class BulkMessageService implements OnApplicationBootstrap {
       currentIndex: 0,
     });
 
-    await this.batchRepository.save(batch);
+    // Reserve synchronously in the same turn as the cap check. There is deliberately no await between
+    // them, so a burst cannot all observe the same stale count and overshoot the ceiling.
+    this.inFlightBatches++;
+    try {
+      await this.batchRepository.save(batch);
+    } catch (error) {
+      this.inFlightBatches--;
+      throw error;
+    }
     this.logger.log(`Created batch ${batchId} with ${dto.messages.length} messages`);
 
     // Start processing asynchronously
-    this.processBatch(batch.id).catch(err => {
+    this.processBatch(batch.id, true).catch(err => {
       this.logger.error(`Batch ${batchId} processing error: ${String(err)}`);
     });
 
@@ -207,6 +218,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     batch.progress.cancelled = batch.progress.pending;
     batch.progress.pending = 0;
     batch.completedAt = new Date();
+    this.stripBatchMediaPayloads(batch.messages);
 
     await this.batchRepository.save(batch);
     this.logger.log(`Cancelled batch ${batchId}`);
@@ -214,19 +226,18 @@ export class BulkMessageService implements OnApplicationBootstrap {
     return batch;
   }
 
-  private async processBatch(batchDbId: string): Promise<void> {
-    const batch = await this.batchRepository.findOne({ where: { id: batchDbId } });
-    if (!batch) return;
-
-    this.processingBatches.set(batch.id, true);
+  private async processBatch(batchDbId: string, reserved = false): Promise<void> {
+    let batch: MessageBatch | null = null;
     // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
     // save/send, or normal completion) — otherwise the map leaks an entry per such batch.
     try {
-      this.inFlightBatches++;
+      batch = await this.batchRepository.findOne({ where: { id: batchDbId } });
+      if (!batch) return;
+      this.processingBatches.set(batch.id, true);
       await this.executeBatch(batch);
     } finally {
-      this.inFlightBatches--;
-      this.processingBatches.delete(batch.id);
+      if (reserved) this.inFlightBatches--;
+      if (batch) this.processingBatches.delete(batch.id);
     }
   }
 
@@ -240,6 +251,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     if (!engine) {
       batch.status = BatchStatus.FAILED;
       batch.completedAt = new Date();
+      this.stripBatchMediaPayloads(batch.messages);
       await this.batchRepository.save(batch);
       return;
     }
@@ -390,7 +402,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
    * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
    */
   private stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
-    for (const m of messages) {
+    for (const m of messages ?? []) {
       for (const key of ['image', 'video', 'audio', 'document']) {
         const media = m.content[key] as { base64?: unknown } | undefined;
         if (media && typeof media === 'object' && 'base64' in media) {
@@ -455,7 +467,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
           ? {
               media: {
                 mimetype: media.mimetype,
-                data: media.url ?? media.base64,
+                data: stripBase64DataUri(media.base64) || media.url,
                 filename: media.filename,
               },
             }
@@ -478,25 +490,25 @@ export class BulkMessageService implements OnApplicationBootstrap {
       case 'image':
         return engine.sendImageMessage(chatId, {
           mimetype: content.image?.mimetype || 'image/jpeg',
-          data: content.image?.url || content.image?.base64 || '',
+          data: stripBase64DataUri(content.image?.base64) || content.image?.url || '',
           caption: content.caption,
         });
       case 'video':
         return engine.sendVideoMessage(chatId, {
           mimetype: content.video?.mimetype || 'video/mp4',
-          data: content.video?.url || content.video?.base64 || '',
+          data: stripBase64DataUri(content.video?.base64) || content.video?.url || '',
           caption: content.caption,
         });
       case 'audio':
         return engine.sendAudioMessage(chatId, {
           mimetype: content.audio?.mimetype || (content.audio?.ptt ? 'audio/ogg; codecs=opus' : 'audio/mpeg'),
-          data: content.audio?.url || content.audio?.base64 || '',
+          data: stripBase64DataUri(content.audio?.base64) || content.audio?.url || '',
           ptt: content.audio?.ptt,
         });
       case 'document':
         return engine.sendDocumentMessage(chatId, {
           mimetype: content.document?.mimetype || 'application/octet-stream',
-          data: content.document?.url || content.document?.base64 || '',
+          data: stripBase64DataUri(content.document?.base64) || content.document?.url || '',
           filename: content.document?.filename,
           caption: content.caption,
         });

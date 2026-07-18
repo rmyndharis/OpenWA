@@ -50,7 +50,12 @@ export function buildIngressDeadLetterRow(data: IngressJobData, error?: string):
     deliveryId: data.deliveryId,
     attempts: 1,
     lastError: error ?? 'inline ingress dispatch failed',
-    payload: { route: data.route, providerConversationId: data.providerConversationId, ingress: data.payload },
+    payload: {
+      route: data.route,
+      method: data.method,
+      providerConversationId: data.providerConversationId,
+      ingress: data.payload,
+    },
     redriven: false,
   };
 }

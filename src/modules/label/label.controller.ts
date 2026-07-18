@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { LabelService } from './label.service';
 import { AddLabelDto } from './dto/add-label.dto';
@@ -50,6 +50,7 @@ export class LabelController {
 
   @Post('chat/:chatId')
   @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add a label to a chat' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'chatId', description: 'Chat ID' })

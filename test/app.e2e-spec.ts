@@ -3,10 +3,11 @@
 jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { applyGlobalValidation } from './../src/config/app-validation';
 
 /**
  * Smoke e2e: the previous test asserted a non-existent Hello-World route and failed to
@@ -23,8 +24,7 @@ describe('App smoke (e2e)', () => {
 
     app = moduleFixture.createNestApplication();
     // Mirror the bits of main.ts that affect routing/validation.
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     await app.init();
   });
 

@@ -111,7 +111,10 @@ export class IngressService {
       return { status: preflight.status, body: preflight.body };
     }
 
-    const dedupHeader = (route.dedupHeader ?? route.signature.dedupHeader ?? 'x-delivery').toLowerCase();
+    // Standard Webhooks signs and requires webhook-id, so it is the stable, authenticated retry id.
+    // Other schemes retain the existing x-delivery/body-hash behavior for compatibility.
+    const defaultDedupHeader = route.signature.scheme === 'standard-webhooks' ? 'webhook-id' : 'x-delivery';
+    const dedupHeader = (route.dedupHeader ?? route.signature.dedupHeader ?? defaultDedupHeader).toLowerCase();
     const deliveryId = req.headers[dedupHeader] ?? deriveDeliveryId(req);
     const payload = { headers: req.headers, query: req.query, body: req.rawBody, rawBody: req.rawBody };
     const isNew = await this.deps.events.recordOrSkip({
@@ -131,6 +134,7 @@ export class IngressService {
       pluginId: req.pluginId,
       instanceId: req.instanceId,
       route: req.route,
+      method: req.method,
       deliveryId,
       sessionId: instance.sessionScope ?? undefined,
       providerConversationId,

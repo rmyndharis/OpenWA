@@ -5,10 +5,11 @@ jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 process.env.MCP_ENABLED = 'true';
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { type INestApplication, ValidationPipe } from '@nestjs/common';
+import { type INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { applyGlobalValidation } from '../src/config/app-validation';
 
 // --- MCP protocol helpers ---
 
@@ -58,8 +59,7 @@ describe('MCP server (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    applyGlobalValidation(app);
     await app.init();
   }, 30_000);
 

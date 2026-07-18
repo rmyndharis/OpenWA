@@ -672,7 +672,7 @@ flowchart TB
     end
     
     subgraph Storage["Shared Storage"]
-        S3[S3/MinIO<br/>Media Files]
+        S3[S3/MinIO<br/>Media backup / migration]
     end
     
     I1 --> S3
@@ -1251,6 +1251,9 @@ flowchart TB
 Media storage is a **single service** (`src/common/storage/storage.service.ts`) that branches
 internally on `storageType` — there is no `I*Adapter` interface, separate adapter classes, or a
 `StorageFactory`. The two backends are `local` (the default; files under `./data/media`) and `s3`.
+The shipped producer/consumer is the storage export/import migration and backup flow. Incoming and
+outgoing message media is returned inline to REST/webhook consumers and is **not** automatically
+written through `StorageService`.
 **MinIO is not a separate type** — it is the `s3` backend; the S3 client is always created with
 `forcePathStyle: true`, which MinIO requires, and any S3-compatible endpoint works. The public method
 set is `putFile` / `getFile` / `listFiles` / `createExportStream` (export) / `importFromStream`

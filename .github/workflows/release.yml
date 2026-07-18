@@ -9,14 +9,13 @@ env:
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   # ──── Release Gate (CI-strength) ──────────────────────────────────
   # Mirror the CI workflow's gate jobs so a tag can never publish an image or GitHub Release that
-  # lint, the spec type-check, unit + e2e tests, the Postgres migration smoke, or the dashboard
-  # build/lint would have rejected. Each job below matches its CI counterpart; only the tag-match
+  # lint, the spec type-check, OpenAPI snapshot, unit + e2e tests, the Postgres migration smoke, or the
+  # dashboard build/lint/type-check would have rejected. Each job below matches its CI counterpart; only the tag-match
   # guard and the publish jobs (docker, release) are release-specific.
   lint:
     name: Lint
@@ -61,10 +60,13 @@ jobs:
         run: npx tsc --noEmit -p tsconfig.json
 
       - name: Check formatting
-        run: npm run format -- --check
+        run: npm run format:check
 
       - name: Check version consistency (docs track package.json)
         run: npm run check:versions
+
+      - name: Check OpenAPI snapshot is up to date
+        run: npm run openapi:check
 
   test:
     name: Test
@@ -163,6 +165,9 @@ jobs:
       - name: Run ESLint
         run: cd dashboard && npm run lint
 
+      - name: Type-check dashboard tests
+        run: cd dashboard && npm run typecheck
+
       - name: Check i18n parity
         run: cd dashboard && npm run i18n:check
 
@@ -195,6 +200,8 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # Gate the public Release on every CI-strength job AND a successfully built+pushed image that
     # also boots, so a tag never produces a GitHub Release without passing the same gate CI enforces,
     # a matching container image, and a runtime boot check on both architectures (boot-smoke runs the
@@ -242,6 +249,9 @@ jobs:
   docker:
     name: Docker Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     needs: [lint, test, test-postgres, dashboard, build]
     steps:
       - uses: actions/checkout@v7
@@ -295,6 +305,8 @@ jobs:
   boot-smoke:
     name: Boot smoke (amd64 + arm64)
     runs-on: ubuntu-latest
+    permissions:
+      packages: read
     needs: [docker]
     steps:
       - name: Set up QEMU

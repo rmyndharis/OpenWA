@@ -1,5 +1,5 @@
 import { PayloadTooLargeException } from '@nestjs/common';
-import { assertBase64WithinMediaCap } from './media-cap.util';
+import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 
 describe('assertBase64WithinMediaCap', () => {
   const orig = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
@@ -15,6 +15,11 @@ describe('assertBase64WithinMediaCap', () => {
     expect(() => assertBase64WithinMediaCap(undefined)).not.toThrow();
     expect(() => assertBase64WithinMediaCap(null)).not.toThrow();
     expect(() => assertBase64WithinMediaCap('')).not.toThrow();
+  });
+
+  it('strips only a data-URI base64 prefix and preserves plain base64', () => {
+    expect(stripBase64DataUri('data:image/png;base64,QUJD')).toBe('QUJD');
+    expect(stripBase64DataUri('QUJD')).toBe('QUJD');
   });
 
   it('accepts a base64 payload at the cap', () => {

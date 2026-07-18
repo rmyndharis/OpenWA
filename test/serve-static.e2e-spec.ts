@@ -1,4 +1,5 @@
 import { Module, INestApplication, Controller, Get } from '@nestjs/common';
+import { applyGlobalValidation } from '../src/config/app-validation';
 import { NestFactory } from '@nestjs/core';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import request from 'supertest';
@@ -45,7 +46,7 @@ describe('Dashboard serve-static (e2e)', () => {
 
   beforeAll(async () => {
     app = await NestFactory.create(ServeStaticTestModule, { logger: false });
-    app.setGlobalPrefix('api');
+    applyGlobalValidation(app);
     await app.init();
   });
 

@@ -10,6 +10,9 @@ env:
   NODE_VERSION: '22'
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -40,7 +43,7 @@ jobs:
         run: npx tsc --noEmit -p tsconfig.json
 
       - name: Check formatting
-        run: npm run format -- --check
+        run: npm run format:check
 
       - name: Check version consistency (docs track package.json)
         run: npm run check:versions
@@ -154,6 +157,9 @@ jobs:
 
       - name: Run ESLint
         run: cd dashboard && npm run lint
+
+      - name: Type-check dashboard tests
+        run: cd dashboard && npm run typecheck
 
       - name: Check i18n parity
         run: cd dashboard && npm run i18n:check

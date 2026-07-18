@@ -57,7 +57,8 @@ describe('MetricsService', () => {
       expect(out).toContain('openwa_messages_total{direction="incoming"} 50');
       expect(out).toContain('openwa_messages_failed_total 3');
       // Every metric must declare HELP/TYPE before its sample.
-      expect(out).toContain('# TYPE openwa_messages_total counter');
+      expect(out).toContain('# TYPE openwa_messages_total gauge');
+      expect(out).toContain('# TYPE openwa_messages_failed_total gauge');
       // Webhook terminal-failure counter is emitted with correct counter typing + current total.
       expect(out).toContain('# TYPE openwa_webhook_delivery_failures_total counter');
       expect(out).toContain(`openwa_webhook_delivery_failures_total ${getWebhookDeliveryFailuresTotal()}`);

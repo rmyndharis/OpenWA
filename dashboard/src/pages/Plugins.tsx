@@ -260,9 +260,25 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [handshakeReceived, setHandshakeReceived] = useState(false);
+  const [handshakeError, setHandshakeError] = useState<string | null>(null);
+
+  const nonceConfigUiScripts = (source: string): string => {
+    const nonce = document.querySelector<HTMLMetaElement>('meta[name="openwa-csp-nonce"]')?.content ?? '';
+    if (!nonce || nonce === '__OPENWA_CSP_NONCE__') return source; // Vite development has no production CSP.
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    // Config UIs are required to be self-contained. Nonce only inline scripts; a plugin-supplied
+    // external `src` must still satisfy the parent's host allow-list rather than bypassing it via nonce.
+    for (const script of doc.querySelectorAll('script:not([src])')) script.setAttribute('nonce', nonce);
+    return `<!doctype html>\n${doc.documentElement.outerHTML}`;
+  };
 
   useEffect(() => {
     let cancelled = false;
+    setHtml(null);
+    setError(null);
+    setHandshakeReceived(false);
+    setHandshakeError(null);
     pluginsApi
       .getConfigUi(plugin.id)
       .then(h => {
@@ -277,12 +293,20 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   }, [plugin.id, t]);
 
   useEffect(() => {
+    if (html === null || handshakeReceived) return;
+    const timer = window.setTimeout(() => setHandshakeError(t('plugins.config.uiHandshakeError')), 5000);
+    return () => window.clearTimeout(timer);
+  }, [html, handshakeReceived, t]);
+
+  useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const frame = iframeRef.current?.contentWindow;
       if (!frame || e.source !== frame) return; // only our sandboxed iframe (its origin is opaque 'null')
       const msg = e.data as { type?: string; config?: Record<string, unknown> };
       const post = (m: unknown) => frame.postMessage(m, '*');
       if (msg?.type === 'config:get') {
+        setHandshakeReceived(true);
+        setHandshakeError(null);
         // Only expose schema-DECLARED fields (already secret-redacted by the API). An undeclared key
         // may hold a secret the host can't mask, so it never reaches the untrusted iframe; with no
         // schema there is nothing safe to send. The plugin must declare its fields to pre-fill them.
@@ -332,14 +356,17 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
       </div>
     );
   return (
-    <iframe
-      ref={iframeRef}
-      className="plugin-config-ui-frame"
-      sandbox="allow-scripts"
-      srcDoc={html}
-      title={plugin.name}
-      style={{ height: plugin.configUi?.height ?? 600 }}
-    />
+    <>
+      {handshakeError && <div className="config-ui-status config-ui-error">{handshakeError}</div>}
+      <iframe
+        ref={iframeRef}
+        className="plugin-config-ui-frame"
+        sandbox="allow-scripts"
+        srcDoc={nonceConfigUiScripts(html)}
+        title={plugin.name}
+        style={{ height: plugin.configUi?.height ?? 600 }}
+      />
+    </>
   );
 }
 
@@ -1133,20 +1160,24 @@ export default function Plugins() {
                     <PluginInstances pluginId={configPlugin.id} />
                   ) : showTabs && configTab === 'sessions' && configPlugin.sessionScoped !== false ? (
                     <SessionsTab plugin={configPlugin} />
-                  ) : configPlugin.configUi ? (
-                    <PluginConfigUi plugin={configPlugin} />
-                  ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
-                    <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
-                      {Object.entries(lz.configSchema.properties).map(([key, field]) => (
-                        <ConfigField
-                          key={key}
-                          field={field}
-                          label={field.title || key}
-                          value={schemaConfig[key]}
-                          onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
-                        />
-                      ))}
-                    </form>
+                  ) : configPlugin.configUi ||
+                    (lz.configSchema && Object.keys(lz.configSchema.properties).length > 0) ? (
+                    <>
+                      {configPlugin.configUi && <PluginConfigUi plugin={configPlugin} />}
+                      {lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 && (
+                        <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
+                          {Object.entries(lz.configSchema.properties).map(([key, field]) => (
+                            <ConfigField
+                              key={key}
+                              field={field}
+                              label={field.title || key}
+                              value={schemaConfig[key]}
+                              onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
+                            />
+                          ))}
+                        </form>
+                      )}
+                    </>
                   ) : (
                     <div className="no-config">
                       <Settings size={48} style={{ opacity: 0.3 }} />
@@ -1160,9 +1191,7 @@ export default function Plugins() {
                     {t('common.close')}
                   </button>
                   {/* The Sessions and Instances tabs have their own actions; the footer Save is config-tab only. */}
-                  {showTabs && (configTab === 'sessions' || configTab === 'instances')
-                    ? null
-                    : configPlugin.configUi ? null : lz.configSchema &&
+                  {showTabs && (configTab === 'sessions' || configTab === 'instances') ? null : lz.configSchema &&
                     Object.keys(lz.configSchema.properties).length > 0 ? (
                     <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>
                       {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}

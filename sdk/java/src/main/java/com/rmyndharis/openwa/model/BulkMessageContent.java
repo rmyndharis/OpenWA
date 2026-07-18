@@ -3,10 +3,10 @@ package com.rmyndharis.openwa.model;
 /** Content payload for one bulk-send item. Populate the field matching the item's {@link BulkMessageType}. */
 public record BulkMessageContent(
     String text,
-    SendMediaRequest image,
-    SendMediaRequest video,
-    SendMediaRequest audio,
-    SendMediaRequest document,
+    BulkMediaRequest image,
+    BulkMediaRequest video,
+    BulkMediaRequest audio,
+    BulkMediaRequest document,
     String caption) {
 
     public static Builder builder() {
@@ -15,10 +15,10 @@ public record BulkMessageContent(
 
     public static final class Builder {
         private String text;
-        private SendMediaRequest image;
-        private SendMediaRequest video;
-        private SendMediaRequest audio;
-        private SendMediaRequest document;
+        private BulkMediaRequest image;
+        private BulkMediaRequest video;
+        private BulkMediaRequest audio;
+        private BulkMediaRequest document;
         private String caption;
 
         public Builder text(String v) {
@@ -26,22 +26,22 @@ public record BulkMessageContent(
             return this;
         }
 
-        public Builder image(SendMediaRequest v) {
+        public Builder image(BulkMediaRequest v) {
             this.image = v;
             return this;
         }
 
-        public Builder video(SendMediaRequest v) {
+        public Builder video(BulkMediaRequest v) {
             this.video = v;
             return this;
         }
 
-        public Builder audio(SendMediaRequest v) {
+        public Builder audio(BulkMediaRequest v) {
             this.audio = v;
             return this;
         }
 
-        public Builder document(SendMediaRequest v) {
+        public Builder document(BulkMediaRequest v) {
             this.document = v;
             return this;
         }

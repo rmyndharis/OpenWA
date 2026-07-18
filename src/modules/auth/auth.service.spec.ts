@@ -235,6 +235,18 @@ describe('AuthService', () => {
 
       expect(evictApiKey).not.toHaveBeenCalled();
     });
+
+    it('rejects demoting or expiring the last usable admin', async () => {
+      const key = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.count as jest.Mock).mockResolvedValue(0);
+
+      await expect(service.update('uuid-1', { role: ApiKeyRole.OPERATOR })).rejects.toThrow(/last active admin/i);
+      await expect(
+        service.update('uuid-1', { expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+      ).rejects.toThrow(/last active admin/i);
+      expect(repository.save).not.toHaveBeenCalled();
+    });
   });
 
   // ── delete / revoke ───────────────────────────────────────────────
@@ -270,6 +282,17 @@ describe('AuthService', () => {
 
       expect(repository.remove).toHaveBeenCalledWith(key);
       expect(evictApiKey).toHaveBeenCalledWith('uuid-1', 'deleted');
+    });
+
+    it('rejects deleting the last usable admin but allows it when another usable admin exists', async () => {
+      const key = createMockApiKey({ role: ApiKeyRole.ADMIN });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.remove as jest.Mock).mockResolvedValue(key);
+      (repository.count as jest.Mock).mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+      await expect(service.delete('uuid-1')).rejects.toThrow(/last active admin/i);
+      await expect(service.delete('uuid-1')).resolves.toBeUndefined();
+      expect(repository.remove).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -314,6 +337,16 @@ describe('AuthService', () => {
       const result = await service.revoke('uuid-1');
 
       expect(result.isActive).toBe(false); // revoke still succeeded
+    });
+
+    it('rejects revoking the last usable admin', async () => {
+      const key = createMockApiKey({ role: ApiKeyRole.ADMIN, isActive: true });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.count as jest.Mock).mockResolvedValue(0);
+
+      await expect(service.revoke('uuid-1')).rejects.toThrow(/last active admin/i);
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(key.isActive).toBe(true);
     });
   });
 

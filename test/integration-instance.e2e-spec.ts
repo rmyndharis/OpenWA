@@ -6,11 +6,12 @@ jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 process.env.ALLOW_DEV_API_KEY = 'true';
 process.env.BASE_URL = 'https://api.example.com';
 
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { applyGlobalValidation } from '../src/config/app-validation';
 import { PluginLoaderService } from '../src/core/plugins/plugin-loader.service';
 
 // A stub ingress-capable plugin so the capability check passes without a real plugin on disk.
@@ -49,8 +50,7 @@ describe('IntegrationInstanceController (e2e)', () => {
       })
       .compile();
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    applyGlobalValidation(app);
     await app.init();
   });
 

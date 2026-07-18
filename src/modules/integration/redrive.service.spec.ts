@@ -8,7 +8,7 @@ describe('RedriveService', () => {
   let ingressEnqueue: jest.Mocked<Partial<IngressEnqueueService>>;
 
   beforeEach(() => {
-    repo = { find: jest.fn(), update: jest.fn().mockResolvedValue(undefined) };
+    repo = { find: jest.fn(), update: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) };
     ingressEnqueue = { enqueue: jest.fn().mockResolvedValue({ outcome: 'queued' }) };
   });
 
@@ -49,6 +49,7 @@ describe('RedriveService', () => {
     const res = await svc.redriveInstance('p', 'i');
 
     expect(res.redriven).toBe(2);
+    expect(res).toEqual({ redriven: 2, remaining: 0, batchSize: 100 });
     expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(2);
     expect(ingressEnqueue.enqueue).toHaveBeenNthCalledWith(
       1,
@@ -56,6 +57,7 @@ describe('RedriveService', () => {
         pluginId: 'p',
         instanceId: 'i',
         route: 'chatwoot',
+        method: 'POST',
         deliveryId: 'd1',
         sessionId: 's',
         providerConversationId: 'conv-1',
@@ -90,7 +92,7 @@ describe('RedriveService', () => {
 
     expect(res.redriven).toBe(0);
     expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.update).toHaveBeenCalledWith({ id: 'f9' }, { attempts: 1, lastError: 'redrive dispatch failed' });
   });
 
   it('queries only non-redriven inbound rows for the instance and returns 0 when none are found', async () => {
@@ -101,6 +103,8 @@ describe('RedriveService', () => {
 
     expect(repo.find).toHaveBeenCalledWith({
       where: { pluginId: 'p', instanceId: 'i', direction: 'inbound', redriven: false },
+      order: { attempts: 'ASC', createdAt: 'ASC' },
+      take: 100,
     });
     expect(res.redriven).toBe(0);
     expect(ingressEnqueue.enqueue).not.toHaveBeenCalled();

@@ -43,10 +43,11 @@ export type HostToWorkerMessage =
   | { kind: 'config-change'; config: Record<string, unknown> }
   // Ask the worker plugin to run its healthCheck(); it replies with health-result.
   | { kind: 'health-check'; id: number }
-  // Dispatch a verified inbound webhook to the worker for a route it subscribed to (webhook-subscribe).
+  // Dispatch an inbound webhook to the worker for a route it subscribed to (webhook-subscribe).
   // `body`/`rawBody` are buffered host-side to a string, like PluginNetResponse.body. `verified`
-  // reflects the host's signature check (see PluginIngressRoute.verify); the worker still re-checks
-  // when `verify: 'self'`. The worker replies with webhook-result.
+  // reflects whether the host authenticated the delivery via the route's signature scheme; it is
+  // false for scheme:none. PluginIngressRoute.verify:'self' is reserved and does not trigger a second
+  // worker-side verification pass. The worker replies with webhook-result.
   | {
       kind: 'webhook';
       id: number;

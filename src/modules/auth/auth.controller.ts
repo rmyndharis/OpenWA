@@ -118,8 +118,30 @@ export class AuthController {
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Update API key (admin only)' })
   @ApiResponse({ status: 200, description: 'The updated API key.', type: ApiKeyResponseDto })
-  async update(@Param('id') id: string, @Body() dto: UpdateApiKeyDto): Promise<ApiKeyResponseDto> {
+  @ApiResponse({ status: 409, description: 'The change would remove the last usable admin key.' })
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateApiKeyDto,
+    @Req() req: Request,
+    @CurrentApiKey() actor?: ApiKey,
+  ): Promise<ApiKeyResponseDto> {
+    const before = await this.authService.findOne(id);
     const k = await this.authService.update(id, dto);
+    const authzSnapshot = (key: ApiKey) => ({
+      role: key.role,
+      allowedIps: key.allowedIps,
+      allowedSessions: key.allowedSessions,
+      expiresAt: key.expiresAt,
+    });
+    await this.auditService.logInfo(AuditAction.API_KEY_UPDATED, {
+      ...this.auditContext(req, actor),
+      metadata: {
+        targetKeyId: k.id,
+        targetKeyName: k.name,
+        before: authzSnapshot(before),
+        after: authzSnapshot(k),
+      },
+    });
     return {
       id: k.id,
       name: k.name,
@@ -140,6 +162,7 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete API key (admin only)' })
   @ApiResponse({ status: 204, description: 'API key deleted' })
+  @ApiResponse({ status: 409, description: 'The key is the last usable admin key.' })
   async delete(@Param('id') id: string, @Req() req: Request, @CurrentApiKey() actor?: ApiKey): Promise<void> {
     const target = await this.authService.findOne(id);
     await this.authService.delete(id);
@@ -151,8 +174,10 @@ export class AuthController {
 
   @Post(':id/revoke')
   @RequireRole(ApiKeyRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke API key (admin only)' })
   @ApiResponse({ status: 200, description: 'The revoked API key (isActive now false).', type: ApiKeyResponseDto })
+  @ApiResponse({ status: 409, description: 'The key is the last usable admin key.' })
   async revoke(
     @Param('id') id: string,
     @Req() req: Request,

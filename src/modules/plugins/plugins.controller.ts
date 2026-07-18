@@ -103,9 +103,9 @@ export class PluginsController {
     return this.pluginsService.updateConfig(id, configDto.config);
   }
 
-  // The dashboard fetches this WITH the API key and injects the body as an iframe `srcdoc` (sandboxed,
-  // opaque origin). Served as untrusted HTML, so it's CSP-sandboxed + nosniff in case it's ever loaded
-  // directly as a document (it can't be in a browser — navigations don't carry the X-API-Key header).
+  // The dashboard fetches this WITH the API key and injects the body as an opaque-origin sandboxed
+  // iframe srcdoc. It attaches that document's response-specific nonce to inline scripts so the
+  // inherited CSP allows only the isolated editor bootstrap, without enabling parent unsafe-inline.
   @Get(':id/config-ui')
   @RequireRole(ApiKeyRole.ADMIN)
   @Header('Content-Type', 'text/html; charset=utf-8')

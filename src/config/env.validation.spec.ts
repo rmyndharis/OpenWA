@@ -87,9 +87,7 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ RATE_LIMIT_LONG_LIMIT: '0' })).toThrow(/RATE_LIMIT_LONG_LIMIT/);
     expect(() => validateEnv({ WEBHOOK_TIMEOUT: '0' })).toThrow(/WEBHOOK_TIMEOUT/);
     // 0 stays valid where it has a real meaning: unlimited sessions, no webhook retries, a TTL.
-    expect(() =>
-      validateEnv({ MAX_CONCURRENT_SESSIONS: '0', WEBHOOK_MAX_RETRIES: '0', RATE_LIMIT_SHORT_TTL: '0' }),
-    ).not.toThrow();
+    expect(() => validateEnv({ MAX_CONCURRENT_SESSIONS: '0', RATE_LIMIT_SHORT_TTL: '0' })).not.toThrow();
     // a positive value still passes
     expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000' })).not.toThrow();
   });

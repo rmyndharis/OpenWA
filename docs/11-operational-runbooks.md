@@ -225,6 +225,10 @@ curl -H "X-API-Key: $API_KEY" \
 
 **Trigger:** Webhook success rate < 95%, alert from monitoring
 
+For sustained/high-volume webhook traffic, enable Redis-backed dispatch with `QUEUE_ENABLED=true`.
+The inline fallback deliberately has bounded concurrency and a bounded waiter queue; overflow is recorded
+as a delivery failure rather than retaining payloads without limit.
+
 **Impact:** External systems not receiving events
 
 **Prerequisites:**
@@ -483,17 +487,20 @@ curl -H "X-API-Key: $API_KEY" http://localhost:2785/api/health
 
 **Steps:**
 
-Use the repo's `scripts/backup.sh`. It captures **everything** required to restore a
-working install — critically including `main.sqlite`, the auth (API-key) + audit DB,
-which an earlier version of this runbook omitted (a "successful" backup that could not
-restore authentication):
+Use the repo's `scripts/backup.sh`. Its explicit scope covers the load-bearing state below — critically
+including `main.sqlite`, the auth (API-key) + audit DB, which an earlier version of this runbook omitted.
+User-managed files outside that list (for example the project-level `.env`) must be protected separately:
 
 ```bash
 # scripts/backup.sh captures:
 #   - main.sqlite   — auth (API keys) + audit log   (ALWAYS SQLite)
 #   - openwa.sqlite — user data                      (or a pg_dump when DATABASE_TYPE=postgres)
-#   - sessions/     — WhatsApp LocalAuth session data
+#   - sessions/     — whatsapp-web.js state (SESSION_DATA_PATH)
+#   - baileys/      — Baileys credentials (BAILEYS_AUTH_DIR)
 #   - media/        — local media                    (skipped automatically when STORAGE_TYPE=s3)
+#   - plugin-packages/ — installed plugin code from PLUGINS_DIR
+#   - plugin-state/    — registry + ctx.storage state under OPENWA_DATA_DIR
+#   - .env.generated / .api-key — generated configuration and bootstrap secret
 
 # Run from the repo root (operates on the data dir, default ./data):
 ./scripts/backup.sh
@@ -507,14 +514,20 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 
 > The data directory is a Docker **named volume** (`openwa-data`) in the production
 > compose. Run the script where that volume is mounted — e.g. point `OPENWA_DATA_DIR`
-> at the volume's mountpoint, or run it inside a container with `/app/data` mounted.
+> at the volume's mountpoint, or run it inside a container with `/app/data` mounted. When operating
+> directly on the host mount, also set any path that does not use its default below `OPENWA_DATA_DIR`
+> (notably compose's colocated `PLUGINS_DIR`) to the corresponding host-visible path.
 
 **Verification:**
 
 ```bash
-# The archive MUST contain main.sqlite (auth/audit), the data store, and sessions/
+# The archive MUST contain main.sqlite, the configured data store, and the auth directory for the
+# selected engine (sessions/ for whatsapp-web.js or baileys/ for Baileys).
 tar -tzf ./backups/openwa-backup-*.tar.gz
 ```
+
+> Backup archives contain API keys, provider credentials, WhatsApp auth state, and plugin secrets.
+> Encrypt them at rest, restrict access, and never publish or attach them to support tickets.
 
 ---
 
@@ -531,9 +544,10 @@ tar -tzf ./backups/openwa-backup-*.tar.gz
 
 **Steps:**
 
-Use the repo's `scripts/restore.sh`. It restores **both** databases (`main.sqlite`
-auth/audit + the data store) and the WhatsApp `sessions/`, and snapshots the current
-data dir first so a bad restore can be undone:
+Use the repo's `scripts/restore.sh`. It restores `main.sqlite` (auth/audit) and a SQLite data store;
+for PostgreSQL it stages `database.sql` for the explicit import below. It also restores
+whatsapp-web.js/Baileys auth state, local media, plugins, and generated secret/config files. It snapshots
+the current data dir first so a bad restore can be undone:
 
 ```bash
 # 1. Stop the app (so files are quiescent)
@@ -551,9 +565,11 @@ docker compose up -d
 curl -s -X POST -H "X-API-Key: <an-existing-key>" http://localhost:2785/api/auth/validate
 ```
 
-> Restoring `main.sqlite` is the whole point: it carries the API keys and audit log.
-> If a restore leaves you unable to authenticate, the backup that produced the archive
-> did not capture `main.sqlite` — re-run `scripts/backup.sh` (which always does).
+> `main.sqlite` carries the hashed API keys and audit log; `.api-key`, when retained by the original
+> installation, carries the plaintext bootstrap admin key. After restore, verify that both expected files
+> were present in the archive and that the client is using the original plaintext key. Re-running backup
+> after the source state or key has already been lost cannot recover it; use an older valid archive or the
+> documented credential-recovery procedure instead.
 
 **Verification:**
 

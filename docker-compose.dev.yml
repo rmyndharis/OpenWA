@@ -69,13 +69,24 @@ services:
       - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
       # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots. Empty = default.
       - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
+      # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
+      - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
       # docker-compose.yml; without this it falls back to ./plugins on the read-only root and install fails.
       - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10000}
-      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
+      - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-5000}
+      - WEBHOOK_DISPATCH_CONCURRENCY=${WEBHOOK_DISPATCH_CONCURRENCY:-16}
+      - WEBHOOK_DISPATCH_MAX_QUEUED=${WEBHOOK_DISPATCH_MAX_QUEUED:-1000}
+      - RATE_LIMIT_SHORT_TTL=${RATE_LIMIT_SHORT_TTL:-}
+      - RATE_LIMIT_SHORT_LIMIT=${RATE_LIMIT_SHORT_LIMIT:-}
+      - RATE_LIMIT_MEDIUM_TTL=${RATE_LIMIT_MEDIUM_TTL:-}
+      - RATE_LIMIT_MEDIUM_LIMIT=${RATE_LIMIT_MEDIUM_LIMIT:-}
+      - RATE_LIMIT_LONG_TTL=${RATE_LIMIT_LONG_TTL:-}
+      - RATE_LIMIT_LONG_LIMIT=${RATE_LIMIT_LONG_LIMIT:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       - QUEUE_ENABLED=${QUEUE_ENABLED:-false}
     volumes:
       - ./data:/app/data

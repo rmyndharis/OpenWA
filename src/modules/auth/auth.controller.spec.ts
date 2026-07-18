@@ -13,7 +13,13 @@ describe('AuthController — API-key lifecycle audit logging', () => {
   const makeReq = (): Request =>
     ({ method: 'POST', path: '/auth/api-keys', clientIp: '203.0.113.7' }) as unknown as Request;
 
-  let authService: { createApiKey: jest.Mock; findOne: jest.Mock; delete: jest.Mock; revoke: jest.Mock };
+  let authService: {
+    createApiKey: jest.Mock;
+    findOne: jest.Mock;
+    update: jest.Mock;
+    delete: jest.Mock;
+    revoke: jest.Mock;
+  };
   let auditService: { logInfo: jest.Mock };
   let controller: AuthController;
 
@@ -29,7 +35,15 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     };
     authService = {
       createApiKey: jest.fn().mockResolvedValue({ apiKey: createdKey, rawKey: 'raw-secret' }),
-      findOne: jest.fn().mockResolvedValue({ id: 'k1', name: 'target-key' }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 'k1',
+        name: 'target-key',
+        role: 'viewer',
+        allowedIps: null,
+        allowedSessions: null,
+        expiresAt: null,
+      }),
+      update: jest.fn().mockResolvedValue({ ...createdKey, role: 'admin' }),
       delete: jest.fn().mockResolvedValue(undefined),
       revoke: jest.fn().mockResolvedValue({ ...createdKey, isActive: false }),
     };
@@ -39,9 +53,22 @@ describe('AuthController — API-key lifecycle audit logging', () => {
 
   const lastContextFor = (
     action: AuditAction,
-  ): { apiKey?: ApiKey; ipAddress?: string; metadata?: { targetKeyId?: string } } | undefined => {
+  ):
+    | {
+        apiKey?: ApiKey;
+        ipAddress?: string;
+        metadata?: { targetKeyId?: string; before?: { role?: string }; after?: { role?: string } };
+      }
+    | undefined => {
     const calls = auditService.logInfo.mock.calls as Array<
-      [AuditAction, { apiKey?: ApiKey; ipAddress?: string; metadata?: { targetKeyId?: string } }]
+      [
+        AuditAction,
+        {
+          apiKey?: ApiKey;
+          ipAddress?: string;
+          metadata?: { targetKeyId?: string; before?: { role?: string }; after?: { role?: string } };
+        },
+      ]
     >;
     return calls.find(c => c[0] === action)?.[1];
   };
@@ -53,12 +80,22 @@ describe('AuthController — API-key lifecycle audit logging', () => {
     expect(ctx?.apiKey).toBe(actor);
     expect(ctx?.ipAddress).toBe('203.0.113.7');
     expect(ctx?.metadata?.targetKeyId).toBe('k1');
+    expect(JSON.stringify(auditService.logInfo.mock.calls)).not.toContain('raw-secret');
   });
 
   it('logs API_KEY_DELETED on delete', async () => {
     await controller.delete('k1', makeReq(), actor);
     expect(authService.delete).toHaveBeenCalledWith('k1');
     expect(lastContextFor(AuditAction.API_KEY_DELETED)?.metadata?.targetKeyId).toBe('k1');
+  });
+
+  it('logs API_KEY_UPDATED with before/after authorization state', async () => {
+    await controller.update('k1', { role: 'admin' } as never, makeReq(), actor);
+    const ctx = lastContextFor(AuditAction.API_KEY_UPDATED);
+    expect(ctx?.apiKey).toBe(actor);
+    expect(ctx?.metadata?.targetKeyId).toBe('k1');
+    expect(ctx?.metadata?.before?.role).toBe('viewer');
+    expect(ctx?.metadata?.after?.role).toBe('admin');
   });
 
   it('logs API_KEY_REVOKED on revoke', async () => {

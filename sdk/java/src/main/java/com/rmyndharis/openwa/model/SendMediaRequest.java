@@ -1,14 +1,13 @@
 package com.rmyndharis.openwa.model;
 
-/** Request body for sending media (image/video/audio/document/sticker). Provide {@code url} or {@code base64}. */
+/** Request body for sending image/video/document/sticker media. Provide {@code url} or {@code base64}. */
 public record SendMediaRequest(
     String chatId,
     String url,
     String base64,
     String mimetype,
     String filename,
-    String caption,
-    Boolean ptt) {
+    String caption) {
 
     public static Builder builder() {
         return new Builder();
@@ -21,7 +20,6 @@ public record SendMediaRequest(
         private String mimetype;
         private String filename;
         private String caption;
-        private Boolean ptt;
 
         public Builder chatId(String v) {
             this.chatId = v;
@@ -57,14 +55,8 @@ public record SendMediaRequest(
             return this;
         }
 
-        /** Audio only: send as a WhatsApp voice note (PTT). */
-        public Builder ptt(Boolean v) {
-            this.ptt = v;
-            return this;
-        }
-
         public SendMediaRequest build() {
-            return new SendMediaRequest(chatId, url, base64, mimetype, filename, caption, ptt);
+            return new SendMediaRequest(chatId, url, base64, mimetype, filename, caption);
         }
     }
 }

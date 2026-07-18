@@ -34,6 +34,7 @@ All five SDKs expose the same fluent resource surface:
 | `channels` | list, get, messages, subscribe, unsubscribe _(Newsletters)_                                                                                                                            |
 | `catalog`  | info, products, product, sendProduct, sendCatalog _(WhatsApp Business)_                                                                                                                |
 | `status`   | list, fromContact, sendText, sendImage, sendVideo, delete _(Stories)_                                                                                                                  |
+| `search`   | search _(Operator)_                                                                                                                                                                  |
 | `templates`| list, get, create, update, delete                                                                                                                                                     |
 | `health`   | check, live, ready                                                                                                                                                                     |
 

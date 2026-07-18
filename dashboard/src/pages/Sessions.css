@@ -692,7 +692,8 @@
 }
 
 .sessions-page .status-pill.initializing,
-.sessions-page .status-pill.connecting {
+.sessions-page .status-pill.connecting,
+.sessions-page .status-pill.authenticating {
   background: rgba(234, 179, 8, 0.1);
   color: var(--warning);
 }
@@ -707,7 +708,8 @@
   color: var(--success);
 }
 
-.sessions-page .status-pill.disconnected {
+.sessions-page .status-pill.disconnected,
+.sessions-page .status-pill.failed {
   background: rgba(239, 68, 68, 0.1);
   color: var(--error);
 }

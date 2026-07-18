@@ -31,7 +31,7 @@
 
 **OpenWA** is a free, open-source WhatsApp API Gateway designed for developers who need full control over their messaging infrastructure—without vendor lock-in or hidden paywalls.
 
-Built on a **pluggable architecture**, OpenWA lets you swap database engines (SQLite/PostgreSQL), storage backends (Local/S3), and cache layers (Memory/Redis) without changing a single line of application code.
+Built on a **pluggable architecture**, OpenWA lets you select database engines (SQLite/PostgreSQL), backup/migration storage backends (Local/S3), and cache layers (disabled/Redis) through configuration rather than application-code changes. Message media itself is returned inline to API and webhook consumers; it is not automatically persisted to the storage backend.
 
 |                               |                                                              |
 | ----------------------------- | ------------------------------------------------------------ |
@@ -87,7 +87,7 @@ Built on a **pluggable architecture**, OpenWA lets you swap database engines (SQ
 | SQLite           | ✅     | Zero-config embedded database  |
 | PostgreSQL       | ✅     | Production-grade database      |
 | Redis Cache      | ✅     | Optional performance caching   |
-| S3/MinIO Storage | ✅     | Scalable media storage         |
+| S3/MinIO Storage | ✅     | Media-directory backup/migration backend |
 | Docker           | ✅     | One-command deployment         |
 | Health Checks    | ✅     | Kubernetes-ready probes        |
 | Data Migration   | ✅     | Export/import between backends |

@@ -3,6 +3,7 @@ import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 
 export enum AuditAction {
   // API Key events
   API_KEY_CREATED = 'api_key_created',
+  API_KEY_UPDATED = 'api_key_updated',
   API_KEY_USED = 'api_key_used',
   API_KEY_REVOKED = 'api_key_revoked',
   API_KEY_DELETED = 'api_key_deleted',

@@ -92,9 +92,8 @@ export async function request<T>(
     'X-API-Key': config.apiKey,
   };
 
-  let res: Response;
   try {
-    res = await config.fetch(url, {
+    const res = await config.fetch(url, {
       method: options.method,
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
@@ -104,30 +103,30 @@ export async function request<T>(
       // as a non-2xx error instead.
       redirect: 'manual',
     });
+
+    if (!res.ok) {
+      const context = `${options.method} ${options.path}`;
+      const apiError = await OpenWAApiError.fromResponse(res, context);
+      throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind);
+    }
+
+    if (res.status === 204) {
+      return null as T;
+    }
+    const text = await res.text();
+    if (!text) return null as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return text as unknown as T;
+    }
   } catch (err) {
-    clearTimeout(timer);
     if (err instanceof Error && err.name === 'AbortError') {
       throw new OpenWATimeoutError(timeoutMs);
     }
     throw err;
-  }
-  clearTimeout(timer);
-
-  if (!res.ok) {
-    const context = `${options.method} ${options.path}`;
-    const apiError = await OpenWAApiError.fromResponse(res, context);
-    throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind);
-  }
-
-  if (res.status === 204) {
-    return null as T;
-  }
-  const text = await res.text();
-  if (!text) return null as T;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return text as unknown as T;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -708,9 +708,10 @@ describe('WhatsAppWebJsAdapter.forceDestroy (recover a wedged session, #351)', (
     expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
   });
 
-  it('is a no-op when there is no client', async () => {
+  it('records teardown intent even when startup has not assigned a client yet', async () => {
     const adapter = newAdapter();
     await expect(adapter.forceDestroy()).resolves.toBeUndefined();
+    expect((adapter as unknown as { tearingDown: boolean }).tearingDown).toBe(true);
   });
 });
 
@@ -2006,7 +2007,7 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
     // Time out BOTH callers' wall-clock deadline while the real download is still pending. With the old
     // coupling this freed the slot and admitted download2 (inFlight 2); the fix holds the slot.
     await jest.advanceTimersByTimeAsync(25);
-    expect(await r1).toBeUndefined(); // caller unblocked on the timeout race
+    expect(await r1).toEqual(expect.objectContaining({ mimetype: 'image/png', omitted: true, sizeBytes: 100 }));
     expect(downloads.length).toBe(1); // download2 still not started — slot held by the pending real download1
     expect(maxInFlight).toBe(1);
 
@@ -2018,7 +2019,7 @@ describe('WhatsAppWebJsAdapter inbound media concurrency (slot held until the re
 
     // Settle the rest so nothing dangles.
     await jest.advanceTimersByTimeAsync(25);
-    expect(await r2).toBeUndefined();
+    expect(await r2).toEqual(expect.objectContaining({ mimetype: 'image/png', omitted: true, sizeBytes: 100 }));
     downloads[1].resolve({ mimetype: 'image/png', data: Buffer.from('b').toString('base64') });
     await jest.advanceTimersByTimeAsync(0);
     expect(maxInFlight).toBe(1);
