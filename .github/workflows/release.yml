@@ -215,7 +215,7 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Extract release notes from CHANGELOG
         id: changelog
@@ -227,9 +227,11 @@ jobs:
             NOTES="Release v${VERSION}"
           fi
           # Use EOF delimiter for multi-line output
-          echo "NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "NOTES<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -344,7 +346,7 @@ jobs:
               continue
             fi
             ok=""
-            for i in $(seq 1 40); do
+            for _ in $(seq 1 40); do
               if curl -sf http://127.0.0.1:2785/api/health/live >/dev/null 2>&1; then ok=1; break; fi
               sleep 5
             done

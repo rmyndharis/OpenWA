@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continue to use `SendMediaRequest`. Bulk media uses the nested `BulkMediaRequest` type.
 - The PHP SDK's configured `timeout` now applies to every request, including calls made through an injected
   Guzzle client; pass `timeout` explicitly when a different bound is required.
+- PHP SDK contributor installs now remain compatible with the declared PHP 8.1 runtime floor, and CI
+  exercises the suite on both PHP 8.1 and 8.2.
 
 ### Fixed
 
@@ -22,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auth stores plus generated secrets, and preserve message `chatName` during data import.
 - Bound webhook and integration redrive work, make Redis throttling atomic, guard stale engine teardown,
   and make media precedence, data-URI normalization, limits, and omission markers consistent across engines.
-- Audit API-key authorization changes, protect the final usable admin, and align action-style POST routes
-  with their documented HTTP `200` responses.
+- Record API-key authorization changes in administrative activity logs, protect the final usable admin,
+  and align action-style POST routes with their documented HTTP `200` responses.
 - Correct ingress method/verification/dedup metadata, dashboard session-state visibility and plugin config
   fallback, SDK timeout/type parity, metrics types, deployment configuration forwarding, and CI contract gates.
 
