@@ -57,7 +57,7 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/client-s3": "^3.1090.0",
     "@bull-board/api": "^8.1.2",
     "@bull-board/express": "^8.1.2",
     "@bull-board/nestjs": "^8.1.2",
@@ -70,14 +70,14 @@
     "@nestjs/platform-express": "^11.1.28",
     "@nestjs/platform-socket.io": "^11.1.28",
     "@nestjs/serve-static": "^5.0.5",
-    "@nestjs/swagger": "^11.4.5",
+    "@nestjs/swagger": "^11.4.6",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.3",
     "@nestjs/websockets": "^11.1.28",
     "@whiskeysockets/baileys": "7.0.0-rc13",
     "adm-zip": "^0.6.0",
     "archiver": "^8.0.0",
-    "bullmq": "^5.80.2",
+    "bullmq": "^5.80.8",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.1",
@@ -124,7 +124,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.63.0"
+    "typescript-eslint": "^8.64.0"
   },
   "jest": {
     "moduleFileExtensions": [
