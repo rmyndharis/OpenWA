@@ -685,7 +685,6 @@
 
 .chats-page .emoji-btn:hover {
   background: var(--bg-light);
-  transform: scale(1.15);
 }
 
 .chats-page .message-bubble.media-type {

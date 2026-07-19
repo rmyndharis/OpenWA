@@ -840,17 +840,11 @@
     transform 0.18s ease;
 }
 
-/* Active tab: a clear, primary-tinted treatment instead of the near-invisible white-on-light it had
-   before. The tint + colored text + lifted shadow + tiny scale make the selected tab read at a glance,
-   and the transition on background/color/box-shadow/transform above animates the swap smoothly. */
+/* Active tab: a clear primary treatment that reads at a glance — flat, no lift or glow. */
 .plugins-page .install-tab.active,
 .plugins-page .config-modal .modal-tab.active {
   background: var(--primary);
   color: #fff;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.08),
-    0 4px 12px color-mix(in srgb, var(--primary) 35%, transparent);
-  transform: translateY(-1px);
 }
 
 /* Keep the inactive tabs legible against the pill's light track and give them a hover affordance so

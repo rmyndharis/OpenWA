@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   danger buttons use the single `--error` red.
 - The Infrastructure page's inline-styled elements (including the restart/migration progress modal) are
   moved to scoped CSS classes, so all surfaces stay on the design-token system.
+- Decorative hover/selection effects are flattened for a more professional look: the install/config
+  tab active state no longer lifts or glows, the restart progress bar is a flat primary fill instead
+  of a gradient, and the emoji-picker button no longer scales on hover.
 
 ### Removed
 

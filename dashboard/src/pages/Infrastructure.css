@@ -723,7 +723,7 @@
 
 .infrastructure-page .restart-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #22c55e, #10b981);
+  background: var(--primary);
   transition: width 1s linear;
 }
 
