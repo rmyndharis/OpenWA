@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Chat-list avatars no longer burst into HTTP 429s: profile pictures for the whole sidebar are
+  batch-resolved in ONE request (`GET .../contacts/profile-pictures?ids=…`, up to 50 ids, 3 engine
+  lookups at a time) instead of one parallel fetch per row, which exhausted the per-IP throttle.
+
+
 - The chat header no longer formats a LID privacy id as a fake phone number (e.g. "+26 281 346
   125 0071"): digit-only LIDs and group ids are rejected by the phone formatter, and personal @lid
   chats now resolve and display the real number through the engine (cached a day). Chat list rows

@@ -19,6 +19,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
+import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone } from '../hooks/useResolvedPhone';
 import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
@@ -88,19 +89,18 @@ const getMediaSrc = (media?: MessageMedia): string => {
   return `data:${media.mimetype};base64,${media.data}`;
 };
 
-// Chat list avatar: the same 1h-cached profile picture as the room header (shared TanStack Query
-// cache keyed by (sessionId, contactId), so the row and the header never fetch twice), falling
-// back to the generic person/group icon while it loads or when the picture is hidden/unavailable.
-function ChatAvatar({ sessionId, chat }: { sessionId: string; chat: Chat }) {
-  const pp = useProfilePicture(sessionId, chat.id);
-  if (pp.data) {
+// Chat list avatar. Renders from the sidebar's ONE batch request (useProfilePictures) — firing a
+// query per row burst the per-IP throttle into 429s. The generic icon stays while the batch loads
+// or when the contact hides their picture.
+function ChatAvatar({ pictureUrl, isGroup }: { pictureUrl?: string | null; isGroup: boolean }) {
+  if (pictureUrl) {
     return (
       <div className="chat-avatar">
-        <img src={pp.data} alt="" onError={() => pp.refetch()} />
+        <img src={pictureUrl} alt="" />
       </div>
     );
   }
-  return <div className="chat-avatar">{chat.isGroup ? <Users size={20} /> : <User size={20} />}</div>;
+  return <div className="chat-avatar">{isGroup ? <Users size={20} /> : <User size={20} />}</div>;
 }
 
 export function Chats() {
@@ -158,6 +158,12 @@ export function Chats() {
     onMessageAppended,
     onMediaLoad,
   } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+
+  // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
+  // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
+  // to the generic icon for ids that resolve null.
+  const chatIds = useMemo(() => chats.map(c => c.id), [chats]);
+  const listPics = useProfilePictures(selectedSessionId || undefined, chatIds);
 
   // Profile-picture fetch for the active room (cached 1h by useProfilePicture; TanStack Query
   // dedupes, so other components querying the same key share this slice).
@@ -940,7 +946,7 @@ export function Chats() {
                       className={`chat-item-card ${isActive ? 'active' : ''}`}
                       onClick={() => setActiveChat(chat)}
                     >
-                      <ChatAvatar sessionId={selectedSessionId} chat={chat} />
+                      <ChatAvatar pictureUrl={listPics.data?.[chat.id]} isGroup={chat.isGroup} />
 
                       <div className="chat-item-info">
                         <div className="chat-item-top">

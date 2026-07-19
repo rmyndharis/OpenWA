@@ -31,6 +31,25 @@ export class ContactController {
     });
   }
 
+  @Get('profile-pictures')
+  @ApiOperation({
+    summary: 'Batch-resolve profile picture URLs for up to 50 contacts',
+    description:
+      'One request for a whole chat sidebar — avoids the burst of parallel single fetches that ' +
+      'would exhaust the per-IP throttle. Engine lookups run 3 at a time; per-id failures return null.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiQuery({ name: 'ids', required: true, description: 'Comma-separated contact ids (max 50 used)' })
+  // NOTE: declared BEFORE @Get(':contactId') so the literal segment wins over the param route.
+  async getProfilePictures(@Param('sessionId') sessionId: string, @Query('ids') ids?: string) {
+    const list = (ids ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const pictures = await this.contactService.getProfilePictures(sessionId, list);
+    return { pictures };
+  }
+
   @Get(':contactId')
   @ApiOperation({ summary: 'Get a specific contact by ID' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })

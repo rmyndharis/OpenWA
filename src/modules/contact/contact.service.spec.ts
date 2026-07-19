@@ -51,4 +51,37 @@ describe('ContactService', () => {
     );
     expect(resolveContactPhone).toHaveBeenCalledWith('123@lid');
   });
+
+  it('batch-resolves profile pictures, nulling per-id failures without aborting', async () => {
+    const getProfilePicture = jest
+      .fn()
+      .mockResolvedValueOnce('https://pps/1.jpg')
+      .mockRejectedValueOnce(new Error('no picture'))
+      .mockResolvedValueOnce('https://pps/3.jpg');
+    const out = await makeService({ getProfilePicture }).getProfilePictures('s1', ['a@c.us', 'b@c.us', 'c@c.us']);
+    expect(out).toEqual({ 'a@c.us': 'https://pps/1.jpg', 'b@c.us': null, 'c@c.us': 'https://pps/3.jpg' });
+  });
+
+  it('ignores ids beyond the 50-id batch cap', async () => {
+    const getProfilePicture = jest.fn().mockResolvedValue(null);
+    const ids = Array.from({ length: 60 }, (_, i) => `${i}@c.us`);
+    const out = await makeService({ getProfilePicture }).getProfilePictures('s1', ids);
+    expect(Object.keys(out)).toHaveLength(50);
+    expect(getProfilePicture).toHaveBeenCalledTimes(50);
+  });
+
+  it('runs batch lookups at most 3 concurrently', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const getProfilePicture = jest.fn().mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise(r => setImmediate(r));
+      active -= 1;
+      return null;
+    });
+    const ids = Array.from({ length: 9 }, (_, i) => `${i}@c.us`);
+    await makeService({ getProfilePicture }).getProfilePictures('s1', ids);
+    expect(maxActive).toBeLessThanOrEqual(3);
+  });
 });
