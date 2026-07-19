@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The Chats room header now shows the contact or group profile picture (fetched through the existing
+  `GET /sessions/:id/contacts/:id/profile-picture` endpoint, cached for one hour, with the icon
+  fallback preserved when the engine returns no URL), a floating scroll-to-bottom button appears in
+  the messages pane once the reader scrolls away from the latest message, and the room header shows
+  the prettified phone number (e.g. `628123456789@c.us` → `+62 812 345 6789`) as the primary
+  subtitle for personal chats — with the raw JID retained on a muted monospace line for technical
+  use (lid resolution, webhook payloads, group ids). The composer send icon was also enlarged to
+  better match its 48 px button.
+
+## [0.10.0] - 2026-07-19
+
+### Added
+
 - Reconnect-loop observability: every scheduled reconnect attempt is counted in the new
   `openwa_session_reconnect_attempts_total` Prometheus counter, and every fifth consecutive attempt
   of an episode emits a `session.reconnect_loop` webhook event (`{ sessionId, attempts, nextDelayMs }`),
@@ -29,14 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trap with initial focus, background scroll lock, and `role="dialog"` semantics. The Sessions page
   modals are the first to use it, gaining those behaviors plus a pinned header/footer with a
   scrolling body on long content.
-- The Chats room header now shows the contact or group profile picture (fetched through the existing
-  `GET /sessions/:id/contacts/:id/profile-picture` endpoint, cached for one hour, with the icon
-  fallback preserved when the engine returns no URL), a floating scroll-to-bottom button appears in
-  the messages pane once the reader scrolls away from the latest message, and the room header shows
-  the prettified phone number (e.g. `628123456789@c.us` → `+62 812 345 6789`) as the primary
-  subtitle for personal chats — with the raw JID retained on a muted monospace line for technical
-  use (lid resolution, webhook payloads, group ids). The composer send icon was also enlarged to
-  better match its 48 px button.
+- The dashboard Message Tester now covers every outbound message type: in addition to
+  text/image/video/audio/document it can send location, contact-card, sticker, and native poll
+  messages, forward an existing message to another chat, and submit a bulk text batch (recipients
+  one per line, optional inter-message delay) with live batch progress polling and a cancel control
+  in the response panel.
 
 ### Changed
 
@@ -115,6 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with fetching gated to `qr_ready` (no more expected-but-noisy 400 console errors), and enabling a
   plugin with unset required config opens its config dialog with a warning instead of failing with a
   raw sandbox error.
+- Plugins whose config schema declares field defaults no longer fail to enable with those values
+  missing: defaults are now seeded into the stored config at load time (fresh installs and every
+  boot), without ever overwriting explicit values. Required fields without a declared default still
+  need real operator input.
 
 ## [0.9.0] - 2026-07-18
 

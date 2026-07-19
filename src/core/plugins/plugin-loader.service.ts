@@ -24,6 +24,7 @@ import {
   IPlugin,
   PluginType,
   PluginLogger,
+  PluginConfigSchema,
   validateIngressManifest,
   warnUnauthenticatedIngressRoutes,
 } from './plugin.interfaces';
@@ -138,6 +139,32 @@ export function dispatchConversationMedia(
 // still reports them installed/enabled) is pruned on boot. Scoped to these known ids so a
 // temporarily-unreadable plugin dir (e.g. an unmounted volume) never loses its persisted config.
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(['auto-reply', 'translation']);
+
+/**
+ * Fill config keys the schema declares a `default` for and that are absent (undefined) in the
+ * stored config. Seeding happens at LOAD time (fresh installs and every boot), so a plugin whose
+ * schema fields carry defaults never runs its lifecycle with them missing — the failure class of
+ * "enable throws: <field> is required/has no value" for defaulted fields. Explicit values — even
+ * null — are never overwritten, and object/array defaults are deep-cloned so the seeded runtime
+ * config and the persisted entry can't share a mutable reference. Required fields WITHOUT a
+ * declared default stay absent on purpose: those need real operator input, not an invented value.
+ */
+export function seedConfigDefaults(
+  schema: PluginConfigSchema | undefined,
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = schema?.properties;
+  if (!properties) return config;
+  let seeded: Record<string, unknown> | undefined;
+  for (const [key, field] of Object.entries(properties)) {
+    if (config[key] !== undefined || field === null || typeof field !== 'object') continue;
+    const value = field.default;
+    if (value === undefined) continue;
+    if (!seeded) seeded = { ...config };
+    seeded[key] = value !== null && typeof value === 'object' ? structuredClone(value) : value;
+  }
+  return seeded ?? config;
+}
 
 @Injectable()
 export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
@@ -282,7 +309,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
     const pluginInstance: PluginInstance = {
       manifest,
       status: PluginStatus.INSTALLED,
-      config: storedConfig,
+      // Seed schema-declared defaults under the stored config, so a defaulted field is never
+      // missing when the plugin later runs (explicit values are never overwritten).
+      config: seedConfigDefaults(manifest.configSchema, storedConfig),
       instance: null,
       loadedAt: new Date(),
       builtIn: false,
@@ -325,7 +354,9 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       name: manifest.name,
       version: manifest.version,
       status: PluginStatus.INSTALLED,
-      config: existing?.config ?? {},
+      // The operator's persisted config survives, with schema-declared defaults seeded under it so
+      // the persisted entry matches the seeded runtime config (see loadPlugin).
+      config: seedConfigDefaults(manifest.configSchema, existing?.config ?? {}),
       builtIn,
       installedAt: existing?.installedAt ?? new Date(),
       updatedAt: new Date(),
