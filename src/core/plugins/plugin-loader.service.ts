@@ -158,7 +158,7 @@ export function seedConfigDefaults(
   let seeded: Record<string, unknown> | undefined;
   for (const [key, field] of Object.entries(properties)) {
     if (config[key] !== undefined || field === null || typeof field !== 'object') continue;
-    const value = (field as PluginConfigField).default;
+    const value = field.default;
     if (value === undefined) continue;
     if (!seeded) seeded = { ...config };
     seeded[key] = value !== null && typeof value === 'object' ? structuredClone(value) : value;
