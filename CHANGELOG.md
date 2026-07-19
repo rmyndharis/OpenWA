@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Verified dead dashboard code: unused CSS across multiple pages, dead client methods and utilities,
   unused image assets, and 39 unused i18n keys across all locales.
+- Verified-unused dashboard i18n keys (19 per locale across all 11 locales): dead `common.*`
+  vocabulary and page-specific keys with zero references in the app.
 
 ### Fixed
 
