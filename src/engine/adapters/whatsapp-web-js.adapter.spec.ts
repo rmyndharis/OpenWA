@@ -39,6 +39,11 @@ jest.mock('qrcode', () => ({
   toDataURL: jest.fn(() => Promise.resolve('data:image/png;base64,FAKEQR')),
 }));
 
+// Spying on child_process.execFile must target the real module exports: the TypeScript __importStar
+// namespace wrapper that `import * as childProcess` yields has non-configurable members, so
+// jest.spyOn cannot redefine execFile on it. The adapter reads execFile live off this same object.
+const childProcess = jest.requireActual<typeof import('child_process')>('child_process');
+
 describe('wwebjsAckToDeliveryStatus (engine ack-int -> neutral DeliveryStatus boundary, #265)', () => {
   // Regression-locks the integer boundary the decoupling moved behaviour into, incl. the
   // PLAYED(4) -> 'read' collapse that the old ackToMessageStatus(4) -> READ test used to cover.
@@ -2489,6 +2494,177 @@ describe('WhatsAppWebJsAdapter stale Singleton cleanup (pre-launch)', () => {
 
     expect(rmSpy).toHaveBeenCalledTimes(3); // all three attempted even though each failed
     expect(clientInitSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WhatsAppWebJsAdapter orphaned Chromium sweep (pre-launch)', () => {
+  const SESSION_ID = 'sess-orphan';
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: SESSION_ID, sessionDataPath: './data/sessions', puppeteer: {} });
+
+  type ExecFileCallback = (error: Error | null, stdout: string, stderr: string) => void;
+
+  let execFileSpy: jest.SpyInstance;
+  let killSpy: jest.SpyInstance;
+  let rmSpy: jest.SpyInstance;
+  let clientInitSpy: jest.SpyInstance;
+  let savedWebVersion: string | undefined;
+
+  // execFile is overloaded, so spy through a structural shape like the Client.prototype spies above.
+  // The adapter invokes it as execFile('ps', args, opts, callback); the callback is always last.
+  const mockPsResult = (result: { stdout?: string; error?: Error }): void => {
+    execFileSpy.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as ExecFileCallback;
+      cb(result.error ?? null, result.stdout ?? '', '');
+    });
+  };
+  // `ps -eo pid=,args=` rows: leading whitespace, pid, then the full command line.
+  const psTable = (rows: [number, string][]): string => rows.map(([pid, args]) => `  ${pid} ${args}`).join('\n') + '\n';
+  const loggerLogSpy = (adapter: WhatsAppWebJsAdapter): jest.SpyInstance => {
+    const logger = (adapter as unknown as { logger: { log: (message: string, context?: unknown) => void } }).logger;
+    return jest.spyOn(logger, 'log').mockImplementation(() => undefined);
+  };
+
+  beforeEach(() => {
+    // Keep initialize() offline: 'off' skips the wa-version registry fetch in resolveWebVersionPin.
+    savedWebVersion = process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    // Default: an empty process table (nothing to sweep); tests override via mockPsResult.
+    execFileSpy = jest
+      .spyOn(childProcess as unknown as { execFile: (...args: unknown[]) => void }, 'execFile')
+      .mockImplementation((...args: unknown[]) => {
+        (args[args.length - 1] as ExecFileCallback)(null, '', '');
+      });
+    // Never let a test signal a real process.
+    killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    // Stub Client.prototype.initialize so the real wwebjs Client is built but no browser launches.
+    clientInitSpy = jest
+      .spyOn(Client.prototype as unknown as { initialize: () => Promise<void> }, 'initialize')
+      .mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    execFileSpy.mockRestore();
+    killSpy.mockRestore();
+    rmSpy.mockRestore();
+    clientInitSpy.mockRestore();
+    if (savedWebVersion === undefined) {
+      delete process.env.WWEBJS_WEB_VERSION;
+    } else {
+      process.env.WWEBJS_WEB_VERSION = savedWebVersion;
+    }
+  });
+
+  it('appends the --openwa-session marker to the puppeteer args handed to the Client', async () => {
+    const adapter = newAdapter();
+
+    await adapter.initialize({});
+
+    const client = (adapter as unknown as { client: { options: { puppeteer?: { args?: string[] } } } }).client;
+    expect(client.options.puppeteer?.args).toContain(`--openwa-session=${SESSION_ID}`);
+  });
+
+  it('SIGKILLs a Chromium process carrying this session marker and logs the sweep', async () => {
+    mockPsResult({
+      stdout: psTable([
+        [
+          1501,
+          `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless --openwa-session=${SESSION_ID}`,
+        ],
+        [1502, '/usr/bin/node dist/main.js'],
+      ]),
+    });
+    const adapter = newAdapter();
+    const logSpy = loggerLogSpy(adapter);
+
+    await adapter.initialize({});
+
+    expect(execFileSpy).toHaveBeenCalledTimes(1);
+    // No shell: ps is exec'd directly with an argv array, an options object, and a callback.
+    expect(execFileSpy).toHaveBeenCalledWith('ps', ['-eo', 'pid=,args='], expect.any(Object), expect.any(Function));
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(1501, 'SIGKILL');
+    expect(logSpy).toHaveBeenCalledWith(
+      'Killed 1 orphaned Chromium process(es) left over from a previous process lifetime',
+      {
+        sessionId: SESSION_ID,
+        pids: [1501],
+      },
+    );
+  });
+
+  it('does NOT kill a non-browser process that merely carries the marker string', async () => {
+    mockPsResult({
+      stdout: psTable([
+        [1601, `/bin/grep --openwa-session=${SESSION_ID}`],
+        [1602, `/usr/bin/node scan-sessions.js --openwa-session=${SESSION_ID}`],
+      ]),
+    });
+
+    await newAdapter().initialize({});
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT kill a Chromium process belonging to a different session', async () => {
+    mockPsResult({
+      stdout: psTable([[1701, '/usr/lib/chromium/chromium --headless --no-sandbox --openwa-session=session-lain']]),
+    });
+
+    await newAdapter().initialize({});
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips the sweep on platforms other than darwin/linux (no ps, no kill)', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      await newAdapter().initialize({});
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+
+    expect(execFileSpy).not.toHaveBeenCalled();
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it('still initializes when ps fails (best-effort, never fails the start)', async () => {
+    mockPsResult({ error: new Error('spawn ps ENOENT') });
+
+    await expect(newAdapter().initialize({})).resolves.toBeUndefined();
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(clientInitSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the orphan sweep before the Singleton cleanup and client.initialize()', async () => {
+    const order: string[] = [];
+    execFileSpy.mockImplementation((...args: unknown[]) => {
+      order.push('ps');
+      (args[args.length - 1] as ExecFileCallback)(
+        null,
+        psTable([[1801, `/usr/bin/chromium --headless --openwa-session=${SESSION_ID}`]]),
+        '',
+      );
+    });
+    killSpy.mockImplementation(() => {
+      order.push('kill');
+      return true;
+    });
+    rmSpy.mockImplementation(() => {
+      order.push('rm');
+      return Promise.resolve(undefined);
+    });
+    clientInitSpy.mockImplementation(() => {
+      order.push('client.initialize');
+      return Promise.resolve(undefined);
+    });
+
+    await newAdapter().initialize({});
+
+    expect(order).toEqual(['ps', 'kill', 'rm', 'rm', 'rm', 'client.initialize']);
   });
 });
 

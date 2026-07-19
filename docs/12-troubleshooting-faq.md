@@ -996,6 +996,7 @@ available_events:
   - session.qr           # New QR code generated
   - session.authenticated  # Session authenticated
   - session.disconnected   # Session disconnected
+  - session.reconnect_loop # Every 5th consecutive reconnect attempt (payload: sessionId, attempts, nextDelayMs)
 
   # Groups (reserved but NOT currently emitted — accepted in events list, never delivered)
   - group.join           # reserved, not emitted

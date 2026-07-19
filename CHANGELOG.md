@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Reconnect-loop observability: every scheduled reconnect attempt is counted in the new
+  `openwa_session_reconnect_attempts_total` Prometheus counter, and every fifth consecutive attempt
+  of an episode emits a `session.reconnect_loop` webhook event (`{ sessionId, attempts, nextDelayMs }`),
+  a structured warning log, and an `openwa_session_reconnect_loop_alerts_total` counter tick — a
+  session stuck in a reconnect loop is now visible to operators instead of retrying silently forever.
+  The episode streak re-arms after a stable connection, so recovered sessions do not keep alerting.
+- The whatsapp-web.js engine now sweeps orphaned Chromium processes before each (re)launch: browsers
+  are started with an `--openwa-session=<id>` marker arg, and any leftover browser process carrying
+  this session's marker from a previous process lifetime (e.g. after the gateway itself was killed)
+  is terminated before the new launch, alongside the existing stale Singleton-file cleanup.
+
 ### Fixed
 
 - Long-lived sessions no longer die permanently after hours of uptime. A dead whatsapp-web.js

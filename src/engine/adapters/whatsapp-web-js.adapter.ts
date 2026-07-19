@@ -4,6 +4,7 @@ import { Client, LocalAuth, MessageMedia, MessageTypes, WAState, type Message } 
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execFile } from 'child_process';
 import {
   IWhatsAppEngine,
   EngineStatus,
@@ -409,6 +410,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         }
       }
 
+      // Marker arg: Chromium silently ignores unknown flags, so this exists purely as a label that
+      // lets killOrphanedChromiumProcesses() identify this session's browser processes in `ps`
+      // output later (after a hard kill of the OpenWA process orphaned them).
+      puppeteerArgs.push(`--openwa-session=${this.config.sessionId}`);
+
       // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
       // hang on some setups, #251). Opt-in: unset leaves whatsapp-web.js to auto-select.
       const versionPin = await resolveWebVersionPin();
@@ -458,6 +464,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.setStatus(EngineStatus.DISCONNECTED);
         return;
       }
+      // Kill any Chromium that survived a hard kill of a previous OpenWA process lifetime (its
+      // Puppeteer exit hook never ran, leaving an orphaned browser holding the profile). Safe here
+      // for the same reason as the Singleton cleanup below: this runs only at engine (re)start,
+      // before this lifetime's browser exists, so it cannot kill a live browser.
+      await this.killOrphanedChromiumProcesses();
       // Clear stale Chromium Singleton* files left by a hard kill before launching — see
       // removeStaleSingletonFiles. This runs only at engine (re)start, never while
       // the browser is alive, so it cannot pull the files out from under a running Chromium.
@@ -909,6 +920,63 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
       this.logger.warn(`Could not clear stale auth at ${dir}`, { error: String(error) });
     });
+  }
+
+  /**
+   * SIGKILL any Chromium orphaned by a previous lifetime of this process. When OpenWA dies hard
+   * (kill -9, crash, host reboot) Puppeteer's exit hook never runs, so the browser survives as an
+   * orphan — leaking memory and pinning the session profile dir. Orphans are identified by the
+   * `--openwa-session=<id>` marker arg appended to the puppeteer args at launch (Chromium ignores
+   * the unknown flag; it is purely a `ps` label). Best-effort: never throws — a `ps` failure only
+   * logs at debug, so the sweep can never block an engine start.
+   */
+  private async killOrphanedChromiumProcesses(): Promise<void> {
+    if (process.platform !== 'darwin' && process.platform !== 'linux') {
+      this.logger.debug(`Skipping orphaned Chromium sweep: unsupported platform ${process.platform}`);
+      return;
+    }
+    try {
+      // No shell: the args array is handed to ps verbatim, so nothing here is injectable.
+      // maxBuffer is raised because `ps -eo args` prints full command lines, which on a busy host
+      // (many Chromium renderers carrying dozens of flags each) can exceed the 1MB default.
+      const psOutput = await new Promise<string>((resolve, reject) => {
+        execFile('ps', ['-eo', 'pid=,args='], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+          // The @types/node ExecFileException is an Omit<> of ErrnoException, which the type
+          // checker no longer recognises as an Error — narrow it explicitly for the reject.
+          if (error) reject(error instanceof Error ? error : new Error(error.message));
+          else resolve(stdout);
+        });
+      });
+      const marker = `--openwa-session=${this.config.sessionId}`;
+      const killedPids: number[] = [];
+      for (const line of psOutput.split('\n')) {
+        const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        const args = match[2];
+        if (pid === process.pid || !args.includes(marker)) continue;
+        // Never kill a non-browser process that happens to carry the marker string
+        // (e.g. a `grep --openwa-session=…` probing the process table).
+        if (!/chrome|chromium|headless/i.test(args)) continue;
+        try {
+          process.kill(pid, 'SIGKILL');
+          killedPids.push(pid);
+        } catch (error) {
+          // ESRCH: the process exited between `ps` and the kill — nothing left to do.
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+            this.logger.debug(`Could not SIGKILL orphaned Chromium pid ${pid}`, { error: String(error) });
+          }
+        }
+      }
+      if (killedPids.length > 0) {
+        this.logger.log(
+          `Killed ${killedPids.length} orphaned Chromium process(es) left over from a previous process lifetime`,
+          { sessionId: this.config.sessionId, pids: killedPids },
+        );
+      }
+    } catch (error) {
+      this.logger.debug('Could not enumerate processes for the orphaned Chromium sweep', { error: String(error) });
+    }
   }
 
   /**

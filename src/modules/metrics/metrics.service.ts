@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'crypto';
 import { StatsService } from '../stats/stats.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
+import {
+  getSessionReconnectAttemptsTotal,
+  getSessionReconnectLoopAlertsTotal,
+} from '../../common/metrics/session-reconnect-metrics';
 import { renderHttpRequestMetrics } from '../../common/metrics/request-metrics';
 
 /**
@@ -104,6 +108,16 @@ export class MetricsService {
     );
     lines.push('# TYPE openwa_webhook_delivery_failures_total counter');
     lines.push(`openwa_webhook_delivery_failures_total ${getWebhookDeliveryFailuresTotal()}`);
+
+    lines.push(
+      '# HELP openwa_session_reconnect_attempts_total Reconnect attempts scheduled across all sessions since process start.',
+    );
+    lines.push('# TYPE openwa_session_reconnect_attempts_total counter');
+    lines.push(`openwa_session_reconnect_attempts_total ${getSessionReconnectAttemptsTotal()}`);
+
+    lines.push('# HELP openwa_session_reconnect_loop_alerts_total Reconnect-loop alerts emitted since process start.');
+    lines.push('# TYPE openwa_session_reconnect_loop_alerts_total counter');
+    lines.push(`openwa_session_reconnect_loop_alerts_total ${getSessionReconnectLoopAlertsTotal()}`);
 
     // HTTP RED metrics (request rate + duration per route), recorded by RequestMetricsInterceptor.
     // Included in the same cached render — a few seconds of staleness is fine for Prometheus.

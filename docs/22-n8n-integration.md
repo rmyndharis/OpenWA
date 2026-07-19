@@ -86,6 +86,7 @@ Start workflows when WhatsApp events occur.
 | `session.qr`            | QR code generated                   | Reconnection alerts       |
 | `session.authenticated` | Session logged in (phone available) | Startup notifications     |
 | `session.disconnected`  | Session lost connection             | Alert monitoring          |
+| `session.reconnect_loop` | Every 5th consecutive reconnect attempt | Stuck-session alerting |
 
 > **Reserved:** `group.join`, `group.leave`, and `group.update` are accepted by the
 > subscription API but are not emitted yet — don't depend on them until a release notes

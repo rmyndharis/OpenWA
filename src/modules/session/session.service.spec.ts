@@ -22,6 +22,10 @@ import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { IncomingMessage, EngineEventCallbacks, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 import { BaileysSessionStore } from '../../engine/adapters/baileys-session-store';
+import {
+  getSessionReconnectAttemptsTotal,
+  getSessionReconnectLoopAlertsTotal,
+} from '../../common/metrics/session-reconnect-metrics';
 
 function createMockSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -903,6 +907,123 @@ describe('SessionService', () => {
         expect(state.attempts).toBe(3); // no further attempt consumed
         expect(i.sessionErrors.get('sess-uuid-1')).toMatch(/Reconnection failed after 3 attempts/);
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.FAILED });
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('scheduleReconnect (reconnect-loop observability)', () => {
+    type LoopInternals = {
+      reconnectStates: Map<
+        string,
+        {
+          attempts: number;
+          timer: NodeJS.Timeout | null;
+          maxAttempts: number;
+          baseDelay: number;
+          lastAttemptAt?: number;
+        }
+      >;
+      scheduleReconnect: (id: string, session: Session) => void;
+    };
+    const internals = (): LoopInternals => service as unknown as LoopInternals;
+    const loopDispatches = (): unknown[][] =>
+      ((webhookService.dispatch as jest.Mock).mock.calls as unknown[][]).filter(c => c[1] === 'session.reconnect_loop');
+
+    it('counts every scheduled attempt but emits no loop alert on attempts 1..4', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        const state = { attempts: 0, timer: null, maxAttempts: Number.POSITIVE_INFINITY, baseDelay: 5000 };
+        i.reconnectStates.set('sess-uuid-1', state);
+
+        const attemptsBefore = getSessionReconnectAttemptsTotal();
+        const alertsBefore = getSessionReconnectLoopAlertsTotal();
+
+        for (let k = 0; k < 4; k++) {
+          i.scheduleReconnect('sess-uuid-1', createMockSession());
+        }
+
+        expect(state.attempts).toBe(4);
+        // One counter tick per scheduled attempt.
+        expect(getSessionReconnectAttemptsTotal()).toBe(attemptsBefore + 4);
+        // ...but the loop alert only arms at attempt 5 — no dispatch, no alert tick before that.
+        expect(loopDispatches()).toHaveLength(0);
+        expect(getSessionReconnectLoopAlertsTotal()).toBe(alertsBefore);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('alerts on attempts 5 and 10 with the loop payload (one signal per 5 consecutive attempts)', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        const state = { attempts: 0, timer: null, maxAttempts: Number.POSITIVE_INFINITY, baseDelay: 5000 };
+        i.reconnectStates.set('sess-uuid-1', state);
+
+        const attemptsBefore = getSessionReconnectAttemptsTotal();
+        const alertsBefore = getSessionReconnectLoopAlertsTotal();
+
+        for (let k = 0; k < 10; k++) {
+          i.scheduleReconnect('sess-uuid-1', createMockSession());
+        }
+
+        expect(getSessionReconnectAttemptsTotal()).toBe(attemptsBefore + 10);
+        expect(getSessionReconnectLoopAlertsTotal()).toBe(alertsBefore + 2);
+
+        const calls = loopDispatches();
+        expect(calls).toHaveLength(2);
+        // Attempt 5: the delay was computed with attempts=4 → 5000*2^4 = 80s (+ <1s jitter).
+        expect(calls[0][0]).toBe('sess-uuid-1');
+        expect(calls[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', attempts: 5 });
+        expect((calls[0][2] as { nextDelayMs: number }).nextDelayMs).toBeGreaterThanOrEqual(80_000);
+        expect((calls[0][2] as { nextDelayMs: number }).nextDelayMs).toBeLessThan(81_000);
+        // Attempt 10: computed with attempts=9 → 5000*2^9 = 2560s (+ <1s jitter).
+        expect(calls[1][2]).toMatchObject({ sessionId: 'sess-uuid-1', attempts: 10 });
+        expect((calls[1][2] as { nextDelayMs: number }).nextDelayMs).toBeGreaterThanOrEqual(2_560_000);
+        expect((calls[1][2] as { nextDelayMs: number }).nextDelayMs).toBeLessThan(2_561_000);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    it('re-arms the alert after a stability reset: the next alert waits 5 fresh attempts', () => {
+      jest.useFakeTimers();
+      try {
+        const i = internals();
+        // Four attempts already consumed, then the session stayed up ≥5 min — the budget resets.
+        const state = {
+          attempts: 4,
+          timer: null,
+          maxAttempts: Number.POSITIVE_INFINITY,
+          baseDelay: 5000,
+          lastAttemptAt: Date.now(),
+        };
+        i.reconnectStates.set('sess-uuid-1', state);
+
+        const alertsBefore = getSessionReconnectLoopAlertsTotal();
+
+        jest.advanceTimersByTime(300_000); // stability window elapses (no timer pending yet)
+        for (let k = 0; k < 4; k++) {
+          i.scheduleReconnect('sess-uuid-1', createMockSession());
+        }
+        // Without the reset the very first of these would have been attempt 5 and alerted; instead the
+        // streak restarted at 0, so 4 fresh schedules reach only attempt 4 — still no alert.
+        expect(state.attempts).toBe(4);
+        expect(loopDispatches()).toHaveLength(0);
+        expect(getSessionReconnectLoopAlertsTotal()).toBe(alertsBefore);
+
+        i.scheduleReconnect('sess-uuid-1', createMockSession()); // fresh attempt 5 → alert again
+        expect(state.attempts).toBe(5);
+        const calls = loopDispatches();
+        expect(calls).toHaveLength(1);
+        expect(calls[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', attempts: 5 });
+        expect(getSessionReconnectLoopAlertsTotal()).toBe(alertsBefore + 1);
       } finally {
         jest.clearAllTimers();
         jest.useRealTimers();

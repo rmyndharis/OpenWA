@@ -40,6 +40,10 @@ import {
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
+import {
+  incrementSessionReconnectAttempts,
+  incrementSessionReconnectLoopAlerts,
+} from '../../common/metrics/session-reconnect-metrics';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
@@ -72,6 +76,13 @@ const RECONNECT_DELAY_CAP_MS = 3_600_000;
  * unrelated transient drops and one day wedge FAILED for no current reason.
  */
 const RECONNECT_STABILITY_RESET_MS = 300_000;
+/**
+ * A reconnect-loop alert fires once per this many CONSECUTIVE attempts of a session — one signal per
+ * ongoing episode, not spam per attempt. A broken-forever setup retries without limit (by design), so
+ * the 5th/10th/15th… scheduled attempt is the operator-facing tell; the streak resets via the
+ * stability window above (or onReady), so a later episode re-arms the alert from attempt 5 again.
+ */
+const RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS = 5;
 /**
  * Session liveness watchdog. The engine layer is event-driven, so an engine that dies WITHOUT
  * firing an event (a silent Chromium crash) is never noticed: the row sits READY forever and never
@@ -1563,6 +1574,27 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         action: 'reconnect_scheduled',
       },
     );
+
+    incrementSessionReconnectAttempts();
+
+    // Loop alert every RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS consecutive attempts: with the default
+    // unlimited budget a permanently-broken setup retries forever, and this is the one operator-facing
+    // signal per ongoing episode (not per attempt). The streak resets via the stability window/onReady,
+    // so a fresh episode re-arms the alert instead of continuing an old cadence.
+    if (state.attempts > 0 && state.attempts % RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS === 0) {
+      this.logger.warn(`Session is reconnect-looping: attempt ${state.attempts} scheduled`, {
+        sessionId: id,
+        attempts: state.attempts,
+        nextDelayMs: delay,
+        action: 'reconnect_loop',
+      });
+      incrementSessionReconnectLoopAlerts();
+      void this.webhookService.dispatch(id, 'session.reconnect_loop', {
+        sessionId: id,
+        attempts: state.attempts,
+        nextDelayMs: delay,
+      });
+    }
 
     // Clear any timer a prior scheduleReconnect left pending so two back-to-back disconnects
     // don't stack two timers (which would run executeReconnect twice and double-init the engine).
