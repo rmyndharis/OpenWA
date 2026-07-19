@@ -132,6 +132,13 @@ export function dispatchConversationMedia(
   }
 }
 
+// Plugin ids whose bundled-extension code was permanently removed (v0.7 — superseded by the
+// marketplace chat-flow / group-translate; also reserved in plugin-installer). A leftover
+// directory without a manifest marks them as deleted on disk, so the stale registry entry (which
+// still reports them installed/enabled) is pruned on boot. Scoped to these known ids so a
+// temporarily-unreadable plugin dir (e.g. an unmounted volume) never loses its persisted config.
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(['auto-reply', 'translation']);
+
 @Injectable()
 export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('PluginLoaderService');
@@ -221,6 +228,12 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
           pluginPath,
           action: 'manifest_missing',
         });
+        if (LEGACY_REMOVED_PLUGIN_IDS.has(entry.name)) {
+          this.pluginStorage.deletePluginEntry(entry.name);
+          this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
+            action: 'registry_ghost_pruned',
+          });
+        }
         continue;
       }
 

@@ -57,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Boot no longer warns about (and the plugin list no longer shows) ghost entries for the legacy
+  bundled extensions removed in v0.7 (`auto-reply`, `translation`): when their code directory has no
+  manifest, the stale registry entry is pruned at startup. The guard is scoped to those known ids so
+  a temporarily unreadable plugin directory never loses its persisted config.
+
+
 - Long-lived sessions no longer die permanently after hours of uptime. A dead whatsapp-web.js
   Chromium (browser process exit, renderer crash, or closed page) is now detected through the
   puppeteer lifecycle handles and driven through the standard disconnect → reconnect pipeline, and

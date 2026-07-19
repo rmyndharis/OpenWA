@@ -410,6 +410,60 @@ describe('PluginLoaderService — skips dot-prefixed directories on load (crash-
   });
 });
 
+describe('PluginLoaderService — prunes registry ghosts of removed built-ins', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+  let storage: PluginStorageService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-ghosts-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    storage = new PluginStorageService(config);
+    loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const seedGhost = (id: string): void => {
+    // A leftover directory with no manifest (code deleted) + a stale registry entry still claiming
+    // the plugin is installed — the ghost state upgrades from <=0.6 are in.
+    fs.mkdirSync(path.join(pluginsDir, id), { recursive: true });
+    storage.setPluginEntry({
+      id,
+      type: 'extension',
+      name: id,
+      version: '1.0.0',
+      status: 'installed',
+      config: {},
+      builtIn: true,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+  };
+
+  it('prunes registry entries of legacy removed built-ins (auto-reply, translation) with no manifest', () => {
+    seedGhost('auto-reply');
+    seedGhost('translation');
+
+    loader.onModuleInit();
+
+    expect(storage.getPluginEntry('auto-reply')).toBeUndefined();
+    expect(storage.getPluginEntry('translation')).toBeUndefined();
+  });
+
+  it('keeps a manifest-less NON-legacy plugin entry (config survives an unreadable dir)', () => {
+    seedGhost('some-other-plugin');
+
+    loader.onModuleInit();
+
+    expect(storage.getPluginEntry('some-other-plugin')).toBeDefined();
+  });
+});
+
 describe('PluginLoaderService — enable concurrency', () => {
   let tmpDir: string;
   let loader: PluginLoaderService;
