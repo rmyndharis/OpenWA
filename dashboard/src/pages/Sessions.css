@@ -151,7 +151,7 @@
 }
 
 .sessions-page .info-value.error-text {
-  color: var(--color-danger, #dc2626);
+  color: var(--error);
   font-weight: 500;
   max-width: 60%;
   text-align: right;

@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit log rows now carry the resolved API key and client IP for every call site: the values are
   stamped into the per-request async context by the auth guard and auto-filled on write (explicit
   context still wins).
+- Dashboard CSS no longer references undefined custom properties or fallbacks from a foreign
+  design system: every danger/danger-color usage now resolves to the single `--error` token, wrong
+  `--primary`/`--text-secondary`/`--border`/`--warning` fallbacks are dropped, and the plugin
+  instances "off" badge shows its background again (it referenced an undefined `--bg-secondary`).
 - Dashboard readability and behavior: the send button stays readable when disabled, API Keys badges
   render on desktop (rules were stranded in a mobile-only media query), the Templates page gets real
   primary/secondary button styles, fourteen dark-mode selectors are corrected so dark mode applies,

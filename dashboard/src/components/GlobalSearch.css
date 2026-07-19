@@ -101,7 +101,7 @@
 }
 
 .global-search-hit-snippet mark {
-  background: var(--warning, #fde68a);
+  background: var(--warning);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;

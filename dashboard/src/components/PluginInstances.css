@@ -68,11 +68,11 @@
   white-space: nowrap;
 }
 .plugin-instances .pi-badge.on {
-  background: var(--success-bg, #dcfce7);
-  color: var(--success, #16a34a);
+  background: var(--primary-soft);
+  color: var(--success);
 }
 .plugin-instances .pi-badge.off {
-  background: var(--bg-secondary);
+  background: var(--bg-light);
   color: var(--text-muted);
 }
 .plugin-instances .pi-actions {
@@ -94,19 +94,19 @@
 .plugin-instances .pi-secret code {
   flex: 1;
   padding: 0.75rem;
-  background: var(--bg-secondary);
+  background: var(--bg-light);
   border-radius: 6px;
   word-break: break-all;
 }
 .plugin-instances .pi-error {
-  color: var(--danger, #e5484d);
+  color: var(--error);
   font-size: 0.85rem;
   margin-top: 0.5rem;
 }
 .plugin-instances .pi-confirm-icon {
   display: flex;
   justify-content: center;
-  color: var(--danger, #e5484d);
+  color: var(--error);
   margin-bottom: 0.75rem;
 }
 .plugin-instances textarea {

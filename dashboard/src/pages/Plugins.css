@@ -392,15 +392,15 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-light);
-  color: var(--danger, #e5484d);
+  color: var(--error);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .plugins-page .config-form .config-array-remove:hover {
-  background: var(--danger, #e5484d);
+  background: var(--error);
   color: #fff;
-  border-color: var(--danger, #e5484d);
+  border-color: var(--error);
 }
 
 .plugins-page .config-form .config-array-add {
@@ -443,7 +443,7 @@
 .plugins-page .config-ui-error {
   padding: 1rem;
   text-align: center;
-  color: var(--danger, #e5484d);
+  color: var(--error);
 }
 
 .plugins-page .config-form .form-group small {
@@ -455,7 +455,7 @@
 }
 
 .plugins-page .config-form .form-group .required-mark {
-  color: var(--danger, #e5484d);
+  color: var(--error);
 }
 
 .plugins-page .toggle-group {
@@ -522,7 +522,7 @@
 }
 
 .plugins-page .toggle-switch input:checked + .toggle-slider {
-  background-color: var(--primary, #22c55e);
+  background-color: var(--primary);
 }
 
 .plugins-page .toggle-switch input:checked + .toggle-slider:before {
@@ -710,7 +710,7 @@
   padding: 0;
   background: none;
   border: none;
-  color: var(--primary, #22c55e);
+  color: var(--primary);
   font: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -845,11 +845,11 @@
    and the transition on background/color/box-shadow/transform above animates the swap smoothly. */
 .plugins-page .install-tab.active,
 .plugins-page .config-modal .modal-tab.active {
-  background: var(--primary, #22c55e);
+  background: var(--primary);
   color: #fff;
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.08),
-    0 4px 12px color-mix(in srgb, var(--primary, #22c55e) 35%, transparent);
+    0 4px 12px color-mix(in srgb, var(--primary) 35%, transparent);
   transform: translateY(-1px);
 }
 
@@ -857,7 +857,7 @@
    it's obvious they're clickable before the active treatment snaps in. */
 .plugins-page .install-tab:not(.active):hover,
 .plugins-page .config-modal .modal-tab:not(.active):hover {
-  background: color-mix(in srgb, var(--primary, #22c55e) 12%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
   color: var(--text-primary);
 }
 
@@ -940,13 +940,13 @@
   justify-content: center;
   gap: 10px;
   padding: 28px 12px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-size: 0.875rem;
 }
 
 .plugins-page .catalog-error {
   flex-wrap: wrap;
-  color: var(--danger, #dc2626);
+  color: var(--error);
 }
 
 .plugins-page .catalog-search {
@@ -983,7 +983,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--border, #e5e7eb);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 
@@ -996,13 +996,13 @@
 }
 
 .plugins-page .catalog-row-version {
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-weight: 400;
   font-size: 0.85em;
 }
 
 .plugins-page .catalog-row-desc {
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-size: 0.85rem;
   margin-top: 2px;
 }
@@ -1013,7 +1013,7 @@
   gap: 8px;
   margin-top: 4px;
   font-size: 0.8rem;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .plugins-page .catalog-badge.update {
@@ -1028,6 +1028,6 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-size: 0.85rem;
 }

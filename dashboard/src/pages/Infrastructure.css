@@ -498,7 +498,7 @@
 }
 .infrastructure-page .engine-web-version code {
   font-size: 0.8125rem;
-  background: var(--bg-subtle, rgba(127, 127, 127, 0.1));
+  background: rgba(127, 127, 127, 0.1);
   padding: 0.05rem 0.35rem;
   border-radius: 4px;
 }
@@ -512,7 +512,7 @@
   gap: 0.4rem;
   margin: 0 0 1rem;
   font-size: 0.8125rem;
-  color: var(--warning, #b45309);
+  color: var(--warning);
 }
 .infrastructure-page .env-pin-note svg {
   flex-shrink: 0;
@@ -531,7 +531,7 @@
 }
 .infrastructure-page .migration-warning svg {
   flex-shrink: 0;
-  color: var(--warning, #d97706);
+  color: var(--warning);
   margin-top: 0.1rem;
 }
 .infrastructure-page .migration-warning p {
