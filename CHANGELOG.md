@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trap with initial focus, background scroll lock, and `role="dialog"` semantics. The Sessions page
   modals are the first to use it, gaining those behaviors plus a pinned header/footer with a
   scrolling body on long content.
+- The dashboard Message Tester now covers every outbound message type: in addition to
+  text/image/video/audio/document it can send location, contact-card, sticker, and native poll
+  messages, forward an existing message to another chat, and submit a bulk text batch (recipients
+  one per line, optional inter-message delay) with live batch progress polling and a cancel control
+  in the response panel.
 
 ### Changed
 

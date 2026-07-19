@@ -210,6 +210,104 @@ export interface SendMediaPayload {
   caption?: string;
 }
 
+// Payloads below mirror the backend DTOs in src/modules/message/dto (raw bodies, no envelope).
+export interface SendLocationPayload {
+  chatId: string;
+  latitude: number;
+  longitude: number;
+  description?: string;
+  address?: string;
+}
+
+export interface SendContactPayload {
+  chatId: string;
+  contactName: string;
+  contactNumber: string;
+}
+
+export interface SendPollPayload {
+  chatId: string;
+  name: string;
+  options: string[];
+  allowMultipleAnswers?: boolean;
+}
+
+export interface ForwardMessagePayload {
+  fromChatId: string;
+  toChatId: string;
+  messageId: string;
+}
+
+// Media block of a single bulk message (BulkMediaDto — no caption; caption sits next to it).
+export interface BulkMediaPayload {
+  url?: string;
+  base64?: string;
+  mimetype?: string;
+  filename?: string;
+  ptt?: boolean;
+}
+
+export interface BulkMessageItem {
+  chatId: string;
+  type: 'text' | 'image' | 'video' | 'audio' | 'document';
+  content: {
+    text?: string;
+    image?: BulkMediaPayload;
+    video?: BulkMediaPayload;
+    audio?: BulkMediaPayload;
+    document?: BulkMediaPayload;
+    caption?: string;
+  };
+  variables?: Record<string, string>;
+}
+
+export interface SendBulkPayload {
+  batchId?: string;
+  messages: BulkMessageItem[];
+  options?: {
+    delayBetweenMessages?: number;
+    randomizeDelay?: boolean;
+    stopOnError?: boolean;
+  };
+}
+
+/** 202 response of POST send-bulk — the batch is processing asynchronously; poll getBatchStatus. */
+export interface BulkBatchResponse {
+  batchId: string;
+  status: string;
+  totalMessages: number;
+  estimatedCompletionTime?: string;
+  statusUrl: string;
+}
+
+export type BatchStatus = 'pending' | 'processing' | 'completed' | 'cancelled' | 'failed';
+
+export interface BatchProgress {
+  total: number;
+  sent: number;
+  failed: number;
+  pending: number;
+  cancelled: number;
+}
+
+export interface BatchMessageResult {
+  chatId: string;
+  status: 'pending' | 'sent' | 'failed' | 'cancelled';
+  messageId?: string;
+  error?: { code: string; message: string };
+  sentAt?: string;
+}
+
+/** GET batch/:batchId shape; the cancel endpoint returns the same minus results/timestamps. */
+export interface BatchStatusResponse {
+  batchId: string;
+  status: BatchStatus;
+  progress: BatchProgress;
+  results?: BatchMessageResult[];
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface HealthStatus {
   status: 'ok' | 'error';
   timestamp?: string;
@@ -632,6 +730,44 @@ export const messageApi = {
     request<MessageResponse>(`/sessions/${sessionId}/messages/send-${mediaType}`, {
       method: 'POST',
       body: JSON.stringify({ chatId, ...payload }),
+    }),
+  sendLocation: (sessionId: string, data: SendLocationPayload) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/send-location`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  sendContact: (sessionId: string, data: SendContactPayload) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/send-contact`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  // Stickers take the same media body as the other send-* endpoints (base64 XOR url + mimetype).
+  sendSticker: (sessionId: string, chatId: string, payload: SendMediaPayload) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/send-sticker`, {
+      method: 'POST',
+      body: JSON.stringify({ chatId, ...payload }),
+    }),
+  sendPoll: (sessionId: string, data: SendPollPayload) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/send-poll`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  forward: (sessionId: string, data: ForwardMessagePayload) =>
+    request<MessageResponse>(`/sessions/${sessionId}/messages/forward`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  // Async batch: returns 202 immediately; poll getBatchStatus until a terminal status.
+  sendBulk: (sessionId: string, data: SendBulkPayload) =>
+    request<BulkBatchResponse>(`/sessions/${sessionId}/messages/send-bulk`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getBatchStatus: (sessionId: string, batchId: string) =>
+    request<BatchStatusResponse>(`/sessions/${sessionId}/messages/batch/${encodeURIComponent(batchId)}`),
+  cancelBatch: (sessionId: string, batchId: string) =>
+    request<BatchStatusResponse>(`/sessions/${sessionId}/messages/batch/${encodeURIComponent(batchId)}/cancel`, {
+      method: 'POST',
     }),
   reply: (sessionId: string, data: { chatId: string; quotedMessageId: string; text: string }) =>
     request<MessageResponse>(`/sessions/${sessionId}/messages/reply`, {
