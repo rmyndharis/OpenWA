@@ -83,22 +83,48 @@ export function useChatScrollPosition(
   const scrollMap = useRef<Map<string, number>>(new Map());
   const prevChatIdRef = useRef<string | null>(null);
   const pinnedRef = useRef<boolean>(true);
+  // A 'saved' restore writes scrollTop BEFORE media decodes — the browser clamps the write to the
+  // still-short scrollHeight and the thread lands at the top. The saved value lives here and is
+  // re-applied on every media decode until the user scrolls (any genuine scroll cancels it).
+  const pendingRestoreRef = useRef<number | null>(null);
+  // Marks our own writes so the scroll listener can skip them (a genuine user scroll both updates
+  // the pin state / position map AND cancels pendingRestore; our writes must do neither).
+  const programmaticWriteRef = useRef<boolean>(false);
 
-  const pinToBottom = useCallback((el: HTMLDivElement) => {
-    el.scrollTop = el.scrollHeight;
-    pinnedRef.current = true;
+  const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
+    const before = el.scrollTop;
+    programmaticWriteRef.current = true;
+    el.scrollTop = top;
+    // No scroll event fires when the value doesn't change (or clamps to the same value) — don't
+    // leave the flag set to swallow the next genuine user scroll.
+    if (el.scrollTop === before) programmaticWriteRef.current = false;
   }, []);
 
+  const pinToBottom = useCallback(
+    (el: HTMLDivElement) => {
+      writeScrollTop(el, el.scrollHeight);
+      pinnedRef.current = true;
+    },
+    [writeScrollTop],
+  );
+
   // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
-  // pins; any scroll away (only ever the user's) unpins. The SAME listener also saves the visible
-  // chat's scrollTop on every scroll, so the per-chat position map always holds the last REAL user
-  // position — saving at switch time would read post-swap (clamped) geometry and restore garbage.
+  // pins; any scroll away (only ever the user's) unpins. The SAME listener saves the visible
+  // chat's scrollTop on every genuine user scroll, so the per-chat position map always holds the
+  // last REAL user position — saving at switch time would read post-swap (clamped) geometry and
+  // restore garbage.
   // NOTE: an effect without a dep array re-runs on EVERY render, and React runs the previous
   // cleanup first — so the listener must be (re)attached unconditionally each run.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return undefined;
     const onScroll = () => {
+      if (programmaticWriteRef.current) {
+        programmaticWriteRef.current = false;
+        return;
+      }
+      // A genuine user scroll: cancels any pending restore, then updates pin + position map.
+      pendingRestoreRef.current = null;
       pinnedRef.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
       const visibleChatId = prevChatIdRef.current;
       if (visibleChatId) scrollMap.current.set(visibleChatId, el.scrollTop);
@@ -110,6 +136,8 @@ export function useChatScrollPosition(
   useLayoutEffect(() => {
     const next = activeChatId;
     const el = containerRef.current;
+    // A new restore decision supersedes any pending one (it belongs to a different chat/visit).
+    pendingRestoreRef.current = null;
 
     const decision = decideRestoreTarget(
       next,
@@ -121,7 +149,8 @@ export function useChatScrollPosition(
       if (decision.restore === 'saved' && next !== null) {
         const saved = scrollMap.current.get(next);
         if (saved !== undefined) {
-          el.scrollTop = saved;
+          pendingRestoreRef.current = saved; // re-applied on media loads until the user scrolls
+          writeScrollTop(el, saved);
           pinnedRef.current = false; // a saved spot is (almost always) not the bottom
         }
       } else if (decision.restore === 'bottom') {
@@ -130,7 +159,7 @@ export function useChatScrollPosition(
     }
 
     prevChatIdRef.current = next;
-  }, [activeChatId, isLoaded, pinToBottom]);
+  }, [activeChatId, isLoaded, pinToBottom, writeScrollTop]);
 
   const onMessageAppended = useCallback(
     (direction: ScrollDirection) => {
@@ -150,16 +179,25 @@ export function useChatScrollPosition(
     [pinToBottom],
   );
 
-  // Media has no layout box before it decodes; while pinned, each decode re-pins to the bottom so
-  // late-loading images/video can't silently un-bottom a freshly opened (or freshly appended-to)
-  // thread. A user scroll away from the bottom clears the pin, so this never fights the reader.
+  // Media has no layout box before it decodes. While pinned, each decode re-pins to the bottom;
+  // while a 'saved' restore is pending, each decode RE-APPLIES the saved scrollTop (the first write
+  // was clamped to the pre-decode scrollHeight). A user scroll clears both, so late-decoding media
+  // never yanks a reading user.
   const onMediaLoad = useCallback(() => {
+    const pending = pendingRestoreRef.current;
+    if (pending !== null) {
+      requestAnimationFrame(() => {
+        const cur = containerRef.current;
+        if (cur && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
+      });
+      return;
+    }
     if (!pinnedRef.current) return;
     requestAnimationFrame(() => {
       const cur = containerRef.current;
       if (cur && pinnedRef.current) pinToBottom(cur);
     });
-  }, [pinToBottom]);
+  }, [pinToBottom, writeScrollTop]);
 
   return { containerRef, onMessageAppended, onMediaLoad };
 }
