@@ -2,52 +2,40 @@ import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 
 import { decideScroll, type ScrollDirection } from '../utils/scrollDecision.ts';
 
 /**
- * Decide what to do with the scroll container on a chat switch or load-resolve.
+ * Decide the restore target on a chat switch or load-resolve.
  *
  * Inputs:
- *   - prevChatId: chat we are LEAVING (or null if first render)
  *   - nextChatId: chat we are ENTERING (or null if no chat selected)
- *   - prevLoaded: was the previous chat's content rendered when we last ran?
  *   - isLoaded:   is the next chat's content rendered now?
  *   - savedScrollTop: previously-saved scrollTop for nextChatId (or undefined)
  *
- * Output: { save: 'previous' | null, restore: 'saved' | 'bottom' | null }
- *   - save:    instructs the hook to write the CURRENT scrollTop into the
- *              map under prevChatId BEFORE doing the restore
- *   - restore: instructs the hook to write scrollTop = (the saved value)
- *              or = scrollHeight (bottom); null means do nothing
+ * Output: { restore: 'saved' | 'bottom' | null }
+ *   - restore: 'saved' = write scrollTop = the saved value; 'bottom' = scrollHeight;
+ *              null = do nothing (still loading / deselected).
+ *
+ * NOTE: there is deliberately no "save the leaving chat's scrollTop" step here. A layout effect
+ * runs AFTER React has already swapped the container's content to the NEW chat, so a post-swap
+ * read captures the NEW content's (possibly clamped) scrollTop, not the leaving chat's position —
+ * saving then restores the returning chat to the TOP. Instead the scroll listener saves the live
+ * scrollTop continuously (see below), so the map always holds each chat's last REAL position.
  *
  * This is a pure function so it can be unit-tested without React.
  */
 export interface RestoreDecision {
-  save: 'previous' | null;
   restore: 'saved' | 'bottom' | null;
 }
 
 export function decideRestoreTarget(
-  prevChatId: string | null,
   nextChatId: string | null,
-  prevLoaded: boolean,
   isLoaded: boolean,
   savedScrollTop: number | undefined,
 ): RestoreDecision {
-  // Only save the previous chat's scrollTop when we're switching to ANOTHER
-  // chat (not when deselecting back to nothing) and when its content was
-  // actually rendered (not a spinner snapshot).
-  const save: 'previous' | null =
-    prevChatId !== null &&
-    nextChatId !== null &&
-    prevChatId !== nextChatId &&
-    prevLoaded
-      ? 'previous'
-      : null;
-
   const restore: 'saved' | 'bottom' | null =
     nextChatId !== null && isLoaded
       ? savedScrollTop !== undefined ? 'saved' : 'bottom'
       : null;
 
-  return { save, restore };
+  return { restore };
 }
 
 /**
@@ -94,7 +82,6 @@ export function useChatScrollPosition(
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollMap = useRef<Map<string, number>>(new Map());
   const prevChatIdRef = useRef<string | null>(null);
-  const prevLoadedRef = useRef<boolean>(false);
   const pinnedRef = useRef<boolean>(true);
 
   const pinToBottom = useCallback((el: HTMLDivElement) => {
@@ -102,40 +89,35 @@ export function useChatScrollPosition(
     pinnedRef.current = true;
   }, []);
 
-  // Track the pin state from scroll geometry alone: any scroll that lands at the bottom (ours or the
-  // user's) pins; any scroll away (only ever the user's) unpins — no programmatic/user distinction
-  // needed. NOTE: an effect without a dep array re-runs on EVERY render, and React runs the previous
-  // cleanup first — so the listener must be (re)attached unconditionally each run. Guarding against
-  // re-attach (e.g. remembering the element in a ref) would leave the listener permanently removed
-  // after the second render, killing unpin tracking entirely.
+  // Track pin state from scroll geometry: any scroll that lands at the bottom (ours or the user's)
+  // pins; any scroll away (only ever the user's) unpins. The SAME listener also saves the visible
+  // chat's scrollTop on every scroll, so the per-chat position map always holds the last REAL user
+  // position — saving at switch time would read post-swap (clamped) geometry and restore garbage.
+  // NOTE: an effect without a dep array re-runs on EVERY render, and React runs the previous
+  // cleanup first — so the listener must be (re)attached unconditionally each run.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return undefined;
     const onScroll = () => {
       pinnedRef.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
+      const visibleChatId = prevChatIdRef.current;
+      if (visibleChatId) scrollMap.current.set(visibleChatId, el.scrollTop);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   });
 
   useLayoutEffect(() => {
-    const prev = prevChatIdRef.current;
     const next = activeChatId;
     const el = containerRef.current;
-    const prevLoaded = prevLoadedRef.current;
 
     const decision = decideRestoreTarget(
-      prev,
       next,
-      prevLoaded,
       isLoaded,
       next !== null ? scrollMap.current.get(next) : undefined,
     );
 
     if (el) {
-      if (decision.save === 'previous' && prev !== null) {
-        scrollMap.current.set(prev, el.scrollTop);
-      }
       if (decision.restore === 'saved' && next !== null) {
         const saved = scrollMap.current.get(next);
         if (saved !== undefined) {
@@ -148,7 +130,6 @@ export function useChatScrollPosition(
     }
 
     prevChatIdRef.current = next;
-    prevLoadedRef.current = isLoaded;
   }, [activeChatId, isLoaded, pinToBottom]);
 
   const onMessageAppended = useCallback(
