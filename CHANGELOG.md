@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routes no longer flash the OS default, and the message-analytics chart now defaults to 24h.
 - The dev compose defaults `AUTO_START_SESSIONS=true`, so previously authenticated sessions come
   back by themselves after a container restart (the application-level default stays off).
+- Dashboard action buttons are consolidated into shared global `.btn-primary`/`.btn-secondary`/
+  `.btn-danger` classes (28 page-scoped copies removed), so padding, radius, hover, and disabled
+  states are consistent across pages; the Plugins hover now uses the `--primary-hover` token and
+  danger buttons use the single `--error` red.
 
 ### Removed
 
