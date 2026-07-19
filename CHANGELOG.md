@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Dashboard theming is simplified to a single light/dark toggle button; the accent-palette picker
-  was removed for maintainability. The stored theme is applied before first paint, so standalone
+  was removed for maintainability. The global `h2` is a real heading
+  again instead of a forced small uppercase eyebrow (section/card titles were smaller than body
+  text); the eyebrow look survives as an opt-in `.eyebrow` class.
+ The stored theme is applied before first paint, so standalone
   routes no longer flash the OS default, and the message-analytics chart now defaults to 24h.
 - The dev compose defaults `AUTO_START_SESSIONS=true`, so previously authenticated sessions come
   back by themselves after a container restart (the application-level default stays off).

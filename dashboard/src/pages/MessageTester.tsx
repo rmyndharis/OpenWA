@@ -195,7 +195,7 @@ export function MessageTester() {
 
       <div className="tester-panels">
         <div className="compose-panel">
-          <h2>{t('messageTester.compose')}</h2>
+          <h2 className="eyebrow">{t('messageTester.compose')}</h2>
 
           <div className="form-group">
             <label>{t('messageTester.session')}</label>
@@ -352,7 +352,7 @@ export function MessageTester() {
         </div>
 
         <div className="response-panel">
-          <h2>{t('messageTester.responseTitle')}</h2>
+          <h2 className="eyebrow">{t('messageTester.responseTitle')}</h2>
 
           {response ? (
             <>

@@ -46,7 +46,17 @@ h1 {
   letter-spacing: -0.025em;
 }
 
+/* h2 is a real heading again — the old global made EVERY h2 a small uppercase eyebrow, which
+   forced pages to keep resetting it (and left section titles smaller than body text). The eyebrow
+   look is now opt-in via .eyebrow for the section/card labels that actually want it. */
 h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.eyebrow {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-secondary);
