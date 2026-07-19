@@ -59,6 +59,7 @@ describe('MessageService', () => {
       save: jest.fn().mockImplementation(msg => Promise.resolve(msg)),
       findOne: jest.fn().mockResolvedValue(null),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(),
     };
 
@@ -1015,6 +1016,50 @@ describe('MessageService', () => {
       });
 
       expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({ waMessageId: 'true_621@c.us_ABC' }));
+    });
+  });
+
+  describe('persistSentState vs the own-send echo (dedup race)', () => {
+    it('merges state onto the echo row, then drops the redundant PENDING row', async () => {
+      // The engine's message_create echo (onMessageCreate) won the insert race, so the SENT-state save
+      // collides on UNIQUE(sessionId, waMessageId). The echo row carries only a media-less marker —
+      // the merge must land status/timestamp/metadata on it BEFORE the placeholder is deleted, or the
+      // payload is lost. The send still succeeds.
+      (repository.save as jest.Mock)
+        .mockImplementationOnce(msg => Promise.resolve(msg)) // saveOutgoingMessage (PENDING)
+        .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'));
+
+      const result = await service.sendText('sess-1', { chatId: '621@c.us', text: 'hi' });
+
+      expect(result.messageId).toBe('wa-msg-1'); // send reported success
+      expect(repository.update).toHaveBeenCalledWith(
+        { sessionId: 'sess-1', waMessageId: 'wa-msg-1' },
+        expect.objectContaining({ status: MessageStatus.SENT, timestamp: 1706868000 }),
+      );
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+    });
+
+    it('merges the media payload onto the echo row for a media send (no data loss after reload)', async () => {
+      (repository.save as jest.Mock)
+        .mockImplementationOnce(msg => Promise.resolve(msg))
+        .mockRejectedValueOnce(new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'));
+
+      await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
+
+      const patch = (repository.update as jest.Mock).mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+      expect((patch?.metadata as { media?: { data?: string } } | undefined)?.media?.data).toBe('QUJD');
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+    });
+
+    it('does NOT delete anything on a transient (non-unique) persist error', async () => {
+      (repository.save as jest.Mock)
+        .mockImplementationOnce(msg => Promise.resolve(msg))
+        .mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+
+      const result = await service.sendText('sess-1', { chatId: '621@c.us', text: 'hi' });
+
+      expect(result.messageId).toBe('wa-msg-1'); // transient persist faults never fail the send
+      expect(repository.delete).not.toHaveBeenCalled();
     });
   });
 });

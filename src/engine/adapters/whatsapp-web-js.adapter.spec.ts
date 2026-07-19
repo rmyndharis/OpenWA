@@ -1489,6 +1489,98 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     const msg = onMessage.mock.calls[0][0] as { call?: { video: boolean; missed: boolean } };
     expect(msg.call).toEqual({ video: true, missed: true });
   });
+
+  it('enriches an own-send (message_create) echo with the media payload', async () => {
+    // buildIncomingMessageBase is sync and carries no media; without enrichment a phone-composed
+    // image persists/renders as a bare 📎 marker. The echo must reuse the same capped download path
+    // as the incoming handler, so the payload lands on the outgoing row.
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-echo-media',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageCreate = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    const mockMsg = {
+      id: { _serialized: 'OWN_MEDIA_1' },
+      from: '628123@c.us',
+      to: '628111@c.us',
+      body: '',
+      type: 'image',
+      timestamp: 1700000070,
+      fromMe: true,
+      hasMedia: true,
+      _data: { mimetype: 'image/png', size: 3 },
+      downloadMedia: jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD', filename: 'a.png' }),
+      getContact: jest.fn().mockResolvedValue(null),
+      hasQuotedMsg: false,
+    };
+
+    client.emit('message_create', mockMsg);
+    // The echo runs async (media download through the limiter) — flush the chain.
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessageCreate.mock.calls[0][0] as {
+      media?: { mimetype?: string; data?: string; omitted?: boolean };
+    };
+    expect(msg.media?.mimetype).toBe('image/png');
+    expect(msg.media?.data).toBe('QUJD');
+    expect(msg.media?.omitted).toBeUndefined();
+  });
+
+  it('still emits the echo (without media) when the own-send media download fails', async () => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-echo-media-fail',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageCreate = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    const mockMsg = {
+      id: { _serialized: 'OWN_MEDIA_2' },
+      from: '628123@c.us',
+      to: '628111@c.us',
+      body: '',
+      type: 'image',
+      timestamp: 1700000071,
+      fromMe: true,
+      hasMedia: true,
+      _data: { mimetype: 'image/png', size: 3 },
+      downloadMedia: jest.fn().mockRejectedValue(new Error('media gone')),
+      getContact: jest.fn().mockResolvedValue(null),
+      hasQuotedMsg: false,
+    };
+
+    client.emit('message_create', mockMsg);
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const msg = onMessageCreate.mock.calls[0][0] as { media?: unknown };
+    // The failure is contained at the call site: the echo still fires, just without the media field
+    // (the omitted marker is synthesized downstream, in SessionService's persistence).
+    expect(msg.media).toBeUndefined();
+  });
 });
 
 describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web builds)', () => {

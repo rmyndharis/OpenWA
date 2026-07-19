@@ -53,6 +53,12 @@ import {
   ackStatusTransitionFrom,
 } from '../message/message-status.util';
 
+// Message types that carry downloadable media. Any persisted row of these types must have a media
+// marker in metadata — never NULL — or the dashboard renders an empty bubble (no placeholder) and the
+// by-type stats filter skips the row. Sources that lack the payload (wwjs own-send echo, media-free
+// history sync) get the omitted marker synthesized at the persistence chokepoints.
+const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
+
 interface ReconnectState {
   attempts: number;
   timer: NodeJS.Timeout | null;
@@ -676,7 +682,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         .map(x => {
           const m = byId.get(x)!;
           const metadata: Record<string, unknown> = {};
-          if (m.media) metadata.media = m.media;
+          if (m.media) {
+            metadata.media = m.media;
+          } else if (MEDIA_MESSAGE_TYPES.has(m.type)) {
+            // History sync maps messages media-free (footprint). Without the marker the row renders
+            // as an empty bubble — the DB copy wins over the engine-history placeholder in the
+            // dashboard merge — and the by-type stats filter would skip it.
+            metadata.media = { mimetype: '', omitted: true };
+          }
           if (m.quotedMessage) metadata.quotedMessage = m.quotedMessage;
           if (m.call) metadata.call = m.call;
           const row = this.messageRepository.create({
@@ -1002,18 +1015,89 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: id,
             source: 'Engine',
           })
-          .then(({ continue: shouldContinue, data: finalMessage }) => {
+          .then(async ({ continue: shouldContinue, data: finalMessage }) => {
             if (!shouldContinue) {
               return;
             }
 
-            // NOTE: unlike onMessage (incoming), this path intentionally does NOT mirror the message
-            // to the `messages` table. message_create ALSO fires for API-originated sends, which the
-            // REST send path already persists — saving here would double-persist them. Safe
-            // persistence of phone-composed sends needs a unique (sessionId, waMessageId) index +
-            // de-dup and is tracked as a separate enhancement; until then this path only webhooks/
-            // emits. So local message history reflects API sends + all inbound, but not sends
-            // composed on a linked phone.
+            // Persist the outgoing message so local history reflects sends composed on a linked phone
+            // (message_create is the ONLY event those produce). It also fires for API-originated sends,
+            // which the REST send path persists itself — the UNIQUE(sessionId, waMessageId) index is
+            // the atomic dedup oracle between the two writers: the loser skips its insert, and
+            // persistSentState additionally drops its redundant PENDING row when the echo won. The
+            // webhook/WS dispatch below is identical whether the insert won, lost, or failed — the
+            // message.sent contract is unchanged.
+            const outgoing: IncomingMessage = finalMessage;
+            const metadata: Record<string, unknown> = {};
+            if (outgoing.media) {
+              metadata.media = outgoing.media;
+            } else if (MEDIA_MESSAGE_TYPES.has(outgoing.type)) {
+              // The wwjs own-send echo carries no media field at all (Baileys emits an omitted
+              // marker); synthesize it so the dashboard renders the 📎 placeholder instead of an
+              // empty bubble, and the row stays countable in the by-type stats.
+              metadata.media = { mimetype: '', omitted: true };
+            }
+            if (outgoing.quotedMessage) {
+              metadata.quotedMessage = outgoing.quotedMessage;
+            }
+            if (outgoing.call) {
+              metadata.call = outgoing.call;
+            }
+
+            // The ephemeral opt-out gates STORAGE only (mirrors onMessage); the live dispatch below
+            // is today's contract and stays.
+            const mayPersist =
+              resolveFeatureFlags(this.configService).storeEphemeralMessages ||
+              !(outgoing.ephemeralDuration && outgoing.ephemeralDuration > 0);
+
+            if (mayPersist) {
+              const dbMessage = this.messageRepository.create({
+                sessionId: id,
+                // Mirror onMessage's chokepoint: an unreadable id is the empty sentinel, stored as
+                // NULL — `''` would collide on the second such message.
+                waMessageId: outgoing.id || undefined,
+                chatId: outgoing.chatId,
+                from: outgoing.from,
+                to: outgoing.to,
+                body: outgoing.body,
+                type: outgoing.type,
+                direction: MessageDirection.OUTGOING,
+                timestamp: outgoing.timestamp,
+                status: MessageStatus.SENT,
+                metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+              });
+              // The hook chain above is async; a delete()/teardown can retire this engine while it
+              // awaits. Re-check liveness so a late continuation can't persist an orphan row
+              // (mirrors onMessage).
+              if (!this.isLiveEngine(id, engine)) return;
+              let persisted = false;
+              try {
+                const result = await this.messageRepository.insert(
+                  dbMessage as unknown as QueryDeepPartialEntity<Message>,
+                );
+                Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
+                persisted = true;
+              } catch (err) {
+                // Unique violation = the REST send path already persisted this API-originated send —
+                // the dedup oracle working as intended, not an error. Anything else is a real DB
+                // failure; fail open so a real send is never dropped on a transient DB fault.
+                if (!isUniqueConstraintError(err)) {
+                  this.logger.error(`Failed to save outgoing message ${outgoing.id} to database`, String(err));
+                }
+              }
+              if (persisted) {
+                // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
+                // composed sends exactly like API sends.
+                void this.hookManager
+                  .execute(
+                    'message:persisted',
+                    { sessionId: id, message: dbMessage },
+                    { sessionId: id, source: 'SessionService' },
+                  )
+                  .catch(() => undefined);
+              }
+            }
+
             void this.webhookService.dispatch(id, 'message.sent', finalMessage);
             // Emit real-time event to WebSocket clients (as message.sent, not message.received)
             this.eventsGateway.emitMessageSent(id, finalMessage);

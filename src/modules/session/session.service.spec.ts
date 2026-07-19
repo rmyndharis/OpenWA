@@ -10,7 +10,7 @@ import {
   SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
 } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
-import { Message, MessageStatus } from '../message/entities/message.entity';
+import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
@@ -1636,19 +1636,118 @@ describe('SessionService', () => {
       expect(sent[0][0]).toBe('sess-uuid-1');
     });
 
-    it('does NOT persist an outgoing (message_create) self-message to the messages table', async () => {
-      // Contract lock: message_create also fires for API sends (already persisted by the REST send
-      // path), so a naive save here would double-persist. Phone-composed sends are therefore
-      // webhooked/emitted but not mirrored to local history; safe persistence (unique index + dedup)
-      // is a separate enhancement. This guards against the omission silently changing.
+    it('persists an outgoing (message_create) self-message so phone-composed sends reach local history', async () => {
+      // message_create is the ONLY event a phone-composed send produces; persist it best-effort. The
+      // UNIQUE(sessionId, waMessageId) index dedups against the REST send path, which persists
+      // API-originated sends itself (see the unique-race test below).
       const callbacks = await startAndCaptureCallbacks();
+      // Pass the message through the hook chain untouched (the default mock replaces data with {}).
+      (hookManager.execute as jest.Mock).mockImplementation((_e: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (messageRepository.insert as jest.Mock).mockClear();
 
       callbacks.onMessageCreate!(makeMessage({ id: 'wa-out-2', from: 'me@c.us', to: 'peer@c.us', fromMe: true }));
       await flush();
 
-      expect(dispatchedEvents('message.sent')).toHaveLength(1); // it IS webhooked/emitted
-      expect(messageRepository.create).not.toHaveBeenCalled(); // but NOT persisted
-      expect(messageRepository.save).not.toHaveBeenCalled();
+      expect(dispatchedEvents('message.sent')).toHaveLength(1); // webhook/WS contract unchanged
+      expect(messageRepository.insert).toHaveBeenCalledTimes(1);
+      const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
+      expect(row).toMatchObject({
+        sessionId: 'sess-uuid-1',
+        waMessageId: 'wa-out-2',
+        direction: MessageDirection.OUTGOING,
+        status: MessageStatus.SENT,
+      });
+      // A winning insert also feeds plugin providers (search etc.) like any other persisted message.
+      const persistedCalls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      );
+      expect(persistedCalls).toHaveLength(1);
+    });
+
+    it('still dispatches (but does not double-persist) when the REST send path won the dedup race', async () => {
+      // API-originated sends fire message_create too; the REST path persists them. A UNIQUE violation
+      // here is the dedup oracle working — not an error: skip the insert + message:persisted quietly,
+      // but the webhook/WS dispatch MUST still happen (today's contract).
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockRejectedValueOnce(
+        new Error('UNIQUE constraint failed: messages.sessionId, messages.waMessageId'),
+      );
+
+      callbacks.onMessageCreate!(makeMessage({ id: 'wa-out-dup', from: 'me@c.us', to: 'peer@c.us', fromMe: true }));
+      await flush();
+
+      expect(dispatchedEvents('message.sent')).toHaveLength(1);
+      const persistedCalls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      );
+      expect(persistedCalls).toHaveLength(0);
+    });
+
+    it('fails open on a transient insert error: message.sent still dispatches', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.insert as jest.Mock).mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+
+      callbacks.onMessageCreate!(makeMessage({ id: 'wa-out-busy', from: 'me@c.us', to: 'peer@c.us', fromMe: true }));
+      await flush();
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'message.sent', expect.anything());
+    });
+
+    it('gates persist (but NOT dispatch) on STORE_EPHEMERAL_MESSAGES=false for ephemeral echoes', async () => {
+      // Unlike onMessage (which skips persist AND dispatch for ephemeral), the own-send path's dispatch
+      // is today's contract and stays; only storage honors the opt-out.
+      process.env.STORE_EPHEMERAL_MESSAGES = 'false';
+      const callbacks = await startAndCaptureCallbacks();
+      (hookManager.execute as jest.Mock).mockImplementation((_e: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (messageRepository.insert as jest.Mock).mockClear();
+
+      callbacks.onMessageCreate!(
+        makeMessage({ id: 'wa-out-eph', from: 'me@c.us', to: 'peer@c.us', fromMe: true, ephemeralDuration: 86400 }),
+      );
+      await flush();
+
+      expect(messageRepository.insert).not.toHaveBeenCalled();
+      expect(dispatchedEvents('message.sent')).toHaveLength(1);
+      delete process.env.STORE_EPHEMERAL_MESSAGES;
+    });
+
+    it('synthesizes the omitted media marker for a media echo carrying no media (wwjs shape)', async () => {
+      // wwjs' buildIncomingMessageBase never attaches media to the own-send echo; without the marker
+      // the dashboard renders an empty bubble and the by-type stats filter would skip the row.
+      const callbacks = await startAndCaptureCallbacks();
+      (hookManager.execute as jest.Mock).mockImplementation((_e: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (messageRepository.create as jest.Mock).mockClear();
+
+      callbacks.onMessageCreate!(
+        makeMessage({ id: 'wa-out-img', from: 'me@c.us', to: 'peer@c.us', fromMe: true, type: 'image', body: '' }),
+      );
+      await flush();
+
+      const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
+      expect(row.metadata).toEqual({ media: { mimetype: '', omitted: true } });
+    });
+
+    it('passes a Baileys-style omitted marker through unchanged', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (hookManager.execute as jest.Mock).mockImplementation((_e: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (messageRepository.create as jest.Mock).mockClear();
+      const marker = { mimetype: 'image/png', omitted: true, sizeBytes: 1234 };
+
+      callbacks.onMessageCreate!(
+        makeMessage({ id: 'wa-out-img2', from: 'me@c.us', to: 'peer@c.us', fromMe: true, type: 'image', body: '', media: marker }),
+      );
+      await flush();
+
+      const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
+      expect(row.metadata).toEqual({ media: marker });
     });
 
     it('scopes the ack status UPDATE by sessionId, not just waMessageId', async () => {
@@ -2495,6 +2594,41 @@ describe('SessionService', () => {
         expect(qb.orIgnore).toHaveBeenCalled();
         expect(execute).toHaveBeenCalled();
         expect(messageRepository.save).not.toHaveBeenCalled(); // no longer the throwing path
+      });
+
+      it('synthesizes the omitted media marker for media-free history rows (no empty bubbles)', async () => {
+        // History sync maps messages media-free (footprint). A media row persisted WITHOUT the marker
+        // renders as an empty bubble in the dashboard (the DB copy wins the merge over the engine
+        // placeholder) and is skipped by the by-type stats filter.
+        const callbacks = await startAndCaptureCallbacks();
+        const execute = jest.fn().mockResolvedValue({ identifiers: [] });
+        const qb = {
+          insert: jest.fn().mockReturnThis(),
+          values: jest.fn().mockReturnThis(),
+          orIgnore: jest.fn().mockReturnThis(),
+          execute,
+        };
+        (messageRepository.createQueryBuilder as jest.Mock) = jest.fn().mockReturnValue(qb);
+        (messageRepository.find as jest.Mock).mockResolvedValue([]); // nothing pre-seen
+        (messageRepository.create as jest.Mock).mockImplementation((data: Record<string, unknown>) => ({ ...data }));
+
+        callbacks.onHistoryMessages?.([
+          {
+            id: 'h-img',
+            from: 'me@c.us',
+            to: 'peer@c.us',
+            chatId: 'peer@c.us',
+            body: '',
+            type: 'image',
+            timestamp: 1,
+            fromMe: true,
+            isGroup: false,
+          },
+        ]);
+        await flush();
+
+        const rows = qb.values.mock.calls[0][0] as Array<Record<string, unknown>>;
+        expect(rows[0].metadata).toEqual({ media: { mimetype: '', omitted: true } });
       });
     });
 

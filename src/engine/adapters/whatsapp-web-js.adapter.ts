@@ -625,11 +625,27 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         return;
       }
 
-      try {
-        this.callbacks.onMessageCreate?.(buildIncomingMessageBase(msg));
-      } catch (error) {
-        this.logger.error('Error processing outgoing message', String(error));
-      }
+      void (async () => {
+        const incomingMessage = buildIncomingMessageBase(msg);
+        // Enrich with the media payload through the same capped path the incoming handler uses —
+        // the base builder is sync and carries none, so a phone-sent image would otherwise persist
+        // and render as a bare 📎 marker even though the media is downloadable right here.
+        if (msg.hasMedia) {
+          try {
+            incomingMessage.media = await this.capInboundMediaFor(msg);
+          } catch (error) {
+            this.logger.warn('Own-send media download failed; emitting echo without media', {
+              msgId: msg.id?._serialized,
+              error: String(error),
+            });
+          }
+        }
+        try {
+          this.callbacks.onMessageCreate?.(incomingMessage);
+        } catch (error) {
+          this.logger.error('Error processing outgoing message', String(error));
+        }
+      })();
     });
 
     this.client.on('message_ack', (msg, ack) => {

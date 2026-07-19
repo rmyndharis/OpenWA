@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { SessionService } from '../session/session.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
 import { SendTemplateMessageDto } from './dto/send-template.dto';
@@ -16,6 +17,7 @@ import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/secu
 import { userPart } from '../../engine/identity/wa-id';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 
 export interface GetMessagesOptions {
   chatId?: string;
@@ -580,9 +582,32 @@ export class MessageService {
     try {
       await this.messageRepository.save(message);
     } catch (persistError) {
-      this.logger.warn(`Persisting SENT state failed after a successful send (id=${result.id})`, {
-        error: persistError instanceof Error ? persistError.message : String(persistError),
-      });
+      if (result.id && isUniqueConstraintError(persistError)) {
+        // The engine's own-send echo (onMessageCreate) won the race and already persisted a row with
+        // this waMessageId. That row carries only a media-less marker — merge our SENT state AND our
+        // metadata (the actual media payload) onto it BEFORE dropping this redundant PENDING row, or
+        // the payload-bearing row is the one that gets deleted and the media is gone after a reload.
+        // Best-effort throughout: the send itself already succeeded.
+        this.logger.debug(`Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`, {
+          messageId: message.id,
+        });
+        const patch: QueryDeepPartialEntity<Message> = { status: MessageStatus.SENT, timestamp: result.timestamp };
+        if (message.metadata) {
+          patch.metadata = message.metadata as QueryDeepPartialEntity<Record<string, unknown>>;
+        }
+        await this.messageRepository
+          .update({ sessionId: message.sessionId, waMessageId: result.id }, patch)
+          .catch(err =>
+            this.logger.warn(`Merging SENT state onto the echo-persisted row failed (id=${result.id})`, {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        await this.messageRepository.delete({ id: message.id }).catch(() => undefined);
+      } else {
+        this.logger.warn(`Persisting SENT state failed after a successful send (id=${result.id})`, {
+          error: persistError instanceof Error ? persistError.message : String(persistError),
+        });
+      }
     }
     return { messageId: result.id, timestamp: result.timestamp };
   }
