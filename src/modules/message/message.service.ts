@@ -588,9 +588,12 @@ export class MessageService {
         // metadata (the actual media payload) onto it BEFORE dropping this redundant PENDING row, or
         // the payload-bearing row is the one that gets deleted and the media is gone after a reload.
         // Best-effort throughout: the send itself already succeeded.
-        this.logger.debug(`Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`, {
-          messageId: message.id,
-        });
+        this.logger.debug(
+          `Send echo already persisted ${result.id}; merging state and dropping the redundant pending row`,
+          {
+            messageId: message.id,
+          },
+        );
         const patch: QueryDeepPartialEntity<Message> = { status: MessageStatus.SENT, timestamp: result.timestamp };
         if (message.metadata) {
           patch.metadata = message.metadata as QueryDeepPartialEntity<Record<string, unknown>>;

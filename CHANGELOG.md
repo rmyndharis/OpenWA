@@ -19,6 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are started with an `--openwa-session=<id>` marker arg, and any leftover browser process carrying
   this session's marker from a previous process lifetime (e.g. after the gateway itself was killed)
   is terminated before the new launch, alongside the existing stale Singleton-file cleanup.
+- Messages composed on a linked phone are now persisted to local history (previously only API
+  sends and inbound messages were stored). Deduplication against the REST send path is atomic on the
+  existing unique message index, and delivery/read state advances via acks on these rows as well.
+- The whatsapp-web.js own-send echo now downloads media through the same capped inbound path as
+  inbound messages (declared-size pre-gate, timeout, concurrency limiter), so phone-composed images
+  persist and render with their real payload.
+
+### Changed
+
+- Dashboard theming is simplified to a single light/dark toggle button; the accent-palette picker
+  was removed for maintainability. The stored theme is applied before first paint, so standalone
+  routes no longer flash the OS default, and the message-analytics chart now defaults to 24h.
+- The dev compose defaults `AUTO_START_SESSIONS=true`, so previously authenticated sessions come
+  back by themselves after a container restart (the application-level default stays off).
+
+### Removed
+
+- Verified dead dashboard code: unused CSS across multiple pages, dead client methods and utilities,
+  unused image assets, and 39 unused i18n keys across all locales.
 
 ### Fixed
 
@@ -38,6 +57,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   force-killed browser can never block startup; and page transport errors (`Protocol error`,
   `Target closed`, detached frame, …) observed during send/query operations are now treated as an
   immediate death signal, cutting dead-session detection from minutes to the first failed call.
+- Sent images no longer vanish from the chat thread: the realtime own-send echo carries no media
+  payload by design, and the live cache merge replaced metadata wholesale, wiping the optimistic
+  bubble's base64. Metadata now merges per field (a real payload always beats a payload-less echo
+  marker), and the post-send reconciliation folds the optimistic copy into the echo row.
+- Chat thread scrolling now behaves on every path: opens at the latest message, restores the exact
+  per-chat position when returning (position is saved continuously, not read after the content
+  swap), and stays pinned while media decodes instead of clamping the restore to the pre-decode
+  height — releasing cleanly on user scroll.
+- The messages-by-type chart no longer shows a misleading Unknown slice: rows with no body and no
+  metadata (content-less system/event rows) are excluded from the aggregation.
+- Full-text search self-heals its schema at boot when migrations are skipped (`DATABASE_SYNCHRONIZE=true`),
+  and SQLite FTS5 queries are sanitized per token, so phone numbers, chat identifiers, quotes, and
+  parentheses no longer fail as malformed queries.
+- Audit log rows now carry the resolved API key and client IP for every call site: the values are
+  stamped into the per-request async context by the auth guard and auto-filled on write (explicit
+  context still wins).
+- Dashboard readability and behavior: the send button stays readable when disabled, API Keys badges
+  render on desktop (rules were stranded in a mobile-only media query), the Templates page gets real
+  primary/secondary button styles, fourteen dark-mode selectors are corrected so dark mode applies,
+  Sessions modals regain the 90vh cap with a scrolling body, QR provisioning uses the realtime push
+  with fetching gated to `qr_ready` (no more expected-but-noisy 400 console errors), and enabling a
+  plugin with unset required config opens its config dialog with a warning instead of failing with a
+  raw sandbox error.
 
 ## [0.9.0] - 2026-07-18
 

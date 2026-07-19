@@ -1652,6 +1652,7 @@ describe('SessionService', () => {
 
       expect(dispatchedEvents('message.sent')).toHaveLength(1); // webhook/WS contract unchanged
       expect(messageRepository.insert).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
       expect(row).toMatchObject({
         sessionId: 'sess-uuid-1',
@@ -1729,6 +1730,7 @@ describe('SessionService', () => {
       );
       await flush();
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
       expect(row.metadata).toEqual({ media: { mimetype: '', omitted: true } });
     });
@@ -1742,10 +1744,19 @@ describe('SessionService', () => {
       const marker = { mimetype: 'image/png', omitted: true, sizeBytes: 1234 };
 
       callbacks.onMessageCreate!(
-        makeMessage({ id: 'wa-out-img2', from: 'me@c.us', to: 'peer@c.us', fromMe: true, type: 'image', body: '', media: marker }),
+        makeMessage({
+          id: 'wa-out-img2',
+          from: 'me@c.us',
+          to: 'peer@c.us',
+          fromMe: true,
+          type: 'image',
+          body: '',
+          media: marker,
+        }),
       );
       await flush();
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const row = (messageRepository.create as jest.Mock).mock.calls[0][0] as Partial<Message>;
       expect(row.metadata).toEqual({ media: marker });
     });
@@ -2627,6 +2638,7 @@ describe('SessionService', () => {
         ]);
         await flush();
 
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         const rows = qb.values.mock.calls[0][0] as Array<Record<string, unknown>>;
         expect(rows[0].metadata).toEqual({ media: { mimetype: '', omitted: true } });
       });

@@ -95,8 +95,8 @@ a non-admin hitting the path falls through to the `*` redirect.
 ```
 
 > There is **no Settings page** and no `/sessions/:id`, `/sessions/:id/chat`, or `/webhooks/:id`
-> route. Theme (light/dark/system) and color-palette selection live in a popover menu in the sidebar
-> footer (`Layout.tsx`), persisted client-side by the `useTheme` hook.
+> route. Theme (light/dark/system) is a one-click toggle in the sidebar footer (`Layout.tsx`),
+> persisted client-side by the `useTheme` hook.
 
 ## 17.3 Wireframes
 
@@ -354,7 +354,7 @@ each with a colocated CSS file. There is no design-system package to pull from.
 
 | Component | File | Responsibility |
 | --- | --- | --- |
-| `Layout` | `components/Layout.tsx` | App shell: collapsible sidebar nav, mobile drawer, language menu, theme/palette popover, logout, live version badge |
+| `Layout` | `components/Layout.tsx` | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark theme toggle, logout, live version badge |
 | `ToastProvider` / `useToast` | `components/Toast.tsx` | Context-based toast notifications (success/error/warning/info) with de-dup keys |
 | `PageHeader` | `components/PageHeader.tsx` | Shared page title / subtitle / badge / actions header |
 | `DashboardCharts` | `components/DashboardCharts.tsx` | `recharts`-based message-volume / activity charts on the Dashboard |
@@ -401,7 +401,7 @@ library — those visuals are composed directly with `div`s and the page's own C
 
 There is **no Zustand store** (and no global client-state library). Server data is owned by
 **TanStack Query** (`@tanstack/react-query`); the only other shared state is two small React Context
-providers — `useRole` (the authenticated key's role) and `useTheme` (mode + palette, persisted to
+providers — `useRole` (the authenticated key's role) and `useTheme` (mode, persisted to
 `localStorage`).
 
 ### API client — raw payloads, no `{ data }` envelope
@@ -569,26 +569,23 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 ## 17.7 Theme Configuration
 
 Theming is **not** shadcn HSL design tokens. It is a plain `useTheme` hook (`src/hooks/useTheme.ts`)
-that toggles two attributes on `<html>` and lets the CSS do the rest. The values are persisted to
-`localStorage` under `openwa_theme` and `openwa_palette`:
+that toggles one attribute on `<html>` and lets the CSS do the rest. The value is persisted to
+`localStorage` under `openwa_theme`:
 
 - **Mode** — `light | dark | system`. `system` removes `data-theme` so a `prefers-color-scheme`
   media query in the global CSS takes over; otherwise `data-theme="light|dark"` is set explicitly.
-- **Palette** — one of seven accent palettes (`openwa`, `blue`, `graphite`, `indigo`, `amber`,
-  `rose`, `teal`), applied as `data-palette="…"`. Each palette is a set of CSS custom properties
-  scoped to that attribute selector.
 
-The mode/palette pickers render in the sidebar footer popover (`Layout.tsx`); there is no
-`ThemeProvider` context wrapper — it's a hook consumed directly where needed.
+The sidebar footer button toggles light ↔ dark directly (resolving `system` first); there is no
+picker popover and no `ThemeProvider` context wrapper — it's a hook consumed directly where needed.
+An earlier accent-palette picker (seven palettes via `data-palette`) was removed for
+maintainability; the legacy `openwa_palette` storage key and the attribute are cleaned up on load.
 
 ```typescript
 // src/hooks/useTheme.ts (abridged)
 export type Theme = 'light' | 'dark' | 'system';
-export type ThemePalette = 'openwa' | 'blue' | 'graphite' | 'indigo' | 'amber' | 'rose' | 'teal';
 
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(/* localStorage 'openwa_theme' ?? 'system' */);
-  const [palette, setPalette] = useState<ThemePalette>(/* localStorage 'openwa_palette' ?? 'openwa' */);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -597,18 +594,13 @@ export function useTheme() {
     localStorage.setItem('openwa_theme', theme);
   }, [theme]);
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-palette', palette);
-    localStorage.setItem('openwa_palette', palette);
-  }, [palette]);
-
-  return { theme, setTheme, palette, setPalette, /* resolvedTheme, paletteOptions, ... */ };
+  return { theme, setTheme, /* toggleTheme, resolvedTheme */ };
 }
 ```
 
-The actual colors live in the global CSS as variables keyed off `[data-theme]` / `[data-palette]` —
-e.g. `:root { --color-accent: #25d366; } [data-palette='blue'] { --color-accent: #2563eb; }` — so
-switching mode or palette is a single attribute write with no re-render of the tree.
+The actual colors live in the global CSS as variables keyed off `[data-theme]` —
+e.g. `:root { --color-accent: #25d366; } [data-theme='dark'] { --color-accent: #25d366; }` — so
+switching mode is a single attribute write with no re-render of the tree.
 
 ## 17.8 Build & Deployment
 
