@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter, Skull } from 'lucide-react';
+import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, Search, Filter, Skull } from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
 import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -10,6 +10,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
 import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
+import { Modal } from '../components/Modal';
 import './Sessions.css';
 
 export function Sessions() {
@@ -396,43 +397,13 @@ export function Sessions() {
       )}
 
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.create.title')}</h2>
-              <button className="btn-icon" onClick={() => setShowCreateModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label>{t('sessions.create.label')}</label>
-              <input
-                type="text"
-                placeholder={t('sessions.create.placeholder')}
-                value={newSessionName}
-                onChange={e => {
-                  const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
-                  setNewSessionName(value);
-                }}
-                onKeyDown={e => e.key === 'Enter' && handleCreate()}
-              />
-              <p className="input-hint">
-                <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
-              </p>
-              {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
-                <p className="input-error">{t('sessions.create.invalidChars')}</p>
-              )}
-              {newSessionName && newSessionName.length > 50 && (
-                <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
-              )}
-              {newSessionName &&
-                /^[a-z0-9-]+$/.test(newSessionName) &&
-                newSessionName.length <= 50 &&
-                sessions.some(s => s.name === newSessionName) && (
-                  <p className="input-error">{t('sessions.create.duplicate')}</p>
-                )}
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setShowCreateModal(false)}
+          title={t('sessions.create.title')}
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
                 {t('common.cancel')}
               </button>
@@ -449,279 +420,293 @@ export function Sessions() {
               >
                 {creating ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <label>{t('sessions.create.label')}</label>
+          <input
+            type="text"
+            placeholder={t('sessions.create.placeholder')}
+            value={newSessionName}
+            onChange={e => {
+              const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
+              setNewSessionName(value);
+            }}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+          />
+          <p className="input-hint">
+            <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
+          </p>
+          {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
+            <p className="input-error">{t('sessions.create.invalidChars')}</p>
+          )}
+          {newSessionName && newSessionName.length > 50 && (
+            <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
+          )}
+          {newSessionName &&
+            /^[a-z0-9-]+$/.test(newSessionName) &&
+            newSessionName.length <= 50 &&
+            sessions.some(s => s.name === newSessionName) && (
+              <p className="input-error">{t('sessions.create.duplicate')}</p>
+            )}
+        </Modal>
       )}
 
       {qrData && (
-        <div className="modal-overlay" onClick={handleCloseQRModal}>
-          <div className="modal qr-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <h2>{pairingMode ? t('sessions.pairing.tabPhone') : t('sessions.qr.title')}</h2>
-                <span className="session-name">{qrData.sessionName}</span>
+        <Modal
+          open
+          onClose={handleCloseQRModal}
+          className="qr-modal"
+          closeLabel={t('common.close')}
+          title={
+            <span className="modal-title">
+              {pairingMode ? t('sessions.pairing.tabPhone') : t('sessions.qr.title')}
+              <span className="session-name">{qrData.sessionName}</span>
+            </span>
+          }
+        >
+          <div style={{ textAlign: 'center' }}>
+            {!pairingCode && (
+              <div className="pairing-tabs" role="tablist">
+                <button
+                  role="tab"
+                  aria-selected={!pairingMode}
+                  className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
+                  onClick={() => {
+                    setPairingMode(false);
+                    setPairingError(null);
+                  }}
+                >
+                  {t('sessions.pairing.tabQr')}
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={pairingMode}
+                  className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
+                  onClick={() => {
+                    setPairingMode(true);
+                    setPairingError(null);
+                  }}
+                >
+                  {t('sessions.pairing.tabPhone')}
+                </button>
               </div>
-              <button className="btn-close" onClick={handleCloseQRModal} aria-label={t('common.close')}>
-                <X size={20} style={{ color: 'var(--text-muted)' }} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'center' }}>
-              {!pairingCode && (
-                <div className="pairing-tabs" role="tablist">
-                  <button
-                    role="tab"
-                    aria-selected={!pairingMode}
-                    className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
-                    onClick={() => {
-                      setPairingMode(false);
-                      setPairingError(null);
-                    }}
-                  >
-                    {t('sessions.pairing.tabQr')}
-                  </button>
-                  <button
-                    role="tab"
-                    aria-selected={pairingMode}
-                    className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
-                    onClick={() => {
-                      setPairingMode(true);
-                      setPairingError(null);
-                    }}
-                  >
-                    {t('sessions.pairing.tabPhone')}
-                  </button>
-                </div>
-              )}
+            )}
 
-              {!pairingMode ? (
-                // QR Code Content
-                qrData.qrCode ? (
+            {!pairingMode ? (
+              // QR Code Content
+              qrData.qrCode ? (
+                <>
+                  <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
+                  <div className="qr-instructions">
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} />
+                    </p>
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} />
+                    </p>
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} />
+                    </p>
+                  </div>
+                  <p className="qr-auto-refresh">
+                    <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
+                  </p>
+                </>
+              ) : (
+                <div style={{ padding: '2rem' }}>
+                  <Loader2 className="animate-spin" size={48} />
+                  <p>{t('sessions.qr.generating')}</p>
+                </div>
+              )
+            ) : (
+              // Pairing Code Content
+              <div className="pairing-container" role="tabpanel">
+                {pairingError && <div className="pairing-error">{pairingError}</div>}
+
+                {!pairingCode ? (
+                  <div className="pairing-form">
+                    <label htmlFor="pairing-phone" className="pairing-label">
+                      {t('sessions.pairing.phoneLabel')}
+                    </label>
+                    <input
+                      id="pairing-phone"
+                      className="pairing-input"
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={15}
+                      placeholder={t('sessions.pairing.phonePlaceholder')}
+                      value={phoneNumber}
+                      onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                      onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
+                    />
+                    <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
+                      {t('sessions.pairing.phoneHint')}
+                    </p>
+                    <button
+                      className="btn-primary"
+                      onClick={handleGeneratePairingCode}
+                      disabled={requestingPairing || !/^[0-9]{6,15}$/.test(phoneNumber.trim())}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      {requestingPairing ? (
+                        <>
+                          <Loader2 className="animate-spin" size={16} />
+                          <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
+                        </>
+                      ) : (
+                        t('sessions.pairing.generateButton')
+                      )}
+                    </button>
+                  </div>
+                ) : (
                   <>
-                    <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
+                    <label style={{ display: 'block', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {t('sessions.pairing.codeLabel')}
+                    </label>
+                    <div className="pairing-code-display">
+                      {pairingCode.substring(0, 4)} - {pairingCode.substring(4)}
+                    </div>
+
                     <div className="qr-instructions">
+                      <p className="pairing-instructions-title">{t('sessions.pairing.instructions')}</p>
                       <p className="qr-step">
-                        <Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} />
+                        <Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} />
                       </p>
                       <p className="qr-step">
-                        <Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} />
+                        <Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} />
                       </p>
                       <p className="qr-step">
-                        <Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} />
+                        <Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} />
                       </p>
                     </div>
-                    <p className="qr-auto-refresh">
-                      <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
-                    </p>
-                  </>
-                ) : (
-                  <div style={{ padding: '2rem' }}>
-                    <Loader2 className="animate-spin" size={48} />
-                    <p>{t('sessions.qr.generating')}</p>
-                  </div>
-                )
-              ) : (
-                // Pairing Code Content
-                <div className="pairing-container" role="tabpanel">
-                  {pairingError && <div className="pairing-error">{pairingError}</div>}
 
-                  {!pairingCode ? (
-                    <div className="pairing-form">
-                      <label htmlFor="pairing-phone" className="pairing-label">
-                        {t('sessions.pairing.phoneLabel')}
-                      </label>
-                      <input
-                        id="pairing-phone"
-                        className="pairing-input"
-                        type="tel"
-                        inputMode="numeric"
-                        maxLength={15}
-                        placeholder={t('sessions.pairing.phonePlaceholder')}
-                        value={phoneNumber}
-                        onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                        onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
-                      />
-                      <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
-                        {t('sessions.pairing.phoneHint')}
-                      </p>
+                    <div style={{ marginTop: '1.5rem' }}>
                       <button
-                        className="btn-primary"
-                        onClick={handleGeneratePairingCode}
-                        disabled={requestingPairing || !/^[0-9]{6,15}$/.test(phoneNumber.trim())}
-                        style={{ width: '100%', justifyContent: 'center' }}
+                        className="btn-secondary"
+                        onClick={() => {
+                          setPairingCode(null);
+                          setPhoneNumber('');
+                        }}
+                        style={{ width: '100%' }}
                       >
-                        {requestingPairing ? (
-                          <>
-                            <Loader2 className="animate-spin" size={16} />
-                            <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
-                          </>
-                        ) : (
-                          t('sessions.pairing.generateButton')
-                        )}
+                        {t('sessions.pairing.changeNumber')}
                       </button>
                     </div>
-                  ) : (
-                    <>
-                      <label style={{ display: 'block', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                        {t('sessions.pairing.codeLabel')}
-                      </label>
-                      <div className="pairing-code-display">
-                        {pairingCode.substring(0, 4)} - {pairingCode.substring(4)}
-                      </div>
 
-                      <div className="qr-instructions">
-                        <p className="pairing-instructions-title">{t('sessions.pairing.instructions')}</p>
-                        <p className="qr-step">
-                          <Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} />
-                        </p>
-                        <p className="qr-step">
-                          <Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} />
-                        </p>
-                        <p className="qr-step">
-                          <Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} />
-                        </p>
-                        <p className="qr-step">
-                          <Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} />
-                        </p>
-                      </div>
-
-                      <div style={{ marginTop: '1.5rem' }}>
-                        <button
-                          className="btn-secondary"
-                          onClick={() => {
-                            setPairingCode(null);
-                            setPhoneNumber('');
-                          }}
-                          style={{ width: '100%' }}
-                        >
-                          {t('sessions.pairing.changeNumber')}
-                        </button>
-                      </div>
-
-                      <p className="qr-auto-refresh">
-                        <RefreshCw size={14} className="spin-slow" /> {t('sessions.pairing.waitingConnection')}
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+                    <p className="qr-auto-refresh">
+                      <RefreshCw size={14} className="spin-slow" /> {t('sessions.pairing.waitingConnection')}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
 
       {selectedSession && (
-        <div className="modal-overlay" onClick={() => setSelectedSession(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.details.title')}</h2>
-              <button className="btn-icon" onClick={() => setSelectedSession(null)}>
-                <X size={20} />
-              </button>
+        <Modal
+          open
+          onClose={() => setSelectedSession(null)}
+          title={t('sessions.details.title')}
+          closeLabel={t('common.close')}
+          footer={
+            <button className="btn-secondary" onClick={() => setSelectedSession(null)}>
+              {t('common.close')}
+            </button>
+          }
+        >
+          <div className="detail-grid">
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.name')}</span>
+              <span className="detail-value">{selectedSession.name}</span>
             </div>
-            <div className="modal-body">
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.name')}</span>
-                  <span className="detail-value">{selectedSession.name}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.status')}</span>
-                  <span className={`status-badge ${selectedSession.status}`}>
-                    {formatStatus(selectedSession.status)}
-                  </span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.sessionId')}</span>
-                  <span className="detail-value mono">{selectedSession.id}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.phone')}</span>
-                  <span className="detail-value">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.created')}</span>
-                  <span className="detail-value">{new Date(selectedSession.createdAt).toLocaleString()}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.lastActive')}</span>
-                  <span className="detail-value">
-                    {selectedSession.lastActive
-                      ? new Date(selectedSession.lastActive).toLocaleString()
-                      : t('common.never')}
-                  </span>
-                </div>
-              </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.status')}</span>
+              <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
             </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setSelectedSession(null)}>
-                {t('common.close')}
-              </button>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.sessionId')}</span>
+              <span className="detail-value mono">{selectedSession.id}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.phone')}</span>
+              <span className="detail-value">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.created')}</span>
+              <span className="detail-value">{new Date(selectedSession.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.lastActive')}</span>
+              <span className="detail-value">
+                {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
+              </span>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {deleteConfirmId && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirmId(null)}>
-          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.delete.title')}</h2>
-              <button className="btn-icon" onClick={() => setDeleteConfirmId(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>
-                <Trans
-                  i18nKey="sessions.delete.message"
-                  values={{ name: sessions.find(s => s.id === deleteConfirmId)?.name }}
-                  components={{ strong: <strong /> }}
-                />
-              </p>
-              <p className="text-muted">{t('sessions.delete.warning')}</p>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setDeleteConfirmId(null)}
+          title={t('sessions.delete.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={() => handleDelete(deleteConfirmId)}>
                 {t('common.delete')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.delete.message"
+              values={{ name: sessions.find(s => s.id === deleteConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.delete.warning')}</p>
+        </Modal>
       )}
 
       {killConfirmId && (
-        <div className="modal-overlay" onClick={() => setKillConfirmId(null)}>
-          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.forceKill.title')}</h2>
-              <button className="btn-icon" onClick={() => setKillConfirmId(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>
-                <Trans
-                  i18nKey="sessions.forceKill.message"
-                  values={{ name: sessions.find(s => s.id === killConfirmId)?.name }}
-                  components={{ strong: <strong /> }}
-                />
-              </p>
-              <p className="text-muted">{t('sessions.forceKill.warning')}</p>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setKillConfirmId(null)}
+          title={t('sessions.forceKill.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setKillConfirmId(null)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={() => handleForceKill(killConfirmId)}>
                 {t('sessions.forceKill.confirm')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.forceKill.message"
+              values={{ name: sessions.find(s => s.id === killConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.forceKill.warning')}</p>
+        </Modal>
       )}
 
       <div className="sessions-grid">
