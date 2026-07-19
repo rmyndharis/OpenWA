@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.btn-danger` classes (28 page-scoped copies removed), so padding, radius, hover, and disabled
   states are consistent across pages; the Plugins hover now uses the `--primary-hover` token and
   danger buttons use the single `--error` red.
+- The Infrastructure page's inline-styled elements (including the restart/migration progress modal) are
+  moved to scoped CSS classes, so all surfaces stay on the design-token system.
 
 ### Removed
 

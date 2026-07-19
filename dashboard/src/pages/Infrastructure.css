@@ -566,3 +566,180 @@
   align-items: center;
   gap: 0.35rem;
 }
+
+/* Loading / status-load-error states */
+.infrastructure-page.infra-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.infrastructure-page .status-error-card {
+  text-align: center;
+  padding: 2.5rem;
+}
+
+.infrastructure-page .status-error-icon {
+  color: var(--warning, #d97706);
+  margin-bottom: 1rem;
+}
+
+.infrastructure-page .status-error-text {
+  margin: 0;
+}
+
+.infrastructure-page .status-error-retry {
+  margin-top: 1.25rem;
+}
+
+/* Toggle-row spacing variants */
+.infrastructure-page .toggle-row-spaced {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.infrastructure-page .toggle-row-spaced-bottom {
+  margin-bottom: 1rem;
+}
+
+.infrastructure-page .queue-toggle-row {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+  margin-top: 0.5rem;
+}
+
+/* Empty-state cards (migrations status, redis disabled) */
+.infrastructure-page .empty-state-card {
+  padding: 2.5rem;
+  text-align: center;
+  background: var(--bg-light);
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  margin-top: 1rem;
+}
+
+.infrastructure-page .empty-state-icon {
+  margin-bottom: 1rem;
+}
+
+.infrastructure-page .empty-state-icon.success {
+  color: var(--success);
+  opacity: 0.7;
+}
+
+.infrastructure-page .empty-state-icon.muted {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.infrastructure-page .empty-state-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.infrastructure-page .migrations-status {
+  margin: 0.75rem 0 0;
+  color: var(--success);
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+/* Shared muted hint text (migration hint, engine notes, redis disabled) */
+.infrastructure-page .muted-hint {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.infrastructure-page .engine-restart-note {
+  margin: 1rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* Data backup / restore */
+.infrastructure-page .hidden-file-input {
+  display: none;
+}
+
+/* Restart / migration progress modal */
+.infrastructure-page .restart-modal {
+  max-width: 500px;
+  text-align: center;
+}
+
+.infrastructure-page .restart-modal-header {
+  justify-content: center;
+  border-bottom: none;
+}
+
+.infrastructure-page .restart-modal-body {
+  padding: 2rem;
+}
+
+.infrastructure-page .restart-idle-desc {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+.infrastructure-page .restart-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.infrastructure-page .restart-countdown {
+  margin-bottom: 1.5rem;
+}
+
+.infrastructure-page .restart-status-icon {
+  color: var(--success);
+  margin-bottom: 1rem;
+}
+
+.infrastructure-page .restart-countdown-msg {
+  font-size: 1.125rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.infrastructure-page .restart-progress-track {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.infrastructure-page .restart-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #10b981);
+  transition: width 1s linear;
+}
+
+.infrastructure-page .restart-dont-close {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.infrastructure-page .restart-success-msg {
+  font-size: 1rem;
+  color: var(--text-secondary);
+}
+
+.infrastructure-page .restart-error-msg {
+  font-size: 1rem;
+  color: var(--error);
+  margin-bottom: 1rem;
+}
