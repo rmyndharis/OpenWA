@@ -155,6 +155,14 @@
   justify-content: center;
   color: var(--text-secondary);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.chats-page .chat-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .chats-page .chat-item-card.active .chat-avatar {
@@ -319,6 +327,22 @@
   align-items: center;
   justify-content: center;
   color: var(--text-secondary);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.chats-page .room-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chats-page .room-contact-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
 }
 
 .chats-page .room-contact-info h3 {
@@ -326,12 +350,29 @@
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.chats-page .room-contact-info span {
-  font-size: 0.75rem;
+/* Prettified phone (or "Group" / "Private contact" label for non-personal JIDs). Primary subtitle
+   line directly under the name — what an operator reads first. */
+.chats-page .room-contact-phone {
+  font-size: 0.8125rem;
   color: var(--text-muted);
-  font-family: monospace;
+  line-height: 1.2;
+}
+
+/* Raw JID preserved for technical use (lid resolution, webhook payloads, group ids). Muted mono,
+   below the phone, truncated to keep the header compact — the full value is in the title tooltip. */
+.chats-page .room-contact-jid {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chats-page .room-messages {
@@ -343,6 +384,44 @@
   gap: 0.75rem;
   background-image: radial-gradient(var(--border) 1px, transparent 0);
   background-size: 24px 24px;
+  position: relative;
+}
+
+/* Floating scroll-to-bottom button. Sits at the bottom-right of the messages pane (not the footer)
+   so it overlays the conversation without stealing input-bar space. The default desktop scrollbar
+   gutter leaves ~15px to the right edge; we anchor a bit further in so the button doesn't overlap
+   the scrollbar on narrow viewports. */
+.chats-page .scroll-to-bottom-btn {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 1rem;
+  z-index: 5;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-white);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    transform 0.1s;
+  padding: 0;
+}
+
+.chats-page .scroll-to-bottom-btn:hover {
+  background: var(--bg-light);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.chats-page .scroll-to-bottom-btn:active {
+  transform: scale(0.94);
 }
 
 .chats-page .messages-loading {

@@ -104,6 +104,9 @@
     "send": "Enviar",
     "placeholderTitle": "Comece a digitar",
     "placeholderDesc": "Selecione um chat ativo na barra lateral esquerda para ler e enviar mensagens do WhatsApp.",
+    "scrollToBottom": "Ir para a mais recente",
+    "groupSubtitle": "Grupo",
+    "privateContactSubtitle": "Contato privado",
     "deleteConfirm": "Excluir esta mensagem para todos?",
     "messageDeleted": "🚫 Esta mensagem foi excluída",
     "messageMasked": "🔒 Ocultada pelo WhatsApp em dispositivos vinculados — verifique no seu telefone principal",
@@ -760,7 +763,9 @@
         "confirm": "Regenerar o segredo de assinatura de {{id}}? O segredo atual deixará de funcionar imediatamente.",
         "action": "Regenerar"
       },
-      "edit": { "title": "Editar {{id}}" },
+      "edit": {
+        "title": "Editar {{id}}"
+      },
       "delete": {
         "title": "Excluir instância",
         "confirm": "Excluir a instância {{id}}? A URL de entrada e o segredo dela deixarão de funcionar imediatamente.",
@@ -795,7 +800,9 @@
     "empty": "Nenhuma mensagem encontrada.",
     "error": "Falha na pesquisa. Tente novamente.",
     "unavailable": "A pesquisa não está configurada.",
-    "scope": { "current": "Esta sessão" },
+    "scope": {
+      "current": "Esta sessão"
+    },
     "loading": "Pesquisando…"
   }
 }

@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trap with initial focus, background scroll lock, and `role="dialog"` semantics. The Sessions page
   modals are the first to use it, gaining those behaviors plus a pinned header/footer with a
   scrolling body on long content.
+- The Chats room header now shows the contact or group profile picture (fetched through the existing
+  `GET /sessions/:id/contacts/:id/profile-picture` endpoint, cached for one hour, with the icon
+  fallback preserved when the engine returns no URL), a floating scroll-to-bottom button appears in
+  the messages pane once the reader scrolls away from the latest message, and the room header shows
+  the prettified phone number (e.g. `628123456789@c.us` → `+62 812 345 6789`) as the primary
+  subtitle for personal chats — with the raw JID retained on a muted monospace line for technical
+  use (lid resolution, webhook payloads, group ids). The composer send icon was also enlarged to
+  better match its 48 px button.
 
 ### Changed
 
@@ -36,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was removed for maintainability. The global `h2` is a real heading
   again instead of a forced small uppercase eyebrow (section/card titles were smaller than body
   text); the eyebrow look survives as an opt-in `.eyebrow` class.
- The stored theme is applied before first paint, so standalone
+  The stored theme is applied before first paint, so standalone
   routes no longer flash the OS default, and the message-analytics chart now defaults to 24h.
 - The dev compose defaults `AUTO_START_SESSIONS=true`, so previously authenticated sessions come
   back by themselves after a container restart (the application-level default stays off).
@@ -63,7 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundled extensions removed in v0.7 (`auto-reply`, `translation`): when their code directory has no
   manifest, the stale registry entry is pruned at startup. The guard is scoped to those known ids so
   a temporarily unreadable plugin directory never loses its persisted config.
-
 
 - Long-lived sessions no longer die permanently after hours of uptime. A dead whatsapp-web.js
   Chromium (browser process exit, renderer crash, or closed page) is now detected through the

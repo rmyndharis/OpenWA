@@ -104,6 +104,9 @@
     "send": "发送",
     "placeholderTitle": "开始聊天",
     "placeholderDesc": "从左侧边栏选择一个活跃聊天，即可开始阅读和发送 WhatsApp 消息。",
+    "scrollToBottom": "滚动到最新",
+    "groupSubtitle": "群组",
+    "privateContactSubtitle": "私人联系人",
     "deleteConfirm": "为所有人删除此消息？",
     "messageDeleted": "🚫 此消息已被删除",
     "messageMasked": "🔒 WhatsApp 已对关联设备隐藏此消息 — 请在主手机上查看",
@@ -760,7 +763,9 @@
         "confirm": "要重新生成 {{id}} 的签名密钥吗？当前密钥将立即失效。",
         "action": "重新生成"
       },
-      "edit": { "title": "编辑 {{id}}" },
+      "edit": {
+        "title": "编辑 {{id}}"
+      },
       "delete": {
         "title": "删除实例",
         "confirm": "要删除实例 {{id}} 吗？其接入 URL 和密钥将立即失效。",
@@ -795,7 +800,9 @@
     "empty": "未找到消息。",
     "error": "搜索失败。请重试。",
     "unavailable": "搜索未配置。",
-    "scope": { "current": "当前会话" },
+    "scope": {
+      "current": "当前会话"
+    },
     "loading": "搜索中…"
   }
 }

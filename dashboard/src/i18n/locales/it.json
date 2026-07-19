@@ -104,6 +104,9 @@
     "send": "Invia",
     "placeholderTitle": "Inizia a messaggiare",
     "placeholderDesc": "Seleziona una chat attiva dalla barra laterale a sinistra per iniziare a leggere e inviare messaggi WhatsApp.",
+    "scrollToBottom": "Vai al più recente",
+    "groupSubtitle": "Gruppo",
+    "privateContactSubtitle": "Contatto privato",
     "deleteConfirm": "Eliminare questo messaggio per tutti?",
     "messageDeleted": "🚫 Questo messaggio è stato eliminato",
     "messageMasked": "🔒 Nascosto da WhatsApp sui dispositivi collegati — controlla sul telefono principale",
@@ -760,7 +763,9 @@
         "confirm": "Rigenerare il segreto di firma per {{id}}? Il segreto attuale smetterà di funzionare immediatamente.",
         "action": "Rigenera"
       },
-      "edit": { "title": "Modifica {{id}}" },
+      "edit": {
+        "title": "Modifica {{id}}"
+      },
       "delete": {
         "title": "Elimina istanza",
         "confirm": "Eliminare l'istanza {{id}}? Il relativo URL di ingresso e segreto smetteranno di funzionare immediatamente.",
@@ -795,7 +800,9 @@
     "empty": "Nessun messaggio trovato.",
     "error": "Ricerca fallita. Riprova.",
     "unavailable": "La ricerca non è configurata.",
-    "scope": { "current": "Questa sessione" },
+    "scope": {
+      "current": "Questa sessione"
+    },
     "loading": "Ricerca…"
   }
 }

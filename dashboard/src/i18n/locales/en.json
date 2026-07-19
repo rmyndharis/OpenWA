@@ -104,6 +104,9 @@
     "send": "Send",
     "placeholderTitle": "Start messaging",
     "placeholderDesc": "Choose a conversation to read and reply.",
+    "scrollToBottom": "Scroll to latest",
+    "groupSubtitle": "Group",
+    "privateContactSubtitle": "Private contact",
     "deleteConfirm": "Delete this message for everyone?",
     "messageDeleted": "🚫 This message was deleted",
     "messageMasked": "🔒 Masked by WhatsApp for linked devices — check your primary phone",
@@ -760,7 +763,9 @@
         "confirm": "Regenerate the signing secret for {{id}}? The current secret stops working immediately.",
         "action": "Regenerate"
       },
-      "edit": { "title": "Edit {{id}}" },
+      "edit": {
+        "title": "Edit {{id}}"
+      },
       "delete": {
         "title": "Delete instance",
         "confirm": "Delete instance {{id}}? Its ingress URL and secret stop working immediately.",
@@ -795,7 +800,9 @@
     "empty": "No messages found.",
     "error": "Search failed. Try again.",
     "unavailable": "Search is not configured.",
-    "scope": { "current": "This session" },
+    "scope": {
+      "current": "This session"
+    },
     "loading": "Searching…"
   }
 }

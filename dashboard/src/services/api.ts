@@ -545,9 +545,19 @@ export interface CheckNumberResponse {
   whatsappId: string | null;
 }
 
+export interface ProfilePictureResponse {
+  /** Signed CDN URL for the contact/group picture, or null when hidden / unavailable. */
+  url: string | null;
+}
+
 export const contactApi = {
   checkNumber: (sessionId: string, number: string) =>
     request<CheckNumberResponse>(`/sessions/${sessionId}/contacts/check/${encodeURIComponent(number)}`),
+  // Returns the contact/group profile picture URL. Both engines return null when the user hid their
+  // picture or has none. The URL is a signed WhatsApp CDN link that expires in a few hours, so the
+  // dashboard caches it for an hour (see useProfilePicture) and re-fetches on expiry.
+  profilePicture: (sessionId: string, contactId: string) =>
+    request<ProfilePictureResponse>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/profile-picture`),
 };
 
 // =============================================================================

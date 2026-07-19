@@ -16,7 +16,10 @@ import {
   X,
   CornerUpLeft,
   Trash2,
+  ChevronDown,
 } from 'lucide-react';
+import { useProfilePicture } from '../hooks/useProfilePicture';
+import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
@@ -139,6 +142,39 @@ export function Chats() {
     onMessageAppended,
     onMediaLoad,
   } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+
+  // Profile-picture fetch for the active room (cached 1h by useProfilePicture; TanStack Query
+  // dedupes, so other components querying the same key share this slice).
+  const activePp = useProfilePicture(selectedSessionId || undefined, activeChat?.id);
+
+  // Scroll-to-bottom button visibility. The main scroll-position memory is owned by
+  // useChatScrollPosition, which doesn't expose its pin state (intentionally — that would re-render
+  // the whole room on every scroll). This small listener tracks only the boolean "user is far from
+  // the bottom" so we can float the jump button.
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return undefined;
+    const onScroll = () => {
+      // 120px gap = a couple of message bubbles before counting as "scrolled up".
+      setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+    };
+    onScroll(); // sync initial position (e.g. saved restore landed above the bottom)
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  });
+
+  const handleJumpToBottom = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [messagesContainerRef]);
+
+  // Reset the jump button whenever the active chat changes: the new chat's content is restored by
+  // useChatScrollPosition and our listener will resync on its first scroll tick.
+  useEffect(() => {
+    setShowJumpToBottom(false);
+  }, [activeChat?.id]);
 
   // Popular emojis
   const popularEmojis = [
@@ -910,15 +946,53 @@ export function Chats() {
                   <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
                     <ArrowLeft size={20} />
                   </button>
-                  <div className="room-avatar">{activeChat.isGroup ? <Users size={20} /> : <User size={20} />}</div>
+                  <div className="room-avatar">
+                    {activePp.data ? (
+                      <img
+                        src={activePp.data}
+                        alt=""
+                        // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
+                        onError={() => activePp.refetch()}
+                      />
+                    ) : activeChat.isGroup ? (
+                      <Users size={20} />
+                    ) : (
+                      <User size={20} />
+                    )}
+                  </div>
                   <div className="room-contact-info">
                     <h3>{activeChat.name || activeChat.id.split('@')[0]}</h3>
-                    <span>{activeChat.id}</span>
+                    {/* For personal chats, show the prettified phone number (most common ask). For
+                        groups/LID, show a stable semantic label instead — the raw JID follows below
+                        for the technical case (lid debugging, group id lookups). */}
+                    <span className="room-contact-phone">
+                      {formatPhoneForDisplay(activeChat.id) ??
+                        (activeChat.isGroup ? t('chats.groupSubtitle') : t('chats.privateContactSubtitle'))}
+                    </span>
+                    {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:
+                        webhooks, message rows, lid resolution). Monospace + muted so it doesn't compete
+                        with the human-facing name/number. */}
+                    <span className="room-contact-jid" title={activeChat.id}>
+                      {activeChat.id}
+                    </span>
                   </div>
                 </header>
 
-                {/* Messages body */}
+                {/* Messages body. position:relative so the scroll-to-bottom button can float inside. */}
                 <div className="room-messages" ref={messagesContainerRef}>
+                  {/* Floating scroll-to-bottom button. Hidden while loading (no height to measure yet)
+                      and when the user is already at/near the bottom. */}
+                  {showJumpToBottom && !loadingMessages && (
+                    <button
+                      type="button"
+                      className="scroll-to-bottom-btn"
+                      onClick={handleJumpToBottom}
+                      aria-label={t('chats.scrollToBottom')}
+                      title={t('chats.scrollToBottom')}
+                    >
+                      <ChevronDown size={22} />
+                    </button>
+                  )}
                   {loadingMessages ? (
                     <div className="messages-loading">
                       <Loader2 className="animate-spin" size={32} />
@@ -1251,7 +1325,7 @@ export function Chats() {
                       className="btn-send-message"
                       aria-label={t('chats.send')}
                     >
-                      {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={24} strokeWidth={2.5} />}
+                      {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={28} strokeWidth={2.5} />}
                     </button>
                   </form>
                 </footer>

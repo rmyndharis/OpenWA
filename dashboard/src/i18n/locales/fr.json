@@ -104,6 +104,9 @@
     "send": "Envoyer",
     "placeholderTitle": "Commencer à discuter",
     "placeholderDesc": "Sélectionnez une discussion active dans la barre latérale gauche pour commencer à lire et envoyer des messages WhatsApp.",
+    "scrollToBottom": "Aller au plus récent",
+    "groupSubtitle": "Groupe",
+    "privateContactSubtitle": "Contact privé",
     "deleteConfirm": "Supprimer ce message pour tout le monde ?",
     "messageDeleted": "🚫 Ce message a été supprimé",
     "messageMasked": "🔒 Masqué par WhatsApp sur les appareils liés — consultez votre téléphone principal",
@@ -760,7 +763,9 @@
         "confirm": "Régénérer le secret de signature pour {{id}} ? Le secret actuel arrêtera de fonctionner immédiatement.",
         "action": "Régénérer"
       },
-      "edit": { "title": "Modifier {{id}}" },
+      "edit": {
+        "title": "Modifier {{id}}"
+      },
       "delete": {
         "title": "Supprimer l'instance",
         "confirm": "Supprimer l'instance {{id}} ? Son URL d'entrée et son secret arrêteront de fonctionner immédiatement.",
@@ -795,7 +800,9 @@
     "empty": "Aucun message trouvé.",
     "error": "Échec de la recherche. Réessayez.",
     "unavailable": "La recherche n'est pas configurée.",
-    "scope": { "current": "Cette session" },
+    "scope": {
+      "current": "Cette session"
+    },
     "loading": "Recherche…"
   }
 }
