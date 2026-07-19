@@ -18,6 +18,16 @@ test('parsePhoneFromJid returns null for LID privacy ids', () => {
   assert.equal(parsePhoneFromJid('abcdef@lid'), null);
 });
 
+test('parsePhoneFromJid returns null for a DIGITS-ONLY LID (privacy ids are not phones)', () => {
+  // The actual bug: a LID user part is all digits, so the digits check alone formatted it as a
+  // fake phone number ("+26 281 346 125 0071"). The domain guard rejects it first.
+  assert.equal(parsePhoneFromJid('262813461250071@lid'), null);
+});
+
+test('parsePhoneFromJid returns null for a digits-only GROUP id (not a phone either)', () => {
+  assert.equal(parsePhoneFromJid('120363404149049457@g.us'), null);
+});
+
 test('parsePhoneFromJid returns null for broadcast/newsletter/status JIDs', () => {
   assert.equal(parsePhoneFromJid('status@broadcast'), null);
   assert.equal(parsePhoneFromJid('abc@newsletter'), null);
@@ -34,6 +44,10 @@ test('formatPhoneForDisplay formats a US-style 11-digit number with 1-digit coun
 test('formatPhoneForDisplay returns null for non-phone JIDs (group/lid)', () => {
   assert.equal(formatPhoneForDisplay('120363abc@g.us'), null);
   assert.equal(formatPhoneForDisplay('xyz@lid'), null);
+});
+
+test('formatPhoneForDisplay returns null for a digits-only LID instead of inventing a phone', () => {
+  assert.equal(formatPhoneForDisplay('262813461250071@lid'), null);
 });
 
 test('formatPhoneForDisplay passes short codes through unchanged with a + prefix', () => {

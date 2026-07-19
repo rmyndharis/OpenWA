@@ -14,7 +14,12 @@
  */
 export function parsePhoneFromJid(jid: string): string | null {
   if (!jid) return null;
-  const local = jid.split('@')[0];
+  const [local, domain] = jid.split('@');
+  // Only personal-account domains carry a real phone number. LID privacy ids, groups, and
+  // status/broadcast/newsletter ids are digit-heavy too but are NOT phones — treating them as one
+  // formats a privacy/group id as a fake number (a LID like 262813461250071@lid displayed as
+  // "+26 281 346 125 0071").
+  if (domain && !domain.startsWith('c.us') && domain !== 's.whatsapp.net') return null;
   // Group participant ids include a colon + device, e.g. `628xxx@c.us:7`. Strip it for display.
   const user = local.split(':')[0];
   if (!/^\d+$/.test(user)) return null;

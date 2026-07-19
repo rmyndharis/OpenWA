@@ -19,6 +19,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
+import { useResolvedPhone } from '../hooks/useResolvedPhone';
 import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
@@ -87,6 +88,21 @@ const getMediaSrc = (media?: MessageMedia): string => {
   return `data:${media.mimetype};base64,${media.data}`;
 };
 
+// Chat list avatar: the same 1h-cached profile picture as the room header (shared TanStack Query
+// cache keyed by (sessionId, contactId), so the row and the header never fetch twice), falling
+// back to the generic person/group icon while it loads or when the picture is hidden/unavailable.
+function ChatAvatar({ sessionId, chat }: { sessionId: string; chat: Chat }) {
+  const pp = useProfilePicture(sessionId, chat.id);
+  if (pp.data) {
+    return (
+      <div className="chat-avatar">
+        <img src={pp.data} alt="" onError={() => pp.refetch()} />
+      </div>
+    );
+  }
+  return <div className="chat-avatar">{chat.isGroup ? <Users size={20} /> : <User size={20} />}</div>;
+}
+
 export function Chats() {
   const { t } = useTranslation();
   useDocumentTitle(t('nav.chats'));
@@ -146,6 +162,18 @@ export function Chats() {
   // Profile-picture fetch for the active room (cached 1h by useProfilePicture; TanStack Query
   // dedupes, so other components querying the same key share this slice).
   const activePp = useProfilePicture(selectedSessionId || undefined, activeChat?.id);
+
+  // Header phone line. Local formatting handles @c.us ids offline; for anything else personal
+  // (notably @lid privacy ids, which are NOT phones and must never be formatted as one) resolve
+  // the real number through the engine — cached a day, and only fired when local formatting failed.
+  const activePhoneDisplay = activeChat ? formatPhoneForDisplay(activeChat.id) : null;
+  const needsPhoneResolution = Boolean(activeChat && !activeChat.isGroup && !activePhoneDisplay);
+  const resolvedPhoneQ = useResolvedPhone(
+    needsPhoneResolution ? selectedSessionId || undefined : undefined,
+    needsPhoneResolution ? activeChat?.id : undefined,
+  );
+  const activePhoneText =
+    activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
 
   // Scroll-to-bottom button visibility. The main scroll-position memory is owned by
   // useChatScrollPosition, which doesn't expose its pin state (intentionally — that would re-render
@@ -912,7 +940,7 @@ export function Chats() {
                       className={`chat-item-card ${isActive ? 'active' : ''}`}
                       onClick={() => setActiveChat(chat)}
                     >
-                      <div className="chat-avatar">{chat.isGroup ? <Users size={20} /> : <User size={20} />}</div>
+                      <ChatAvatar sessionId={selectedSessionId} chat={chat} />
 
                       <div className="chat-item-info">
                         <div className="chat-item-top">
@@ -962,11 +990,12 @@ export function Chats() {
                   </div>
                   <div className="room-contact-info">
                     <h3>{activeChat.name || activeChat.id.split('@')[0]}</h3>
-                    {/* For personal chats, show the prettified phone number (most common ask). For
-                        groups/LID, show a stable semantic label instead — the raw JID follows below
-                        for the technical case (lid debugging, group id lookups). */}
+                    {/* Personal chats show the prettified phone number — local formatting for
+                        @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
+                        must never be formatted as one). Groups fall back to a semantic label;
+                        the raw JID follows below for the technical case. */}
                     <span className="room-contact-phone">
-                      {formatPhoneForDisplay(activeChat.id) ??
+                      {activePhoneText ??
                         (activeChat.isGroup ? t('chats.groupSubtitle') : t('chats.privateContactSubtitle'))}
                     </span>
                     {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:

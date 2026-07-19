@@ -656,6 +656,12 @@ export const contactApi = {
   // dashboard caches it for an hour (see useProfilePicture) and re-fetches on expiry.
   profilePicture: (sessionId: string, contactId: string) =>
     request<ProfilePictureResponse>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/profile-picture`),
+  // Best-effort resolution of a contact id (e.g. an @lid privacy id) to its phone number (MSISDN
+  // digits), or null when the engine can't map it. Cached a day by useResolvedPhone.
+  resolvePhone: (sessionId: string, contactId: string) =>
+    request<{ contactId: string; phone: string | null }>(
+      `/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}/phone`,
+    ),
 };
 
 // =============================================================================

@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The chat header no longer formats a LID privacy id as a fake phone number (e.g. "+26 281 346
+  125 0071"): digit-only LIDs and group ids are rejected by the phone formatter, and personal @lid
+  chats now resolve and display the real number through the engine (cached a day). Chat list rows
+  also render profile pictures now, sharing the room header's 1-hour cache instead of static icons.
+
+
 - Boot no longer warns about (and the plugin list no longer shows) ghost entries for the legacy
   bundled extensions removed in v0.7 (`auto-reply`, `translation`): when their code directory has no
   manifest, the stale registry entry is pruned at startup. The guard is scoped to those known ids so
