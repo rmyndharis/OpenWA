@@ -39,11 +39,7 @@ import { useRole } from '../hooks/useRole';
 import { useToast } from '../components/Toast';
 import { PageHeader } from '../components/PageHeader';
 import { GlobalSearch } from '../components/GlobalSearch';
-import {
-  useChatMessages,
-  useChatMessagesActions,
-  messagesQueryKey,
-} from '../hooks/useChatMessages';
+import { useChatMessages, useChatMessagesActions, messagesQueryKey } from '../hooks/useChatMessages';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
@@ -138,11 +134,33 @@ export function Chats() {
   // chat has any message (doesn't toggle per append) and covers both the
   // first-fetch resolution and a WS-driven first message on a previously-empty
   // chat. `loadingMessages` alone would miss the latter case.
-  const { containerRef: messagesContainerRef, onMessageAppended, onMediaLoad } =
-    useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+  const {
+    containerRef: messagesContainerRef,
+    onMessageAppended,
+    onMediaLoad,
+  } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
 
   // Popular emojis
-  const popularEmojis = ['😀', '😂', '👍', '❤️', '🔥', '👏', '🙏', '🎉', '💡', '🤔', '😅', '😍', '😊', '😭', '😎', '😜', '🚀', '✨'];
+  const popularEmojis = [
+    '😀',
+    '😂',
+    '👍',
+    '❤️',
+    '🔥',
+    '👏',
+    '🙏',
+    '🎉',
+    '💡',
+    '🤔',
+    '😅',
+    '😍',
+    '😊',
+    '😭',
+    '😎',
+    '😜',
+    '🚀',
+    '✨',
+  ];
 
   // 1. Fetch available connected sessions on mount
   useEffect(() => {
@@ -291,9 +309,7 @@ export function Chats() {
       });
       for (const [key, list] of caches) {
         if (!list) continue;
-        const idx = list.findIndex(
-          m => m.id === event.messageId || m.waMessageId === event.messageId,
-        );
+        const idx = list.findIndex(m => m.id === event.messageId || m.waMessageId === event.messageId);
         if (idx === -1) continue;
         const target = list[idx];
         // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
@@ -319,9 +335,7 @@ export function Chats() {
       });
       for (const [key, list] of caches) {
         if (!list) continue;
-        const idx = list.findIndex(
-          m => m.id === event.messageId || m.waMessageId === event.messageId,
-        );
+        const idx = list.findIndex(m => m.id === event.messageId || m.waMessageId === event.messageId);
         if (idx === -1) continue;
         const target = list[idx];
         const next = list.slice();
@@ -696,11 +710,12 @@ export function Chats() {
           waMessageId: result.messageId,
           status: 'sent',
         };
-        const echoAlreadyAdded = prev.some(
-          m => m.id === result.messageId || m.waMessageId === result.messageId,
-        );
+        const echoAlreadyAdded = prev.some(m => m.id === result.messageId || m.waMessageId === result.messageId);
         if (echoAlreadyAdded) {
-          return mergeOrAppend(prev.filter(m => m.id !== tempId), reconciled);
+          return mergeOrAppend(
+            prev.filter(m => m.id !== tempId),
+            reconciled,
+          );
         }
         return prev.map(m => (m.id === tempId ? reconciled : m));
       });
@@ -711,9 +726,7 @@ export function Chats() {
         if (chatIndex === -1) return prevChats;
         const updatedChats = [...prevChats];
         const target = { ...updatedChats[chatIndex] };
-        target.lastMessage = currentAttachment
-          ? `[${currentAttachment.mimetype.split('/')[0]}]`
-          : textToSend;
+        target.lastMessage = currentAttachment ? `[${currentAttachment.mimetype.split('/')[0]}]` : textToSend;
         target.timestamp = Math.floor(Date.now() / 1000);
         updatedChats.splice(chatIndex, 1);
         updatedChats.unshift(target);
@@ -780,11 +793,7 @@ export function Chats() {
       <PageHeader
         title={t('nav.chats')}
         subtitle={t('chats.subtitle')}
-        actions={
-          sessions.length > 0 && (
-            <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} />
-          )
-        }
+        actions={sessions.length > 0 && <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} />}
       />
 
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
@@ -810,8 +819,7 @@ export function Chats() {
           <h3>{t('chats.noSessionsTitle')}</h3>
           <p>
             <Trans i18nKey="chats.noSessionsDesc">
-              Please connect a WhatsApp session from the <strong>Sessions</strong> menu first to use the chat
-              feature.
+              Please connect a WhatsApp session from the <strong>Sessions</strong> menu first to use the chat feature.
             </Trans>
           </p>
         </div>
@@ -868,18 +876,14 @@ export function Chats() {
                       className={`chat-item-card ${isActive ? 'active' : ''}`}
                       onClick={() => setActiveChat(chat)}
                     >
-                      <div className="chat-avatar">
-                        {chat.isGroup ? <Users size={20} /> : <User size={20} />}
-                      </div>
+                      <div className="chat-avatar">{chat.isGroup ? <Users size={20} /> : <User size={20} />}</div>
 
                       <div className="chat-item-info">
                         <div className="chat-item-top">
                           <span className="chat-item-name" title={chat.name || chat.id}>
                             {chat.name || chat.id.split('@')[0]}
                           </span>
-                          {chat.timestamp && (
-                            <span className="chat-item-time">{formatChatTime(chat.timestamp)}</span>
-                          )}
+                          {chat.timestamp && <span className="chat-item-time">{formatChatTime(chat.timestamp)}</span>}
                         </div>
                         <div className="chat-item-bottom">
                           <span className="chat-item-snippet" title={formatLastMessageSnippet(chat)}>
@@ -887,9 +891,7 @@ export function Chats() {
                               <span className="no-message">{t('chats.noMessageYet')}</span>
                             )}
                           </span>
-                          {chat.unreadCount > 0 && (
-                            <span className="chat-unread-badge">{chat.unreadCount}</span>
-                          )}
+                          {chat.unreadCount > 0 && <span className="chat-unread-badge">{chat.unreadCount}</span>}
                         </div>
                       </div>
                     </div>
@@ -908,9 +910,7 @@ export function Chats() {
                   <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
                     <ArrowLeft size={20} />
                   </button>
-                  <div className="room-avatar">
-                    {activeChat.isGroup ? <Users size={20} /> : <User size={20} />}
-                  </div>
+                  <div className="room-avatar">{activeChat.isGroup ? <Users size={20} /> : <User size={20} />}</div>
                   <div className="room-contact-info">
                     <h3>{activeChat.name || activeChat.id.split('@')[0]}</h3>
                     <span>{activeChat.id}</span>
@@ -1058,10 +1058,7 @@ export function Chats() {
                               {/* Quoted message display */}
                               {msg.metadata?.quotedMessage && (
                                 <div className="message-quote-box">
-                                  <MessageBody
-                                    text={msg.metadata.quotedMessage.body}
-                                    className="quote-body"
-                                  />
+                                  <MessageBody text={msg.metadata.quotedMessage.body} className="quote-body" />
                                 </div>
                               )}
 
@@ -1075,9 +1072,7 @@ export function Chats() {
                                 msg.body &&
                                 (!mediaInfo || msg.body !== mediaInfo.filename) &&
                                 msg.type !== 'location' &&
-                                msg.type !== 'call' && (
-                                  <MessageBody text={msg.body} className="message-text" />
-                                )
+                                msg.type !== 'call' && <MessageBody text={msg.body} className="message-text" />
                               )}
 
                               <div className="message-meta">
@@ -1104,9 +1099,7 @@ export function Chats() {
                                       </span>
                                     ))}
                                   {Object.keys(reactions).length > 1 && (
-                                    <span className="reactions-count-span">
-                                      {Object.keys(reactions).length}
-                                    </span>
+                                    <span className="reactions-count-span">{Object.keys(reactions).length}</span>
                                   )}
                                 </div>
                               )}
@@ -1134,11 +1127,7 @@ export function Chats() {
                                   </button>
                                   <div className="reaction-quick-popover">
                                     {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
-                                      <button
-                                        key={emoji}
-                                        type="button"
-                                        onClick={() => handleReactMessage(msg, emoji)}
-                                      >
+                                      <button key={emoji} type="button" onClick={() => handleReactMessage(msg, emoji)}>
                                         {emoji}
                                       </button>
                                     ))}
@@ -1187,12 +1176,7 @@ export function Chats() {
                   <div className="chats-emoji-picker">
                     <div className="emoji-grid">
                       {popularEmojis.map(emoji => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          className="emoji-btn"
-                          onClick={() => handleEmojiClick(emoji)}
-                        >
+                        <button key={emoji} type="button" className="emoji-btn" onClick={() => handleEmojiClick(emoji)}>
                           {emoji}
                         </button>
                       ))}

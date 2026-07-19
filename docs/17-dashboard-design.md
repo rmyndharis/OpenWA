@@ -343,7 +343,7 @@ a non-admin hitting the path falls through to the `*` redirect.
 
 ## 17.4 Component Library
 
-> **No component framework is installed.** shadcn/ui is *not* adopted — there is no `npx shadcn`
+> **No component framework is installed.** shadcn/ui is _not_ adopted — there is no `npx shadcn`
 > init, no `components/ui/` directory, no `cn()` utility, and no `@/components` import alias. The
 > wireframes above are design intent; the implementation is hand-written.
 
@@ -352,15 +352,15 @@ a non-admin hitting the path falls through to the `*` redirect.
 The UI is built from a small set of project-specific components under `dashboard/src/components/`,
 each with a colocated CSS file. There is no design-system package to pull from.
 
-| Component | File | Responsibility |
-| --- | --- | --- |
-| `Layout` | `components/Layout.tsx` | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark theme toggle, logout, live version badge |
-| `ToastProvider` / `useToast` | `components/Toast.tsx` | Context-based toast notifications (success/error/warning/info) with de-dup keys |
-| `PageHeader` | `components/PageHeader.tsx` | Shared page title / subtitle / badge / actions header |
-| `DashboardCharts` | `components/DashboardCharts.tsx` | `recharts`-based message-volume / activity charts on the Dashboard |
-| `FilterBuilder` | `components/FilterBuilder.tsx` | Visual condition builder for webhook event filters |
-| `ErrorBoundary` | `components/ErrorBoundary.tsx` | Top-level React error boundary wrapping the whole app |
-| `GithubIcon` | `components/GithubIcon.tsx` | Inline brand SVG |
+| Component                    | File                             | Responsibility                                                                                                        |
+| ---------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `Layout`                     | `components/Layout.tsx`          | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark theme toggle, logout, live version badge |
+| `ToastProvider` / `useToast` | `components/Toast.tsx`           | Context-based toast notifications (success/error/warning/info) with de-dup keys                                       |
+| `PageHeader`                 | `components/PageHeader.tsx`      | Shared page title / subtitle / badge / actions header                                                                 |
+| `DashboardCharts`            | `components/DashboardCharts.tsx` | `recharts`-based message-volume / activity charts on the Dashboard                                                    |
+| `FilterBuilder`              | `components/FilterBuilder.tsx`   | Visual condition builder for webhook event filters                                                                    |
+| `ErrorBoundary`              | `components/ErrorBoundary.tsx`   | Top-level React error boundary wrapping the whole app                                                                 |
+| `GithubIcon`                 | `components/GithubIcon.tsx`      | Inline brand SVG                                                                                                      |
 
 Pages live under `dashboard/src/pages/`, each as a `*.tsx` + `*.css` pair (e.g. `Sessions.tsx` +
 `Sessions.css`). Pages are lazy-loaded in `App.tsx` via `React.lazy` + `Suspense`.
@@ -436,10 +436,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 export const sessionApi = {
-  list: () => request<Session[]>('/sessions'),          // bare array
+  list: () => request<Session[]>('/sessions'), // bare array
   get: (id: string) => request<Session>(`/sessions/${id}`),
-  create: (name: string) =>
-    request<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name }) }),
+  create: (name: string) => request<Session>('/sessions', { method: 'POST', body: JSON.stringify({ name }) }),
   delete: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   // QR returns a raw { qrCode, status } object — not { qr, expiresAt }, and there is no expiry timer.
   getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
@@ -492,7 +491,7 @@ Real-time updates use **socket.io** (`socket.io-client`), not a raw browser `Web
   `${VITE_WS_URL || window.location.origin}/events` — same-origin by default; `VITE_WS_URL` only
   overrides it for split-origin deployments.
 - **API key via the socket.io `auth` payload (and an `X-API-Key` header for proxies), deliberately
-  *not* in the query string** — a key in the handshake URL would leak into access logs / `Referer`.
+  _not_ in the query string** — a key in the handshake URL would leak into access logs / `Referer`.
 - **Reconnection is socket.io's built-in mechanism** — `reconnectionAttempts: 5`,
   `reconnectionDelay: 1000` — not a hand-rolled `setTimeout(connect, 3000)`. When all attempts are
   exhausted the manager fires `reconnect_failed`; the hook surfaces that as `connectionFailed` so the
@@ -510,7 +509,7 @@ import { io, Socket } from 'socket.io-client';
 const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 
 interface ServerEventEnvelope {
-  type: string;        // 'event'
+  type: string; // 'event'
   timestamp: string;
   payload?: { event: string; sessionId: string; data: Record<string, unknown> };
 }
@@ -529,11 +528,14 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      auth: { apiKey },                       // key in the handshake auth, NOT the URL
-      extraHeaders: { 'X-API-Key': apiKey },  // header copy for proxies
+      auth: { apiKey }, // key in the handshake auth, NOT the URL
+      extraHeaders: { 'X-API-Key': apiKey }, // header copy for proxies
     });
 
-    socketRef.current.on('connect', () => { setIsConnected(true); setConnectionFailed(false); });
+    socketRef.current.on('connect', () => {
+      setIsConnected(true);
+      setConnectionFailed(false);
+    });
     socketRef.current.on('disconnect', () => setIsConnected(false));
     socketRef.current.io.on('reconnect_failed', () => setConnectionFailed(true));
   }, []);
@@ -559,7 +561,9 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       }
     };
     socket?.on('message', handle);
-    return () => { socket?.off('message', handle); };
+    return () => {
+      socket?.off('message', handle);
+    };
   }, [connect, events]);
 
   return { isConnected, connectionFailed, reconnect, subscribe, unsubscribe };
@@ -594,7 +598,7 @@ export function useTheme() {
     localStorage.setItem('openwa_theme', theme);
   }, [theme]);
 
-  return { theme, setTheme, /* toggleTheme, resolvedTheme */ };
+  return { theme, setTheme /* toggleTheme, resolvedTheme */ };
 }
 ```
 
@@ -607,7 +611,7 @@ switching mode is a single attribute write with no re-render of the tree.
 ### Vite Configuration
 
 The dev server listens on **2886** and proxies `/api` to the API on `2785`. The WebSocket proxy is
-on **`/socket.io`** (socket.io's transport path) with `ws: true` — *not* `/ws`. There is no `@`
+on **`/socket.io`** (socket.io's transport path) with `ws: true` — _not_ `/ws`. There is no `@`
 import alias and no custom `manualChunks`/Radix vendor split; code-splitting is handled by the
 per-page `React.lazy` imports in `App.tsx`. The build-time version (`__APP_VERSION__`) is injected
 from `package.json` via `define`.
@@ -619,9 +623,9 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const { version: pkgVersion } = JSON.parse(
-  readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'),
-) as { version: string };
+const { version: pkgVersion } = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')) as {
+  version: string;
+};
 
 export default defineConfig({
   plugins: [react()],

@@ -597,7 +597,10 @@ export default function Plugins() {
       if (missing.length > 0) {
         toast.warning(
           t('plugins.toasts.configRequiredTitle', 'Configuration required'),
-          t('plugins.toasts.configRequiredDesc', `Fill in the required field(s) before enabling: ${missing.join(', ')}`),
+          t(
+            'plugins.toasts.configRequiredDesc',
+            `Fill in the required field(s) before enabling: ${missing.join(', ')}`,
+          ),
         );
         handleOpenConfig(plugin);
         return;

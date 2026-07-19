@@ -70,9 +70,7 @@ export function Sessions() {
     onQRCode: useCallback((event: { sessionId: string; qrCode: string }) => {
       // Fill the open QR modal straight from the push — the REST endpoint 400s BY DESIGN until a QR
       // exists, so fetching it eagerly just spams the console with expected failures.
-      setQrData(prev =>
-        prev && prev.sessionId === event.sessionId ? { ...prev, qrCode: event.qrCode } : prev,
-      );
+      setQrData(prev => (prev && prev.sessionId === event.sessionId ? { ...prev, qrCode: event.qrCode } : prev));
     }, []),
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
@@ -153,7 +151,8 @@ export function Sessions() {
       }
     },
     [fetchSessions],
-  );  useEffect(() => {
+  );
+  useEffect(() => {
     if (qrData) {
       currentSessionName.current = qrData.sessionName;
       qrRefreshInterval.current = setInterval(() => {
@@ -325,7 +324,8 @@ export function Sessions() {
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
       (statusFilter === 'inactive' && ['created', 'idle', 'disconnected', 'failed'].includes(s.status)) ||
-      (statusFilter === 'connecting' && ['initializing', 'connecting', 'authenticating', 'qr_ready'].includes(s.status));
+      (statusFilter === 'connecting' &&
+        ['initializing', 'connecting', 'authenticating', 'qr_ready'].includes(s.status));
     return matchesSearch && matchesStatus;
   });
 

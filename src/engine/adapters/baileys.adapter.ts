@@ -238,7 +238,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
         previous.ev.removeAllListeners('chats.update');
         previous.ev.removeAllListeners('messaging-history.set');
         previous.ev.removeAllListeners('lid-mapping.update');
-        previous.end(undefined);
+        void previous.end(undefined);
       } catch {
         // end() may already have run from Baileys' own close handler — a safe no-op.
       }
@@ -469,7 +469,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.sock?.end(undefined);
+    void this.sock?.end(undefined);
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
     return Promise.resolve();
@@ -487,7 +487,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       this.logger.warn('Baileys logout failed; ending socket', {
         error: err instanceof Error ? err.message : String(err),
       });
-      this.sock?.end(undefined);
+      void this.sock?.end(undefined);
     }
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
@@ -519,7 +519,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.sock?.end(undefined);
+    void this.sock?.end(undefined);
     this.sock = null;
     this.setStatus(EngineStatus.DISCONNECTED);
     return Promise.resolve();

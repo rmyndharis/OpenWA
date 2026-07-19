@@ -1,4 +1,4 @@
-.login-container{
+.login-container {
   min-height: 100vh;
   width: 100%;
   display: flex;
@@ -14,7 +14,7 @@
   bottom: 0;
 }
 
-.login-container .login-card{
+.login-container .login-card {
   background: var(--bg-white);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
@@ -24,7 +24,7 @@
   text-align: center;
 }
 
-.login-container .login-logo{
+.login-container .login-logo {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -33,19 +33,19 @@
   margin-bottom: 1.5rem;
 }
 
-.login-container .logo-icon{
+.login-container .logo-icon {
   width: 127px;
   height: 127px;
   object-fit: contain;
 }
 
-.login-container .version-info{
+.login-container .version-info {
   font-size: 0.75rem;
   color: var(--text-muted);
   font-weight: 500;
 }
 
-.login-container .login-language{
+.login-container .login-language {
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -58,33 +58,33 @@
   background: var(--bg-white);
 }
 
-.login-container .login-language svg{
+.login-container .login-language svg {
   flex-shrink: 0;
 }
 
-.login-container .login-language .custom-select{
+.login-container .login-language .custom-select {
   flex: 1;
   min-width: 0;
 }
 
-.login-container .login-language:focus-within{
+.login-container .login-language:focus-within {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
-.login-container .login-form{
+.login-container .login-form {
   text-align: left;
 }
 
-.login-container [dir="rtl"] .login-form{
+.login-container [dir='rtl'] .login-form {
   text-align: right;
 }
 
-.login-container .input-group{
+.login-container .input-group {
   margin-bottom: 1.5rem;
 }
 
-.login-container .input-group label{
+.login-container .input-group label {
   display: block;
   font-size: 0.875rem;
   font-weight: 500;
@@ -92,11 +92,11 @@
   margin-bottom: 0.5rem;
 }
 
-.login-container .input-wrapper{
+.login-container .input-wrapper {
   position: relative;
 }
 
-.login-container .input-wrapper input{
+.login-container .input-wrapper input {
   width: 100%;
   padding: 0.75rem 3rem 0.75rem 1rem;
   font-size: 1rem;
@@ -108,17 +108,17 @@
     box-shadow 0.2s;
 }
 
-.login-container .input-wrapper input:focus{
+.login-container .input-wrapper input:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
-.login-container .input-wrapper input.error{
+.login-container .input-wrapper input.error {
   border-color: var(--error);
 }
 
-.login-container .toggle-visibility{
+.login-container .toggle-visibility {
   position: absolute;
   right: 0.75rem;
   top: 50%;
@@ -130,18 +130,18 @@
   padding: 0.25rem;
 }
 
-.login-container .toggle-visibility:hover{
+.login-container .toggle-visibility:hover {
   color: var(--text-secondary);
 }
 
-.login-container .error-message{
+.login-container .error-message {
   display: block;
   color: var(--error);
   font-size: 0.875rem;
   margin-top: 0.5rem;
 }
 
-.login-container .connect-btn{
+.login-container .connect-btn {
   width: 100%;
   padding: 0.875rem 1.5rem;
   font-size: 1rem;
@@ -154,32 +154,32 @@
   transition: background 0.2s;
 }
 
-.login-container .connect-btn:hover:not(:disabled){
+.login-container .connect-btn:hover:not(:disabled) {
   background: var(--primary-hover);
 }
 
-.login-container .connect-btn:disabled{
+.login-container .connect-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
 
-.login-container .login-help{
+.login-container .login-help {
   margin-top: 1.5rem;
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
 
-.login-container .login-help a{
+.login-container .login-help a {
   color: var(--primary);
   text-decoration: none;
   font-weight: 500;
 }
 
-.login-container .login-help a:hover{
+.login-container .login-help a:hover {
   text-decoration: underline;
 }
 
-.login-container .login-footer{
+.login-container .login-footer {
   margin-top: 2rem;
   display: flex;
   flex-direction: column;
@@ -190,52 +190,52 @@
   text-align: center;
 }
 
-.login-container .login-footer .github-link{
+.login-container .login-footer .github-link {
   color: var(--text-muted);
   transition: color 0.2s;
 }
 
-.login-container .login-footer .github-link:hover{
+.login-container .login-footer .github-link:hover {
   color: var(--primary);
 }
 
-.login-container .login-footer a{
+.login-container .login-footer a {
   color: var(--text-muted);
   font-size: 0.75rem;
   text-decoration: none;
 }
 
-.login-container .login-footer a:hover{
+.login-container .login-footer a:hover {
   color: var(--text-secondary);
 }
 
 /* Mobile Responsive */
 @media (max-width: 480px) {
-  .login-container{
+  .login-container {
     padding: 1rem;
   }
 
-  .login-container .login-card{
+  .login-container .login-card {
     padding: 2rem 1.5rem;
     border-radius: 10px;
   }
 
-  .login-container .logo-icon{
+  .login-container .logo-icon {
     width: 80px;
     height: 80px;
   }
 
-  .login-container .input-wrapper input{
+  .login-container .input-wrapper input {
     padding: 0.625rem 2.5rem 0.625rem 0.875rem;
     font-size: 0.9375rem;
   }
 
-  .login-container .connect-btn{
+  .login-container .connect-btn {
     padding: 0.75rem 1.25rem;
     font-size: 0.9375rem;
   }
 
-  .login-container .login-help{
+  .login-container .login-help {
     font-size: 0.8125rem;
   }
 }

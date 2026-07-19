@@ -83,7 +83,10 @@ test('mergeChatMessages: returns ascending by timestamp (oldest first, newest la
   const older = mapEngineHistoryMessage(hist({ id: 'a', timestamp: 1000 }));
   const newer = mapEngineHistoryMessage(hist({ id: 'b', timestamp: 2000 }));
   const merged = mergeChatMessages([], [newer, older]);
-  assert.deepEqual(merged.map(m => m.id), ['a', 'b']);
+  assert.deepEqual(
+    merged.map(m => m.id),
+    ['a', 'b'],
+  );
 });
 
 import {
@@ -162,9 +165,7 @@ test('mergeOrAppend: an omitted-media echo does NOT clobber the copy holding the
 });
 
 test('mergeOrAppend: incoming media WITH a payload replaces the existing marker', () => {
-  const before = [
-    msg({ id: 'm-1', type: 'image', metadata: { media: { mimetype: 'image/png', omitted: true } } }),
-  ];
+  const before = [msg({ id: 'm-1', type: 'image', metadata: { media: { mimetype: 'image/png', omitted: true } } })];
   const live = msg({
     id: 'm-1',
     type: 'image',
@@ -177,9 +178,7 @@ test('mergeOrAppend: incoming media WITH a payload replaces the existing marker'
 test('mergeOrAppend: an echo with undefined leaves keeps the existing quote/call fields', () => {
   // The WS mapper builds metadata as `{media, quotedMessage, call}` with undefined leaves — those
   // must not erase fields the existing copy has (a wholesale spread would overwrite with undefined).
-  const before = [
-    msg({ id: 'm-1', metadata: { quotedMessage: { id: 'q-1', body: 'quoted' } } }),
-  ];
+  const before = [msg({ id: 'm-1', metadata: { quotedMessage: { id: 'q-1', body: 'quoted' } } })];
   const echo = msg({ id: 'm-1', metadata: { media: undefined } });
   const after = mergeOrAppend(before, echo);
   assert.deepEqual(after[0].metadata, { quotedMessage: { id: 'q-1', body: 'quoted' } });
@@ -206,7 +205,7 @@ test('updateMessageById applies a partial patch by id', () => {
   const before = [msg({ id: 'm-1', status: 'pending' })];
   const after = updateMessageById(before, 'm-1', { status: 'failed' });
   assert.equal(after[0].status, 'failed');
-  assert.equal(after[0].body, 'hello');  // other fields unchanged
+  assert.equal(after[0].body, 'hello'); // other fields unchanged
 });
 
 test('updateMessageById is a no-op when id is not present', () => {

@@ -32,11 +32,8 @@ export function Dashboard() {
   const messagesToday = overview ? overview.messages.today.sent + overview.messages.today.received : '—';
   const totalMessages = overview ? overview.messages.sent + overview.messages.received : '—';
   const loading = loadingSessions;
-  const error = sessionsError instanceof Error
-    ? sessionsError.message
-    : sessionsError
-      ? t('dashboard.loadError')
-      : null;
+  const error =
+    sessionsError instanceof Error ? sessionsError.message : sessionsError ? t('dashboard.loadError') : null;
   const webhookCount = webhooks.length;
 
   const handleDisconnect = async (id: string) => {
@@ -87,7 +84,9 @@ export function Dashboard() {
   if (error) {
     return (
       <div className="dashboard" style={{ padding: '2rem' }}>
-        <div style={{ background: 'rgba(239, 68, 68, 0.12)', padding: '1rem', borderRadius: '8px', color: 'var(--error)' }}>
+        <div
+          style={{ background: 'rgba(239, 68, 68, 0.12)', padding: '1rem', borderRadius: '8px', color: 'var(--error)' }}
+        >
           {t('dashboard.errorPrefix', { message: error })}
         </div>
       </div>

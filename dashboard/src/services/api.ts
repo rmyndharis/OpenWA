@@ -709,14 +709,20 @@ export const infraApi = {
   // Data migration: export all Data-DB tables (call while still on the OLD database, before switching),
   // then import after the switch + restart. Used by the DB-switch migration guard so data isn't lost.
   exportData: () =>
-    request<{ exportedAt: string; dataDbType: string; tables: Record<string, unknown[]>; counts: Record<string, number> }>(
-      '/infra/export-data',
-    ),
+    request<{
+      exportedAt: string;
+      dataDbType: string;
+      tables: Record<string, unknown[]>;
+      counts: Record<string, number>;
+    }>('/infra/export-data'),
   importData: (tables: Record<string, unknown[]>) =>
-    request<{ imported: boolean; counts?: Record<string, number>; message?: string; warnings?: string[] }>('/infra/import-data', {
-      method: 'POST',
-      body: JSON.stringify({ tables }),
-    }),
+    request<{ imported: boolean; counts?: Record<string, number>; message?: string; warnings?: string[] }>(
+      '/infra/import-data',
+      {
+        method: 'POST',
+        body: JSON.stringify({ tables }),
+      },
+    ),
 };
 
 // =============================================================================
@@ -745,7 +751,10 @@ export interface PluginConfigSchema {
   properties: Record<string, PluginConfigField>;
 }
 
-export interface PluginI18nText { title?: string; description?: string }
+export interface PluginI18nText {
+  title?: string;
+  description?: string;
+}
 export interface PluginI18nLocale {
   name?: string;
   description?: string;

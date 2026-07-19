@@ -117,10 +117,7 @@ function mergeMessageMetadata(
  * the existing media/quote — see mergeMessageMetadata).
  * Returns a new array — does not mutate the input.
  */
-export function mergeOrAppend(
-  list: ChatMessageView[],
-  incoming: ChatMessageView,
-): ChatMessageView[] {
+export function mergeOrAppend(list: ChatMessageView[], incoming: ChatMessageView): ChatMessageView[] {
   const idx = list.findIndex(m => msgKey(m) === msgKey(incoming));
   if (idx === -1) return [...list, incoming];
   const existing = list[idx];
@@ -151,10 +148,7 @@ export function updateMessageById(
 /**
  * Filter out the entry with the matching id. No-op if not found.
  */
-export function removeMessageById(
-  list: ChatMessageView[],
-  id: string,
-): ChatMessageView[] {
+export function removeMessageById(list: ChatMessageView[], id: string): ChatMessageView[] {
   if (!list.some(m => m.id === id)) return list;
   return list.filter(m => m.id !== id);
 }
@@ -174,15 +168,9 @@ export function removeMessageById(
  * are keyed differently. `revokedId` is guarded because an undefined one would otherwise match a row
  * whose `waMessageId` is also undefined.
  */
-export function findRevokedIndex(
-  list: ChatMessageView[],
-  event: { id: string; revokedId?: string },
-): number {
-  const matches = (m: ChatMessageView, candidate: string): boolean =>
-    m.id === candidate || m.waMessageId === candidate;
-  return list.findIndex(
-    m => matches(m, event.id) || (event.revokedId !== undefined && matches(m, event.revokedId)),
-  );
+export function findRevokedIndex(list: ChatMessageView[], event: { id: string; revokedId?: string }): number {
+  const matches = (m: ChatMessageView, candidate: string): boolean => m.id === candidate || m.waMessageId === candidate;
+  return list.findIndex(m => matches(m, event.id) || (event.revokedId !== undefined && matches(m, event.revokedId)));
 }
 
 /**

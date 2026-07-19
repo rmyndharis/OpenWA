@@ -31,9 +31,7 @@ export function decideRestoreTarget(
   savedScrollTop: number | undefined,
 ): RestoreDecision {
   const restore: 'saved' | 'bottom' | null =
-    nextChatId !== null && isLoaded
-      ? savedScrollTop !== undefined ? 'saved' : 'bottom'
-      : null;
+    nextChatId !== null && isLoaded ? (savedScrollTop !== undefined ? 'saved' : 'bottom') : null;
 
   return { restore };
 }
@@ -139,11 +137,7 @@ export function useChatScrollPosition(
     // A new restore decision supersedes any pending one (it belongs to a different chat/visit).
     pendingRestoreRef.current = null;
 
-    const decision = decideRestoreTarget(
-      next,
-      isLoaded,
-      next !== null ? scrollMap.current.get(next) : undefined,
-    );
+    const decision = decideRestoreTarget(next, isLoaded, next !== null ? scrollMap.current.get(next) : undefined);
 
     if (el) {
       if (decision.restore === 'saved' && next !== null) {

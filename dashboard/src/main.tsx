@@ -1,8 +1,8 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './i18n'
-import './index.css'
-import App from './App.tsx'
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import './i18n';
+import './index.css';
+import App from './App.tsx';
 
 // Apply the stored theme BEFORE first paint: useTheme() only runs inside Layout, so standalone
 // routes (Login) otherwise flash the OS theme on reload even when the user explicitly picked one.
@@ -16,4 +16,4 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
   </StrictMode>,
-)
+);
