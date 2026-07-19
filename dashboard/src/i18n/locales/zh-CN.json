@@ -63,7 +63,7 @@
     "label": "主题：{{value}}",
     "appearance": "外观",
     "mode": "模式",
-    "palette": "调色板"
+    "toggleTo": "切换到{{value}}"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -566,29 +566,6 @@
     "subtitle": "配置服务器、数据库、缓存、存储和引擎设置",
     "saveConfig": "保存配置",
     "saving": "正在保存...",
-    "server": {
-      "title": "服务器配置",
-      "production": "生产",
-      "development": "开发",
-      "environment": "环境",
-      "domain": "域名",
-      "apiPort": "API 端口",
-      "dashboardPort": "仪表盘端口",
-      "corsOrigins": "CORS 来源",
-      "corsPlaceholder": "* 或用逗号分隔的来源",
-      "publicApiUrl": "公共 API URL（可选）",
-      "publicDashboardUrl": "公共仪表盘 URL（可选）"
-    },
-    "webhook": {
-      "title": "Webhook 和速率限制",
-      "settings": "Webhook 设置",
-      "timeout": "超时（毫秒）",
-      "maxRetries": "最大重试次数",
-      "retryDelay": "重试延迟（毫秒）",
-      "rateLimit": "速率限制",
-      "window": "时间窗口（秒）",
-      "maxReq": "每个窗口最大请求数"
-    },
     "database": {
       "title": "数据库配置",
       "sqlite": "SQLite",
@@ -611,7 +588,6 @@
     },
     "engine": {
       "title": "WhatsApp 引擎",
-      "subtitle": "选择并配置 WhatsApp 连接引擎。",
       "builtIn": "内置",
       "headless": "无头模式",
       "headlessDesc": "在没有可见界面的情况下运行浏览器（推荐用于生产环境）。",
@@ -711,35 +687,21 @@
     "title": "插件",
     "subtitle": "安装、配置和管理扩展",
     "refresh": "刷新",
-    "engineCard": "当前 WhatsApp 引擎",
-    "running": "运行中",
-    "supportedFeatures": "支持的功能：",
     "builtIn": "内置",
     "noDescription": "没有可用描述",
-    "required": "必需",
-    "active": "活跃",
-    "activate": "激活",
     "enable": "启用",
     "disable": "禁用",
     "healthCheck": "健康检查",
     "configure": "配置",
-    "available": "可用",
     "install": "安装插件",
     "uninstall": "卸载",
     "uninstallConfirm": "卸载“{{name}}”？这将删除其文件。",
-    "engineSwitchHint": "在设置中将其设为活动引擎，然后重启",
     "empty": {
       "title": "未找到插件",
       "description": "安装插件以扩展 OpenWA 功能"
     },
     "config": {
       "title": "配置 {{name}}",
-      "restartNotice": "更改需要重启服务器后才会生效",
-      "engineType": "引擎类型",
-      "headless": "无头模式",
-      "headlessDesc": "运行不显示界面的浏览器（推荐用于生产环境）",
-      "sessionDataPath": "会话数据路径",
-      "browserArgs": "浏览器参数",
       "noOptions": "此插件没有可用配置项",
       "uiHandshakeError": "插件配置界面未初始化。如有可用的架构表单，请使用下方表单。",
       "save": "保存配置",
@@ -748,7 +710,6 @@
       "tabSessions": "会话"
     },
     "rail": {
-      "engine": "活动引擎",
       "enabled": "已启用",
       "installed": "已安装",
       "active": "活跃插件",

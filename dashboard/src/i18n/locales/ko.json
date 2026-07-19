@@ -63,7 +63,7 @@
     "label": "테마: {{value}}",
     "appearance": "화면 모드",
     "mode": "모드",
-    "palette": "팔레트"
+    "toggleTo": "{{value}}(으)로 전환"
   },
   "nav": {
     "dashboard": "대시보드",
@@ -566,29 +566,6 @@
     "subtitle": "서버, 데이터베이스, 캐시, 스토리지, 엔진 설정을 구성하세요",
     "saveConfig": "설정 저장",
     "saving": "저장하는 중...",
-    "server": {
-      "title": "서버 설정",
-      "production": "프로덕션",
-      "development": "개발",
-      "environment": "환경",
-      "domain": "도메인",
-      "apiPort": "API 포트",
-      "dashboardPort": "대시보드 포트",
-      "corsOrigins": "CORS 오리진",
-      "corsPlaceholder": "* 또는 쉼표로 구분된 오리진",
-      "publicApiUrl": "공개 API URL (선택 사항)",
-      "publicDashboardUrl": "공개 대시보드 URL (선택 사항)"
-    },
-    "webhook": {
-      "title": "웹훅 및 속도 제한",
-      "settings": "웹훅 설정",
-      "timeout": "제한 시간 (ms)",
-      "maxRetries": "최대 재시도 횟수",
-      "retryDelay": "재시도 지연 (ms)",
-      "rateLimit": "속도 제한",
-      "window": "시간 윈도우 (초)",
-      "maxReq": "윈도우당 최대 요청 수"
-    },
     "database": {
       "title": "데이터베이스 설정",
       "sqlite": "SQLite",
@@ -611,7 +588,6 @@
     },
     "engine": {
       "title": "WhatsApp 엔진",
-      "subtitle": "WhatsApp 연결 엔진을 선택하고 구성하세요.",
       "builtIn": "내장",
       "headless": "헤드리스 모드",
       "headlessDesc": "브라우저 UI 없이 실행합니다 (프로덕션에 권장).",
@@ -711,35 +687,21 @@
     "title": "플러그인",
     "subtitle": "확장 기능을 설치, 구성, 관리하세요",
     "refresh": "새로고침",
-    "engineCard": "활성 WhatsApp 엔진",
-    "running": "실행 중",
-    "supportedFeatures": "지원하는 기능:",
     "builtIn": "내장",
     "noDescription": "설명 없음",
-    "required": "필수",
-    "active": "활성",
-    "activate": "활성화",
     "enable": "사용",
     "disable": "사용 안 함",
     "healthCheck": "상태 확인",
     "configure": "구성",
-    "available": "사용 가능",
     "install": "플러그인 설치",
     "uninstall": "제거",
     "uninstallConfirm": "\"{{name}}\"을(를) 제거할까요? 관련 파일이 모두 삭제됩니다.",
-    "engineSwitchHint": "활성 엔진을 변경하려면 환경 변수에 ENGINE_TYPE을 설정하고 서버를 재시작하세요",
     "empty": {
       "title": "설치된 플러그인이 없습니다",
       "description": "OpenWA의 기능을 확장하려면 플러그인을 설치하세요."
     },
     "config": {
       "title": "{{name}} 구성",
-      "restartNotice": "변경 사항을 적용하려면 서버를 재시작해야 합니다",
-      "engineType": "엔진 유형",
-      "headless": "헤드리스 모드",
-      "headlessDesc": "브라우저 UI 없이 실행 (프로덕션에 권장)",
-      "sessionDataPath": "세션 데이터 경로",
-      "browserArgs": "브라우저 인수",
       "noOptions": "이 플러그인에 사용할 수 있는 구성 옵션이 없습니다",
       "uiHandshakeError": "플러그인 설정 UI가 초기화되지 않았습니다. 사용 가능한 경우 아래 스키마 양식을 이용하세요.",
       "save": "설정 저장",
@@ -748,7 +710,6 @@
       "tabSessions": "세션"
     },
     "rail": {
-      "engine": "활성 엔진",
       "enabled": "사용 중",
       "installed": "설치됨",
       "active": "활성 플러그인",

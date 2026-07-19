@@ -720,19 +720,6 @@ export const infraApi = {
 };
 
 // =============================================================================
-// Settings API
-// =============================================================================
-
-export const settingsApi = {
-  get: () => request<Settings>('/settings'),
-  update: (settings: Partial<Settings>) =>
-    request<Settings>('/settings', {
-      method: 'PUT',
-      body: JSON.stringify(settings),
-    }),
-};
-
-// =============================================================================
 // Plugin Types
 // =============================================================================
 

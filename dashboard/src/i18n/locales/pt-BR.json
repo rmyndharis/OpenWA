@@ -63,7 +63,7 @@
     "label": "Tema: {{value}}",
     "appearance": "Aparência",
     "mode": "Modo",
-    "palette": "Paleta"
+    "toggleTo": "Mudar para {{value}}"
   },
   "nav": {
     "dashboard": "Painel",
@@ -566,29 +566,6 @@
     "subtitle": "Configure o servidor, banco de dados, cache, armazenamento e motor",
     "saveConfig": "Salvar configuração",
     "saving": "Salvando...",
-    "server": {
-      "title": "Configuração do servidor",
-      "production": "Produção",
-      "development": "Desenvolvimento",
-      "environment": "Ambiente",
-      "domain": "Domínio",
-      "apiPort": "Porta da API",
-      "dashboardPort": "Porta do painel",
-      "corsOrigins": "Origens CORS",
-      "corsPlaceholder": "* ou várias origens separadas por vírgula",
-      "publicApiUrl": "URL pública da API (opcional)",
-      "publicDashboardUrl": "URL pública do painel (opcional)"
-    },
-    "webhook": {
-      "title": "Webhook e limite de requisições",
-      "settings": "Configuração de webhook",
-      "timeout": "Tempo limite (ms)",
-      "maxRetries": "Máximo de tentativas",
-      "retryDelay": "Intervalo entre tentativas (ms)",
-      "rateLimit": "Limite de requisições",
-      "window": "Janela de tempo (segundos)",
-      "maxReq": "Máximo de requisições por janela"
-    },
     "database": {
       "title": "Configuração do banco de dados",
       "sqlite": "SQLite",
@@ -611,7 +588,6 @@
     },
     "engine": {
       "title": "Motor do WhatsApp",
-      "subtitle": "Escolha e configure o motor de conexão do WhatsApp.",
       "builtIn": "Integrado",
       "headless": "Modo headless",
       "headlessDesc": "Execute o navegador sem interface visível (recomendado para produção).",
@@ -711,35 +687,21 @@
     "title": "Plugins",
     "subtitle": "Instale, configure e gerencie extensões",
     "refresh": "Atualizar",
-    "engineCard": "Motor do WhatsApp ativo",
-    "running": "Em execução",
-    "supportedFeatures": "Funcionalidades suportadas:",
     "builtIn": "Integrado",
     "noDescription": "Sem descrição disponível",
-    "required": "Obrigatório",
-    "active": "Ativo",
-    "activate": "Ativar",
     "enable": "Habilitar",
     "disable": "Desabilitar",
     "healthCheck": "Verificação de saúde",
     "configure": "Configurar",
-    "available": "Disponível",
     "install": "Instalar plugin",
     "uninstall": "Desinstalar",
     "uninstallConfirm": "Desinstalar \"{{name}}\"? Isso remove seus arquivos.",
-    "engineSwitchHint": "Defina-o como motor ativo nas Configurações e reinicie",
     "empty": {
       "title": "Nenhum plugin encontrado",
       "description": "Instale plugins para ampliar a funcionalidade do OpenWA"
     },
     "config": {
       "title": "Configurar {{name}}",
-      "restartNotice": "As alterações requerem reiniciar o servidor para serem aplicadas",
-      "engineType": "Tipo de motor",
-      "headless": "Modo headless",
-      "headlessDesc": "Executar o navegador sem interface visível (recomendado para produção)",
-      "sessionDataPath": "Caminho dos dados da sessão",
-      "browserArgs": "Argumentos do navegador",
       "noOptions": "Não há opções de configuração disponíveis para este plugin",
       "uiHandshakeError": "A interface de configuração do plugin não foi iniciada. Use o formulário abaixo, se disponível.",
       "save": "Salvar configuração",
@@ -748,7 +710,6 @@
       "tabSessions": "Sessões"
     },
     "rail": {
-      "engine": "Motor ativo",
       "enabled": "habilitado",
       "installed": "instalado",
       "active": "Plugins ativos",

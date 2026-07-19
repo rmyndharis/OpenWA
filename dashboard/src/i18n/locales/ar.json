@@ -63,7 +63,7 @@
     "label": "المظهر: {{value}}",
     "appearance": "المظهر",
     "mode": "الوضع",
-    "palette": "لوحة الألوان"
+    "toggleTo": "التبديل إلى {{value}}"
   },
   "nav": {
     "dashboard": "لوحة التحكم",
@@ -570,29 +570,6 @@
     "subtitle": "تهيئة إعدادات الخادم وقاعدة البيانات والذاكرة المؤقتة والتخزين والمحرك",
     "saveConfig": "حفظ الإعدادات",
     "saving": "جارٍ الحفظ...",
-    "server": {
-      "title": "إعدادات الخادم",
-      "production": "إنتاج",
-      "development": "تطوير",
-      "environment": "البيئة",
-      "domain": "النطاق",
-      "apiPort": "منفذ API",
-      "dashboardPort": "منفذ لوحة التحكم",
-      "corsOrigins": "مصادر CORS",
-      "corsPlaceholder": "* أو مصادر مفصولة بفاصلة",
-      "publicApiUrl": "رابط API العام (اختياري)",
-      "publicDashboardUrl": "رابط لوحة التحكم العامة (اختياري)"
-    },
-    "webhook": {
-      "title": "الويب هوك وحد التحميل",
-      "settings": "إعدادات الويب هوك",
-      "timeout": "المهلة (مللي ثانية)",
-      "maxRetries": "أقصى عدد للمحاولات",
-      "retryDelay": "تأخير إعادة المحاولة (مللي ثانية)",
-      "rateLimit": "حد التحميل",
-      "window": "نافذة الوقت (ثوانٍ)",
-      "maxReq": "أقصى عدد طلبات لكل نافذة"
-    },
     "database": {
       "title": "إعدادات قاعدة البيانات",
       "sqlite": "SQLite",
@@ -615,7 +592,6 @@
     },
     "engine": {
       "title": "محرك واتساب",
-      "subtitle": "اختر محرك اتصال واتساب وقم بتهيئته.",
       "builtIn": "مدمج",
       "headless": "الوضع بدون واجهة",
       "headlessDesc": "تشغيل المتصفح بدون واجهة مرئية (موصى به للإنتاج).",
@@ -715,35 +691,21 @@
     "title": "الإضافات",
     "subtitle": "ثبّت الإضافات وكوّنها وأدِرها",
     "refresh": "تحديث",
-    "engineCard": "محرك واتساب النشط",
-    "running": "يعمل",
-    "supportedFeatures": "الميزات المدعومة:",
     "builtIn": "مدمج",
     "noDescription": "لا يوجد وصف متاح",
-    "required": "مطلوب",
-    "active": "نشط",
-    "activate": "تفعيل",
     "enable": "تمكين",
     "disable": "تعطيل",
     "healthCheck": "فحص الصحة",
     "configure": "إعداد",
-    "available": "متاحة",
     "install": "تثبيت إضافة",
     "uninstall": "إزالة",
     "uninstallConfirm": "إزالة \"{{name}}\"؟ سيؤدي ذلك إلى حذف ملفاتها.",
-    "engineSwitchHint": "عيّنها كمحرك نشط في الإعدادات، ثم أعد التشغيل",
     "empty": {
       "title": "لم يتم العثور على إضافات",
       "description": "ثبّت إضافات لتوسيع وظائف OpenWA"
     },
     "config": {
       "title": "إعداد {{name}}",
-      "restartNotice": "تتطلب التغييرات إعادة تشغيل الخادم لتصبح فعّالة",
-      "engineType": "نوع المحرك",
-      "headless": "الوضع غير المرئي",
-      "headlessDesc": "تشغيل المتصفح بدون واجهة مرئية (موصى به للإنتاج)",
-      "sessionDataPath": "مسار بيانات الجلسة",
-      "browserArgs": "مُعطيات المتصفح",
       "noOptions": "لا توجد خيارات إعداد لهذه الإضافة",
       "uiHandshakeError": "لم تتم تهيئة واجهة إعداد الإضافة. استخدم نموذج الإعدادات أدناه إن كان متاحًا.",
       "save": "حفظ الإعدادات",
@@ -752,7 +714,6 @@
       "tabSessions": "الجلسات"
     },
     "rail": {
-      "engine": "المحرك النشط",
       "enabled": "مُمكَّنة",
       "installed": "مُثبَّتة",
       "active": "الإضافات النشطة",

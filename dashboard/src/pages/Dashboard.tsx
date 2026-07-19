@@ -109,6 +109,7 @@ export function Dashboard() {
       <div className="stats-grid">
         {statsCards.map(({ label, value, icon: Icon, detail }) => (
           <div key={label} className="stat-card">
+            <Icon className="stat-watermark" />
             <div className="stat-header">
               <span className="stat-label">{label}</span>
               <Icon size={20} className="stat-icon" />

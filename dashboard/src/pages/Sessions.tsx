@@ -67,6 +67,13 @@ export function Sessions() {
   }, [sessions]);
 
   const { isConnected, subscribe } = useWebSocket({
+    onQRCode: useCallback((event: { sessionId: string; qrCode: string }) => {
+      // Fill the open QR modal straight from the push — the REST endpoint 400s BY DESIGN until a QR
+      // exists, so fetching it eagerly just spams the console with expected failures.
+      setQrData(prev =>
+        prev && prev.sessionId === event.sessionId ? { ...prev, qrCode: event.qrCode } : prev,
+      );
+    }, []),
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
         const prev = sessionsRef.current.find(s => s.id === event.sessionId);
@@ -119,6 +126,9 @@ export function Sessions() {
         currentSessionName.current = '';
         return;
       }
+      // Poll only while a QR actually exists to refresh (qr_ready): before that the endpoint 400s
+      // by design (the engine hasn't produced one), and the WS session.qr push covers first display.
+      if (currentSession?.status !== 'qr_ready') return;
       try {
         const qr = await sessionApi.getQR(sessionId);
         setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
@@ -143,9 +153,7 @@ export function Sessions() {
       }
     },
     [fetchSessions],
-  );
-
-  useEffect(() => {
+  );  useEffect(() => {
     if (qrData) {
       currentSessionName.current = qrData.sessionName;
       qrRefreshInterval.current = setInterval(() => {
@@ -259,13 +267,18 @@ export function Sessions() {
     // even before Chromium has finished initializing.
     setQrData({ sessionId: id, sessionName, qrCode: '' });
     currentSessionName.current = sessionName;
-    try {
-      const qr = await sessionApi.getQR(id);
-      setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
-    } catch (err) {
-      console.error('Failed to get QR:', err);
-      // Do not clear qrData here — keep the loading modal open so the
-      // polling interval (every 5 s) retries until the QR becomes available.
+    // Eager-fetch only when a QR already exists (qr_ready): before that the endpoint 400s BY DESIGN
+    // (the engine hasn't produced one), and the WS session.qr push + gated 5s poll deliver it
+    // without spamming the console with expected failures.
+    if (session?.status === 'qr_ready') {
+      try {
+        const qr = await sessionApi.getQR(id);
+        setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
+      } catch (err) {
+        console.error('Failed to get QR:', err);
+        // Do not clear qrData here — keep the loading modal open so the
+        // polling interval (every 5 s) retries until the QR becomes available.
+      }
     }
   };
 

@@ -63,7 +63,7 @@
     "label": "主題：{{value}}",
     "appearance": "外觀",
     "mode": "模式",
-    "palette": "調色板"
+    "toggleTo": "切換到{{value}}"
   },
   "nav": {
     "dashboard": "控制面板",
@@ -566,29 +566,6 @@
     "subtitle": "設定伺服器、資料庫、快取、儲存空間和引擎設定",
     "saveConfig": "儲存設定",
     "saving": "正在儲存...",
-    "server": {
-      "title": "伺服器設定",
-      "production": "生產",
-      "development": "開發",
-      "environment": "環境",
-      "domain": "網域",
-      "apiPort": "API 連接埠",
-      "dashboardPort": "控制面板連接埠",
-      "corsOrigins": "CORS 來源",
-      "corsPlaceholder": "* 或以逗號分隔的來源",
-      "publicApiUrl": "公開 API URL（選填）",
-      "publicDashboardUrl": "公開控制面板 URL（選填）"
-    },
-    "webhook": {
-      "title": "Webhook 及速率限制",
-      "settings": "Webhook 設定",
-      "timeout": "逾時（毫秒）",
-      "maxRetries": "最大重試次數",
-      "retryDelay": "重試延遲（毫秒）",
-      "rateLimit": "速率限制",
-      "window": "時間視窗（秒）",
-      "maxReq": "每個視窗最大請求數"
-    },
     "database": {
       "title": "資料庫設定",
       "sqlite": "SQLite",
@@ -611,7 +588,6 @@
     },
     "engine": {
       "title": "WhatsApp 引擎",
-      "subtitle": "選擇並設定 WhatsApp 連線引擎。",
       "builtIn": "內置",
       "headless": "無頭模式",
       "headlessDesc": "在沒有可見介面的情況下執行瀏覽器（建議用於生產環境）。",
@@ -711,35 +687,21 @@
     "title": "外掛",
     "subtitle": "安裝、設定和管理擴充功能",
     "refresh": "重新整理",
-    "engineCard": "目前 WhatsApp 引擎",
-    "running": "執行中",
-    "supportedFeatures": "支援功能：",
     "builtIn": "內置",
     "noDescription": "沒有可用描述",
-    "required": "必需",
-    "active": "活躍",
-    "activate": "啟用",
     "enable": "啟用",
     "disable": "停用",
     "healthCheck": "健康檢查",
     "configure": "設定",
-    "available": "可用",
     "install": "安裝外掛",
     "uninstall": "解除安裝",
     "uninstallConfirm": "解除安裝「{{name}}」？此操作會刪除其檔案。",
-    "engineSwitchHint": "在「設定」中設為使用中的引擎，然後重新啟動",
     "empty": {
       "title": "找不到外掛",
       "description": "安裝外掛以擴展 OpenWA 功能"
     },
     "config": {
       "title": "設定 {{name}}",
-      "restartNotice": "變更需要重新啟動伺服器後才會生效",
-      "engineType": "引擎類型",
-      "headless": "無頭模式",
-      "headlessDesc": "執行不顯示介面的瀏覽器（建議用於生產環境）",
-      "sessionDataPath": "工作階段資料路徑",
-      "browserArgs": "瀏覽器參數",
       "noOptions": "此外掛沒有可用設定選項",
       "uiHandshakeError": "外掛設定介面未初始化。如有可用的結構表單，請使用下方表單。",
       "save": "儲存設定",
@@ -748,7 +710,6 @@
       "tabSessions": "工作階段"
     },
     "rail": {
-      "engine": "使用中的引擎",
       "enabled": "已啟用",
       "installed": "已安裝",
       "active": "活躍外掛",

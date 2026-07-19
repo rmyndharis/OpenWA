@@ -63,7 +63,7 @@
     "label": "Theme: {{value}}",
     "appearance": "Appearance",
     "mode": "Mode",
-    "palette": "Palette"
+    "toggleTo": "Switch to {{value}}"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -566,29 +566,6 @@
     "subtitle": "Configure server, database, cache, storage, and engine settings",
     "saveConfig": "Save Configuration",
     "saving": "Saving...",
-    "server": {
-      "title": "Server Configuration",
-      "production": "Production",
-      "development": "Development",
-      "environment": "Environment",
-      "domain": "Domain",
-      "apiPort": "API Port",
-      "dashboardPort": "Dashboard Port",
-      "corsOrigins": "CORS Origins",
-      "corsPlaceholder": "* or comma-separated origins",
-      "publicApiUrl": "Public API URL (optional)",
-      "publicDashboardUrl": "Public Dashboard URL (optional)"
-    },
-    "webhook": {
-      "title": "Webhook & Rate Limiting",
-      "settings": "Webhook Settings",
-      "timeout": "Timeout (ms)",
-      "maxRetries": "Max Retries",
-      "retryDelay": "Retry Delay (ms)",
-      "rateLimit": "Rate Limiting",
-      "window": "Time Window (seconds)",
-      "maxReq": "Max Requests per Window"
-    },
     "database": {
       "title": "Database Configuration",
       "sqlite": "SQLite",
@@ -611,7 +588,6 @@
     },
     "engine": {
       "title": "WhatsApp Engine",
-      "subtitle": "Choose and configure the WhatsApp connection engine.",
       "builtIn": "Built-in",
       "headless": "Headless Mode",
       "headlessDesc": "Run the browser without a visible UI (recommended for production).",
@@ -711,35 +687,21 @@
     "title": "Plugins",
     "subtitle": "Install, configure, and manage extensions",
     "refresh": "Refresh",
-    "engineCard": "Active WhatsApp Engine",
-    "running": "Running",
-    "supportedFeatures": "Supported Features:",
     "builtIn": "Built-in",
     "noDescription": "No description available",
-    "required": "Required",
-    "active": "Active",
-    "activate": "Activate",
     "enable": "Enable",
     "disable": "Disable",
     "healthCheck": "Health Check",
     "configure": "Configure",
-    "available": "Available",
     "install": "Install plugin",
     "uninstall": "Uninstall",
     "uninstallConfirm": "Uninstall \"{{name}}\"? This deletes its files.",
-    "engineSwitchHint": "To switch the active engine, set ENGINE_TYPE in the environment and restart the server",
     "empty": {
       "title": "No plugins installed",
       "description": "Install a plugin to extend what OpenWA can do."
     },
     "config": {
       "title": "Configure {{name}}",
-      "restartNotice": "Changes require server restart to take effect",
-      "engineType": "Engine Type",
-      "headless": "Headless Mode",
-      "headlessDesc": "Run browser without visible UI (recommended for production)",
-      "sessionDataPath": "Session Data Path",
-      "browserArgs": "Browser Arguments",
       "noOptions": "No configuration options available for this plugin",
       "uiHandshakeError": "The plugin configuration UI did not initialize. Use the schema form below if available.",
       "save": "Save Configuration",
@@ -748,7 +710,6 @@
       "tabSessions": "Sessions"
     },
     "rail": {
-      "engine": "Active engine",
       "enabled": "enabled",
       "installed": "installed",
       "active": "Active plugins",

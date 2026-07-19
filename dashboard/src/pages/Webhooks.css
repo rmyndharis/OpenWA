@@ -26,12 +26,6 @@
   margin-bottom: 2rem;
 }
 
-.webhooks-page .header-content{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 /* H1 inherited from global */
 
 .webhooks-page .btn-primary{
@@ -242,20 +236,20 @@
 }
 
 /* Ensure modal event tags have proper unselected & selected styles in dark mode */
-.webhooks-page [data-theme='dark'] .modal-body .event-tag,
+[data-theme='dark'] .webhooks-page .modal-body .event-tag,
 :root:not([data-theme='light']) .webhooks-page .modal-body .event-tag {
   background: var(--bg-light);
   color: var(--text-secondary);
   border-color: var(--border);
 }
 
-.webhooks-page [data-theme='dark'] .modal-body .event-tag:hover,
+[data-theme='dark'] .webhooks-page .modal-body .event-tag:hover,
 :root:not([data-theme='light']) .webhooks-page .modal-body .event-tag:hover {
   border-color: var(--primary);
   color: var(--primary);
 }
 
-.webhooks-page [data-theme='dark'] .modal-body .event-tag.selected,
+[data-theme='dark'] .webhooks-page .modal-body .event-tag.selected,
 :root:not([data-theme='light']) .webhooks-page .modal-body .event-tag.selected {
   background: var(--primary);
   color: white;
@@ -425,26 +419,26 @@
 }
 
 /* Dark mode - explicit theme */
-.webhooks-page [data-theme='dark'] .event-tag{
+[data-theme='dark'] .webhooks-page .event-tag{
   color: #4ade80;
   background: rgba(37, 211, 102, 0.2);
   border-color: rgba(37, 211, 102, 0.35);
 }
 
-.webhooks-page [data-theme='dark'] .status-badge.active{
+[data-theme='dark'] .webhooks-page .status-badge.active{
   color: #4ade80;
   background: rgba(37, 211, 102, 0.2);
 }
 
-.webhooks-page [data-theme='dark'] .webhook-url{
+[data-theme='dark'] .webhooks-page .webhook-url{
   color: #e2e8f0;
 }
 
-.webhooks-page [data-theme='dark'] .webhook-meta-label{
+[data-theme='dark'] .webhooks-page .webhook-meta-label{
   color: #94a3b8;
 }
 
-.webhooks-page [data-theme='dark'] .webhook-meta-value{
+[data-theme='dark'] .webhooks-page .webhook-meta-value{
   color: #e2e8f0;
 }
 

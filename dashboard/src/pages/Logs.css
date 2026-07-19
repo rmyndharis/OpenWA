@@ -8,12 +8,6 @@
   margin-bottom: 1.5rem;
 }
 
-.logs-page .header-content{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 /* H1 inherited from global */
 
 .logs-page .btn-secondary{

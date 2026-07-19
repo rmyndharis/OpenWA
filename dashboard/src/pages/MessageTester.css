@@ -182,6 +182,7 @@
 
 .message-tester .response-json{
   background: #1E293B;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1rem;
   overflow-x: auto;

@@ -72,18 +72,6 @@
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
-.login-container .login-title{
-  font-size: 1.75rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 0.5rem;
-}
-
-.login-container .login-subtitle{
-  color: var(--text-secondary);
-  margin: 0 0 2rem;
-}
-
 .login-container .login-form{
   text-align: left;
 }
@@ -235,15 +223,6 @@
   .login-container .logo-icon{
     width: 80px;
     height: 80px;
-  }
-
-  .login-container .login-title{
-    font-size: 1.375rem;
-  }
-
-  .login-container .login-subtitle{
-    font-size: 0.875rem;
-    margin-bottom: 1.5rem;
   }
 
   .login-container .input-wrapper input{

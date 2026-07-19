@@ -1,95 +1,18 @@
-.plugins-page{
+.plugins-page {
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-/* Engine Card */
-.plugins-page .engine-card{
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(16, 185, 129, 0.1) 100%);
-  border: 1px solid rgba(34, 197, 94, 0.2);
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 2rem;
-}
-
-.plugins-page .engine-header{
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.plugins-page .engine-info{
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.plugins-page .engine-icon-wrapper{
-  width: 48px;
-  height: 48px;
-  background: rgba(34, 197, 94, 0.15);
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.plugins-page .engine-icon-wrapper svg{
-  color: #22c55e;
-}
-
-.plugins-page .engine-title{
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 0.25rem 0;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.plugins-page .engine-name{
-  font-size: 0.875rem;
-  color: #22c55e;
-}
-
-.plugins-page .engine-features{
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid rgba(34, 197, 94, 0.15);
-}
-
-.plugins-page .features-label{
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.5rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.plugins-page .features-list{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.plugins-page .feature-tag{
-  padding: 0.25rem 0.5rem;
-  background: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
-  border-radius: 4px;
-  font-size: 0.75rem;
-}
-
 /* Plugins Grid */
-.plugins-page .plugins-grid{
+.plugins-page .plugins-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 1.5rem;
 }
 
 /* Plugin Card */
-.plugins-page .plugin-card{
+.plugins-page .plugin-card {
   background: var(--bg-white);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -99,12 +22,12 @@
     box-shadow 0.2s;
 }
 
-.plugins-page .plugin-card:hover{
+.plugins-page .plugin-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
 
-.plugins-page .plugin-card-header{
+.plugins-page .plugin-card-header {
   padding: 1.25rem 1.25rem 1rem;
   display: flex;
   align-items: center;
@@ -112,14 +35,14 @@
   gap: 0.5rem;
 }
 
-.plugins-page .plugin-info{
+.plugins-page .plugin-info {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
 }
 
-.plugins-page .plugin-icon-wrapper{
+.plugins-page .plugin-icon-wrapper {
   width: 42px;
   height: 42px;
   background: var(--bg-light);
@@ -130,43 +53,37 @@
   flex-shrink: 0;
 }
 
-.plugins-page .plugin-icon-wrapper svg{
+.plugins-page .plugin-icon-wrapper svg {
   color: var(--text-secondary);
 }
 
 /* Calm, low-saturation type tints on the icon only — no loud gradient header, no alarming red. */
-.plugins-page .type-engine .plugin-icon-wrapper{
-  background: rgba(34, 197, 94, 0.12);
-}
-.plugins-page .type-engine .plugin-icon-wrapper svg{
-  color: #16a34a;
-}
-.plugins-page .type-extension .plugin-icon-wrapper{
+.plugins-page .type-extension .plugin-icon-wrapper {
   background: rgba(99, 102, 241, 0.12);
 }
-.plugins-page .type-extension .plugin-icon-wrapper svg{
+.plugins-page .type-extension .plugin-icon-wrapper svg {
   color: #6366f1;
 }
-.plugins-page .type-storage .plugin-icon-wrapper{
+.plugins-page .type-storage .plugin-icon-wrapper {
   background: rgba(13, 148, 136, 0.12);
 }
-.plugins-page .type-storage .plugin-icon-wrapper svg{
+.plugins-page .type-storage .plugin-icon-wrapper svg {
   color: #0d9488;
 }
-.plugins-page .type-queue .plugin-icon-wrapper{
+.plugins-page .type-queue .plugin-icon-wrapper {
   background: rgba(217, 119, 6, 0.12);
 }
-.plugins-page .type-queue .plugin-icon-wrapper svg{
+.plugins-page .type-queue .plugin-icon-wrapper svg {
   color: #d97706;
 }
-.plugins-page .type-auth .plugin-icon-wrapper{
+.plugins-page .type-auth .plugin-icon-wrapper {
   background: rgba(147, 51, 234, 0.12);
 }
-.plugins-page .type-auth .plugin-icon-wrapper svg{
+.plugins-page .type-auth .plugin-icon-wrapper svg {
   color: #9333ea;
 }
 
-.plugins-page .plugin-name{
+.plugins-page .plugin-name {
   font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -178,12 +95,12 @@
   text-overflow: ellipsis;
 }
 
-.plugins-page .plugin-version{
+.plugins-page .plugin-version {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.plugins-page .plugin-builtin-badge{
+.plugins-page .plugin-builtin-badge {
   padding: 0.1875rem 0.5rem;
   background: var(--bg-light);
   color: var(--text-muted);
@@ -197,73 +114,73 @@
   flex-shrink: 0;
 }
 
-.plugins-page .plugin-card-body{
+.plugins-page .plugin-card-body {
   padding: 1.25rem;
 }
 
-.plugins-page .plugin-description{
+.plugins-page .plugin-description {
   color: var(--text-secondary);
   font-size: 0.875rem;
   margin-bottom: 1rem;
   line-height: 1.5;
 }
 
-.plugins-page .plugin-status-row{
+.plugins-page .plugin-status-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1rem;
 }
 
-.plugins-page .plugin-status{
+.plugins-page .plugin-status {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.plugins-page .status-dot{
+.plugins-page .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
 }
 
-.plugins-page .status-dot.enabled{
+.plugins-page .status-dot.enabled {
   background: #22c55e;
 }
 
-.plugins-page .status-dot.disabled{
+.plugins-page .status-dot.disabled {
   background: #eab308;
 }
 
-.plugins-page .status-dot.error{
+.plugins-page .status-dot.error {
   background: #ef4444;
 }
 
-.plugins-page .status-dot.installed{
+.plugins-page .status-dot.installed {
   background: #64748b;
 }
 
-.plugins-page .status-text{
+.plugins-page .status-text {
   font-size: 0.875rem;
   color: var(--text-primary);
   text-transform: capitalize;
 }
 
-.plugins-page .plugin-type-label{
+.plugins-page .plugin-type-label {
   font-size: 0.625rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
-.plugins-page .plugin-provides{
+.plugins-page .plugin-provides {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
   margin-bottom: 1rem;
 }
 
-.plugins-page .provides-tag{
+.plugins-page .provides-tag {
   padding: 0.25rem 0.5rem;
   background: var(--bg-light);
   color: var(--text-secondary);
@@ -271,7 +188,7 @@
   border-radius: 4px;
 }
 
-.plugins-page .plugin-error{
+.plugins-page .plugin-error {
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.2);
   border-radius: 6px;
@@ -279,12 +196,12 @@
   margin-bottom: 1rem;
 }
 
-.plugins-page .plugin-error-text{
+.plugins-page .plugin-error-text {
   color: #ef4444;
   font-size: 0.75rem;
 }
 
-.plugins-page .plugin-actions{
+.plugins-page .plugin-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -292,7 +209,7 @@
   border-top: 1px solid var(--border);
 }
 
-.plugins-page .btn-toggle{
+.plugins-page .btn-toggle {
   flex: 1;
   display: flex;
   align-items: center;
@@ -308,75 +225,33 @@
 
 /* Positive action (Enable / Activate): the one solid brand-green CTA, so an action never reads
    the same as the passive "Active" state below. */
-.plugins-page .btn-toggle.enable{
+.plugins-page .btn-toggle.enable {
   background: var(--primary, #25d366);
   border: 1px solid var(--primary, #25d366);
   color: #fff;
 }
 
-.plugins-page .btn-toggle.enable:hover{
+.plugins-page .btn-toggle.enable:hover {
   background: #16a34a;
   border-color: #16a34a;
 }
 
-.plugins-page .btn-toggle.disable{
+.plugins-page .btn-toggle.disable {
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: #ef4444;
 }
 
-.plugins-page .btn-toggle.disable:hover{
+.plugins-page .btn-toggle.disable:hover {
   background: rgba(239, 68, 68, 0.2);
 }
 
-.plugins-page .btn-toggle:disabled{
+.plugins-page .btn-toggle:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* Passive states (Active / Required) are NOT actions — render them as quiet neutral chips, with
-   only a small green check as the "it's on" signal, so they're clearly distinct from the green CTA. */
-.plugins-page .btn-required{
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.875rem;
-  font-weight: 600;
-  border-radius: 8px;
-  cursor: default;
-}
-
-.plugins-page .btn-required svg{
-  color: var(--text-muted);
-}
-
-.plugins-page .btn-active{
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border-radius: 8px;
-  cursor: default;
-}
-
-.plugins-page .btn-active svg{
-  color: #16a34a;
-}
-
-.plugins-page .btn-action{
+.plugins-page .btn-action {
   width: 36px;
   height: 36px;
   display: flex;
@@ -390,60 +265,47 @@
   padding: 0;
 }
 
-.plugins-page .btn-action:hover{
+.plugins-page .btn-action:hover {
   background: var(--bg-white);
   border-color: var(--text-muted);
 }
 
-.plugins-page .btn-action svg{
+.plugins-page .btn-action svg {
   color: var(--text-secondary);
 }
 
 /* Empty State */
-.plugins-page .empty-state{
+.plugins-page .empty-state {
   text-align: center;
   padding: 4rem 2rem;
 }
 
-.plugins-page .empty-state svg{
+.plugins-page .empty-state svg {
   color: var(--text-muted);
   margin-bottom: 1rem;
 }
 
-.plugins-page .empty-state h3{
+.plugins-page .empty-state h3 {
   font-size: 1.25rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
 
-.plugins-page .empty-state p{
+.plugins-page .empty-state p {
   color: var(--text-muted);
 }
 
 /* Config Modal */
-.plugins-page .config-modal{
+.plugins-page .config-modal {
   max-width: 640px;
   width: 90%;
 }
 
-.plugins-page .config-info-banner{
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
-  color: var(--warning);
-  font-size: 0.875rem;
-}
-
-.plugins-page .config-form .form-group{
+.plugins-page .config-form .form-group {
   margin-bottom: 1.25rem;
 }
 
-.plugins-page .config-form .form-group label{
+.plugins-page .config-form .form-group label {
   display: block;
   font-size: 0.875rem;
   font-weight: 600;
@@ -451,7 +313,9 @@
   margin-bottom: 0.5rem;
 }
 
-.plugins-page .config-form .form-group input, .plugins-page .config-form .form-group select, .plugins-page .config-form .form-group textarea{
+.plugins-page .config-form .form-group input,
+.plugins-page .config-form .form-group select,
+.plugins-page .config-form .form-group textarea {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
@@ -462,13 +326,15 @@
   box-sizing: border-box;
 }
 
-.plugins-page .config-form .form-group textarea{
+.plugins-page .config-form .form-group textarea {
   font-family: inherit;
   resize: vertical;
   min-height: 4.5rem;
 }
 
-.plugins-page .config-form .form-group input:focus, .plugins-page .config-form .form-group select:focus, .plugins-page .config-form .form-group textarea:focus{
+.plugins-page .config-form .form-group input:focus,
+.plugins-page .config-form .form-group select:focus,
+.plugins-page .config-form .form-group textarea:focus {
   outline: none;
   border-color: var(--primary);
   background: var(--bg-white);
@@ -476,7 +342,7 @@
 }
 
 /* Nested object — a bordered group of sub-fields. */
-.plugins-page .config-form .config-fieldset{
+.plugins-page .config-form .config-fieldset {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem 0.25rem;
@@ -484,7 +350,7 @@
   min-width: 0;
 }
 
-.plugins-page .config-form .config-fieldset > legend{
+.plugins-page .config-form .config-fieldset > legend {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-secondary);
@@ -492,11 +358,11 @@
 }
 
 /* Array-of-rows — repeating rows with add/remove. */
-.plugins-page .config-form .config-array{
+.plugins-page .config-form .config-array {
   margin-bottom: 1.25rem;
 }
 
-.plugins-page .config-form .config-array > label{
+.plugins-page .config-form .config-array > label {
   display: block;
   font-size: 0.875rem;
   font-weight: 600;
@@ -504,21 +370,21 @@
   margin-bottom: 0.5rem;
 }
 
-.plugins-page .config-form .config-array-row{
+.plugins-page .config-form .config-array-row {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
 }
 
-.plugins-page .config-form .config-array-row-body{
+.plugins-page .config-form .config-array-row-body {
   flex: 1;
   min-width: 0;
   border-left: 2px solid var(--border);
   padding-left: 0.75rem;
 }
 
-.plugins-page .config-form .config-array-remove{
+.plugins-page .config-form .config-array-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -531,13 +397,13 @@
   transition: all 0.2s;
 }
 
-.plugins-page .config-form .config-array-remove:hover{
+.plugins-page .config-form .config-array-remove:hover {
   background: var(--danger, #e5484d);
   color: #fff;
   border-color: var(--danger, #e5484d);
 }
 
-.plugins-page .config-form .config-array-add{
+.plugins-page .config-form .config-array-add {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -552,13 +418,13 @@
   transition: all 0.2s;
 }
 
-.plugins-page .config-form .config-array-add:hover{
+.plugins-page .config-form .config-array-add:hover {
   border-color: var(--primary);
   color: var(--primary);
 }
 
 /* Sandboxed-iframe config editor (B-full). */
-.plugins-page .plugin-config-ui-frame{
+.plugins-page .plugin-config-ui-frame {
   display: block;
   width: 100%;
   border: 1px solid var(--border);
@@ -566,7 +432,7 @@
   background: var(--bg-white);
 }
 
-.plugins-page .config-ui-status{
+.plugins-page .config-ui-status {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -574,13 +440,13 @@
   color: var(--text-muted);
 }
 
-.plugins-page .config-ui-error{
+.plugins-page .config-ui-error {
   padding: 1rem;
   text-align: center;
   color: var(--danger, #e5484d);
 }
 
-.plugins-page .config-form .form-group small{
+.plugins-page .config-form .form-group small {
   display: block;
   margin-top: 0.4rem;
   font-size: 0.75rem;
@@ -588,11 +454,11 @@
   line-height: 1.4;
 }
 
-.plugins-page .config-form .form-group .required-mark{
+.plugins-page .config-form .form-group .required-mark {
   color: var(--danger, #e5484d);
 }
 
-.plugins-page .toggle-group{
+.plugins-page .toggle-group {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -601,22 +467,22 @@
   border-radius: 8px;
 }
 
-.plugins-page .toggle-info{
+.plugins-page .toggle-info {
   flex: 1;
 }
 
-.plugins-page .toggle-info label{
+.plugins-page .toggle-info label {
   display: block !important;
   margin-bottom: 0.25rem !important;
 }
 
-.plugins-page .toggle-info small{
+.plugins-page .toggle-info small {
   display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.plugins-page .toggle-switch{
+.plugins-page .toggle-switch {
   position: relative;
   display: inline-block;
   width: 48px;
@@ -624,13 +490,13 @@
   flex-shrink: 0;
 }
 
-.plugins-page .toggle-switch input{
+.plugins-page .toggle-switch input {
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.plugins-page .toggle-slider{
+.plugins-page .toggle-slider {
   position: absolute;
   cursor: pointer;
   top: 0;
@@ -642,7 +508,7 @@
   border-radius: 26px;
 }
 
-.plugins-page .toggle-slider:before{
+.plugins-page .toggle-slider:before {
   position: absolute;
   content: '';
   height: 20px;
@@ -655,25 +521,25 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.plugins-page .toggle-switch input:checked + .toggle-slider{
+.plugins-page .toggle-switch input:checked + .toggle-slider {
   background-color: var(--primary, #22c55e);
 }
 
-.plugins-page .toggle-switch input:checked + .toggle-slider:before{
+.plugins-page .toggle-switch input:checked + .toggle-slider:before {
   transform: translateX(22px);
 }
 
-.plugins-page .no-config{
+.plugins-page .no-config {
   text-align: center;
   padding: 2rem;
   color: var(--text-muted);
 }
 
-.plugins-page .no-config p{
+.plugins-page .no-config p {
   margin-top: 1rem;
 }
 
-.plugins-page .btn-primary{
+.plugins-page .btn-primary {
   padding: 0.75rem 1.5rem;
   background: var(--primary, #22c55e);
   color: white;
@@ -688,40 +554,62 @@
   gap: 0.5rem;
 }
 
-.plugins-page .btn-primary:hover{
+.plugins-page .btn-primary:hover {
   background: #16a34a;
 }
 
-.plugins-page .btn-primary:disabled{
+.plugins-page .btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Update action in the catalog — visually distinct from a fresh Install (which stays the primary
+   green). "Update available" means a newer version exists; differentiating it (amber) tells the
+   operator at a glance which rows need upgrading vs. which are fresh installs, instead of every
+   action button reading identically. Mirrors .btn-primary's metrics so the catalog rows stay aligned. */
+.plugins-page .btn-update {
+  padding: 0.75rem 1.5rem;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plugins-page .btn-update:hover {
+  background: #d97706;
+}
+
+.plugins-page .btn-update:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 /* Responsive */
 @media (max-width: 768px) {
-  .plugins-page{
+  .plugins-page {
     padding: 1rem;
   }
 
-  .plugins-page .plugins-grid{
+  .plugins-page .plugins-grid {
     grid-template-columns: 1fr;
-  }
-
-  .plugins-page .engine-header{
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 1rem;
   }
 }
 
 /* ── Two-column control layout: status rail + plugin catalog ─────────────── */
-.plugins-page .plugins-layout{
+.plugins-page .plugins-layout {
   display: flex;
   gap: 1.5rem;
   align-items: flex-start;
 }
 
-.plugins-page .plugins-rail{
+.plugins-page .plugins-rail {
   flex: 0 0 280px;
   position: sticky;
   top: 1.5rem;
@@ -734,12 +622,12 @@
   padding: 1.25rem;
 }
 
-.plugins-page .plugins-main{
+.plugins-page .plugins-main {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.plugins-page .rail-label{
+.plugins-page .rail-label {
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -748,48 +636,12 @@
   margin-bottom: 0.625rem;
 }
 
-.plugins-page .rail-engine{
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-}
-
-.plugins-page .rail-engine-icon{
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.plugins-page .rail-engine-meta{
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-
-.plugins-page .rail-engine-name{
-  font-weight: 600;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-}
-
-.plugins-page .rail-engine-lib{
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.plugins-page .rail-stats{
+.plugins-page .rail-stats {
   display: flex;
   gap: 0.75rem;
 }
 
-.plugins-page .rail-stat{
+.plugins-page .rail-stat {
   flex: 1;
   background: var(--bg-light);
   border-radius: 8px;
@@ -797,7 +649,7 @@
   text-align: center;
 }
 
-.plugins-page .rail-stat-num{
+.plugins-page .rail-stat-num {
   display: block;
   font-size: 1.25rem;
   font-weight: 700;
@@ -805,14 +657,14 @@
   line-height: 1.2;
 }
 
-.plugins-page .rail-stat-label{
+.plugins-page .rail-stat-label {
   font-size: 0.6875rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.plugins-page .rail-active-list{
+.plugins-page .rail-active-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -821,13 +673,13 @@
   gap: 0.5rem;
 }
 
-.plugins-page .rail-active-item{
+.plugins-page .rail-active-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.plugins-page .rail-active-name{
+.plugins-page .rail-active-name {
   font-size: 0.8125rem;
   color: var(--text-primary);
   flex: 1;
@@ -836,54 +688,65 @@
   white-space: nowrap;
 }
 
-.plugins-page .rail-active-type{
+.plugins-page .rail-active-type {
   font-size: 0.625rem;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.plugins-page .rail-empty{
+.plugins-page .rail-empty {
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
-/* Engine that isn't the active one — non-actionable (switch via Settings + restart) */
-.plugins-page .btn-available{
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: var(--bg-light);
-  border: 1px dashed var(--border);
-  color: var(--text-muted);
-  font-size: 0.875rem;
-  font-weight: 500;
-  border-radius: 8px;
-  cursor: default;
-}
-
 /* Uninstall icon button — neutral, red on hover */
-.plugins-page .btn-action-danger:hover{
+.plugins-page .btn-action-danger:hover {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.plugins-page .btn-action-danger:hover svg{
+.plugins-page .btn-action-danger:hover svg {
   color: #ef4444;
 }
 
 /* Install modal */
-.plugins-page .install-hint{
+.plugins-page .install-hint {
   font-size: 0.875rem;
   color: var(--text-secondary);
   line-height: 1.5;
   margin-bottom: 1rem;
 }
 
-.plugins-page .install-drop{
+/* Sub-hint (marketplace teaser) under the upload drop — lighter + tighter so it reads as a pointer,
+   not a second paragraph. */
+.plugins-page .install-hint-sub {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* Inline "Catalog" link inside the sub-hint — looks like a link, not a button, so it doesn't compete
+   with the tab strip above or the footer actions. */
+.plugins-page .install-inline-link {
+  display: inline;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--primary, #22c55e);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.plugins-page .install-inline-link:hover {
+  filter: brightness(1.1);
+}
+
+.plugins-page .install-drop {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -898,29 +761,29 @@
   text-align: center;
 }
 
-.plugins-page .install-drop:hover{
+.plugins-page .install-drop:hover {
   border-color: var(--primary, #25d366);
   color: var(--text-secondary);
 }
 
-.plugins-page .install-drop.has-file{
+.plugins-page .install-drop.has-file {
   border-style: solid;
   border-color: var(--primary, #25d366);
   color: var(--text-primary);
   background: rgba(34, 197, 94, 0.05);
 }
 
-.plugins-page .install-drop-name{
+.plugins-page .install-drop-name {
   font-size: 0.875rem;
   word-break: break-all;
 }
 
 @media (max-width: 860px) {
-  .plugins-page .plugins-layout{
+  .plugins-page .plugins-layout {
     flex-direction: column;
   }
 
-  .plugins-page .plugins-rail{
+  .plugins-page .plugins-rail {
     flex-basis: auto;
     width: 100%;
     position: static;
@@ -931,7 +794,7 @@
 /* Segmented pill tab control — shared shape for the install (Upload/Catalog) and
    config (Configuration/Sessions) modal tabs. Replaces the old flat green underline. */
 .plugins-page .install-tabs,
-.plugins-page .config-modal .modal-tabs{
+.plugins-page .config-modal .modal-tabs {
   display: inline-flex;
   align-self: center;
   gap: 2px;
@@ -942,8 +805,46 @@
   border-radius: 10px;
 }
 
+/* When the tabs sit INSIDE the install modal header (between the title and the close button), drop
+   the standalone-row margins so they don't push the title up / leave a gap. Pin them to the true
+   horizontal center of the header with absolute positioning — justify-content:space-between only
+   centers them approximately because the title (left) and close button (right) have different widths,
+   leaving the pill visibly off-center. The header carries position:relative so this is self-contained. */
+.plugins-page .install-modal-header .install-tabs {
+  margin: 0;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill;
+   flex-wrap keeps it from overflowing horizontally on a narrow viewport (mobile bottom-sheet width),
+   wrapping to a second row instead. */
+.plugins-page .install-modal-header {
+  position: relative;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
+}
+
+.plugins-page .install-modal-header h2 {
+  min-width: 0;
+  /* Truncate an over-long title rather than collide with the tabs; the modal title is short by
+     design ("Install a plugin"), so this only ever bites an unusually long translation. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Equal-width tabs so "Upload .zip" and "Catalog" don't read as mismatched lengths. Both get the
+   same min-width + flex:1 1 0 so they share the pill's width equally regardless of label length. */
+.plugins-page .install-tab {
+  flex: 1 1 0;
+  min-width: 128px;
+}
+
 .plugins-page .install-tab,
-.plugins-page .config-modal .modal-tab{
+.plugins-page .config-modal .modal-tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -956,38 +857,56 @@
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
+/* Active tab: a clear, primary-tinted treatment instead of the near-invisible white-on-light it had
+   before. The tint + colored text + lifted shadow + tiny scale make the selected tab read at a glance,
+   and the transition on background/color/box-shadow/transform above animates the swap smoothly. */
 .plugins-page .install-tab.active,
-.plugins-page .config-modal .modal-tab.active{
-  background: var(--bg-white);
+.plugins-page .config-modal .modal-tab.active {
+  background: var(--primary, #22c55e);
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 4px 12px color-mix(in srgb, var(--primary, #22c55e) 35%, transparent);
+  transform: translateY(-1px);
+}
+
+/* Keep the inactive tabs legible against the pill's light track and give them a hover affordance so
+   it's obvious they're clickable before the active treatment snaps in. */
+.plugins-page .install-tab:not(.active):hover,
+.plugins-page .config-modal .modal-tab:not(.active):hover {
+  background: color-mix(in srgb, var(--primary, #22c55e) 12%, transparent);
   color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 /* Sessions tab */
-.plugins-page .sessions-tab{
+.plugins-page .sessions-tab {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
 }
 
-.plugins-page .sessions-section > h3{
+.plugins-page .sessions-section > h3 {
   font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 0.25rem;
 }
 
-.plugins-page .sessions-section > small{
+.plugins-page .sessions-section > small {
   display: block;
   color: var(--text-muted);
   font-size: 0.75rem;
   margin-bottom: 0.75rem;
 }
 
-.plugins-page .sessions-radio{
+.plugins-page .sessions-radio {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -997,7 +916,7 @@
   cursor: pointer;
 }
 
-.plugins-page .sessions-checklist{
+.plugins-page .sessions-checklist {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1006,7 +925,7 @@
   overflow-y: auto;
 }
 
-.plugins-page .sessions-check{
+.plugins-page .sessions-check {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1015,13 +934,13 @@
   cursor: pointer;
 }
 
-.plugins-page .sessions-empty{
+.plugins-page .sessions-empty {
   margin: 0.25rem 0 0.75rem 1.5rem;
   font-size: 0.8125rem;
   color: var(--text-muted);
 }
 
-.plugins-page .sessions-select{
+.plugins-page .sessions-select {
   width: 100%;
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--border);
@@ -1032,14 +951,14 @@
   box-sizing: border-box;
 }
 
-.plugins-page .sessions-override-actions{
+.plugins-page .sessions-override-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
 
-.plugins-page .catalog-empty{
+.plugins-page .catalog-empty {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1049,12 +968,12 @@
   font-size: 0.875rem;
 }
 
-.plugins-page .catalog-error{
+.plugins-page .catalog-error {
   flex-wrap: wrap;
   color: var(--danger, #dc2626);
 }
 
-.plugins-page .catalog-search{
+.plugins-page .catalog-search {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1065,7 +984,7 @@
   color: var(--text-muted);
 }
 
-.plugins-page .catalog-search input{
+.plugins-page .catalog-search input {
   flex: 1;
   border: none;
   background: transparent;
@@ -1074,7 +993,7 @@
   color: var(--text-primary);
 }
 
-.plugins-page .catalog-list{
+.plugins-page .catalog-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1082,7 +1001,7 @@
   overflow-y: auto;
 }
 
-.plugins-page .catalog-row{
+.plugins-page .catalog-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1092,27 +1011,27 @@
   border-radius: 8px;
 }
 
-.plugins-page .catalog-row-info{
+.plugins-page .catalog-row-info {
   min-width: 0;
 }
 
-.plugins-page .catalog-row-name{
+.plugins-page .catalog-row-name {
   font-weight: 600;
 }
 
-.plugins-page .catalog-row-version{
+.plugins-page .catalog-row-version {
   color: var(--text-secondary, #6b7280);
   font-weight: 400;
   font-size: 0.85em;
 }
 
-.plugins-page .catalog-row-desc{
+.plugins-page .catalog-row-desc {
   color: var(--text-secondary, #6b7280);
   font-size: 0.85rem;
   margin-top: 2px;
 }
 
-.plugins-page .catalog-row-meta{
+.plugins-page .catalog-row-meta {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1121,15 +1040,15 @@
   color: var(--text-secondary, #6b7280);
 }
 
-.plugins-page .catalog-badge.update{
+.plugins-page .catalog-badge.update {
   color: var(--primary, #25d366);
 }
 
-.plugins-page .catalog-row-action{
+.plugins-page .catalog-row-action {
   flex-shrink: 0;
 }
 
-.plugins-page .catalog-installed{
+.plugins-page .catalog-installed {
   display: inline-flex;
   align-items: center;
   gap: 6px;

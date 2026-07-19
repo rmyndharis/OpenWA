@@ -9,14 +9,6 @@
   width: 100%;
 }
 
-.sessions-page .header-content {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1rem;
-  width: 100%;
-}
-
 /* H1 inherited from global */
 
 .sessions-page .btn-primary {
@@ -261,12 +253,6 @@
     flex: 1;
   }
 
-  .sessions-page .header-content {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1rem;
-  }
-
   .sessions-page .btn-primary {
     width: 100%;
     justify-content: center;
@@ -321,6 +307,11 @@
   width: 90%;
   max-width: 480px;
   animation: slideUp 0.3s ease;
+  /* Match the global modal: cap height + flex column so the body scrolls with header/footer pinned —
+     long content (QR + instructions) no longer pushes actions off-screen. */
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
   overflow: hidden;
 }
 
@@ -364,6 +355,9 @@
 
 .sessions-page .modal-body {
   padding: 1.5rem;
+  /* Scroll the body (not the whole card) so the pinned header/footer stay visible. */
+  overflow-y: auto;
+  flex: 1 1 auto;
 }
 
 .sessions-page .modal-body > label {

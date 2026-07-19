@@ -576,13 +576,44 @@ export default function Plugins() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.plugins });
   };
 
+  // Required-config gate: a plugin whose schema declares required fields that are still unset fails
+  // INSIDE the sandbox with a raw "<id>: <field> is required" error and flips the card to ERROR.
+  // Open the config modal instead so the user completes the fields first — cures the whole class
+  // (after-hours `schedule`/`awayMessage`, faq-bot `rules`, any catalog plugin with required fields).
+  const missingRequiredConfig = (plugin: Plugin): string[] => {
+    const props = plugin.configSchema?.properties ?? {};
+    return Object.entries(props)
+      .filter(
+        ([key, field]) =>
+          field.required === true &&
+          (plugin.config[key] === undefined || plugin.config[key] === null || plugin.config[key] === ''),
+      )
+      .map(([key]) => key);
+  };
+
   const handleToggle = async (plugin: Plugin) => {
+    if (plugin.status !== 'enabled') {
+      const missing = missingRequiredConfig(plugin);
+      if (missing.length > 0) {
+        toast.warning(
+          t('plugins.toasts.configRequiredTitle', 'Configuration required'),
+          t('plugins.toasts.configRequiredDesc', `Fill in the required field(s) before enabling: ${missing.join(', ')}`),
+        );
+        handleOpenConfig(plugin);
+        return;
+      }
+    }
     setActionLoading(plugin.id);
     try {
       if (plugin.status === 'enabled') {
         await pluginsApi.disable(plugin.id);
       } else {
-        await pluginsApi.enable(plugin.id);
+        const res = await pluginsApi.enable(plugin.id);
+        // The endpoint reports lifecycle failures as 200 + {success:false} — surface them instead
+        // of silently refetching (the user would otherwise think the click did nothing).
+        if (!res.success) {
+          toast.warning(t('plugins.toasts.enableFailedTitle', 'Enable failed'), res.message);
+        }
       }
       refetchAll();
     } catch (err) {
@@ -932,24 +963,24 @@ export default function Plugins() {
       {showInstallModal && (
         <div className="modal-overlay" onClick={() => setShowInstallModal(false)}>
           <div className="modal install-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
+            <div className="modal-header install-modal-header">
               <h2>{t('plugins.installModal.title', 'Install a plugin')}</h2>
+              <div className="install-tabs">
+                <button
+                  className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
+                  onClick={() => setInstallMode('upload')}
+                >
+                  <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
+                </button>
+                <button
+                  className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
+                  onClick={() => setInstallMode('catalog')}
+                >
+                  <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
+                </button>
+              </div>
               <button className="btn-icon" onClick={() => setShowInstallModal(false)}>
                 <X size={20} />
-              </button>
-            </div>
-            <div className="install-tabs">
-              <button
-                className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
-                onClick={() => setInstallMode('upload')}
-              >
-                <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
-              </button>
-              <button
-                className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
-                onClick={() => setInstallMode('catalog')}
-              >
-                <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
               </button>
             </div>
 
@@ -974,6 +1005,15 @@ export default function Plugins() {
                       {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
                     </span>
                   </label>
+                  {/* Point first-time users at the Catalog tab — otherwise the marketplace is invisible
+                      and an operator only ever discovers plugins by hearing about one out-of-band. */}
+                  <p className="install-hint install-hint-sub">
+                    {t('plugins.installModal.catalogTeaser', 'Looking for plugins?')}{' '}
+                    <button type="button" className="install-inline-link" onClick={() => setInstallMode('catalog')}>
+                      {t('plugins.installModal.tabCatalog', 'Catalog')}
+                    </button>{' '}
+                    {t('plugins.installModal.catalogTeaserSuffix', 'browses the official marketplace.')}
+                  </p>
                 </div>
                 <div className="modal-footer">
                   <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
@@ -1059,7 +1099,7 @@ export default function Plugins() {
                                       {entry.installed ? (
                                         entry.updateAvailable ? (
                                           <button
-                                            className="btn-primary"
+                                            className="btn-update"
                                             disabled={installingId !== null || !entry.download}
                                             onClick={() => void handleUpdateFromCatalog(entry)}
                                           >

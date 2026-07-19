@@ -8,12 +8,6 @@
   margin-bottom: 2rem;
 }
 
-.api-keys-page .header-content{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 /* H1 inherited from global */
 
 .api-keys-page .btn-primary{
@@ -127,12 +121,6 @@
   color: var(--text-primary);
 }
 
-.api-keys-page .permissions-cell{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
 .api-keys-page .permission-badge{
   font-size: 0.6875rem;
   padding: 0.25rem 0.5rem;
@@ -146,13 +134,6 @@
 .api-keys-page .permission-badge:first-child:last-child{
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
-}
-
-.api-keys-page .rate-limit{
-  font-family: monospace;
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
 }
 
 .api-keys-page .actions-cell{
@@ -299,16 +280,28 @@
 }
 
 /* Mobile Responsive */
+/* Status badges — must apply on DESKTOP too (they were stranded inside the mobile media query,
+   leaving every Active/Revoked badge unstyled on wide screens). */
+.api-keys-page .status-badge{
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+.api-keys-page .status-badge.active{
+  background: rgba(37, 211, 102, 0.1);
+  color: var(--primary);
+}
+
+.api-keys-page .status-badge.inactive{
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--error);
+}
+
 @media (max-width: 768px) {
   .api-keys-page{
     padding: 1rem;
-  }
-
-  /* Header adjustments for mobile */
-  .api-keys-page .header-content{
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1rem;
   }
 
   .api-keys-page .btn-primary{
@@ -399,23 +392,6 @@
     margin-right: 0.5rem;
   }
 
-  /* Status badges styling */
-  .api-keys-page .status-badge{
-    font-size: 0.6875rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 9999px;
-    font-weight: 600;
-  }
-
-  .api-keys-page .status-badge.active{
-    background: rgba(37, 211, 102, 0.1);
-    color: var(--primary);
-  }
-
-  .api-keys-page .status-badge.inactive{
-    background: rgba(239, 68, 68, 0.12);
-    color: var(--error);
-  }
 
   /* Actions cell - bottom with separator */
   .api-keys-page .keys-table tbody tr.table-row td:last-child{

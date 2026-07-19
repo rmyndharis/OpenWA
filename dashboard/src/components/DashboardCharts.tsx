@@ -62,7 +62,7 @@ function shortChat(chatId: string): string {
 
 export function DashboardCharts() {
   const { t } = useTranslation();
-  const [period, setPeriod] = useState<StatsPeriod>('7d');
+  const [period, setPeriod] = useState<StatsPeriod>('24h');
   const { data, isLoading, isError, error } = useStatsMessagesQuery(period);
 
   // Non-admin keys 403 on /stats/messages → hide the section entirely. Any OTHER error (e.g. a

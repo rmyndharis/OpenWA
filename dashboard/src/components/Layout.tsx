@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -51,10 +51,9 @@ const themeIcons = { light: Sun, dark: Moon, system: Monitor };
 
 export function Layout({ onLogout, userRole }: LayoutProps) {
   const { t, i18n } = useTranslation();
-  const { theme, setTheme, palette, setPalette, paletteOptions } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
   const ThemeIcon = themeIcons[theme];
   const themeLabel = t(`theme.${theme}`);
-  const activePalette = paletteOptions.find(option => option.value === palette) ?? paletteOptions[0];
 
   const navItems = allNavItems.filter(item => !item.adminOnly || userRole === 'admin');
 
@@ -65,9 +64,7 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
   // backend so a stale-built bundle can't display the wrong number. Falls back silently on error.
   const [version, setVersion] = useState(__APP_VERSION__);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
-  const [isAppearanceMenuOpen, setIsAppearanceMenuOpen] = useState(false);
   const languageMenuRef = useRef<HTMLDivElement>(null);
-  const appearanceMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -124,26 +121,6 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
       document.removeEventListener('keydown', closeOnEscape);
     };
   }, [isLanguageMenuOpen]);
-
-  useEffect(() => {
-    if (!isAppearanceMenuOpen) return;
-
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!appearanceMenuRef.current?.contains(event.target as Node)) {
-        setIsAppearanceMenuOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsAppearanceMenuOpen(false);
-    };
-
-    document.addEventListener('mousedown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [isAppearanceMenuOpen]);
 
   const toggleCollapse = () => setIsCollapsed(!isCollapsed);
   const toggleMobile = () => setIsMobileOpen(!isMobileOpen);
@@ -255,79 +232,18 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               </div>
             )}
           </div>
-          <div className="appearance-menu" ref={appearanceMenuRef}>
+          <div className="appearance-menu">
             <button
               className="theme-toggle-btn"
-              onClick={() => setIsAppearanceMenuOpen(open => !open)}
-              title={t('theme.label', { value: themeLabel })}
-              aria-label={t('theme.appearance')}
-              aria-haspopup="menu"
-              aria-expanded={isAppearanceMenuOpen}
+              onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+              title={t('theme.toggleTo', { value: t(resolvedTheme === 'dark' ? 'theme.light' : 'theme.dark') })}
+              aria-label={t('theme.toggleTo', { value: t(resolvedTheme === 'dark' ? 'theme.light' : 'theme.dark') })}
             >
-              <span
-                className="appearance-button-cue"
-                style={{ '--swatch-color': activePalette.color } as CSSProperties}
-                aria-hidden="true"
-              >
-                <ThemeIcon size={14} />
+              <span className="appearance-button-cue" aria-hidden="true">
+                <ThemeIcon size={16} />
               </span>
               {!isCollapsed && <span>{themeLabel}</span>}
             </button>
-            {isAppearanceMenuOpen && (
-              <div className="appearance-menu-list" role="menu" aria-label={t('theme.appearance')}>
-                <div className="appearance-menu-header">
-                  <div>
-                    <strong>{t('theme.appearance')}</strong>
-                    <span>{activePalette.label}</span>
-                  </div>
-                  <span
-                    className="appearance-current-swatch"
-                    style={{ '--swatch-color': activePalette.color } as CSSProperties}
-                    aria-hidden="true"
-                  />
-                </div>
-                <div className="appearance-section">
-                  <span className="appearance-section-label">{t('theme.mode')}</span>
-                  <div className="appearance-mode-grid">
-                    {(['light', 'dark', 'system'] as const).map(mode => {
-                      const ModeIcon = themeIcons[mode];
-                      return (
-                        <button
-                          key={mode}
-                          className={`appearance-mode ${theme === mode ? 'active' : ''}`}
-                          onClick={() => setTheme(mode)}
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={theme === mode}
-                        >
-                          <ModeIcon size={16} />
-                          <span>{t(`theme.${mode}`)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="appearance-section">
-                  <span className="appearance-section-label">{t('theme.palette')}</span>
-                  <div className="palette-grid">
-                    {paletteOptions.map(option => (
-                      <button
-                        key={option.value}
-                        className={`palette-swatch ${palette === option.value ? 'active' : ''}`}
-                        onClick={() => setPalette(option.value)}
-                        type="button"
-                        title={option.label}
-                        role="menuitemradio"
-                        aria-checked={palette === option.value}
-                        style={{ '--swatch-color': option.color } as CSSProperties}
-                      >
-                        <span />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
           <button className="logout-btn" onClick={onLogout} title={isCollapsed ? t('common.logout') : undefined}>
             <LogOut size={20} />

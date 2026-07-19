@@ -62,7 +62,9 @@ export function Login({ onLogin }: LoginProps) {
           <span className="version-info">
             {t('login.version', {
               version: __APP_VERSION__,
-              date: new Date(__BUILD_TIME__).toLocaleDateString(),
+              // ISO date (YYYYMMDD) so the format is stable across locales/regions instead of the
+              // locale-dependent toLocaleDateString() which renders differently per browser region.
+              date: new Date(__BUILD_TIME__).toISOString().slice(0, 10).replace(/-/g, ''),
             })}
           </span>
         </div>
@@ -108,11 +110,7 @@ export function Login({ onLogin }: LoginProps) {
 
         <p className="login-help">
           {t('login.help')}{' '}
-          <a
-            href="https://github.com/rmyndharis/OpenWA/blob/main/docs/01-project-overview.md"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href="https://docs.open-wa.org" target="_blank" rel="noopener noreferrer">
             {t('login.viewDocs')}
           </a>
         </p>

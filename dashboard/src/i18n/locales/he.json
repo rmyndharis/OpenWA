@@ -63,7 +63,7 @@
     "label": "ערכת נושא: {{value}}",
     "appearance": "מראה",
     "mode": "מצב",
-    "palette": "לוח צבעים"
+    "toggleTo": "עבור ל{{value}}"
   },
   "nav": {
     "dashboard": "דאשבורד",
@@ -567,29 +567,6 @@
     "subtitle": "הגדרת השרת, מסד נתונים, מטמון, אחסון ומנוע WhatsApp",
     "saveConfig": "שמירת תצורה",
     "saving": "שומר...",
-    "server": {
-      "title": "הגדרות שרת",
-      "production": "ייצור",
-      "development": "פיתוח",
-      "environment": "סביבה",
-      "domain": "דומיין",
-      "apiPort": "פורט API",
-      "dashboardPort": "פורט דאשבורד",
-      "corsOrigins": "מקורות CORS",
-      "corsPlaceholder": "* או רשימה מופרדת בפסיקים",
-      "publicApiUrl": "כתובת API ציבורית (אופציונלי)",
-      "publicDashboardUrl": "כתובת דאשבורד ציבורית (אופציונלי)"
-    },
-    "webhook": {
-      "title": "Webhooks והגבלת קצב",
-      "settings": "הגדרות Webhook",
-      "timeout": "זמן קצוב (ms)",
-      "maxRetries": "ניסיונות מקסימליים",
-      "retryDelay": "השהיה בין ניסיונות (ms)",
-      "rateLimit": "הגבלת קצב",
-      "window": "חלון זמן (שניות)",
-      "maxReq": "מקסימום בקשות בחלון"
-    },
     "database": {
       "title": "הגדרות מסד נתונים",
       "sqlite": "SQLite",
@@ -612,7 +589,6 @@
     },
     "engine": {
       "title": "מנוע WhatsApp",
-      "subtitle": "בחר והגדר את מנוע החיבור של WhatsApp.",
       "builtIn": "מובנה",
       "headless": "מצב ללא ממשק",
       "headlessDesc": "הרצת הדפדפן ללא ממשק גלוי (מומלץ לסביבת ייצור).",
@@ -712,35 +688,21 @@
     "title": "תוספים",
     "subtitle": "התקנה, הגדרה וניהול של הרחבות",
     "refresh": "רענון",
-    "engineCard": "מנוע WhatsApp פעיל",
-    "running": "פועל",
-    "supportedFeatures": "תכונות נתמכות:",
     "builtIn": "מובנה",
     "noDescription": "אין תיאור זמין",
-    "required": "נדרש",
-    "active": "פעיל",
-    "activate": "הפעלה",
     "enable": "הפעלה",
     "disable": "השבתה",
     "healthCheck": "בדיקת תקינות",
     "configure": "הגדרה",
-    "available": "זמינים",
     "install": "התקנת תוסף",
     "uninstall": "הסרה",
     "uninstallConfirm": "להסיר את \"{{name}}\"? פעולה זו תמחק את הקבצים שלו.",
-    "engineSwitchHint": "יש להגדיר כמנוע הפעיל בהגדרות ולאחר מכן לאתחל",
     "empty": {
       "title": "לא נמצאו תוספים",
       "description": "ניתן להתקין תוספים כדי להרחיב את היכולות של OpenWA"
     },
     "config": {
       "title": "הגדרת {{name}}",
-      "restartNotice": "השינויים דורשים אתחול שרת כדי להיכנס לתוקף",
-      "engineType": "סוג מנוע",
-      "headless": "מצב Headless",
-      "headlessDesc": "הרצת דפדפן ללא ממשק גרפי (מומלץ לייצור)",
-      "sessionDataPath": "נתיב נתוני Session",
-      "browserArgs": "ארגומנטים של הדפדפן",
       "noOptions": "אין אפשרויות הגדרה זמינות עבור תוסף זה",
       "uiHandshakeError": "ממשק הגדרת התוסף לא אותחל. השתמשו בטופס שלמטה אם הוא זמין.",
       "save": "שמירת תצורה",
@@ -749,7 +711,6 @@
       "tabSessions": "Sessions"
     },
     "rail": {
-      "engine": "מנוע פעיל",
       "enabled": "מופעלים",
       "installed": "מותקנים",
       "active": "תוספים פעילים",

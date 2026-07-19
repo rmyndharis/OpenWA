@@ -1,37 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 
 export type Theme = 'light' | 'dark' | 'system';
-export type ThemePalette = 'openwa' | 'blue' | 'graphite' | 'indigo' | 'amber' | 'rose' | 'teal';
 
 const THEME_KEY = 'openwa_theme';
-const PALETTE_KEY = 'openwa_palette';
-
-export const paletteOptions: Array<{ value: ThemePalette; label: string; color: string }> = [
-  { value: 'openwa', label: 'OpenWA', color: '#25d366' },
-  { value: 'blue', label: 'Blue', color: '#2563eb' },
-  { value: 'graphite', label: 'Graphite', color: '#64748b' },
-  { value: 'indigo', label: 'Indigo', color: '#4f46e5' },
-  { value: 'amber', label: 'Amber', color: '#d97706' },
-  { value: 'rose', label: 'Rose', color: '#e11d48' },
-  { value: 'teal', label: 'Teal', color: '#0d9488' },
-];
+// Legacy key from the removed palette picker (pre-0.9.0). Cleaned up on mount so old installs
+// don't carry dead state; the picker was dropped for being hard to maintain and off-brand.
+const LEGACY_PALETTE_KEY = 'openwa_palette';
 
 function isTheme(value: string | null): value is Theme {
   return value === 'light' || value === 'dark' || value === 'system';
-}
-
-function isPalette(value: string | null): value is ThemePalette {
-  return paletteOptions.some(option => option.value === value);
 }
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY);
     return isTheme(saved) ? saved : 'system';
-  });
-  const [palette, setPaletteState] = useState<ThemePalette>(() => {
-    const saved = localStorage.getItem(PALETTE_KEY);
-    return isPalette(saved) ? saved : 'openwa';
   });
 
   const applyTheme = useCallback((newTheme: Theme) => {
@@ -45,26 +28,19 @@ export function useTheme() {
     }
   }, []);
 
-  const applyPalette = useCallback((newPalette: ThemePalette) => {
-    document.documentElement.setAttribute('data-palette', newPalette);
-  }, []);
-
   useEffect(() => {
     applyTheme(theme);
     localStorage.setItem(THEME_KEY, theme);
   }, [theme, applyTheme]);
 
+  // One-time cleanup of the removed palette picker's storage + document attribute.
   useEffect(() => {
-    applyPalette(palette);
-    localStorage.setItem(PALETTE_KEY, palette);
-  }, [palette, applyPalette]);
+    localStorage.removeItem(LEGACY_PALETTE_KEY);
+    document.documentElement.removeAttribute('data-palette');
+  }, []);
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
-  }, []);
-
-  const setPalette = useCallback((newPalette: ThemePalette) => {
-    setPaletteState(newPalette);
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -79,5 +55,5 @@ export function useTheme() {
   const resolvedTheme =
     theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme;
 
-  return { theme, setTheme, toggleTheme, resolvedTheme, palette, setPalette, paletteOptions };
+  return { theme, setTheme, toggleTheme, resolvedTheme };
 }

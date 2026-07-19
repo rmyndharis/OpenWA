@@ -1,22 +1,16 @@
-.dashboard{
+.dashboard {
   padding: 2rem;
   width: 100%;
   box-sizing: border-box;
 }
 
-.dashboard .page-header{
+.dashboard .page-header {
   margin-bottom: 2rem;
-}
-
-.dashboard .header-title{
-  display: flex;
-  align-items: center;
-  gap: 1rem;
 }
 
 /* H1 inherited from global */
 
-.dashboard .status-badge{
+.dashboard .status-badge {
   padding: 0.375rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.6875rem;
@@ -25,12 +19,17 @@
   letter-spacing: 0.025em;
 }
 
-.dashboard .status-badge.connected{
+.dashboard .status-badge.connected {
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.dashboard .stats-grid{
+.dashboard .status-badge.disconnected {
+  background: var(--bg-light);
+  color: var(--text-muted);
+}
+
+.dashboard .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1.5rem;
@@ -38,7 +37,22 @@
   width: 100%;
 }
 
-.dashboard .stat-card{
+/* Collapse the 4-up tile grid to 2 columns on iPad Mini portrait (768px wide) and other narrow
+   viewports so the tiles don't squeeze into thin slivers. Falls back to a single column on phones. */
+@media (max-width: 1024px) {
+  .dashboard .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard .stat-card {
   position: relative;
   background: var(--bg-white);
   border-radius: 12px;
@@ -52,25 +66,38 @@
     box-shadow 0.2s ease;
 }
 
-.dashboard .stat-card:hover{
+.dashboard .stat-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
 
-.dashboard .stat-header{
+.dashboard .stat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
 }
 
-.dashboard .stat-icon{
+.dashboard .stat-icon {
   color: var(--text-muted);
   position: relative;
   z-index: 2;
 }
 
-.dashboard .stat-label{
+.dashboard .stat-watermark {
+  position: absolute;
+  right: -10px;
+  bottom: -15px;
+  width: 96px;
+  height: 96px;
+  opacity: 0.04;
+  color: var(--text-primary);
+  transform: rotate(-15deg);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.dashboard .stat-label {
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -80,7 +107,7 @@
   z-index: 2;
 }
 
-.dashboard .stat-value{
+.dashboard .stat-value {
   font-size: 2rem;
   font-weight: 700;
   color: var(--text-primary);
@@ -88,7 +115,7 @@
   z-index: 2;
 }
 
-.dashboard .stat-detail{
+.dashboard .stat-detail {
   font-size: 0.75rem;
   line-height: 1.35;
   margin-top: 0.5rem;
@@ -97,7 +124,7 @@
   z-index: 2;
 }
 
-.dashboard .sessions-section{
+.dashboard .sessions-section {
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
@@ -107,7 +134,7 @@
   box-sizing: border-box;
 }
 
-.dashboard .section-header{
+.dashboard .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -116,19 +143,20 @@
 
 /* H2 inherited from global */
 
-.dashboard .section-subtitle{
+.dashboard .section-subtitle {
   font-size: 0.875rem;
   color: var(--text-muted);
 }
 
-.dashboard .sessions-table{
+.dashboard .sessions-table {
   display: flex;
   flex-direction: column;
   width: 100%;
   font-size: 0.875rem;
 }
 
-.dashboard .sessions-table .table-header, .dashboard .sessions-table .table-row{
+.dashboard .sessions-table .table-header,
+.dashboard .sessions-table .table-row {
   display: grid;
   grid-template-columns: 140px 200px 140px 1fr 180px;
   gap: 1rem;
@@ -136,7 +164,7 @@
   align-items: center;
 }
 
-.dashboard .sessions-table .table-header{
+.dashboard .sessions-table .table-header {
   background: var(--bg-light);
   border-radius: var(--radius) var(--radius) 0 0;
   font-size: 0.7rem;
@@ -147,29 +175,29 @@
   border-bottom: 1px solid var(--border);
 }
 
-.dashboard .sessions-table .table-row{
+.dashboard .sessions-table .table-row {
   border-bottom: 1px solid var(--border);
 }
 
-.dashboard .sessions-table .table-row:last-child{
+.dashboard .sessions-table .table-row:last-child {
   border-bottom: none;
 }
 
-.dashboard .session-info-cell{
+.dashboard .session-info-cell {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
   min-width: 0;
 }
 
-.dashboard .session-id{
+.dashboard .session-id {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8125rem;
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-.dashboard .session-name{
+.dashboard .session-name {
   font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
@@ -178,13 +206,13 @@
   max-width: 140px;
 }
 
-.dashboard .phone{
+.dashboard .phone {
   color: var(--text-primary);
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
-.dashboard .status-pill{
+.dashboard .status-pill {
   display: inline-block;
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
@@ -193,39 +221,39 @@
   width: fit-content;
 }
 
-.dashboard .status-pill.ready{
+.dashboard .status-pill.ready {
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
 .dashboard .status-pill.connecting,
-.dashboard .status-pill.authenticating{
+.dashboard .status-pill.authenticating {
   background: rgba(245, 158, 11, 0.15);
   color: var(--warning);
 }
 
-.dashboard .status-pill.disconnected{
+.dashboard .status-pill.disconnected {
   background: var(--bg-light);
   color: var(--text-muted);
 }
 
-.dashboard .status-pill.failed{
+.dashboard .status-pill.failed {
   background: rgba(239, 68, 68, 0.15);
   color: var(--error);
 }
 
-.dashboard .last-active{
+.dashboard .last-active {
   color: var(--text-secondary);
   font-size: 0.875rem;
 }
 
-.dashboard .actions{
+.dashboard .actions {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
 }
 
-.dashboard .btn-sm{
+.dashboard .btn-sm {
   padding: 0.375rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
@@ -237,46 +265,46 @@
   color: var(--text-secondary);
 }
 
-.dashboard .btn-sm:hover{
+.dashboard .btn-sm:hover {
   background: var(--bg-white);
   border-color: var(--text-muted);
 }
 
-.dashboard .btn-sm.danger{
+.dashboard .btn-sm.danger {
   color: var(--error);
   border-color: rgba(239, 68, 68, 0.3);
   background: rgba(239, 68, 68, 0.12);
 }
 
-.dashboard .btn-sm.danger:hover{
+.dashboard .btn-sm.danger:hover {
   background: rgba(239, 68, 68, 0.18);
 }
 
 @media (max-width: 1200px) {
-  .dashboard .stats-grid{
+  .dashboard .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
-  .dashboard{
+  .dashboard {
     padding: 1rem;
   }
 
-  .dashboard .stats-grid{
+  .dashboard .stats-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
   }
 
-  .dashboard .stat-value{
+  .dashboard .stat-value {
     font-size: 1.5rem;
   }
 
-  .dashboard .sessions-section{
+  .dashboard .sessions-section {
     padding: 1rem;
   }
 
-  .dashboard .section-header{
+  .dashboard .section-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;
@@ -284,11 +312,11 @@
   }
 
   /* Convert table to card layout on mobile */
-  .dashboard .sessions-table .table-header{
+  .dashboard .sessions-table .table-header {
     display: none;
   }
 
-  .dashboard .sessions-table .table-row{
+  .dashboard .sessions-table .table-row {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -296,34 +324,34 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .dashboard .sessions-table .table-row:last-child{
+  .dashboard .sessions-table .table-row:last-child {
     border-bottom: none;
   }
 
-  .dashboard .session-info-cell{
+  .dashboard .session-info-cell {
     order: 1;
   }
 
-  .dashboard .session-id{
+  .dashboard .session-id {
     font-size: 0.9375rem;
     font-weight: 600;
   }
 
-  .dashboard .phone{
+  .dashboard .phone {
     order: 2;
   }
 
-  .dashboard .status-pill{
+  .dashboard .status-pill {
     order: 3;
   }
 
-  .dashboard .last-active{
+  .dashboard .last-active {
     order: 4;
     font-size: 0.75rem;
     color: var(--text-muted);
   }
 
-  .dashboard .actions{
+  .dashboard .actions {
     order: 5;
     justify-content: flex-start;
     padding-top: 0.5rem;
@@ -332,13 +360,7 @@
 }
 
 @media (max-width: 480px) {
-  .dashboard{
+  .dashboard {
     padding: 0.75rem;
-  }
-
-  .dashboard .header-title{
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
   }
 }

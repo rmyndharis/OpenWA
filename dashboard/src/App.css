@@ -14,47 +14,11 @@
   --error: #ef4444;
   --success: #22c55e;
   --warning: #f59e0b;
-  --info: #2563eb; /* Blue 600 — info/permission/log badges + qr-ready pill; no palette blue token */
+  --info: #2563eb; /* Blue 600 — info/permission/log badges + qr-ready pill */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
   --radius: 10px;
-}
-
-[data-palette='blue'] {
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-soft: rgba(37, 99, 235, 0.12);
-}
-
-[data-palette='graphite'] {
-  --primary: #64748b;
-  --primary-hover: #475569;
-  --primary-soft: rgba(100, 116, 139, 0.14);
-}
-
-[data-palette='indigo'] {
-  --primary: #4f46e5;
-  --primary-hover: #4338ca;
-  --primary-soft: rgba(79, 70, 229, 0.12);
-}
-
-[data-palette='amber'] {
-  --primary: #d97706;
-  --primary-hover: #b45309;
-  --primary-soft: rgba(217, 119, 6, 0.13);
-}
-
-[data-palette='rose'] {
-  --primary: #e11d48;
-  --primary-hover: #be123c;
-  --primary-soft: rgba(225, 29, 72, 0.12);
-}
-
-[data-palette='teal'] {
-  --primary: #0d9488;
-  --primary-hover: #0f766e;
-  --primary-soft: rgba(13, 148, 136, 0.12);
 }
 
 /* Dark Mode */

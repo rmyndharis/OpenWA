@@ -10,12 +10,6 @@
 
 /* H1 inherited from global */
 
-.infrastructure-page .page-subtitle{
-  margin: 0;
-  font-size: 0.9375rem;
-  color: var(--text-secondary);
-}
-
 .infrastructure-page .infra-sections{
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -31,10 +25,6 @@
   border: 1px solid var(--border);
   width: 100%;
   box-sizing: border-box;
-}
-
-.infrastructure-page .infra-card.full-width{
-  grid-column: 1 / -1;
 }
 
 .infrastructure-page .card-header{
@@ -83,14 +73,6 @@
 .infrastructure-page .status-indicator.sqlite{
   background: rgba(59, 130, 246, 0.12);
   color: var(--info);
-}
-
-.infrastructure-page .warning-badge{
-  font-size: 0.75rem;
-  padding: 0.375rem 0.75rem;
-  background: rgba(245, 158, 11, 0.15);
-  color: var(--warning);
-  border-radius: 6px;
 }
 
 /* Radio Group */
@@ -286,62 +268,6 @@
   transform: translateX(22px);
 }
 
-/* Migrations Section */
-.infrastructure-page .migrations-section{
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
-}
-
-.infrastructure-page .migrations-section h3{
-  margin: 0 0 1rem;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.infrastructure-page .migrations-list{
-  background: var(--bg-light);
-  border-radius: var(--radius);
-  padding: 0.5rem;
-  margin-bottom: 1rem;
-}
-
-.infrastructure-page .migration-item{
-  display: grid;
-  grid-template-columns: 24px 1fr auto;
-  gap: 0.75rem;
-  padding: 0.625rem 0.75rem;
-  align-items: center;
-}
-
-.infrastructure-page .migration-status{
-  font-size: 0.875rem;
-}
-
-.infrastructure-page .migration-item.completed .migration-status{
-  color: var(--primary);
-}
-
-.infrastructure-page .migration-item.pending .migration-status{
-  color: var(--text-muted);
-}
-
-.infrastructure-page .migration-name{
-  font-size: 0.875rem;
-  color: var(--text-primary);
-}
-
-.infrastructure-page .migration-date{
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.infrastructure-page .migration-actions{
-  display: flex;
-  gap: 0.75rem;
-}
-
 /* Queue Stats */
 .infrastructure-page .queue-stats{
   margin-top: 1.5rem;
@@ -466,25 +392,6 @@
   background: var(--bg-light);
 }
 
-.infrastructure-page .btn-danger-outline{
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: transparent;
-  color: var(--error);
-  border: 1px solid var(--error);
-  border-radius: var(--radius);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.infrastructure-page .btn-danger-outline:hover{
-  background: rgba(239, 68, 68, 0.12);
-}
-
 /* Footer */
 .infrastructure-page .page-footer{
   margin-top: 2rem;
@@ -540,14 +447,6 @@
     padding: 0.25rem 0.625rem;
   }
 
-  /* Warning badge mobile */
-  .infrastructure-page .warning-badge{
-    flex-shrink: 0;
-    white-space: nowrap;
-    font-size: 0.6875rem;
-    padding: 0.25rem 0.5rem;
-  }
-
   /* Toggle row mobile - prevent switch from being cut off */
   .infrastructure-page .toggle-row{
     gap: 1rem;
@@ -588,23 +487,6 @@
   .infrastructure-page .form-group input, .infrastructure-page .form-group select{
     font-size: 0.875rem;
     padding: 0.625rem 0.875rem;
-  }
-
-  .infrastructure-page .migration-item{
-    grid-template-columns: 24px 1fr;
-    gap: 0.5rem;
-  }
-
-  .infrastructure-page .migration-date{
-    grid-column: 2;
-  }
-
-  .infrastructure-page .migration-actions{
-    flex-direction: column;
-  }
-
-  .infrastructure-page .migration-actions button{
-    justify-content: center;
   }
 
   .infrastructure-page .stat-values{
