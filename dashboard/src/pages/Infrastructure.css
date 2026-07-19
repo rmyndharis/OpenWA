@@ -351,25 +351,6 @@
 }
 
 /* Buttons */
-.infrastructure-page .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.infrastructure-page .btn-primary:hover {
-  background: var(--primary-hover);
-}
-
 .infrastructure-page .btn-primary.large {
   padding: 0.875rem 1.5rem;
   font-size: 1rem;

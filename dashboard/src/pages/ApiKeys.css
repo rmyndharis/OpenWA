@@ -10,25 +10,6 @@
 
 /* H1 inherited from global */
 
-.api-keys-page .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.api-keys-page .btn-primary:hover {
-  background: var(--primary-hover);
-}
-
 .api-keys-page .api-keys-content {
   display: flex;
   flex-direction: column;
@@ -261,22 +242,6 @@
 
 .api-keys-page .confirm-message strong {
   color: var(--text-primary);
-}
-
-.api-keys-page .btn-danger {
-  padding: 0.75rem 1.25rem;
-  background: var(--error);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.api-keys-page .btn-danger:hover {
-  background: #b91c1c;
 }
 
 /* Mobile Responsive */

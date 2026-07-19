@@ -10,25 +10,6 @@
 
 /* H1 inherited from global */
 
-.logs-page .btn-secondary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--bg-white);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.logs-page .btn-secondary:hover {
-  background: var(--bg-light);
-}
-
 .logs-page .filters-bar {
   display: flex;
   gap: 1rem;

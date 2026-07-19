@@ -30,25 +30,6 @@
 
 /* H1 inherited from global */
 
-.webhooks-page .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.webhooks-page .btn-primary:hover {
-  background: var(--primary-hover);
-}
-
 .webhooks-page .webhooks-content {
   display: grid;
   grid-template-columns: 1fr 280px;
@@ -595,25 +576,6 @@
 }
 
 /* Danger Button */
-.webhooks-page .btn-danger {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--error);
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.webhooks-page .btn-danger:hover {
-  background: #b91c1c;
-}
-
 /* Small Modal Variant */
 .webhooks-page .modal.modal-sm {
   max-width: 400px;

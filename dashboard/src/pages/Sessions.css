@@ -11,25 +11,6 @@
 
 /* H1 inherited from global */
 
-.sessions-page .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.sessions-page .btn-primary:hover {
-  background: var(--primary-hover);
-}
-
 .sessions-page .filters-bar {
   display: flex;
   gap: 1rem;
@@ -419,39 +400,6 @@
 }
 
 /* Secondary Button */
-.sessions-page .btn-secondary {
-  padding: 0.75rem 1.25rem;
-  background: var(--bg-light);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.sessions-page .btn-secondary:hover {
-  background: var(--bg-white);
-  border-color: var(--text-muted);
-  color: var(--text-primary);
-}
-
-.sessions-page .btn-danger {
-  padding: 0.75rem 1.25rem;
-  background: #dc2626;
-  color: white;
-  border: none;
-  border-radius: var(--radius);
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.sessions-page .btn-danger:hover {
-  background: #b91c1c;
-}
-
 .sessions-page .confirm-modal {
   max-width: 400px;
 }

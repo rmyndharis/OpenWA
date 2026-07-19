@@ -82,53 +82,8 @@
   margin-bottom: 0;
 }
 
-/* btn-primary/btn-secondary were undefined on this page — both action buttons fell back to
-   near-browser-default styling. Mirrors the Plugins/Logs button styles for design-system parity.
-   Placed BEFORE .templates-new-btn (equal specificity) so its smaller metrics still win on the
-   header button. */
-.templates-page .btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.5rem;
-  background: var(--primary, #22c55e);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.templates-page .btn-primary:hover:not(:disabled) {
-  background: var(--primary-hover, #16a34a);
-}
-
-.templates-page .btn-primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.templates-page .btn-secondary {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: var(--bg-white);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.9375rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.templates-page .btn-secondary:hover:not(:disabled) {
-  background: var(--bg-light);
-}
-
+/* Primary/secondary/danger buttons on this page come from the shared global classes (index.css).
+   .templates-new-btn only overrides metrics for the compact header button. */
 .templates-page .templates-new-btn {
   min-height: 36px;
   padding: 0.5rem 0.75rem;
@@ -434,23 +389,6 @@
   border-color: rgba(239, 68, 68, 0.3);
   background: rgba(239, 68, 68, 0.12);
   color: var(--error);
-}
-
-.templates-page .btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  border: none;
-  border-radius: var(--radius);
-  background: var(--error);
-  color: white;
-  font-size: 0.9375rem;
-  font-weight: 600;
-}
-
-.templates-page .btn-danger:hover {
-  background: #b91c1c;
 }
 
 .templates-page .toast {
