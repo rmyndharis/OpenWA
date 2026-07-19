@@ -96,7 +96,6 @@ export function useChatScrollPosition(
   const prevChatIdRef = useRef<string | null>(null);
   const prevLoadedRef = useRef<boolean>(false);
   const pinnedRef = useRef<boolean>(true);
-  const scrollListenerElRef = useRef<HTMLDivElement | null>(null);
 
   const pinToBottom = useCallback((el: HTMLDivElement) => {
     el.scrollTop = el.scrollHeight;
@@ -105,11 +104,13 @@ export function useChatScrollPosition(
 
   // Track the pin state from scroll geometry alone: any scroll that lands at the bottom (ours or the
   // user's) pins; any scroll away (only ever the user's) unpins — no programmatic/user distinction
-  // needed. Attached once the container exists; the element is stable for the component's lifetime.
+  // needed. NOTE: an effect without a dep array re-runs on EVERY render, and React runs the previous
+  // cleanup first — so the listener must be (re)attached unconditionally each run. Guarding against
+  // re-attach (e.g. remembering the element in a ref) would leave the listener permanently removed
+  // after the second render, killing unpin tracking entirely.
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || scrollListenerElRef.current === el) return undefined;
-    scrollListenerElRef.current = el;
+    if (!el) return undefined;
     const onScroll = () => {
       pinnedRef.current = isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
     };
