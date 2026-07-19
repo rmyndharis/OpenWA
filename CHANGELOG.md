@@ -108,6 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with fetching gated to `qr_ready` (no more expected-but-noisy 400 console errors), and enabling a
   plugin with unset required config opens its config dialog with a warning instead of failing with a
   raw sandbox error.
+- Plugins whose config schema declares field defaults no longer fail to enable with those values
+  missing: defaults are now seeded into the stored config at load time (fresh installs and every
+  boot), without ever overwriting explicit values. Required fields without a declared default still
+  need real operator input.
 
 ## [0.9.0] - 2026-07-18
 
