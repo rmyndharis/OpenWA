@@ -2713,6 +2713,41 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/contacts/profile-pictures": {
+      "get": {
+        "description": "One request for a whole chat sidebar — avoids the burst of parallel single fetches that would exhaust the per-IP throttle. Engine lookups run 3 at a time; per-id failures return null.",
+        "operationId": "ContactController_getProfilePictures",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "description": "Comma-separated contact ids (max 50 used)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Batch-resolve profile picture URLs for up to 50 contacts",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/contacts/{contactId}": {
       "get": {
         "operationId": "ContactController_findOne",
