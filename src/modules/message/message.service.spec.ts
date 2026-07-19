@@ -1046,6 +1046,7 @@ describe('MessageService', () => {
 
       await service.sendImage('sess-1', { chatId: '621@c.us', base64: 'QUJD', mimetype: 'image/png' });
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       const patch = (repository.update as jest.Mock).mock.calls[0]?.[1] as Record<string, unknown> | undefined;
       expect((patch?.metadata as { media?: { data?: string } } | undefined)?.media?.data).toBe('QUJD');
       expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
