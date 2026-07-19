@@ -88,7 +88,6 @@ test('mergeChatMessages: returns ascending by timestamp (oldest first, newest la
 
 import {
   mergeOrAppend,
-  replaceMessageById,
   updateMessageById,
   removeMessageById,
   findRevokedIndex,
@@ -143,6 +142,49 @@ test('mergeOrAppend keeps existing metadata when the incoming copy carries none'
   assert.deepEqual(after[0].metadata, { media: { mimetype: 'image/png' } });
 });
 
+test('mergeOrAppend: an omitted-media echo does NOT clobber the copy holding the payload', () => {
+  // The optimistic send bubble holds the only base64 copy; the engine's own-send echo carries just
+  // `{media: {omitted: true}}` (no data). Replacing wholesale would blank the sent image.
+  const optimistic = msg({
+    id: 'm-1',
+    type: 'image',
+    metadata: { media: { mimetype: 'image/png', filename: 'a.png', data: 'BASE64' } },
+  });
+  const echo = msg({
+    id: 'm-1',
+    type: 'image',
+    metadata: { media: { mimetype: 'image/png', omitted: true, sizeBytes: 1234 } },
+  });
+  const after = mergeOrAppend([optimistic], echo);
+  assert.equal(after.length, 1);
+  assert.equal(after[0].metadata?.media?.data, 'BASE64');
+  assert.equal(after[0].metadata?.media?.omitted, undefined);
+});
+
+test('mergeOrAppend: incoming media WITH a payload replaces the existing marker', () => {
+  const before = [
+    msg({ id: 'm-1', type: 'image', metadata: { media: { mimetype: 'image/png', omitted: true } } }),
+  ];
+  const live = msg({
+    id: 'm-1',
+    type: 'image',
+    metadata: { media: { mimetype: 'image/png', data: 'FRESH' } },
+  });
+  const after = mergeOrAppend(before, live);
+  assert.equal(after[0].metadata?.media?.data, 'FRESH');
+});
+
+test('mergeOrAppend: an echo with undefined leaves keeps the existing quote/call fields', () => {
+  // The WS mapper builds metadata as `{media, quotedMessage, call}` with undefined leaves — those
+  // must not erase fields the existing copy has (a wholesale spread would overwrite with undefined).
+  const before = [
+    msg({ id: 'm-1', metadata: { quotedMessage: { id: 'q-1', body: 'quoted' } } }),
+  ];
+  const echo = msg({ id: 'm-1', metadata: { media: undefined } });
+  const after = mergeOrAppend(before, echo);
+  assert.deepEqual(after[0].metadata, { quotedMessage: { id: 'q-1', body: 'quoted' } });
+});
+
 test('mergeOrAppend dedupes a live WS message against its DB copy (id != id but same waMessageId)', () => {
   // DB-persisted copy: id = UUID, waMessageId = WA serialized id.
   const dbCopy = msg({ id: 'uuid-1', waMessageId: 'true_g@g.us_WA1', body: 'persisted' });
@@ -158,20 +200,6 @@ test('mergeOrAppend does not mutate the input array', () => {
   const after = mergeOrAppend(before, msg({ id: 'm-2' }));
   assert.notEqual(after, before);
   assert.equal(before.length, 1);
-});
-
-test('replaceMessageById swaps the entry with matching id', () => {
-  const before = [msg({ id: 'temp-1', status: 'pending' }), msg({ id: 'm-2' })];
-  const after = replaceMessageById(before, 'temp-1', msg({ id: 'real-1', status: 'sent' }));
-  assert.equal(after.length, 2);
-  assert.equal(after[0].id, 'real-1');
-  assert.equal(after[0].status, 'sent');
-});
-
-test('replaceMessageById is a no-op when oldId is not present', () => {
-  const before = [msg({ id: 'm-1' })];
-  const after = replaceMessageById(before, 'missing', msg({ id: 'real' }));
-  assert.deepEqual(after, before);
 });
 
 test('updateMessageById applies a partial patch by id', () => {

@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import { BadRequestException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
@@ -76,13 +75,20 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect((await provider.health()).ok).toBe(true);
   });
 
-  it('maps an FTS5 syntax error to a 400 (not an unhandled 500)', async () => {
-    // SQLite FTS5 treats `"`, `(`, `*` as query grammar — an unbalanced quote is a syntax error,
-    // which must surface as BadRequestException (400), never a raw 500. Postgres's
-    // websearch_to_tsquery is tolerant and has no equivalent failure mode.
-    await expect(provider.search({ q: '"unbalanced' })).rejects.toThrow(BadRequestException);
-    await expect(provider.search({ q: '*foo' })).rejects.toThrow(BadRequestException);
-    await expect(provider.search({ q: '(test' })).rejects.toThrow(BadRequestException);
+  it('sanitizes FTS5 grammar characters instead of 400ing (chatIds, quotes, parens stay searchable)', async () => {
+    // User input is quoted per-token (toFts5Query), so `"`, `(`, `*`, `@` match literally — a chatId
+    // like 262813461250071@lid is a normal search term here, not a grammar error. Verified against
+    // live FTS5: `a b` and `"a" "b"` are identical (implicit AND), so multi-token semantics hold.
+    for (const q of ['"unbalanced', '*foo', '(test', '262813461250071@lid', 'a@c.us']) {
+      await expect(provider.search({ q })).resolves.toMatchObject({ provider: 'builtin-fts' });
+    }
+  });
+
+  it('keeps multi-token AND semantics after quoting', async () => {
+    // Both rows carry 'hello' AND 'world'... exactly one does ('goodbye world' lacks 'hello').
+    const res = await provider.search({ q: 'hello world' });
+    expect(res.hits.length).toBe(1);
+    expect(res.hits[0].body).toBe('hello world');
   });
 
   it('treats dateFrom/dateTo as epoch-ms against a seconds timestamp column', async () => {

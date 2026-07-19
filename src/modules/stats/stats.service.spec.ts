@@ -99,6 +99,21 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     expect(chat?.chatName).toBe('Alice');
   });
 
+  it('getMessageStats byType excludes content-less system/event rows (no body AND no metadata)', async () => {
+    await ds
+      .getRepository(Session)
+      .save(ds.getRepository(Session).create({ id: 's1', name: 'n', status: SessionStatus.READY, config: {} }));
+    await seedMessage({ body: 'hello' });
+    // A media message with no caption (body '') but a metadata.media payload must still be counted —
+    // only rows empty on BOTH are excluded.
+    await seedMessage({ type: 'image', body: '', metadata: { media: { mimetype: 'image/png', data: 'x' } } });
+    // The misleading slice: an @lid privacy-user event the engine maps to `unknown` — no content at all.
+    await seedMessage({ type: 'unknown', body: '', direction: MessageDirection.INCOMING });
+
+    const stats = await service.getMessageStats('24h');
+    expect(stats.byType).toEqual({ text: 1, image: 1 });
+  });
+
   it('time-series query never groups by the bare reserved word `timestamp` (Postgres-safe)', async () => {
     await ds
       .getRepository(Session)

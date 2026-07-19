@@ -185,7 +185,7 @@
 .chats-page .chat-item-time{
   font-size: 0.75rem;
   color: var(--text-muted);
-  white-shrink: 0;
+  flex-shrink: 0;
 }
 
 .chats-page .chat-item-bottom{
@@ -402,7 +402,7 @@
 }
 
 /* Dark theme outgoing chat bubble override */
-.chats-page [data-theme='dark'] .message-bubble.outgoing{
+[data-theme='dark'] .chats-page .message-bubble.outgoing{
   background: #005c4b; /* Dark WhatsApp Green */
   color: #e9edef;
 }
@@ -472,8 +472,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   background: var(--primary);
   border: none;
   border-radius: 50%;
@@ -490,8 +490,11 @@
 }
 
 .chats-page .btn-send-message:disabled{
-  background: var(--border);
-  color: var(--text-muted);
+  /* Keep the brand silhouette readable while clearly inactive — a bare gray-on-gray glyph
+     reads as "no button here" rather than "send, disabled". */
+  background: var(--primary);
+  color: #fff;
+  opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -741,7 +744,7 @@
 }
 
 .chats-page .message-media-omitted {
-  color: var(--color-text-muted, #888);
+  color: var(--text-muted);
   font-style: italic;
   font-size: 0.9em;
   margin-bottom: 0.25rem;
@@ -782,7 +785,7 @@
   background: var(--border);
 }
 
-.chats-page [data-theme='dark'] .chat-document-media{
+[data-theme='dark'] .chats-page .chat-document-media{
   background: #202c33;
   border-color: #2f3b43;
 }
@@ -951,7 +954,7 @@
   border-left-color: #008069;
 }
 
-.chats-page [data-theme='dark'] .message-quote-box{
+[data-theme='dark'] .chats-page .message-quote-box{
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -1021,7 +1024,7 @@
   opacity: 0.6;
 }
 
-.chats-page [data-theme='dark'] .message-actions-menu, .chats-page [data-theme='dark'] .reaction-quick-popover, .chats-page [data-theme='dark'] .message-reactions-badge{
+[data-theme='dark'] .chats-page .message-actions-menu, [data-theme='dark'] .chats-page .reaction-quick-popover, [data-theme='dark'] .chats-page .message-reactions-badge{
   background: #202c33;
   border-color: #2f3b43;
 }
@@ -1029,7 +1032,7 @@
 /* Inline code inside a message body. */
 .chats-page .message-text code,
 .chats-page .quote-body code {
-  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  background: var(--bg-light);
   padding: 0.1em 0.35em;
   border-radius: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1038,7 +1041,7 @@
 
 /* Code block. */
 .chats-page .message-text pre {
-  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  background: var(--bg-light);
   padding: 0.5em 0.75em;
   border-radius: 6px;
   margin: 0.25em 0;

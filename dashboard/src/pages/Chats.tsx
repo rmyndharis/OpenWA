@@ -29,6 +29,7 @@ import {
 import {
   applyMessageEdit,
   mergeDeliveryStatus,
+  mergeOrAppend,
   findRevokedIndex,
   type ChatMessageView,
 } from '../utils/chatMessages';
@@ -137,7 +138,7 @@ export function Chats() {
   // chat has any message (doesn't toggle per append) and covers both the
   // first-fetch resolution and a WS-driven first message on a previously-empty
   // chat. `loadingMessages` alone would miss the latter case.
-  const { containerRef: messagesContainerRef, onMessageAppended } =
+  const { containerRef: messagesContainerRef, onMessageAppended, onMediaLoad } =
     useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
 
   // Popular emojis
@@ -683,21 +684,25 @@ export function Chats() {
 
       // Race guard: the realtime `message.sent` echo can arrive before this response and already
       // append the message by its real WA id (the dedup at receive time misses because the
-      // optimistic placeholder still carries the temp id). If so, drop the placeholder instead of
-      // renaming it — otherwise both the echo and the renamed temp render as duplicate bubbles.
+      // optimistic placeholder still carries the temp id). If so, fold the placeholder INTO the
+      // echo's row via mergeOrAppend instead of just dropping it — the echo carries no media
+      // payload (engine parity marker), so dropping the placeholder would erase the attachment's
+      // base64 and leave a bare "📎 Media" bubble until the next refetch.
       const sendKey = messagesQueryKey(selectedSessionId, activeChat.id);
       queryClient.setQueryData<ChatMessageView[]>(sendKey, (prev = []) => {
+        const reconciled: ChatMessageView = {
+          ...tempMessage,
+          id: result.messageId,
+          waMessageId: result.messageId,
+          status: 'sent',
+        };
         const echoAlreadyAdded = prev.some(
           m => m.id === result.messageId || m.waMessageId === result.messageId,
         );
         if (echoAlreadyAdded) {
-          return prev.filter(m => m.id !== tempId);
+          return mergeOrAppend(prev.filter(m => m.id !== tempId), reconciled);
         }
-        return prev.map(m =>
-          m.id === tempId
-            ? { ...m, id: result.messageId, waMessageId: result.messageId, status: 'sent' }
-            : m,
-        );
+        return prev.map(m => (m.id === tempId ? reconciled : m));
       });
 
       // Update sidebar chat list (move active chat to the top with the new snippet)
@@ -952,6 +957,7 @@ export function Chats() {
                                 <img
                                   src={thumb}
                                   alt=""
+                                  onLoad={onMediaLoad}
                                   style={{ maxWidth: 220, borderRadius: 8, display: 'block', marginBottom: 4 }}
                                 />
                               )}
@@ -990,6 +996,7 @@ export function Chats() {
                                   src={mediaSrc}
                                   alt={mediaInfo.filename || t('chats.media.image')}
                                   className="chat-image-media"
+                                  onLoad={onMediaLoad}
                                   onClick={() => {
                                     const idx = imageMedia.findIndex(x => x.id === msg.id);
                                     if (idx >= 0) setLightboxIndex(idx);
@@ -1000,7 +1007,12 @@ export function Chats() {
                           case 'video':
                             return (
                               <div className="message-media-video">
-                                <video src={mediaSrc} controls className="chat-video-media" />
+                                <video
+                                  src={mediaSrc}
+                                  controls
+                                  className="chat-video-media"
+                                  onLoadedData={onMediaLoad}
+                                />
                               </div>
                             );
                           case 'audio':
@@ -1255,7 +1267,7 @@ export function Chats() {
                       className="btn-send-message"
                       aria-label={t('chats.send')}
                     >
-                      {sending ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
+                      {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={24} strokeWidth={2.5} />}
                     </button>
                   </form>
                 </footer>

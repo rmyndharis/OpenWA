@@ -1,6 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideRestoreTarget } from './useChatScrollPosition.ts';
+import { decideRestoreTarget, isNearBottom } from './useChatScrollPosition.ts';
+
+test('isNearBottom: exactly at the bottom counts as near', () => {
+  assert.equal(isNearBottom(1000, 2000, 1000), true); // 2000-1000-1000 = 0
+});
+
+test('isNearBottom: within the 24px tolerance counts as near', () => {
+  assert.equal(isNearBottom(980, 2000, 1000), true); // 20px above bottom
+});
+
+test('isNearBottom: beyond the tolerance does not count', () => {
+  assert.equal(isNearBottom(500, 2000, 1000), false); // 500px above bottom
+});
+
+test('isNearBottom: a scrolled-to-top container is not near the bottom', () => {
+  assert.equal(isNearBottom(0, 20000, 800), false);
+});
 
 test('first render with no previous chat: no save, restore to bottom if loaded', () => {
   assert.deepEqual(
