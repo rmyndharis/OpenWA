@@ -1,4 +1,4 @@
-import { MessageMedia, WAState } from 'whatsapp-web.js';
+import { Client, MessageMedia, WAState } from 'whatsapp-web.js';
 import { EventEmitter } from 'events';
 import {
   WhatsAppWebJsAdapter,
@@ -14,6 +14,7 @@ import {
 } from './whatsapp-web-js.adapter';
 import { getEffectiveWebVersionInfo, resolveWebVersionPin, __resetWebVersionCache } from '../wa-web-version';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -2424,5 +2425,136 @@ describe('WhatsAppWebJsAdapter.probeLiveness (session watchdog probe)', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('WhatsAppWebJsAdapter stale Singleton cleanup (pre-launch, WAHA/venom practice)', () => {
+  const SESSION_ID = 'sess-singleton';
+  const newAdapter = (): WhatsAppWebJsAdapter =>
+    new WhatsAppWebJsAdapter({ sessionId: SESSION_ID, sessionDataPath: './data/sessions', puppeteer: {} });
+
+  let rmSpy: jest.SpyInstance;
+  let clientInitSpy: jest.SpyInstance;
+  let savedWebVersion: string | undefined;
+
+  beforeEach(() => {
+    // Keep initialize() offline: 'off' skips the wa-version registry fetch in resolveWebVersionPin.
+    savedWebVersion = process.env.WWEBJS_WEB_VERSION;
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    // Stub Client.prototype.initialize so the real wwebjs Client is built but no browser launches.
+    // (Structural cast: the wwebjs Client typings don't resolve under the lint project.)
+    clientInitSpy = jest
+      .spyOn(Client.prototype as unknown as { initialize: () => Promise<void> }, 'initialize')
+      .mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    rmSpy.mockRestore();
+    clientInitSpy.mockRestore();
+    if (savedWebVersion === undefined) {
+      delete process.env.WWEBJS_WEB_VERSION;
+    } else {
+      process.env.WWEBJS_WEB_VERSION = savedWebVersion;
+    }
+  });
+
+  it('removes the three Singleton files from the LocalAuth profile dir right before client.initialize()', async () => {
+    const order: string[] = [];
+    rmSpy.mockImplementation(() => {
+      order.push('rm');
+      return Promise.resolve(undefined);
+    });
+    clientInitSpy.mockImplementation(() => {
+      order.push('client.initialize');
+      return Promise.resolve(undefined);
+    });
+
+    await newAdapter().initialize({});
+
+    // Same dir LocalAuth uses as userDataDir: <resolved dataPath>/session-<clientId>.
+    const profileDir = path.join(path.resolve('./data/sessions'), `session-${SESSION_ID}`);
+    expect(rmSpy).toHaveBeenCalledTimes(3);
+    expect(rmSpy).toHaveBeenCalledWith(path.join(profileDir, 'SingletonLock'), { force: true });
+    expect(rmSpy).toHaveBeenCalledWith(path.join(profileDir, 'SingletonSocket'), { force: true });
+    expect(rmSpy).toHaveBeenCalledWith(path.join(profileDir, 'SingletonCookie'), { force: true });
+    expect(clientInitSpy).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['rm', 'rm', 'rm', 'client.initialize']);
+  });
+
+  it('still initializes when the Singleton files cannot be removed (best-effort, never fails the start)', async () => {
+    rmSpy.mockRejectedValue(new Error('EPERM: operation not permitted'));
+
+    await expect(newAdapter().initialize({})).resolves.toBeUndefined();
+
+    expect(rmSpy).toHaveBeenCalledTimes(3); // all three attempted even though each failed
+    expect(clientInitSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-path, wwebjs #5728)', () => {
+  const readyAdapter = (client: unknown): { adapter: WhatsAppWebJsAdapter; onDisconnected: jest.Mock } => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onDisconnected };
+    return { adapter, onDisconnected };
+  };
+
+  // A wedged page fires no events while still reporting CONNECTED, so a failed operation carrying a
+  // transport-death signature is the earliest signal — it must route through the disconnect path.
+  it.each([
+    'Protocol error: Target closed',
+    'Protocol error (Runtime.callFunctionOn): Target closed.',
+    'TargetClosedError: page closed',
+    'Attempted to use detached Frame',
+    'Session closed',
+    'Connection closed',
+  ])('reports a failed send carrying "%s" as a disconnect', async message => {
+    const sendMessage = jest.fn().mockRejectedValue(new Error(message));
+    const { adapter, onDisconnected } = readyAdapter({ sendMessage });
+
+    await expect(adapter.sendTextMessage('628111@c.us', 'hi')).rejects.toThrow(message);
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page transport error during sendMessage');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  // Ordinary operation failures must NOT trip the death path — the error only propagates to the caller.
+  it.each(['WhatsApp rate limit', 'Evaluation failed: TypeError: x is not a function'])(
+    'does not report an ordinary send failure (%s) as a disconnect',
+    async message => {
+      const sendMessage = jest.fn().mockRejectedValue(new Error(message));
+      const { adapter, onDisconnected } = readyAdapter({ sendMessage });
+
+      await expect(adapter.sendTextMessage('628111@c.us', 'hi')).rejects.toThrow(message);
+
+      expect(onDisconnected).not.toHaveBeenCalled();
+      expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    },
+  );
+
+  it('detects a transport error from a getter too (getContacts)', async () => {
+    const getContacts = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
+    const { adapter, onDisconnected } = readyAdapter({ getContacts });
+
+    await expect(adapter.getContacts()).rejects.toThrow('Protocol error: Target closed');
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page transport error during getContacts');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('reports nothing when the failure happens during an intentional teardown', async () => {
+    const sendMessage = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
+    const { adapter, onDisconnected } = readyAdapter({ sendMessage });
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    await expect(adapter.sendTextMessage('628111@c.us', 'hi')).rejects.toThrow('Protocol error: Target closed');
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
   });
 });

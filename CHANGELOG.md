@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Baileys engine, `connectionReplaced` (440) is now terminal instead of fighting the other instance,
   duplicate close events no longer burn retry attempts, and a failed reconnect attempt no longer
   fails the session.
+- Harden session stability further: the Baileys engine now treats `forbidden` (403, banned/blocked
+  account) as terminal instead of retrying forever; stale Chromium `SingletonLock`/`SingletonSocket`/
+  `SingletonCookie` files are removed before each whatsapp-web.js (re)launch so a previously
+  force-killed browser can never block startup; and page transport errors (`Protocol error`,
+  `Target closed`, detached frame, …) observed during send/query operations are now treated as an
+  immediate death signal, cutting dead-session detection from minutes to the first failed call.
 
 ## [0.9.0] - 2026-07-18
 

@@ -458,6 +458,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.setStatus(EngineStatus.DISCONNECTED);
         return;
       }
+      // Clear stale Chromium Singleton* files left by a hard kill before launching (WAHA/venom
+      // practice) — see removeStaleSingletonFiles. This runs only at engine (re)start, never while
+      // the browser is alive, so it cannot pull the files out from under a running Chromium.
+      await this.removeStaleSingletonFiles();
       await this.client.initialize();
       // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
       // browser leaves the client looking READY forever ("silent death"). Attach death listeners
@@ -769,6 +773,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.callbacks.onDisconnected?.(reason);
   }
 
+  /**
+   * Error-message signatures of a dead page/transport: Puppeteer raises these when the browser
+   * process, the renderer, or the CDP connection is gone (e.g. 'Protocol error: Target closed').
+   */
+  private static readonly PAGE_TRANSPORT_ERROR_PATTERN =
+    /protocol error|target closed|targetclosederror|detached frame|session closed|connection closed/i;
+
+  /**
+   * Report a failed client/page operation as a session death when the error matches
+   * PAGE_TRANSPORT_ERROR_PATTERN. A wedged page can fire NO events while still reporting CONNECTED
+   * (whatsapp-web.js #5728), so the watchdog takes minutes to notice — an operation failing with one
+   * of these errors is a much earlier death signal (WAHA's PAGE_CALL_ERROR_EVENT pattern). Detection
+   * only: the error itself still propagates to the caller exactly as before, and
+   * handlePuppeteerDeath's guard makes this safe during teardown and against double-reporting.
+   */
+  private reportIfPageTransportError(error: unknown, context: string): void {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!WhatsAppWebJsAdapter.PAGE_TRANSPORT_ERROR_PATTERN.test(message)) {
+      return;
+    }
+    this.logger.warn(`Page transport error during ${context} — treating the session as dead`, {
+      error: message,
+    });
+    this.handlePuppeteerDeath(`Page transport error during ${context}`);
+  }
+
   private markReadyFromClientInfo(): void {
     if ([EngineStatus.READY, EngineStatus.DISCONNECTED, EngineStatus.FAILED].includes(this.status)) return;
     this.clearReadyReconcile();
@@ -879,6 +909,24 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
       this.logger.warn(`Could not clear stale auth at ${dir}`, { error: String(error) });
     });
+  }
+
+  /**
+   * Remove Chromium's SingletonLock/SingletonSocket/SingletonCookie from the LocalAuth profile dir
+   * (same dir clearLocalAuth removes) before the browser launches. A hard-killed Chromium
+   * (SIGKILL/crash) leaves them behind, and on some setups (e.g. Docker PID reuse) the stale files
+   * block the next launch — WAHA and venom both clear them pre-launch. Best-effort: a removal
+   * failure only logs at debug and never fails the start.
+   */
+  private async removeStaleSingletonFiles(): Promise<void> {
+    const profileDir = path.join(path.resolve(this.config.sessionDataPath), `session-${this.config.sessionId}`);
+    for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+      try {
+        await fs.promises.rm(path.join(profileDir, name), { force: true });
+      } catch (error) {
+        this.logger.debug(`Could not remove stale ${name} from ${profileDir}`, { error: String(error) });
+      }
+    }
   }
 
   private async isClientRuntimeReady(): Promise<boolean> {
@@ -1109,6 +1157,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     try {
       return await send(to);
     } catch (err) {
+      // A transport-level failure means the page/browser is gone — report it as a death signal.
+      // No-op for ordinary send errors; the retry/throw behavior below is unchanged.
+      this.reportIfPageTransportError(err, 'sendMessage');
       if (!chatId.endsWith('@c.us') || !isNoLidForUserError(err)) {
         throw err;
       }
@@ -1185,16 +1236,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getContacts(): Promise<Contact[]> {
     this.ensureReady();
-    const contacts = await this.client!.getContacts();
+    try {
+      const contacts = await this.client!.getContacts();
 
-    return contacts.map(c => ({
-      id: c.id._serialized,
-      name: c.name || undefined,
-      pushName: c.pushname || undefined,
-      number: c.number,
-      isMyContact: c.isMyContact,
-      isBlocked: c.isBlocked,
-    }));
+      return contacts.map(c => ({
+        id: c.id._serialized,
+        name: c.name || undefined,
+        pushName: c.pushname || undefined,
+        number: c.number,
+        isMyContact: c.isMyContact,
+        isBlocked: c.isBlocked,
+      }));
+    } catch (error) {
+      this.reportIfPageTransportError(error, 'getContacts');
+      throw error;
+    }
   }
 
   async getContactById(contactId: string): Promise<Contact | null> {
@@ -1217,8 +1273,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getNumberId(number: string): Promise<string | null> {
     this.ensureReady();
-    const numberId = await this.client!.getNumberId(number);
-    return numberId?._serialized ?? null;
+    try {
+      const numberId = await this.client!.getNumberId(number);
+      return numberId?._serialized ?? null;
+    } catch (error) {
+      this.reportIfPageTransportError(error, 'getNumberId');
+      throw error;
+    }
   }
 
   async checkNumberExists(number: string): Promise<boolean> {
@@ -1244,28 +1305,33 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async getGroups(): Promise<Group[]> {
     this.ensureReady();
-    const chats = await this.client!.getChats();
+    try {
+      const chats = await this.client!.getChats();
 
-    // Filter only group chats
-    const groups = chats.filter(chat => chat.isGroup);
+      // Filter only group chats
+      const groups = chats.filter(chat => chat.isGroup);
 
-    // List path: read linkedParentJID synchronously from whatever metadata getChats()
-    // already loaded. We deliberately do NOT fall back to getChatById per group here —
-    // that would be an N+1 round-trip across every group on every list call. Groups
-    // whose metadata isn't loaded report null; the single-group endpoint (getGroupInfo,
-    // which loads full metadata via getChatById) is the authoritative source.
-    return groups.map(g => {
-      const groupChat = g as unknown as GroupChat;
-      return {
-        id: g.id._serialized,
-        name: g.name,
-        participantsCount: groupChat.participants?.length,
-        isAdmin: groupChat.participants?.some(
-          p => p.isAdmin && p.id._serialized === this.client?.info?.wid?._serialized,
-        ),
-        linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
-      };
-    });
+      // List path: read linkedParentJID synchronously from whatever metadata getChats()
+      // already loaded. We deliberately do NOT fall back to getChatById per group here —
+      // that would be an N+1 round-trip across every group on every list call. Groups
+      // whose metadata isn't loaded report null; the single-group endpoint (getGroupInfo,
+      // which loads full metadata via getChatById) is the authoritative source.
+      return groups.map(g => {
+        const groupChat = g as unknown as GroupChat;
+        return {
+          id: g.id._serialized,
+          name: g.name,
+          participantsCount: groupChat.participants?.length,
+          isAdmin: groupChat.participants?.some(
+            p => p.isAdmin && p.id._serialized === this.client?.info?.wid?._serialized,
+          ),
+          linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
+        };
+      });
+    } catch (error) {
+      this.reportIfPageTransportError(error, 'getGroups');
+      throw error;
+    }
   }
 
   // ============= Phase 3: Extended Messaging =============
@@ -1345,65 +1411,78 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult> {
     this.ensureReady();
-    // Find the message to quote
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
+    try {
+      // Find the message to quote
+      const chat = await this.client!.getChatById(chatId);
+      const messages = await chat.fetchMessages({ limit: 100 });
+      const quotedMsg = messages.find(m => m.id._serialized === quotedMsgId);
 
-    if (!quotedMsg) {
-      throw new MessageNotFoundError(quotedMsgId);
+      if (!quotedMsg) {
+        throw new MessageNotFoundError(quotedMsgId);
+      }
+
+      // Reply's send leg hits the same `No LID for user` path as a normal send for a migrated contact,
+      // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
+      // accepts an explicit target (#583 R1).
+      const msg = await this.sendResolved(chatId, to => quotedMsg.reply(text, to));
+      return this.toMessageResult(msg);
+    } catch (error) {
+      this.reportIfPageTransportError(error, 'replyToMessage');
+      throw error;
     }
-
-    // Reply's send leg hits the same `No LID for user` path as a normal send for a migrated contact,
-    // so route it through sendResolved (resolve @c.us->@lid, cache, self-heal). reply(content, chatId)
-    // accepts an explicit target (#583 R1).
-    const msg = await this.sendResolved(chatId, to => quotedMsg.reply(text, to));
-    return this.toMessageResult(msg);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
     this.ensureReady();
-    const chat = await this.client!.getChatById(fromChatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const msgToForward = messages.find(m => m.id._serialized === messageId);
-
-    if (!msgToForward) {
-      throw new MessageNotFoundError(messageId);
-    }
-
-    // The forward's send leg fails with `No LID for user` for a LID-migrated destination, so resolve
-    // it (and self-heal a stale mapping) via sendResolved. Capture the id actually sent to so the
-    // id-recovery below reads back from the SAME (resolved) chat, not the raw @c.us (#583 R1).
-    let resolvedTo = toChatId;
-    await this.sendResolved(toChatId, to => {
-      resolvedTo = to;
-      return msgToForward.forward(to);
-    });
-
-    // whatsapp-web.js's forward() returns void, so BEST-EFFORT recover the REAL id of the sent copy by
-    // reading it back from the destination chat (the most recent outgoing message). The delivery-ack
-    // matcher keys on this id, so a synthetic one would leave the forward stuck at SENT; Baileys already
-    // returns the real id. The forward already succeeded here, so recovery must NEVER fail the operation.
-    // When the copy can't be identified we return an explicit-unknown id (empty): message.service then
-    // leaves the row's waMessageId unset so no ack can mis-match it — unlike a synthetic or source id,
-    // which could cross-drive another row's delivery status. Concurrent forwards to the same chat may
-    // mis-identify the copy — acceptable for delivery-status accuracy.
     try {
-      const destChat = await this.client!.getChatById(resolvedTo);
-      const sentByMe = (await destChat?.fetchMessages({ limit: 5, fromMe: true })) ?? [];
-      let sent: (typeof sentByMe)[number] | undefined;
-      for (const m of sentByMe) {
-        if (!sent || m.timestamp > sent.timestamp) {
-          sent = m;
+      const chat = await this.client!.getChatById(fromChatId);
+      const messages = await chat.fetchMessages({ limit: 100 });
+      const msgToForward = messages.find(m => m.id._serialized === messageId);
+
+      if (!msgToForward) {
+        throw new MessageNotFoundError(messageId);
+      }
+
+      // The forward's send leg fails with `No LID for user` for a LID-migrated destination, so resolve
+      // it (and self-heal a stale mapping) via sendResolved. Capture the id actually sent to so the
+      // id-recovery below reads back from the SAME (resolved) chat, not the raw @c.us (#583 R1).
+      let resolvedTo = toChatId;
+      await this.sendResolved(toChatId, to => {
+        resolvedTo = to;
+        return msgToForward.forward(to);
+      });
+
+      // whatsapp-web.js's forward() returns void, so BEST-EFFORT recover the REAL id of the sent copy by
+      // reading it back from the destination chat (the most recent outgoing message). The delivery-ack
+      // matcher keys on this id, so a synthetic one would leave the forward stuck at SENT; Baileys already
+      // returns the real id. The forward already succeeded here, so recovery must NEVER fail the operation.
+      // When the copy can't be identified we return an explicit-unknown id (empty): message.service then
+      // leaves the row's waMessageId unset so no ack can mis-match it — unlike a synthetic or source id,
+      // which could cross-drive another row's delivery status. Concurrent forwards to the same chat may
+      // mis-identify the copy — acceptable for delivery-status accuracy.
+      try {
+        const destChat = await this.client!.getChatById(resolvedTo);
+        const sentByMe = (await destChat?.fetchMessages({ limit: 5, fromMe: true })) ?? [];
+        let sent: (typeof sentByMe)[number] | undefined;
+        for (const m of sentByMe) {
+          if (!sent || m.timestamp > sent.timestamp) {
+            sent = m;
+          }
         }
+        if (sent) {
+          return this.toMessageResult(sent);
+        }
+      } catch (error) {
+        // Still surface a dead page even though the send itself succeeded (detection only; the
+        // forward's best-effort recovery contract is unchanged).
+        this.reportIfPageTransportError(error, 'forwardMessage');
+        this.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
       }
-      if (sent) {
-        return this.toMessageResult(sent);
-      }
+      return { id: '', timestamp: Math.floor(Date.now() / 1000) };
     } catch (error) {
-      this.logger.warn(`Forward succeeded but recovering the sent message id failed: ${String(error)}`);
+      this.reportIfPageTransportError(error, 'forwardMessage');
+      throw error;
     }
-    return { id: '', timestamp: Math.floor(Date.now() / 1000) };
   }
 
   // ============= Phase 3: Group Management =============
@@ -1538,17 +1617,22 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // Reactions (Phase 3)
   async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
     this.ensureReady();
-    // NOTE: do NOT resolve chatId to @lid here — whatsapp-web.js reacts using the found message's own
-    // id, not this chatId, so LID-resolving the lookup gives no send benefit and would miss a message
-    // stored under the pre-migration @c.us chat (#583 R1 review).
-    const chat = await this.client!.getChatById(chatId);
-    const messages = await chat.fetchMessages({ limit: 100 });
-    const message = messages.find(m => m.id._serialized === messageId);
-    if (!message) {
-      throw new MessageNotFoundError(messageId, chatId);
+    try {
+      // NOTE: do NOT resolve chatId to @lid here — whatsapp-web.js reacts using the found message's own
+      // id, not this chatId, so LID-resolving the lookup gives no send benefit and would miss a message
+      // stored under the pre-migration @c.us chat (#583 R1 review).
+      const chat = await this.client!.getChatById(chatId);
+      const messages = await chat.fetchMessages({ limit: 100 });
+      const message = messages.find(m => m.id._serialized === messageId);
+      if (!message) {
+        throw new MessageNotFoundError(messageId, chatId);
+      }
+      await (message as MessageWithReactions).react(emoji);
+      this.logger.log(`Reacted to message ${messageId} with ${emoji || '(removed)'}`);
+    } catch (error) {
+      this.reportIfPageTransportError(error, 'reactToMessage');
+      throw error;
     }
-    await (message as MessageWithReactions).react(emoji);
-    this.logger.log(`Reacted to message ${messageId} with ${emoji || '(removed)'}`);
   }
 
   async getMessageReactions(chatId: string, messageId: string): Promise<MessageReaction[]> {
@@ -1816,6 +1900,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       const url = await this.client!.getProfilePicUrl(contactId);
       return url || null;
     } catch (error) {
+      this.reportIfPageTransportError(error, 'getProfilePicture');
       this.logger.warn(`Failed to get profile picture for ${contactId}: ${String(error)}`);
       return null;
     }

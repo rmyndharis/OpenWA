@@ -79,7 +79,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
   ),
   // Identity passthrough by default; individual tests may override to simulate unwrapping.
   normalizeMessageContent: jest.fn((c: unknown) => c),
-  DisconnectReason: { loggedOut: 401, restartRequired: 515, connectionReplaced: 440 },
+  DisconnectReason: { loggedOut: 401, forbidden: 403, restartRequired: 515, connectionReplaced: 440 },
   proto: {
     Message: {
       ProtocolMessage: {
@@ -483,6 +483,30 @@ describe('BaileysAdapter reconnect policy — unlimited backoff (I4 hardening)',
       expect(onError).toHaveBeenCalledWith(expect.stringContaining('Connection replaced by another instance (440)'));
       expect(baileys().default).not.toHaveBeenCalled(); // no reconnect — would fight the other instance
       expect(rmSpy).not.toHaveBeenCalled(); // auth survives — unlike loggedOut, the link is still valid
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it('403 forbidden is terminal: FAILED + onError, NO reconnect, auth NOT cleared', async () => {
+    const onError = jest.fn();
+    const adapter = await initWithRealTimers({ onError });
+    baileys().default.mockClear();
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      jest.useFakeTimers();
+
+      fakeSock.fire('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 403 } } },
+      });
+      await jest.runAllTimersAsync(); // would run any scheduled reconnect — none must be scheduled
+
+      expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining('Account rejected by WhatsApp (403)'));
+      expect(baileys().default).not.toHaveBeenCalled(); // no reconnect — account is banned/blocked
+      expect(rmSpy).not.toHaveBeenCalled(); // auth survives — account-level refusal, not dead creds
     } finally {
       rmSpy.mockRestore();
     }
