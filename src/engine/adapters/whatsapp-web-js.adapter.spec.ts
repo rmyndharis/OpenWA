@@ -2657,6 +2657,34 @@ describe('WhatsAppWebJsAdapter orphaned Chromium sweep (pre-launch)', () => {
     expect(client.options.puppeteer?.args).toContain(`--openwa-session=${SESSION_ID}`);
   });
 
+  it('does not mutate the caller-owned puppeteer args array shared across sessions', async () => {
+    // Every adapter receives the SAME array instance — ConfigService.get() returns a live reference
+    // into the cached config tree, via the plugin path (plugins/engines/whatsapp-web-js) and the
+    // factory fallback alike. Appending in place therefore rewrites global config for the rest of
+    // the process lifetime, leaking one session's flags (proxy, session marker) into every later
+    // launch. Without the defensive copy this assertion sees both session markers accumulate.
+    const sharedArgs = ['--no-sandbox'];
+    const argsFor = async (sessionId: string): Promise<string[] | undefined> => {
+      const adapter = new WhatsAppWebJsAdapter({
+        sessionId,
+        sessionDataPath: './data/sessions',
+        puppeteer: { args: sharedArgs },
+      });
+      await adapter.initialize({});
+      return (adapter as unknown as { client: { options: { puppeteer?: { args?: string[] } } } }).client.options
+        .puppeteer?.args;
+    };
+
+    await argsFor('sess-a');
+    const argsB = await argsFor('sess-b');
+
+    expect(sharedArgs).toEqual(['--no-sandbox']);
+    expect(argsB).toContain('--openwa-session=sess-b');
+    // The cross-session leak that let a restart of sess-a SIGKILL sess-b's live browser: the sweep
+    // substring-matches this marker against the full `ps` command line.
+    expect(argsB).not.toContain('--openwa-session=sess-a');
+  });
+
   it('SIGKILLs a Chromium process carrying this session marker and logs the sweep', async () => {
     mockPsResult({
       stdout: psTable([

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Running more than one session no longer corrupts the Chromium launch flags of every
+  session started after the first. The whatsapp-web.js adapter appended its per-session
+  arguments (`--proxy-server`, and the `--openwa-session=<id>` process marker) directly
+  to the array returned by `engine.puppeteer.args` — but `ConfigService` hands back a
+  live reference into the cached configuration tree, so every session shared one array
+  and each start mutated it permanently. Three symptoms followed: the argument list grew
+  without bound across starts and reconnects until Chromium refused to launch; a session
+  configured without a proxy inherited the previous session's `--proxy-server` and routed
+  its traffic through it; and because the orphaned-Chromium sweep identifies processes by
+  substring-matching the session marker, a restart of one session could `SIGKILL` another
+  session's healthy browser. The adapter now copies the array before appending, so the
+  shared configuration is never mutated. Fixed in #840 — thanks @szmazhr.
+
 - Typing a session name in the dashboard's **Create New Session** dialog no longer
   stalls after the first character. The shared `Modal` component ran its initial-focus
   step inside a `useEffect` whose dependency array included `onClose`, and callers pass
