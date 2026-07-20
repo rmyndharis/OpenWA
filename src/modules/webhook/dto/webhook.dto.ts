@@ -27,10 +27,11 @@ const FILTERS_API_EXAMPLE = {
   ],
 };
 
-// Reserved: valid webhook subscription targets that are not dispatched yet (no engine
-// emit source). Kept in WEBHOOK_EVENTS so existing subscriptions validate; tracked
-// separately so the catalog/emitter drift guard can whitelist them as intentional.
-export const WEBHOOK_RESERVED_EVENTS = ['group.join', 'group.leave', 'group.update'] as const;
+// Reserved: valid webhook subscription targets that are declared but have no engine emit
+// source yet. Currently EMPTY — the former occupants (group.join/leave/update) are now
+// dispatched by both engines. Kept as a named export so the catalog/emitter drift guard
+// can whitelist any future intentionally-undeployed event without changing its imports.
+export const WEBHOOK_RESERVED_EVENTS = [] as const;
 
 export const WEBHOOK_EVENTS = [
   'message.received',
@@ -45,6 +46,10 @@ export const WEBHOOK_EVENTS = [
   'session.authenticated',
   'session.disconnected',
   'session.reconnect_loop',
+  'group.join',
+  'group.leave',
+  'group.update',
+  'call.received',
   ...WEBHOOK_RESERVED_EVENTS,
 ] as const;
 

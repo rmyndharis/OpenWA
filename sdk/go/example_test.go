@@ -60,3 +60,23 @@ func ExampleWithRetry() {
 	)
 	_ = client
 }
+
+func ExampleClient_webhookEvents() {
+	client, _ := openwa.New("http://localhost:2785", "owa_k1_…")
+
+	// Subscribe to the group and call events with the Event* constants — they
+	// are the exact wire values, so a typo is a compile error, not a silent
+	// no-delivery.
+	_, err := client.Webhooks.Create(context.Background(), "my-session", openwa.CreateWebhookRequest{
+		URL: "https://example.com/hook",
+		Events: []string{
+			openwa.EventGroupJoin,
+			openwa.EventGroupLeave,
+			openwa.EventGroupUpdate,
+			openwa.EventCallReceived,
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}

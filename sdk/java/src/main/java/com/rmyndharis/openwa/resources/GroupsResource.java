@@ -7,9 +7,12 @@ import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.CreateGroupRequest;
 import com.rmyndharis.openwa.model.GroupDescriptionRequest;
 import com.rmyndharis.openwa.model.GroupInfo;
+import com.rmyndharis.openwa.model.GroupSettings;
 import com.rmyndharis.openwa.model.GroupSubjectRequest;
 import com.rmyndharis.openwa.model.GroupSummary;
 import com.rmyndharis.openwa.model.InviteCodeResponse;
+import com.rmyndharis.openwa.model.JoinGroupRequest;
+import com.rmyndharis.openwa.model.JoinGroupResponse;
 import com.rmyndharis.openwa.model.ListGroupsQuery;
 import com.rmyndharis.openwa.model.ParticipantsRequest;
 import com.rmyndharis.openwa.model.SuccessResult;
@@ -100,6 +103,16 @@ public final class GroupsResource {
             SuccessResult.class);
     }
 
+    /** Join a group via an invite code. Returns the joined group id. */
+    public JoinGroupResponse joinGroup(String sessionId, String inviteCode) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/groups/join",
+            null,
+            new JoinGroupRequest(inviteCode),
+            JoinGroupResponse.class);
+    }
+
     /** Update the group description (empty string clears it). */
     public SuccessResult setDescription(String sessionId, String groupId, String description) {
         return client.request(
@@ -107,6 +120,29 @@ public final class GroupsResource {
             "/api/sessions/" + encodeSegment(sessionId) + "/groups/" + encodeSegment(groupId) + "/description",
             null,
             new GroupDescriptionRequest(description),
+            SuccessResult.class);
+    }
+
+    /** Get the group settings (announce / locked / ephemeral timer). */
+    public GroupSettings getGroupSettings(String sessionId, String groupId) {
+        return client.request(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/groups/" + encodeSegment(groupId) + "/settings",
+            null,
+            null,
+            GroupSettings.class);
+    }
+
+    /**
+     * Update the group settings. At least one field of {@code settings} must be set; absent fields
+     * stay untouched. Setting {@code ephemeralSeconds} returns HTTP 501 on the whatsapp-web.js engine.
+     */
+    public SuccessResult updateGroupSettings(String sessionId, String groupId, GroupSettings settings) {
+        return client.request(
+            HttpMethod.PUT,
+            "/api/sessions/" + encodeSegment(sessionId) + "/groups/" + encodeSegment(groupId) + "/settings",
+            null,
+            settings,
             SuccessResult.class);
     }
 

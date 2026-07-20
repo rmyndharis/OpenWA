@@ -37,6 +37,40 @@ func (s *GroupsService) Create(ctx context.Context, sessionID string, body Creat
 	return &out, nil
 }
 
+// JoinGroup joins a group via an invite code. Requires an OPERATOR-level key.
+func (s *GroupsService) JoinGroup(ctx context.Context, sessionID string, body JoinGroupRequest) (*JoinGroupResponse, error) {
+	var out JoinGroupResponse
+	err := s.client.do(ctx, "POST", s.base(sessionID)+"/join", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetGroupSettings returns the group's announce / locked / ephemeral-timer
+// settings.
+func (s *GroupsService) GetGroupSettings(ctx context.Context, sessionID, groupID string) (*GroupSettings, error) {
+	var out GroupSettings
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(groupID)+"/settings", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateGroupSettings patches the group settings; at least one field must be
+// set (the server rejects an empty patch with a 400). Setting
+// EphemeralSeconds returns 501 on the whatsapp-web.js engine. Requires an
+// OPERATOR-level key.
+func (s *GroupsService) UpdateGroupSettings(ctx context.Context, sessionID, groupID string, body GroupSettings) (*SuccessResult, error) {
+	var out SuccessResult
+	err := s.client.do(ctx, "PUT", s.base(sessionID)+"/"+pathEscape(groupID)+"/settings", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // AddParticipants adds members to a group.
 func (s *GroupsService) AddParticipants(ctx context.Context, sessionID, groupID string, participants []string) (*SuccessResult, error) {
 	return s.participants(ctx, "POST", sessionID, groupID, "/participants", participants)

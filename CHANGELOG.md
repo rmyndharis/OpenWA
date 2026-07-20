@@ -7,8 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Outbound message edit.** `POST /api/sessions/:sessionId/messages/edit` edits the text of a
+  message sent by the account, on both engines (whatsapp-web.js `Message.edit`, Baileys
+  `sendMessage` with an `edit` key). Attempting to edit another sender's message fails with `403`,
+  an unknown message/chat with `404`, and the stored record's body is updated through the same
+  serialized mutation queue as inbound edit events. `message.edited` continues to cover inbound edits.
+- **Live group events.** `group.join`, `group.leave`, and `group.update` are now actually
+  dispatched — to webhooks (HMAC-signed, with stable idempotency keys) and to Socket.IO
+  subscribers — on both engines. They were previously accepted in subscriptions but never emitted
+  ("reserved"). whatsapp-web.js maps `group_join`/`group_leave`/`group_update` notifications;
+  Baileys maps `group-participants.update` (add/remove) and `groups.update` (subject, description,
+  announce/locked changes). On Baileys, full-metadata snapshots (emitted by the library on
+  reconnect and on `GET /groups`) are filtered out so they never surface as fabricated updates;
+  genuine changes replayed from an offline window are dispatched with the receipt time as their
+  `timestamp` (the engine does not forward the original occurrence time).
+- **Join groups & group settings.** `POST /api/sessions/:sessionId/groups/join` joins a group via
+  invite code (an invalid/expired code returns a typed `400`). `GET`/`PUT
+  /api/sessions/:sessionId/groups/:groupId/settings` read and update the admin-only flags
+  (`announce`, `locked`) and the disappearing-message timer (`ephemeralSeconds`, Baileys only — it
+  returns a documented `501` on whatsapp-web.js, which has no such API). A settings patch applies
+  the timer first, so a `501` can never silently follow an already-applied flag change, and
+  explicit `null` fields are rejected with `400`.
+- **Own-profile management.** `PUT /api/sessions/:sessionId/profile/name`, `/status`, and
+  `/picture` set the linked account's display name, about text, and profile picture on both engines.
+- **Incoming-call handling.** A new `call.received` webhook + Socket.IO event fires when an
+  incoming call starts ringing (both engines; stale offers replayed from an offline window and the
+  account's own outgoing calls are not emitted). `POST /api/sessions/:sessionId/calls/:callId/reject`
+  rejects a ringing call, and the per-session `config.autoRejectCalls: true` flag (settable at
+  session creation) rejects every incoming call automatically — the event is still dispatched
+  first. Unknown or expired call ids return `404`.
+- **Docs: official plugin catalog is now discoverable.** The README feature table points to the
+  first-party Integration Fabric plugins (Chatwoot, Typebot, …) in the
+  [OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins) repo, and
+  `docs/23-community-integrations.md` clarifies that it lists community projects only.
+
 ### Fixed
 
+- The dashboard webhook editor now offers `session.reconnect_loop` (accepted by the backend since
+  #800 but never listed in the UI), and the Java/Python SDK event types now include it as well.
 - Typing a session name in the dashboard's **Create New Session** dialog no longer
   stalls after the first character. The shared `Modal` component ran its initial-focus
   step inside a `useEffect` whose dependency array included `onClose`, and callers pass

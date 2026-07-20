@@ -998,10 +998,13 @@ available_events:
   - session.disconnected   # Session disconnected
   - session.reconnect_loop # Every 5th consecutive reconnect attempt (payload: sessionId, attempts, nextDelayMs)
 
-  # Groups (reserved but NOT currently emitted — accepted in events list, never delivered)
-  - group.join           # reserved, not emitted
-  - group.leave          # reserved, not emitted
-  - group.update         # reserved, not emitted
+  # Groups
+  - group.join           # Participant(s) added/joined
+  - group.leave          # Participant(s) left/removed
+  - group.update         # Group subject/description/announce/locked changed
+
+  # Calls
+  - call.received        # Incoming call ringing (payload: callId, from, isVideo, isGroup, timestamp)
 ```
 
 **Q: Webhook payload format?**

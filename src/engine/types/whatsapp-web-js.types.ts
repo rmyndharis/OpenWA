@@ -28,6 +28,12 @@ export interface GroupMetadataRaw {
   parentGroup?: SerializedWid | string | null;
   linkedParentGroup?: SerializedWid | string | null;
   linkedParent?: SerializedWid | string | null;
+  /** Only admins can post (WA Web group model; written by GroupChat.setMessagesAdminsOnly). */
+  announce?: boolean;
+  /** Only admins can edit group info (written by GroupChat.setInfoAdminsOnly). */
+  restrict?: boolean;
+  /** Disappearing-messages timer in seconds, when WA Web reports one on the group model. */
+  ephemeralDuration?: number;
 }
 
 /**
@@ -58,6 +64,10 @@ export interface GroupChat extends Omit<Chat, 'isReadOnly' | 'getLabels'> {
   removeLabel(id: string): Promise<void>;
   getInviteCode(): Promise<string>;
   revokeInvite(): Promise<string>;
+  /** Resolves false when the account lacks admin rights (does not throw). */
+  setMessagesAdminsOnly(adminsOnly?: boolean): Promise<boolean>;
+  /** Resolves false when the account lacks admin rights (does not throw). */
+  setInfoAdminsOnly(adminsOnly?: boolean): Promise<boolean>;
 }
 
 /**

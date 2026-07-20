@@ -40,6 +40,7 @@ Built on a **pluggable architecture**, OpenWA lets you select database engines (
 | 🖥️ **Full Dashboard**         | Modern React UI for session, webhook, and API key management                               |
 | 🔹 **Multi-Session Ready**    | Run multiple WhatsApp sessions concurrently on one instance                                |
 | 🐳 **Docker Native**          | Production-ready with zero configuration                                                   |
+| 🧩 **Official Plugins**       | Chatwoot, Typebot & more as sandboxed plugins on the Integration Fabric — [OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins) |
 | 🔗 **n8n Integration**        | Community nodes for workflow automation                                                    |
 | 🧩 **Community Adapters**     | Third-party integrations (e.g. ioBroker) — see [docs](./docs/23-community-integrations.md) |
 
@@ -108,7 +109,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | Text Messages     | ✅     | Send/receive text messages                   |
 | Media Messages    | ✅     | Images, videos, documents, audio             |
 | Message Reactions | ✅     | React to messages with emoji                 |
-| Message Editing   | ✅     | Live `message.edited` events on both engines |
+| Message Editing   | ✅     | Send edits + live `message.edited` events on both engines  |
 | Bulk Messaging    | ✅     | Send to multiple recipients                  |
 | Message Status    | ✅     | Track delivery and read receipts             |
 
@@ -116,7 +117,9 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 
 | Feature             | Status | Description                        |
 | ------------------- | ------ | ---------------------------------- |
-| Groups API          | ✅     | Create, manage, and message groups |
+| Groups API          | ✅     | Create, manage, join (invite code), and configure groups |
+| Profile Management  | ✅     | Set own display name, about text, and profile picture    |
+| Call Handling       | ✅     | `call.received` events, reject calls, per-session auto-reject |
 | Channels/Newsletter | ✅     | WhatsApp Channels support          |
 | Labels Management   | ✅     | Organize chats with labels         |
 | Proxy Support       | ✅     | Per-session proxy configuration    |

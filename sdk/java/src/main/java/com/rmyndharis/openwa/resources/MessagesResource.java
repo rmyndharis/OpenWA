@@ -8,6 +8,7 @@ import com.rmyndharis.openwa.model.BatchStatusResponse;
 import com.rmyndharis.openwa.model.BulkMessageResponse;
 import com.rmyndharis.openwa.model.ChatHistoryMessage;
 import com.rmyndharis.openwa.model.DeleteMessageRequest;
+import com.rmyndharis.openwa.model.EditMessageRequest;
 import com.rmyndharis.openwa.model.ForwardMessageRequest;
 import com.rmyndharis.openwa.model.ListMessagesQuery;
 import com.rmyndharis.openwa.model.MessageHistoryQuery;
@@ -141,6 +142,16 @@ public final class MessagesResource {
             null,
             body,
             SuccessResult.class);
+    }
+
+    /** Edit the text of a message sent by this account. 404 when the message is not found. */
+    public MessageResponse editMessage(String sessionId, EditMessageRequest body) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/messages/edit",
+            null,
+            body,
+            MessageResponse.class);
     }
 
     /** Delete a message. */

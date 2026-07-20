@@ -13,6 +13,7 @@ import {
   ForwardMessageDto,
   ReactMessageDto,
   DeleteMessageDto,
+  EditMessageDto,
 } from './dto/message-actions.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -360,6 +361,27 @@ export class MessageController {
   ): Promise<{ success: boolean }> {
     await this.messageService.deleteMessage(sessionId, dto);
     return { success: true };
+  }
+
+  // ========== Edit Message ==========
+
+  @Post('edit')
+  @HttpCode(HttpStatus.OK)
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Edit the text of a message sent by this account' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Message edited',
+    type: MessageResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Session not active or invalid request',
+  })
+  @ApiResponse({ status: 404, description: 'Message not found' })
+  async edit(@Param('sessionId') sessionId: string, @Body() dto: EditMessageDto): Promise<MessageResponseDto> {
+    return this.messageService.editMessage(sessionId, dto);
   }
 
   // ========== Bulk Messaging ==========

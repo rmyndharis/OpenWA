@@ -51,6 +51,32 @@ type InviteCodeResponse struct {
 	Message    string `json:"message,omitempty"`
 }
 
+// JoinGroupRequest joins a group via an invite code (the token from a
+// https://chat.whatsapp.com/<code> link).
+type JoinGroupRequest struct {
+	InviteCode string `json:"inviteCode"`
+}
+
+// JoinGroupResponse is the join acknowledgement.
+type JoinGroupResponse struct {
+	Success bool   `json:"success"`
+	GroupID string `json:"groupId"`
+}
+
+// GroupSettings is the announce / locked / ephemeral-timer state of a group —
+// the response of GetGroupSettings and the patch body of UpdateGroupSettings.
+// Every field is a pointer: the engine may omit any of them on reads, and on
+// updates unset fields are omitted from the body so only the provided settings
+// are touched. At least one field must be set for an update — the server
+// rejects an empty patch with a 400. EphemeralSeconds is the
+// disappearing-messages timer in seconds (0 disables; known values 86400,
+// 604800, 7776000) and is unsupported on the whatsapp-web.js engine (501).
+type GroupSettings struct {
+	Announce         *bool `json:"announce,omitempty"`
+	Locked           *bool `json:"locked,omitempty"`
+	EphemeralSeconds *int  `json:"ephemeralSeconds,omitempty"`
+}
+
 // ListGroupsQuery paginates the group list.
 type ListGroupsQuery struct {
 	Limit  *int

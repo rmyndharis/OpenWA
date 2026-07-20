@@ -668,6 +668,22 @@ export class MessageService {
     }
   }
 
+  // ========== Edit Message ==========
+
+  async editMessage(
+    sessionId: string,
+    dto: { chatId: string; messageId: string; body: string },
+  ): Promise<MessageResponseDto> {
+    const engine = this.getEngine(sessionId);
+    const result = await engine.editMessage(dto.chatId, dto.messageId, dto.body);
+
+    // Best-effort: reflect the new body in the stored copy (mirrors deleteMessage's revoked flag),
+    // serialized with the inbound edit/reaction writers through the session's per-message mutation
+    // queue. A missing row must not fail the request — the engine edit already succeeded.
+    await this.sessionService.recordOutboundMessageEdit(sessionId, dto.messageId, dto.body);
+    return { messageId: result.id, timestamp: result.timestamp };
+  }
+
   private getEngine(sessionId: string) {
     const engine = this.sessionService.getEngine(sessionId);
     if (!engine) {

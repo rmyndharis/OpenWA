@@ -23,9 +23,8 @@ BulkMessageType = Literal["text", "image", "video", "audio", "document"]
 WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
-    "session.disconnected",
-    # Reserved: accepted on subscribe but not dispatched yet.
-    "group.join", "group.leave", "group.update",
+    "session.disconnected", "session.reconnect_loop",
+    "group.join", "group.leave", "group.update", "call.received",
     "*",
 ]
 
@@ -161,6 +160,13 @@ class DeleteMessageRequest(TypedDict, total=False):
     chatId: Jid
     messageId: str
     forEveryone: bool
+
+
+class EditMessageRequest(TypedDict):
+    chatId: Jid
+    messageId: str
+    # Same 4096-char cap as SendTextRequest.text — an edit cannot exceed what a send allows.
+    body: str
 
 
 class SendTemplateRequest(TypedDict, total=False):
@@ -427,6 +433,46 @@ class InviteCodeResponse(TypedDict, total=False):
     inviteCode: str
     inviteLink: str
     message: str
+
+
+class JoinGroupRequest(TypedDict):
+    # The token from a https://chat.whatsapp.com/<code> link.
+    inviteCode: str
+
+
+class JoinGroupResponse(TypedDict, total=False):
+    success: bool
+    groupId: Jid
+
+
+# All fields optional, but an update must carry at least one — modeled total=False
+# (callers pass plain dicts); the backend validates (empty body -> 400).
+# `ephemeralSeconds` is the disappearing-messages timer (0 disables); the
+# whatsapp-web.js engine does not support it (request -> 501).
+class GroupSettings(TypedDict, total=False):
+    announce: bool
+    locked: bool
+    ephemeralSeconds: int
+
+
+# ── Profile (own account) ─────────────────────────────────────────
+
+
+class SetProfileNameRequest(TypedDict):
+    # WhatsApp limit: 25 characters.
+    name: str
+
+
+class SetProfileStatusRequest(TypedDict):
+    # May be empty to clear the about/status text (WhatsApp limit: 139 characters).
+    status: str
+
+
+class SetProfilePictureRequest(TypedDict, total=False):
+    # Provide `url` OR `base64` (+ `mimetype`); the backend validates.
+    url: str
+    base64: str
+    mimetype: str
 
 
 # ── Webhook ───────────────────────────────────────────────────────

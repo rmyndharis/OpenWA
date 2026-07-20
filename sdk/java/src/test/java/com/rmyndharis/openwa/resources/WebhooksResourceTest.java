@@ -78,4 +78,21 @@ class WebhooksResourceTest {
         assertEquals("http://h/api/sessions/s/webhooks/w1/test", tx.lastRequest().url());
         assertEquals(HttpMethod.POST, tx.lastRequest().method());
     }
+
+    @Test
+    void createSerializesNewEventTypes() {
+        tx.respond(200, WEBHOOK_JSON);
+        client.webhooks.create(
+            "s",
+            CreateWebhookRequest.builder()
+                .url("https://example.test/hook")
+                .events(List.of(
+                    WebhookEvent.GROUP_JOIN, WebhookEvent.GROUP_LEAVE, WebhookEvent.GROUP_UPDATE,
+                    WebhookEvent.CALL_RECEIVED))
+                .build());
+        assertTrue(tx.lastRequest().body().contains("group.join"));
+        assertTrue(tx.lastRequest().body().contains("group.leave"));
+        assertTrue(tx.lastRequest().body().contains("group.update"));
+        assertTrue(tx.lastRequest().body().contains("call.received"));
+    }
 }

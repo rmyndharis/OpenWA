@@ -364,7 +364,8 @@ CREATE TABLE webhooks (
   "session.reconnect_loop",
   "group.join",
   "group.leave",
-  "group.update"
+  "group.update",
+  "call.received"
 ]
 ```
 

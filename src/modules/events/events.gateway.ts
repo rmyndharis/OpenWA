@@ -466,4 +466,36 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   emitMessageEdited(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'message.edited', data);
   }
+
+  /**
+   * Emit a group membership join (a user was added or joined via invite). Payload mirrors the
+   * `group.join` webhook: `{ groupId, participantIds, timestamp, actorId? }`.
+   */
+  emitGroupJoin(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'group.join', data);
+  }
+
+  /**
+   * Emit a group membership leave (a user left or was removed). Payload mirrors the
+   * `group.leave` webhook: `{ groupId, participantIds, timestamp, actorId? }`.
+   */
+  emitGroupLeave(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'group.leave', data);
+  }
+
+  /**
+   * Emit a group metadata update (subject/description/announce/locked). Payload mirrors the
+   * `group.update` webhook: `{ groupId, participantIds, changes, timestamp, actorId? }`.
+   */
+  emitGroupUpdate(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'group.update', data);
+  }
+
+  /**
+   * Emit an incoming-call notification (a call is ringing). Payload mirrors the `call.received`
+   * webhook: `{ callId, from, isVideo, isGroup, timestamp }`.
+   */
+  emitCallReceived(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'call.received', data);
+  }
 }

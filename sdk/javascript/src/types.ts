@@ -159,6 +159,13 @@ export interface DeleteMessageRequest {
   forEveryone?: boolean;
 }
 
+export interface EditMessageRequest {
+  chatId: Jid;
+  messageId: string;
+  /** New text body; max 4096 chars (same cap as a send). Own messages only — 404 if not found. */
+  body: string;
+}
+
 export interface SendTemplateRequest {
   chatId: Jid;
   /** Provide exactly one of `templateId` or `templateName`. */
@@ -416,6 +423,55 @@ export interface InviteCodeResponse {
   message?: string;
 }
 
+export interface JoinGroupRequest {
+  /** Group invite code (the token from a `https://chat.whatsapp.com/<code>` link); max 128 chars. */
+  inviteCode: string;
+}
+
+export interface JoinGroupResponse {
+  success: boolean;
+  groupId: Jid;
+}
+
+/** Group settings as returned by `GET /sessions/:id/groups/:groupId/settings`. */
+export interface GroupSettingsResponse {
+  /** Only admins can send messages (announce group). */
+  announce?: boolean;
+  /** Only admins can edit group info (locked group). */
+  locked?: boolean;
+  /** Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d). */
+  ephemeralSeconds?: number;
+}
+
+/**
+ * Body for `PUT /sessions/:id/groups/:groupId/settings`. At least one field must be
+ * present (the server answers 400 on an empty body); `ephemeralSeconds` is rejected
+ * with 501 on the whatsapp-web.js engine.
+ */
+export type UpdateGroupSettingsRequest = GroupSettingsResponse;
+
+// ── Profile (the session's own account) ───────────────────────────
+
+export interface SetProfileNameRequest {
+  /** New display name (WhatsApp limit: 25 characters). */
+  name: string;
+}
+
+export interface SetProfileStatusRequest {
+  /** New about/status text (may be empty to clear it; WhatsApp limit: 139 characters). */
+  status: string;
+}
+
+/** Provide `url` OR `base64` (with `mimetype`). Mirrors the media acceptance pattern of sends. */
+export interface SetProfilePictureRequest {
+  /** Image URL (http/https); mutually exclusive with `base64`. */
+  url?: string;
+  /** Base64 encoded image data; requires `mimetype`. */
+  base64?: string;
+  /** Image MIME type (required when using `base64`). */
+  mimetype?: string;
+}
+
 // ── Webhook ───────────────────────────────────────────────────────
 
 /** Events a webhook may subscribe to. Use `*` to receive all. */
@@ -431,10 +487,11 @@ export type WebhookEvent =
   | 'session.qr'
   | 'session.authenticated'
   | 'session.disconnected'
-  // Reserved: accepted on subscribe but not dispatched yet.
+  | 'session.reconnect_loop'
   | 'group.join'
   | 'group.leave'
   | 'group.update'
+  | 'call.received'
   | '*';
 
 export interface WebhookFilterCondition {

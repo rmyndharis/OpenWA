@@ -29,6 +29,7 @@ function createMockEngine() {
     reactToMessage: jest.fn().mockResolvedValue(undefined),
     getMessageReactions: jest.fn().mockResolvedValue([]),
     deleteMessage: jest.fn().mockResolvedValue(undefined),
+    editMessage: jest.fn().mockResolvedValue(mockEngineResult),
     getChatHistory: jest.fn().mockResolvedValue([]),
     sendChatState: jest.fn().mockResolvedValue(undefined),
   };
@@ -68,6 +69,7 @@ describe('MessageService', () => {
     sessionService = {
       getEngine: jest.fn().mockReturnValue(mockEngine),
       findOne: jest.fn().mockResolvedValue({ id: 'sess-1', phone: '628123456789' }),
+      recordOutboundMessageEdit: jest.fn().mockResolvedValue(undefined),
     };
 
     hookManager = {
@@ -992,6 +994,43 @@ describe('MessageService', () => {
       });
 
       expect(mockEngine.deleteMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', false);
+    });
+  });
+
+  describe('editMessage', () => {
+    it('edits via the engine, delegates the stored-row update, and returns the engine result', async () => {
+      const res = await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' });
+
+      expect(mockEngine.editMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', 'edited');
+      // Persistence is delegated to the session's per-message mutation queue (serialized with the
+      // inbound edit path) — the service no longer writes the row directly.
+      expect(sessionService.recordOutboundMessageEdit).toHaveBeenCalledWith('sess-1', 'wa-msg-1', 'edited');
+      expect(repository.update).not.toHaveBeenCalled();
+      expect(res).toEqual({ messageId: 'wa-msg-1', timestamp: 1706868000 });
+    });
+
+    it('still succeeds when the delegated stored-row update is a no-op (the engine edit already happened)', async () => {
+      // recordOutboundMessageEdit is best-effort by contract (never rejects); a missing row or a
+      // failed write is logged inside the session service, not surfaced here.
+      const res = await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' });
+
+      expect(res).toEqual({ messageId: 'wa-msg-1', timestamp: 1706868000 });
+    });
+
+    it('propagates the engine not-found error as-is (MessageNotFoundError → 404)', async () => {
+      mockEngine.editMessage.mockRejectedValueOnce(new NotFoundException('Message wa-msg-1 not found'));
+      await expect(
+        service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(sessionService.recordOutboundMessageEdit).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when the session is not started', async () => {
+      (sessionService.getEngine as jest.Mock).mockReturnValue(undefined);
+      await expect(
+        service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(mockEngine.editMessage).not.toHaveBeenCalled();
     });
   });
 

@@ -102,7 +102,23 @@ describe('OpenWAClient', () => {
 
   it('exposes all expected resource properties', () => {
     const c = client(new MockTransport());
-    for (const r of ['sessions', 'messages', 'contacts', 'groups', 'webhooks', 'chats', 'status', 'health']) {
+    for (const r of [
+      'sessions',
+      'messages',
+      'contacts',
+      'groups',
+      'webhooks',
+      'chats',
+      'status',
+      'health',
+      'labels',
+      'channels',
+      'catalog',
+      'templates',
+      'search',
+      'profile',
+      'calls',
+    ]) {
       expect(c).toHaveProperty(r);
     }
   });

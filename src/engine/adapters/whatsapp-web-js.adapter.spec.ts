@@ -18,9 +18,15 @@ import * as path from 'path';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
-import { EditedMessage, EngineStatus } from '../interfaces/whatsapp-engine.interface';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
+import { CallNotFoundError } from '../../common/errors/call-not-found.error';
+import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
+import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { fetch as undiciFetch } from 'undici';
 
@@ -1789,6 +1795,377 @@ describe('WhatsAppWebJsAdapter message_edit', () => {
   });
 });
 
+describe('WhatsAppWebJsAdapter group notifications (group_join / group_leave / group_update)', () => {
+  const wireGroupHandler = (): { onGroupEvent: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-group-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onGroupEvent = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onGroupEvent };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    return { onGroupEvent, client };
+  };
+
+  const groupArg = (mock: jest.Mock): GroupEvent => {
+    const calls = mock.mock.calls as Array<[GroupEvent]>;
+    return calls[0][0];
+  };
+
+  it('maps group_join to a neutral join GroupEvent with the notification timestamp', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_join', {
+      id: { _serialized: 'NOTIF_JOIN' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: ['628111@c.us', '628222@c.us'],
+      body: '',
+      timestamp: 1700000100,
+      type: 'add',
+    });
+
+    expect(onGroupEvent).toHaveBeenCalledTimes(1);
+    // wwebjs ids are already neutral (@c.us/@g.us): they pass through untranslated. A join
+    // carries no metadata delta, so `changes` stays absent (kind is carried by the event name).
+    expect(groupArg(onGroupEvent)).toEqual({
+      kind: 'join',
+      groupId: '120363@g.us',
+      actorId: 'admin@c.us',
+      participantIds: ['628111@c.us', '628222@c.us'],
+      timestamp: 1700000100,
+    });
+  });
+
+  it('maps group_leave to a neutral leave GroupEvent', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_leave', {
+      id: { _serialized: 'NOTIF_LEAVE' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: ['628111@c.us'],
+      body: '',
+      timestamp: 1700000200,
+      type: 'remove',
+    });
+
+    expect(onGroupEvent).toHaveBeenCalledTimes(1);
+    expect(groupArg(onGroupEvent)).toEqual({
+      kind: 'leave',
+      groupId: '120363@g.us',
+      actorId: 'admin@c.us',
+      participantIds: ['628111@c.us'],
+      timestamp: 1700000200,
+    });
+  });
+
+  it('omits actorId when the notification has no author', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_join', {
+      id: { _serialized: 'NOTIF_NOAUTHOR' },
+      chatId: '120363@g.us',
+      author: '',
+      recipientIds: ['628111@c.us'],
+      body: '',
+      timestamp: 1700000250,
+      type: 'invite',
+    });
+
+    expect(groupArg(onGroupEvent).actorId).toBeUndefined();
+  });
+
+  it('falls back to receipt time when the notification carries no usable timestamp', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1700000300123);
+
+    try {
+      client.emit('group_join', {
+        id: { _serialized: 'NOTIF_NOTS' },
+        chatId: '120363@g.us',
+        author: 'admin@c.us',
+        recipientIds: ['628111@c.us'],
+        body: '',
+        type: 'add',
+      });
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(groupArg(onGroupEvent).timestamp).toBe(1700000300);
+  });
+
+  it('coerces $1-renamed recipientIds entries (#747) and drops unreadable ones', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_join', {
+      id: { _serialized: 'NOTIF_RENAMED' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      // GroupNotification._patch assigns data.recipients straight through, outside upstream's id
+      // normalization — a renamed WA Web build hands us raw id objects here.
+      recipientIds: [{ $1: '628111@c.us' }, { _serialized: '628222@c.us' }, { someFutureName: 'x' }, '628333@c.us'],
+      body: '',
+      timestamp: 1700000400,
+      type: 'add',
+    });
+
+    expect(groupArg(onGroupEvent).participantIds).toEqual(['628111@c.us', '628222@c.us', '628333@c.us']);
+  });
+
+  it('maps group_update subject/description bodies into the changes delta', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_update', {
+      id: { _serialized: 'NOTIF_SUBJ' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: [],
+      body: 'New group name',
+      timestamp: 1700000500,
+      type: 'subject',
+    });
+    client.emit('group_update', {
+      id: { _serialized: 'NOTIF_DESC' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: [],
+      body: 'New description',
+      timestamp: 1700000501,
+      type: 'description',
+    });
+
+    const calls = onGroupEvent.mock.calls as Array<[GroupEvent]>;
+    expect(calls[0][0]).toMatchObject({ kind: 'update', changes: { subject: 'New group name' } });
+    expect(calls[1][0]).toMatchObject({ kind: 'update', changes: { description: 'New description' } });
+  });
+
+  it('maps group_update announce/restrict on-off bodies to the neutral booleans', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_update', {
+      id: { _serialized: 'NOTIF_ANNOUNCE' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: [],
+      body: 'on',
+      timestamp: 1700000600,
+      type: 'announce',
+    });
+    client.emit('group_update', {
+      id: { _serialized: 'NOTIF_RESTRICT' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: [],
+      body: 'off',
+      timestamp: 1700000601,
+      type: 'restrict',
+    });
+
+    const calls = onGroupEvent.mock.calls as Array<[GroupEvent]>;
+    expect(calls[0][0].changes).toEqual({ announce: true });
+    expect(calls[1][0].changes).toEqual({ locked: false });
+  });
+
+  it('still emits an update with empty changes when the subtype is uninterpretable (picture)', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_update', {
+      id: { _serialized: 'NOTIF_PIC' },
+      chatId: '120363@g.us',
+      author: 'admin@c.us',
+      recipientIds: [],
+      body: '',
+      timestamp: 1700000700,
+      type: 'picture',
+    });
+
+    // Never dropped silently: the occurrence reaches consumers, just without guessed fields.
+    expect(onGroupEvent).toHaveBeenCalledTimes(1);
+    expect(groupArg(onGroupEvent)).toMatchObject({ kind: 'update', groupId: '120363@g.us', changes: {} });
+  });
+
+  it('emits a join with empty participantIds when recipientIds is missing (malformed payload)', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    expect(() =>
+      client.emit('group_join', {
+        id: { _serialized: 'NOTIF_MALFORMED' },
+        chatId: '120363@g.us',
+        author: 'admin@c.us',
+        body: '',
+        timestamp: 1700000800,
+        type: 'add',
+      }),
+    ).not.toThrow();
+
+    expect(onGroupEvent).toHaveBeenCalledTimes(1);
+    expect(groupArg(onGroupEvent).participantIds).toEqual([]);
+  });
+
+  it('logs and drops a null notification instead of throwing into the client emitter', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    expect(() => client.emit('group_update', null)).not.toThrow();
+    expect(onGroupEvent).not.toHaveBeenCalled();
+  });
+
+  it('drops a notification without a chatId before building the payload', () => {
+    const { onGroupEvent, client } = wireGroupHandler();
+
+    client.emit('group_join', {
+      id: { _serialized: 'NOTIF_NOCHAT' },
+      author: 'admin@c.us',
+      recipientIds: ['628111@c.us'],
+      body: '',
+      timestamp: 1700000900,
+      type: 'add',
+    });
+
+    expect(onGroupEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
+  const wireCallHandler = (): { adapter: WhatsAppWebJsAdapter; onCall: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-call-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onCall = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onCall };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    return { adapter, onCall, client };
+  };
+
+  const liveCall = (over: Record<string, unknown> = {}) => ({
+    id: 'CALL1',
+    from: '628111@c.us',
+    timestamp: 1700000200,
+    isVideo: false,
+    isGroup: false,
+    fromMe: false,
+    canHandleLocally: false,
+    webClientShouldHandle: false,
+    participants: {},
+    reject: jest.fn().mockResolvedValue(undefined),
+    ...over,
+  });
+
+  const firstCallEvent = (mock: jest.Mock): IncomingCallEvent => {
+    const calls = mock.mock.calls as Array<[IncomingCallEvent]>;
+    if (!calls[0]) throw new Error('Expected a call event');
+    return calls[0][0];
+  };
+
+  it('maps the call event to a neutral IncomingCallEvent', () => {
+    const { onCall, client } = wireCallHandler();
+
+    client.emit('call', liveCall({ isVideo: true }));
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(firstCallEvent(onCall)).toEqual({
+      callId: 'CALL1',
+      from: '628111@c.us',
+      isVideo: true,
+      isGroup: false,
+      timestamp: 1700000200,
+    });
+  });
+
+  it('skips own-account (fromMe) calls — they are outgoing, not incoming', () => {
+    const { onCall, client } = wireCallHandler();
+
+    client.emit('call', liveCall({ fromMe: true }));
+
+    expect(onCall).not.toHaveBeenCalled();
+  });
+
+  it.each([{ id: '' }, { id: undefined }, { from: '' }, { from: undefined }, null])(
+    'drops a malformed call (%o) — nothing emitted, nothing cached',
+    async malformed => {
+      const { adapter, onCall, client } = wireCallHandler();
+
+      client.emit('call', malformed === null ? null : liveCall(malformed as Record<string, unknown>));
+
+      expect(onCall).not.toHaveBeenCalled();
+      await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+    },
+  );
+
+  it('drops a call arriving during teardown', () => {
+    const { adapter, onCall, client } = wireCallHandler();
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    client.emit('call', liveCall());
+
+    expect(onCall).not.toHaveBeenCalled();
+  });
+
+  it('rejectCall rejects the cached live call and evicts it (second reject -> not found)', async () => {
+    const { adapter, client } = wireCallHandler();
+    const call = liveCall();
+    client.emit('call', call);
+
+    await adapter.rejectCall('CALL1');
+
+    expect(call.reject).toHaveBeenCalledTimes(1);
+    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+  });
+
+  it('rejectCall on an unknown id throws CallNotFoundError (HTTP 404)', async () => {
+    const { adapter } = wireCallHandler();
+
+    await expect(adapter.rejectCall('NOPE')).rejects.toBeInstanceOf(CallNotFoundError);
+  });
+
+  it('rejectCall on an expired entry throws CallNotFoundError without touching the call', async () => {
+    const { adapter, client } = wireCallHandler();
+    const call = liveCall();
+    client.emit('call', call);
+    // Age the cached entry past the TTL (calls ring ~a minute; the handle dies with the call).
+    const cache = (adapter as unknown as { liveCalls: Map<string, { expiresAt: number }> }).liveCalls;
+    cache.get('CALL1')!.expiresAt = Date.now() - 1;
+
+    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+    expect(call.reject).not.toHaveBeenCalled();
+  });
+
+  it('teardown clears the live-call cache (reject after disconnect -> not found)', async () => {
+    const { adapter, client } = wireCallHandler();
+    const call = liveCall();
+    client.emit('call', call);
+
+    await adapter.disconnect();
+
+    await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+    expect(call.reject).not.toHaveBeenCalled();
+  });
+
+  it('logs and drops a malformed call instead of throwing into the client emitter', () => {
+    const { onCall, client } = wireCallHandler();
+
+    expect(() => client.emit('call', null)).not.toThrow();
+    expect(onCall).not.toHaveBeenCalled();
+  });
+});
+
 describe('outbound mentions (#530)', () => {
   const ready = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
@@ -2027,6 +2404,58 @@ describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid 
     expect(forward).toHaveBeenCalledWith('159442138038327@lid');
     expect(getChatById).toHaveBeenNthCalledWith(2, '159442138038327@lid');
     expect(res.id).toBe('OUT1');
+  });
+});
+
+describe('editMessage', () => {
+  const ready = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const chatWith = (messages: unknown[]) => ({
+    getChatById: jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue(messages) }),
+  });
+
+  it('edits a message found by _serialized id and returns its (unchanged) id', async () => {
+    const edit = jest.fn().mockResolvedValue({ id: { _serialized: 'M1' }, timestamp: 1700000002 });
+    const adapter = ready(chatWith([{ id: { _serialized: 'M1', id: 'RAW1' }, edit }]));
+    const res = await adapter.editMessage('628@c.us', 'M1', 'new body');
+    expect(edit).toHaveBeenCalledWith('new body');
+    expect(res).toEqual({ id: 'M1', timestamp: 1700000002 });
+  });
+
+  it('also matches the bare id.id fallback (like deleteMessage)', async () => {
+    const edit = jest.fn().mockResolvedValue({ id: { _serialized: 'true_628@c.us_RAW1' }, timestamp: 1700000002 });
+    const adapter = ready(chatWith([{ id: { _serialized: 'true_628@c.us_RAW1', id: 'RAW1' }, edit }]));
+    const res = await adapter.editMessage('628@c.us', 'RAW1', 'new body');
+    expect(edit).toHaveBeenCalledWith('new body');
+    expect(res.id).toBe('true_628@c.us_RAW1');
+  });
+
+  it('throws MessageNotFoundError when the message is outside the fetch window', async () => {
+    const adapter = ready(chatWith([]));
+    await expect(adapter.editMessage('628@c.us', 'GONE', 'x')).rejects.toBeInstanceOf(MessageNotFoundError);
+  });
+
+  it('propagates an engine edit failure unchanged', async () => {
+    const edit = jest.fn().mockRejectedValue(new Error('Evaluation failed'));
+    const adapter = ready(chatWith([{ id: { _serialized: 'M1' }, edit }]));
+    await expect(adapter.editMessage('628@c.us', 'M1', 'x')).rejects.toThrow('Evaluation failed');
+  });
+
+  it('throws MessageNotFoundError when the chat id itself is unknown (getChatById resolves undefined)', async () => {
+    const adapter = ready({ getChatById: jest.fn().mockResolvedValue(undefined) });
+    await expect(adapter.editMessage('nobody@c.us', 'M1', 'x')).rejects.toBeInstanceOf(MessageNotFoundError);
+  });
+
+  it('treats a null edit result as a refusal (EngineRefusedError, 403), not a phantom success', async () => {
+    const edit = jest.fn().mockResolvedValue(null);
+    const adapter = ready(chatWith([{ id: { _serialized: 'M1' }, edit }]));
+    const err = await adapter.editMessage('628@c.us', 'M1', 'x').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EngineRefusedError);
+    expect((err as Error).message).toMatch(/was rejected/);
   });
 });
 
@@ -2824,5 +3253,177 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
 
     expect(onDisconnected).not.toHaveBeenCalled();
     expect(adapter.getStatus()).toBe(EngineStatus.READY);
+  });
+});
+
+describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  describe('joinGroupViaInviteCode', () => {
+    it('returns the joined group id from acceptInvite', async () => {
+      const acceptInvite = jest.fn().mockResolvedValue('120363000@g.us');
+      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('CODE123')).resolves.toBe('120363000@g.us');
+      expect(acceptInvite).toHaveBeenCalledWith('CODE123');
+    });
+
+    it('maps a thrown page error to InvalidInviteCodeError (400)', async () => {
+      const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+        InvalidInviteCodeError,
+      );
+    });
+
+    it('maps a gid-less result to InvalidInviteCodeError (400)', async () => {
+      const acceptInvite = jest.fn().mockResolvedValue(undefined);
+      await expect(readyAdapter({ acceptInvite }).joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(
+        InvalidInviteCodeError,
+      );
+    });
+  });
+
+  describe('setGroupMessagesAdminsOnly / setGroupInfoAdminsOnly', () => {
+    const groupClient = (impl: Record<string, jest.Mock>) => ({
+      getChatById: jest.fn().mockResolvedValue({ isGroup: true, ...impl }),
+    });
+
+    it('resolves the group chat and calls setMessagesAdminsOnly', async () => {
+      const setMessagesAdminsOnly = jest.fn().mockResolvedValue(true);
+      await readyAdapter(groupClient({ setMessagesAdminsOnly })).setGroupMessagesAdminsOnly('g@g.us', true);
+      expect(setMessagesAdminsOnly).toHaveBeenCalledWith(true);
+    });
+
+    it('resolves the group chat and calls setInfoAdminsOnly', async () => {
+      const setInfoAdminsOnly = jest.fn().mockResolvedValue(true);
+      await readyAdapter(groupClient({ setInfoAdminsOnly })).setGroupInfoAdminsOnly('g@g.us', false);
+      expect(setInfoAdminsOnly).toHaveBeenCalledWith(false);
+    });
+
+    it('throws GroupNotFoundError (404) when the chat is not a group', async () => {
+      const getChatById = jest.fn().mockResolvedValue({ isGroup: false });
+      await expect(
+        readyAdapter({ getChatById }).setGroupMessagesAdminsOnly('628111@c.us', true),
+      ).rejects.toBeInstanceOf(GroupNotFoundError);
+    });
+
+    it('throws GroupNotFoundError (404) when the chat id is unknown (getChatById resolves undefined)', async () => {
+      const getChatById = jest.fn().mockResolvedValue(undefined);
+      await expect(readyAdapter({ getChatById }).setGroupMessagesAdminsOnly('gone@g.us', true)).rejects.toBeInstanceOf(
+        GroupNotFoundError,
+      );
+    });
+
+    it.each([
+      ['setGroupMessagesAdminsOnly', 'setMessagesAdminsOnly'],
+      ['setGroupInfoAdminsOnly', 'setInfoAdminsOnly'],
+    ])('%s throws EngineRefusedError (403) when the engine reports false (no admin rights)', async (method, native) => {
+      // wwebjs RESOLVES false (instead of throwing) on a ServerStatusCodeError — a silent no-op
+      // would dress up a refused write as a success.
+      const client = groupClient({ [native]: jest.fn().mockResolvedValue(false) });
+      const call = (readyAdapter(client) as unknown as Record<string, (g: string, v: boolean) => Promise<void>>)[
+        method
+      ]('g@g.us', true);
+      const err = await call.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/admin rights required/);
+    });
+  });
+
+  describe('setGroupEphemeral (no wwjs 1.34.7 API → honest 501)', () => {
+    it('rejects with EngineNotSupportedError (501)', async () => {
+      const err = await readyAdapter({})
+        .setGroupEphemeral('g@g.us', 86400)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineNotSupportedError);
+      expect((err as EngineNotSupportedError).getStatus()).toBe(501);
+    });
+  });
+
+  describe('setProfileName / setProfileStatus', () => {
+    it('setProfileName resolves when the engine accepts', async () => {
+      const setDisplayName = jest.fn().mockResolvedValue(true);
+      await expect(readyAdapter({ setDisplayName }).setProfileName('New Name')).resolves.toBeUndefined();
+      expect(setDisplayName).toHaveBeenCalledWith('New Name');
+    });
+
+    it('setProfileName throws EngineRefusedError (403) when the engine resolves false', async () => {
+      const setDisplayName = jest.fn().mockResolvedValue(false);
+      const err = await readyAdapter({ setDisplayName })
+        .setProfileName('New Name')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/rejected the profile name change/);
+    });
+
+    it('setProfileStatus delegates to client.setStatus', async () => {
+      const setStatus = jest.fn().mockResolvedValue(undefined);
+      await readyAdapter({ setStatus }).setProfileStatus('busy');
+      expect(setStatus).toHaveBeenCalledWith('busy');
+    });
+  });
+
+  describe('setProfilePicture', () => {
+    it('converts base64 MediaInput to a MessageMedia (same helper as media sends)', async () => {
+      const setProfilePicture = jest.fn().mockResolvedValue(true);
+      await readyAdapter({ setProfilePicture }).setProfilePicture({
+        mimetype: 'image/png',
+        data: Buffer.from([1, 2, 3]).toString('base64'),
+      });
+      const calls = setProfilePicture.mock.calls as Array<[MessageMedia]>;
+      const media = calls[0][0];
+      expect(media).toBeInstanceOf(MessageMedia);
+      expect(media.mimetype).toBe('image/png');
+      expect(media.data).toBe(Buffer.from([1, 2, 3]).toString('base64'));
+    });
+
+    it('converts a Buffer payload to base64 MessageMedia', async () => {
+      const setProfilePicture = jest.fn().mockResolvedValue(true);
+      await readyAdapter({ setProfilePicture }).setProfilePicture({ mimetype: 'image/jpeg', data: Buffer.from('IMG') });
+      const calls = setProfilePicture.mock.calls as Array<[MessageMedia]>;
+      expect(calls[0][0].data).toBe(Buffer.from('IMG').toString('base64'));
+    });
+
+    it('throws EngineRefusedError (403) when the engine resolves false', async () => {
+      const setProfilePicture = jest.fn().mockResolvedValue(false);
+      const err = await readyAdapter({ setProfilePicture })
+        .setProfilePicture({ mimetype: 'image/jpeg', data: 'AAAA' })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/rejected the profile picture change/);
+    });
+  });
+
+  describe('getGroupInfo settings fields', () => {
+    it('populates announce/locked/ephemeralSeconds from the native groupMetadata', async () => {
+      const getChatById = jest.fn().mockResolvedValue({
+        isGroup: true,
+        id: { _serialized: '120363000@g.us' },
+        name: 'G',
+        participants: [],
+        groupMetadata: { announce: true, restrict: true, ephemeralDuration: 604800 },
+      });
+      const info = await readyAdapter({ getChatById }).getGroupInfo('120363000@g.us');
+      expect(info?.announce).toBe(true);
+      expect(info?.locked).toBe(true);
+      expect(info?.ephemeralSeconds).toBe(604800);
+    });
+
+    it('leaves the settings fields undefined when the metadata does not carry them', async () => {
+      const getChatById = jest.fn().mockResolvedValue({
+        isGroup: true,
+        id: { _serialized: '120363000@g.us' },
+        name: 'G',
+        participants: [],
+        groupMetadata: {},
+      });
+      const info = await readyAdapter({ getChatById }).getGroupInfo('120363000@g.us');
+      expect(info?.announce).toBeUndefined();
+      expect(info?.locked).toBeUndefined();
+      expect(info?.ephemeralSeconds).toBeUndefined();
+    });
   });
 });

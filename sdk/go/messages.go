@@ -105,6 +105,17 @@ func (s *MessagesService) Delete(ctx context.Context, sessionID string, body Del
 	return &out, nil
 }
 
+// EditMessage edits the text of a message sent by this account. Requires an
+// OPERATOR-level key. The server responds 404 when the message is not found.
+func (s *MessagesService) EditMessage(ctx context.Context, sessionID string, body EditMessageRequest) (*MessageResponse, error) {
+	var out MessageResponse
+	err := s.client.do(ctx, "POST", s.base(sessionID)+"/edit", nil, body, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // History reads live chat history from WhatsApp.
 func (s *MessagesService) History(ctx context.Context, sessionID, chatID string, query *MessageHistoryQuery) ([]ChatHistoryMessage, error) {
 	var out []ChatHistoryMessage

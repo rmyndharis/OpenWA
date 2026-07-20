@@ -100,9 +100,11 @@ const availableEventNames = [
   'session.qr',
   'session.authenticated',
   'session.disconnected',
+  'session.reconnect_loop',
   'group.join',
   'group.leave',
   'group.update',
+  'call.received',
   '*',
 ] as const;
 

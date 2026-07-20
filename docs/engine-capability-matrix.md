@@ -22,7 +22,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 ## Unwired-capability inventory
 
-14 of the 71 interface methods are `not-available` on at least one adapter (19 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
+15 of the 80 interface methods are `not-available` on at least one adapter (20 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
 
 ### Channels / Newsletter
 
@@ -137,16 +137,17 @@ These are honestly out of reach of a clean adapter wiring because the installed 
 - `getContactStatus` / `getContactStatuses` — `fetchStatus` returns the *about* text, not 24h stories; stories only surface as `status@broadcast` messages. Needs an OpenWA-side story accumulator.
 - `sendCatalog` — no catalog-share message type in `AnyMessageContent` (only single `{product}`).
 
-**wwjs (5 cells):**
+**wwjs (6 cells):**
 - `getCatalog` / `getProducts` / `getProduct` — no catalog API at all (`index.d.ts` 0 hits; `Product` is inbound-only).
 - `sendProduct` — no outbound product content type.
 - `sendCatalog` — no outbound catalog content type.
+- `setGroupEphemeral` — no disappearing-timer setter in whatsapp-web.js 1.34.7 (`ephemeralDuration` exists only as a createGroup option). Baileys: `groupToggleEphemeral`.
 
 ---
 
 ## Snapshot summary
 
-- **71** interface methods, **142** adapter-cells (71 × 2 engines).
-- **123** supported cells; **19** not-available cells across **14** methods.
-- Of the 19 not-available cells: **5 adapter-gaps** (fixable) + **14 library-limitations** + **0 uncertain**.
+- **80** interface methods, **160** adapter-cells (80 × 2 engines).
+- **140** supported cells; **20** not-available cells across **15** methods.
+- Of the 20 not-available cells: **5 adapter-gaps** (fixable) + **15 library-limitations** + **0 uncertain**.
 - **3 phantom-support rows** (wwjs `getCatalog`/`getProducts`/`getProduct` — they stub without throwing, so the drift gate's throw-heuristic cannot see them; the matrix is the source of truth for these).

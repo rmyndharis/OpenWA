@@ -42,6 +42,7 @@ func TestRouting(t *testing.T) {
 		{"Messages.Forward", func(c *Client) { c.Messages.Forward(ctx, "s1", ForwardMessageRequest{}) }, "POST", "/api/sessions/s1/messages/forward"},
 		{"Messages.React", func(c *Client) { c.Messages.React(ctx, "s1", ReactMessageRequest{}) }, "POST", "/api/sessions/s1/messages/react"},
 		{"Messages.Delete", func(c *Client) { c.Messages.Delete(ctx, "s1", DeleteMessageRequest{}) }, "POST", "/api/sessions/s1/messages/delete"},
+		{"Messages.EditMessage", func(c *Client) { c.Messages.EditMessage(ctx, "s1", EditMessageRequest{}) }, "POST", "/api/sessions/s1/messages/edit"},
 		{"Messages.History", func(c *Client) { c.Messages.History(ctx, "s1", "c1", nil) }, "GET", "/api/sessions/s1/messages/c1/history"},
 		{"Messages.Reactions", func(c *Client) { c.Messages.Reactions(ctx, "s1", "c1", "m1") }, "GET", "/api/sessions/s1/messages/c1/m1/reactions"},
 		{"Messages.SendBulk", func(c *Client) { c.Messages.SendBulk(ctx, "s1", SendBulkRequest{}) }, "POST", "/api/sessions/s1/messages/send-bulk"},
@@ -59,6 +60,7 @@ func TestRouting(t *testing.T) {
 		{"Groups.List", func(c *Client) { c.Groups.List(ctx, "s1", nil) }, "GET", "/api/sessions/s1/groups"},
 		{"Groups.Get", func(c *Client) { c.Groups.Get(ctx, "s1", "g1") }, "GET", "/api/sessions/s1/groups/g1"},
 		{"Groups.Create", func(c *Client) { c.Groups.Create(ctx, "s1", CreateGroupRequest{}) }, "POST", "/api/sessions/s1/groups"},
+		{"Groups.JoinGroup", func(c *Client) { c.Groups.JoinGroup(ctx, "s1", JoinGroupRequest{}) }, "POST", "/api/sessions/s1/groups/join"},
 		{"Groups.AddParticipants", func(c *Client) { c.Groups.AddParticipants(ctx, "s1", "g1", nil) }, "POST", "/api/sessions/s1/groups/g1/participants"},
 		{"Groups.RemoveParticipants", func(c *Client) { c.Groups.RemoveParticipants(ctx, "s1", "g1", nil) }, "DELETE", "/api/sessions/s1/groups/g1/participants"},
 		{"Groups.PromoteParticipants", func(c *Client) { c.Groups.PromoteParticipants(ctx, "s1", "g1", nil) }, "POST", "/api/sessions/s1/groups/g1/participants/promote"},
@@ -68,6 +70,8 @@ func TestRouting(t *testing.T) {
 		{"Groups.Leave", func(c *Client) { c.Groups.Leave(ctx, "s1", "g1") }, "POST", "/api/sessions/s1/groups/g1/leave"},
 		{"Groups.InviteCode", func(c *Client) { c.Groups.InviteCode(ctx, "s1", "g1") }, "GET", "/api/sessions/s1/groups/g1/invite-code"},
 		{"Groups.RevokeInviteCode", func(c *Client) { c.Groups.RevokeInviteCode(ctx, "s1", "g1") }, "POST", "/api/sessions/s1/groups/g1/invite-code/revoke"},
+		{"Groups.GetGroupSettings", func(c *Client) { c.Groups.GetGroupSettings(ctx, "s1", "g1") }, "GET", "/api/sessions/s1/groups/g1/settings"},
+		{"Groups.UpdateGroupSettings", func(c *Client) { c.Groups.UpdateGroupSettings(ctx, "s1", "g1", GroupSettings{}) }, "PUT", "/api/sessions/s1/groups/g1/settings"},
 
 		{"Webhooks.List", func(c *Client) { c.Webhooks.List(ctx, "s1") }, "GET", "/api/sessions/s1/webhooks"},
 		{"Webhooks.Get", func(c *Client) { c.Webhooks.Get(ctx, "s1", "w1") }, "GET", "/api/sessions/s1/webhooks/w1"},
@@ -119,6 +123,12 @@ func TestRouting(t *testing.T) {
 
 		{"Search.Search", func(c *Client) { c.Search.Search(ctx, SearchQuery{Q: "hi"}) }, "GET", "/api/search"},
 		{"Auth.Validate", func(c *Client) { c.Auth.Validate(ctx) }, "POST", "/api/auth/validate"},
+
+		{"Profile.SetProfileName", func(c *Client) { c.Profile.SetProfileName(ctx, "s1", SetProfileNameRequest{}) }, "PUT", "/api/sessions/s1/profile/name"},
+		{"Profile.SetProfileStatus", func(c *Client) { c.Profile.SetProfileStatus(ctx, "s1", SetProfileStatusRequest{}) }, "PUT", "/api/sessions/s1/profile/status"},
+		{"Profile.SetProfilePicture", func(c *Client) { c.Profile.SetProfilePicture(ctx, "s1", SetProfilePictureRequest{}) }, "PUT", "/api/sessions/s1/profile/picture"},
+
+		{"Calls.RejectCall", func(c *Client) { c.Calls.RejectCall(ctx, "s1", "call1") }, "POST", "/api/sessions/s1/calls/call1/reject"},
 	}
 
 	for _, tc := range cases {

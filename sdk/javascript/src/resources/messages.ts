@@ -13,6 +13,7 @@ import type {
   BulkMessageResponse,
   ChatHistoryMessage,
   DeleteMessageRequest,
+  EditMessageRequest,
   ForwardMessageRequest,
   ListMessagesQuery,
   MessageHistoryQuery,
@@ -136,6 +137,15 @@ export class MessagesResource {
     return this.client.request<SuccessResult>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/messages/delete`,
+      body,
+    });
+  }
+
+  /** Edit the text of an own message (404 if the message is not found). */
+  editMessage(sessionId: string, body: EditMessageRequest): Promise<MessageResponse> {
+    return this.client.request<MessageResponse>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/edit`,
       body,
     });
   }

@@ -2016,6 +2016,54 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/messages/edit": {
+      "post": {
+        "operationId": "MessageController_edit",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message edited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Session not active or invalid request"
+          },
+          "404": {
+            "description": "Message not found"
+          }
+        },
+        "summary": "Edit the text of a message sent by this account",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/messages/send-bulk": {
       "post": {
         "operationId": "MessageController_sendBulk",
@@ -2991,6 +3039,126 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/groups/join": {
+      "post": {
+        "operationId": "GroupController_join",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinGroupDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Joined the group"
+          }
+        },
+        "summary": "Join a group via invite code",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/groups/{groupId}/settings": {
+      "get": {
+        "operationId": "GroupController_getSettings",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group settings"
+          },
+          "404": {
+            "description": "Group not found"
+          }
+        },
+        "summary": "Get group settings (announce / locked / ephemeral timer)",
+        "tags": [
+          "groups"
+        ]
+      },
+      "put": {
+        "operationId": "GroupController_updateSettings",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group settings updated"
+          },
+          "400": {
+            "description": "No setting provided"
+          },
+          "501": {
+            "description": "The active engine does not support a requested setting"
+          }
+        },
+        "summary": "Update group settings (announce / locked / ephemeral timer)",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/groups": {
       "post": {
         "operationId": "GroupController_create",
@@ -3387,6 +3555,154 @@
         "summary": "Revoke group invite code and generate new one",
         "tags": [
           "groups"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/profile/name": {
+      "put": {
+        "operationId": "ProfileController_setName",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProfileNameDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile name updated"
+          }
+        },
+        "summary": "Set the account display name",
+        "tags": [
+          "profile"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/profile/status": {
+      "put": {
+        "operationId": "ProfileController_setStatus",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProfileStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile status updated"
+          }
+        },
+        "summary": "Set the account about/status text",
+        "tags": [
+          "profile"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/profile/picture": {
+      "put": {
+        "operationId": "ProfileController_setPicture",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProfilePictureDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile picture updated"
+          },
+          "400": {
+            "description": "Neither url nor base64 provided, or base64 without mimetype"
+          }
+        },
+        "summary": "Set the account profile picture (URL or base64 image)",
+        "tags": [
+          "profile"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/calls/{callId}/reject": {
+      "post": {
+        "operationId": "CallController_reject",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "callId",
+            "required": true,
+            "in": "path",
+            "description": "Call ID from the call.received event",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Call rejected"
+          },
+          "400": {
+            "description": "Session is not started"
+          },
+          "404": {
+            "description": "Call not found or no longer ringing"
+          }
+        },
+        "summary": "Reject a ringing incoming call",
+        "tags": [
+          "calls"
         ]
       }
     },
@@ -5691,7 +6007,7 @@
           },
           "config": {
             "type": "object",
-            "description": "Session configuration options",
+            "description": "Session configuration options. Set autoRejectCalls (boolean, default false) to automatically reject incoming calls — the call.received event is still emitted.",
             "example": {
               "autoReconnect": true
             }
@@ -5930,6 +6246,7 @@
                 "group.join",
                 "group.leave",
                 "group.update",
+                "call.received",
                 "*"
               ]
             }
@@ -6074,6 +6391,7 @@
                 "group.join",
                 "group.leave",
                 "group.update",
+                "call.received",
                 "*"
               ]
             }
@@ -6460,6 +6778,27 @@
         "required": [
           "chatId",
           "messageId"
+        ]
+      },
+      "EditMessageDto": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string",
+            "description": "New text body for the message",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "chatId",
+          "messageId",
+          "body"
         ]
       },
       "BulkMediaDto": {
@@ -6907,6 +7246,37 @@
           }
         }
       },
+      "JoinGroupDto": {
+        "type": "object",
+        "properties": {
+          "inviteCode": {
+            "type": "string",
+            "description": "Group invite code (the token from a https://chat.whatsapp.com/<code> link)",
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "inviteCode"
+        ]
+      },
+      "GroupSettingsDto": {
+        "type": "object",
+        "properties": {
+          "announce": {
+            "type": "boolean",
+            "description": "Only admins can send messages (announce group)"
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Only admins can edit group info (locked group)"
+          },
+          "ephemeralSeconds": {
+            "type": "number",
+            "description": "Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d)",
+            "minimum": 0
+          }
+        }
+      },
       "CreateGroupDto": {
         "type": "object",
         "properties": {
@@ -6968,6 +7338,51 @@
         "required": [
           "description"
         ]
+      },
+      "SetProfileNameDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "New display name (WhatsApp limit: 25 characters)",
+            "maxLength": 25
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "SetProfileStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "New about/status text (may be empty to clear it; WhatsApp limit: 139 characters)",
+            "maxLength": 139
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "SetProfilePictureDto": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Image URL (http/https)",
+            "example": "https://example.com/avatar.jpg"
+          },
+          "base64": {
+            "type": "string",
+            "description": "Base64 encoded image data"
+          },
+          "mimetype": {
+            "type": "string",
+            "description": "Image MIME type (required when using base64)",
+            "example": "image/jpeg"
+          }
+        }
       },
       "SendTextStatusDto": {
         "type": "object",

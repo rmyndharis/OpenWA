@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { GroupService } from './group.service';
 import { SessionService } from '../session/session.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 
 describe('GroupService', () => {
   const makeService = (engine: Partial<IWhatsAppEngine> | undefined) => {
@@ -55,5 +56,98 @@ describe('GroupService', () => {
     const svc = makeService({ addParticipants });
     await svc.addParticipants('s1', 'g1', ['a@c.us', 'b@c.us']);
     expect(addParticipants).toHaveBeenCalledWith('g1', ['a@c.us', 'b@c.us']);
+  });
+
+  it('joinGroupViaInviteCode delegates and returns the group id', async () => {
+    const joinGroupViaInviteCode = jest.fn().mockResolvedValue('120363000@g.us');
+    const svc = makeService({ joinGroupViaInviteCode });
+    await expect(svc.joinGroupViaInviteCode('s1', 'CODE123')).resolves.toBe('120363000@g.us');
+    expect(joinGroupViaInviteCode).toHaveBeenCalledWith('CODE123');
+  });
+
+  describe('getGroupSettings', () => {
+    it('maps the settings fields from getGroupInfo', async () => {
+      const svc = makeService({
+        getGroupInfo: jest.fn().mockResolvedValue({ id: 'g1', announce: true, locked: false, ephemeralSeconds: 86400 }),
+      });
+      await expect(svc.getGroupSettings('s1', 'g1')).resolves.toEqual({
+        announce: true,
+        locked: false,
+        ephemeralSeconds: 86400,
+      });
+    });
+
+    it('omits ephemeralSeconds when the engine does not report one', async () => {
+      const svc = makeService({
+        getGroupInfo: jest.fn().mockResolvedValue({ id: 'g1', announce: true, locked: true }),
+      });
+      const settings = (await svc.getGroupSettings('s1', 'g1')) as Record<string, unknown>;
+      expect(settings).toEqual({ announce: true, locked: true });
+      expect('ephemeralSeconds' in settings).toBe(false);
+    });
+
+    it('maps an unknown group to 404 (same rule as getGroupInfo)', async () => {
+      const svc = makeService({ getGroupInfo: jest.fn().mockResolvedValue(null) });
+      await expect(svc.getGroupSettings('s1', 'g404')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('updateGroupSettings', () => {
+    it('rejects an empty patch with 400 (at least one setting required)', async () => {
+      const svc = makeService({});
+      await expect(svc.updateGroupSettings('s1', 'g1', {})).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('invokes only the engine methods for the fields present', async () => {
+      const engine = {
+        setGroupMessagesAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupInfoAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupEphemeral: jest.fn().mockResolvedValue(undefined),
+      };
+      const svc = makeService(engine);
+      await svc.updateGroupSettings('s1', 'g1', { announce: true });
+      expect(engine.setGroupMessagesAdminsOnly).toHaveBeenCalledWith('g1', true);
+      expect(engine.setGroupInfoAdminsOnly).not.toHaveBeenCalled();
+      expect(engine.setGroupEphemeral).not.toHaveBeenCalled();
+    });
+
+    it('applies all three fields when all are present (incl. ephemeral 0 = disable)', async () => {
+      const engine = {
+        setGroupMessagesAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupInfoAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupEphemeral: jest.fn().mockResolvedValue(undefined),
+      };
+      const svc = makeService(engine);
+      await svc.updateGroupSettings('s1', 'g1', { announce: false, locked: true, ephemeralSeconds: 0 });
+      expect(engine.setGroupMessagesAdminsOnly).toHaveBeenCalledWith('g1', false);
+      expect(engine.setGroupInfoAdminsOnly).toHaveBeenCalledWith('g1', true);
+      expect(engine.setGroupEphemeral).toHaveBeenCalledWith('g1', 0);
+    });
+
+    it('lets EngineNotSupportedError propagate (→ 501)', async () => {
+      const engine = {
+        setGroupEphemeral: jest.fn().mockRejectedValue(new EngineNotSupportedError('setGroupEphemeral')),
+      };
+      const svc = makeService(engine);
+      await expect(svc.updateGroupSettings('s1', 'g1', { ephemeralSeconds: 3600 })).rejects.toBeInstanceOf(
+        EngineNotSupportedError,
+      );
+    });
+
+    it('applies ephemeralSeconds FIRST so a 501 cannot leave announce/locked half-applied (wwjs case)', async () => {
+      // wwjs always 501s setGroupEphemeral: a {announce, ephemeralSeconds} patch must fail BEFORE
+      // touching announce/locked, not after a silent partial application.
+      const engine = {
+        setGroupMessagesAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupInfoAdminsOnly: jest.fn().mockResolvedValue(undefined),
+        setGroupEphemeral: jest.fn().mockRejectedValue(new EngineNotSupportedError('setGroupEphemeral')),
+      };
+      const svc = makeService(engine);
+      await expect(
+        svc.updateGroupSettings('s1', 'g1', { announce: true, locked: true, ephemeralSeconds: 86400 }),
+      ).rejects.toBeInstanceOf(EngineNotSupportedError);
+      expect(engine.setGroupMessagesAdminsOnly).not.toHaveBeenCalled();
+      expect(engine.setGroupInfoAdminsOnly).not.toHaveBeenCalled();
+    });
   });
 });

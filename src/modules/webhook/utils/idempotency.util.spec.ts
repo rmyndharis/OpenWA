@@ -164,12 +164,71 @@ describe('Idempotency Utils', () => {
       );
     });
 
-    it('should generate key for group.join', () => {
-      const key = generateIdempotencyKey('group.join', {
-        groupId: 'grp_1',
-        participantId: 'user_1',
-      });
-      expect(key).toBe('grp_grp_1_user_1_join');
+    it('keys group.join on the group + affected participants (the real participantIds payload)', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const key = generateIdempotencyKey(
+        'group.join',
+        { groupId: '123@g.us', participantIds: ['6281@c.us'], timestamp: 1782000000 },
+        at,
+      );
+      expect(key).toMatch(/^grp_123@g\.us_[a-f0-9]{12}_join_2026-07-20T00:00:00\.000Z$/);
+    });
+
+    it('is retry-stable for group.join: the same occurrence regenerates the same key', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const data = { groupId: '123@g.us', participantIds: ['6281@c.us'], timestamp: 1782000000 };
+      expect(generateIdempotencyKey('group.join', data, at)).toBe(generateIdempotencyKey('group.join', data, at));
+    });
+
+    it('salts group.join keys so a leave-then-rejoin of the same user stays a distinct event', () => {
+      const data = { groupId: '123@g.us', participantIds: ['6281@c.us'], timestamp: 1782000000 };
+      const a = generateIdempotencyKey('group.join', data, '2026-07-20T00:00:00.000Z');
+      const b = generateIdempotencyKey('group.join', data, '2026-07-20T01:00:00.000Z');
+      expect(a).not.toBe(b);
+    });
+
+    it('gives different participants distinct group.join keys for the same occurrence', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const a = generateIdempotencyKey('group.join', { groupId: '123@g.us', participantIds: ['u1@c.us'] }, at);
+      const b = generateIdempotencyKey('group.join', { groupId: '123@g.us', participantIds: ['u2@c.us'] }, at);
+      expect(a).not.toBe(b);
+    });
+
+    it('keys group.leave symmetrically to group.join (and distinct from it)', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const data = { groupId: '123@g.us', participantIds: ['6281@c.us'] };
+      const join = generateIdempotencyKey('group.join', data, at);
+      const leave = generateIdempotencyKey('group.leave', data, at);
+      expect(leave).toMatch(/^grp_123@g\.us_[a-f0-9]{12}_leave_/);
+      expect(leave).not.toBe(join);
+    });
+
+    it('keys group.update on WHAT changed, salted per occurrence', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const data = { groupId: '123@g.us', changes: { subject: 'New name' }, timestamp: 1782000000 };
+      const a = generateIdempotencyKey('group.update', data, at);
+      expect(a).toMatch(/^grp_123@g\.us_update_[a-f0-9]{12}_2026-07-20T00:00:00\.000Z$/);
+      // Retry of the same delivery stays stable...
+      expect(generateIdempotencyKey('group.update', data, at)).toBe(a);
+      // ...a later identical update is a distinct occurrence...
+      expect(generateIdempotencyKey('group.update', data, '2026-07-20T00:05:00.000Z')).not.toBe(a);
+      // ...and a different change differs even inside the same dispatch window.
+      expect(generateIdempotencyKey('group.update', { groupId: '123@g.us', changes: { announce: true } }, at)).not.toBe(
+        a,
+      );
+    });
+
+    it('keys call.received on the session + call id (unique per call, no occurrence salt needed)', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const data = { sessionId: 'A', callId: 'CALL1', from: '628111@c.us', timestamp: 1782000000 };
+      const key = generateIdempotencyKey('call.received', data, at);
+      expect(key).toBe('call_A_CALL1');
+      // Retry of the same dispatch regenerates the same key — occurredAt is ignored by design...
+      expect(generateIdempotencyKey('call.received', data, '2026-07-20T01:00:00.000Z')).toBe(key);
+      // ...while a distinct call (a new occurrence, always a new call id) gets a distinct key.
+      expect(generateIdempotencyKey('call.received', { ...data, callId: 'CALL2' }, at)).not.toBe(key);
+      // Scoped by session like the message keys: the same call id on another session must not dedupe.
+      expect(generateIdempotencyKey('call.received', { ...data, sessionId: 'B' }, at)).not.toBe(key);
     });
 
     it('should generate fallback key for unknown events', () => {

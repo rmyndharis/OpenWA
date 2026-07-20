@@ -17,7 +17,9 @@ export class CreateSessionDto {
   name: string;
 
   @ApiPropertyOptional({
-    description: 'Session configuration options',
+    description:
+      'Session configuration options. Set autoRejectCalls (boolean, default false) to ' +
+      'automatically reject incoming calls — the call.received event is still emitted.',
     example: { autoReconnect: true },
   })
   @IsOptional()

@@ -2,6 +2,10 @@
 
 Third-party integrations and adapters built by the community on top of OpenWA's REST API.
 
+> **Looking for Chatwoot, Typebot, and other first-party integrations?** Those ship as official
+> sandboxed plugins on the Integration Fabric — see the [OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins)
+> catalog. This page lists only community-built projects.
+
 > ⚠️ **These projects are community-maintained and are not affiliated with or endorsed by OpenWA.**
 > They may lag behind OpenWA API changes. Verify compatibility and review the source before using
 > them in production.

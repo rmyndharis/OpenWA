@@ -1,12 +1,15 @@
 package com.rmyndharis.openwa.resources;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.CreateGroupRequest;
+import com.rmyndharis.openwa.model.GroupSettings;
 import com.rmyndharis.openwa.model.ListGroupsQuery;
 import com.rmyndharis.openwa.support.MockTransport;
 import java.util.List;
@@ -103,6 +106,52 @@ class GroupsResourceTest {
         assertEquals("http://h/api/sessions/s/groups/g@g.us/description", tx.lastRequest().url());
         assertEquals(HttpMethod.PUT, tx.lastRequest().method());
         assertTrue(tx.lastRequest().body().contains("A description"));
+    }
+
+    @Test
+    void joinGroupHitsJoinPath() {
+        tx.respond(200, "{\"success\":true,\"groupId\":\"g@g.us\"}");
+        client.groups.joinGroup("s", "AbCdEfGhIjKl");
+        assertEquals("http://h/api/sessions/s/groups/join", tx.lastRequest().url());
+        assertEquals(HttpMethod.POST, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("AbCdEfGhIjKl"));
+    }
+
+    @Test
+    void getGroupSettingsHitsSettingsPath() {
+        tx.respond(200, "{\"announce\":true,\"locked\":false,\"ephemeralSeconds\":604800}");
+        client.groups.getGroupSettings("s", "g@g.us");
+        assertEquals("http://h/api/sessions/s/groups/g@g.us/settings", tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    @Test
+    void getGroupSettingsParsesOptionalFields() {
+        tx.respond(200, "{\"announce\":true}");
+        GroupSettings settings = client.groups.getGroupSettings("s", "g@g.us");
+        assertEquals(Boolean.TRUE, settings.announce());
+        assertNull(settings.locked());
+        assertNull(settings.ephemeralSeconds());
+    }
+
+    @Test
+    void updateGroupSettingsPutsOnlySetFields() {
+        tx.respond(200, "{\"success\":true,\"message\":\"Group settings updated\"}");
+        client.groups.updateGroupSettings("s", "g@g.us", GroupSettings.builder().announce(true).build());
+        assertEquals("http://h/api/sessions/s/groups/g@g.us/settings", tx.lastRequest().url());
+        assertEquals(HttpMethod.PUT, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("\"announce\":true"));
+        assertFalse(tx.lastRequest().body().contains("locked"));
+        assertFalse(tx.lastRequest().body().contains("ephemeralSeconds"));
+    }
+
+    @Test
+    void updateGroupSettingsSendsEphemeralSeconds() {
+        tx.respond(200, "{\"success\":true,\"message\":\"Group settings updated\"}");
+        client.groups.updateGroupSettings(
+            "s", "g@g.us", GroupSettings.builder().locked(true).ephemeralSeconds(86400).build());
+        assertTrue(tx.lastRequest().body().contains("\"locked\":true"));
+        assertTrue(tx.lastRequest().body().contains("\"ephemeralSeconds\":86400"));
     }
 
     @Test

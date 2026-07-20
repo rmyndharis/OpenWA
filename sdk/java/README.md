@@ -66,7 +66,8 @@ The client exposes the same fluent resource surface as the JavaScript, Python,
 and PHP SDKs:
 
 `sessions` · `messages` · `contacts` · `groups` · `webhooks` · `chats` ·
-`labels` · `channels` · `catalog` · `status` · `templates` · `health` · `search`,
+`labels` · `channels` · `catalog` · `status` · `templates` · `health` · `search` ·
+`profile` · `calls`,
 plus `client.auth()`.
 
 Operator-only modules (`docker`, `metrics`, `infra`, `plugins`, `mcp`) are

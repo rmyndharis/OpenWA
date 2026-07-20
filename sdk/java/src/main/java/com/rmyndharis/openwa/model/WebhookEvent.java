@@ -30,13 +30,16 @@ public enum WebhookEvent {
     SESSION_AUTHENTICATED,
     @SerializedName("session.disconnected")
     SESSION_DISCONNECTED,
-    // Reserved: accepted on subscribe but not dispatched yet.
+    @SerializedName("session.reconnect_loop")
+    SESSION_RECONNECT_LOOP,
     @SerializedName("group.join")
     GROUP_JOIN,
     @SerializedName("group.leave")
     GROUP_LEAVE,
     @SerializedName("group.update")
     GROUP_UPDATE,
+    @SerializedName("call.received")
+    CALL_RECEIVED,
     @SerializedName("*")
     ALL
 }

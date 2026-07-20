@@ -166,3 +166,22 @@ export class DeleteMessageDto {
   @IsBoolean()
   forEveryone?: boolean;
 }
+
+export class EditMessageDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  chatId: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  messageId: string;
+
+  // Same body cap as SendTextMessageDto.text — an edit cannot exceed what a send allows.
+  @ApiProperty({ description: 'New text body for the message', maxLength: 4096 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  body: string;
+}

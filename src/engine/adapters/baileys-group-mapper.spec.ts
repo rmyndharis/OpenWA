@@ -59,6 +59,22 @@ describe('mapBaileysGroupInfo', () => {
     ]);
   });
 
+  it('maps the group settings fields (announce / restrict→locked / ephemeralDuration→ephemeralSeconds)', () => {
+    const info = mapBaileysGroupInfo(meta({ announce: true, restrict: true, ephemeralDuration: 86400 }));
+    expect(info.announce).toBe(true);
+    expect(info.locked).toBe(true);
+    expect(info.ephemeralSeconds).toBe(86400);
+  });
+
+  it('leaves the settings fields undefined when the metadata does not carry them', () => {
+    const m = meta();
+    delete m.announce;
+    const info = mapBaileysGroupInfo(m);
+    expect(info.announce).toBeUndefined();
+    expect(info.locked).toBeUndefined();
+    expect(info.ephemeralSeconds).toBeUndefined();
+  });
+
   it('canonicalizes participant ids and owner through the supplied normalizer (lid -> resolved phone)', () => {
     // A lid-addressed group: participants/owner arrive as @lid. The normalizer (the adapter's
     // session-store) resolves the known lid to its phone so both sides of the admin check share a dialect.

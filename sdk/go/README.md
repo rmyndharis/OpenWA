@@ -53,7 +53,7 @@ func main() {
   `client.Sessions`, `client.Messages`, `client.Contacts`, `client.Groups`,
   `client.Webhooks`, `client.Chats`, `client.Status`, `client.Labels`,
   `client.Channels`, `client.Catalog`, `client.Templates`, `client.Health`,
-  `client.Search`, `client.Auth`.
+  `client.Search`, `client.Auth`, `client.Profile`, `client.Calls`.
 - **Context-first** — every network method takes `ctx context.Context` as its
   first argument; the context bounds the request (and any retries).
 - **Functional options + DI** — inject dependencies instead of relying on

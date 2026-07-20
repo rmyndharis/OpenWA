@@ -54,6 +54,9 @@ export function mapBaileysGroupInfo(metadata: GroupMetadata, normalizeJid: Norma
     // WhatsApp "announce" = only admins can post; surface as both isAnnounce and (members') isReadOnly (best-effort).
     isAnnounce: metadata.announce,
     isReadOnly: metadata.announce,
+    announce: metadata.announce,
+    locked: metadata.restrict,
+    ephemeralSeconds: metadata.ephemeralDuration,
     linkedParentJID: metadata.linkedParent ?? null,
   };
 }

@@ -37,6 +37,8 @@ import {
   IncomingMessage,
   ReactionEvent,
   EditedMessage,
+  GroupEvent,
+  IncomingCallEvent,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
@@ -1253,6 +1255,31 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
         this.enqueueMessageMutation(id, message.messageId, () => this.applyMessageEdit(id, message));
       },
+      onGroupEvent: (event): void => {
+        if (!this.isLiveEngine(id, engine)) return;
+        this.logger.debug(`Group event: ${event.kind} in ${event.groupId}`, {
+          sessionId: id,
+          groupId: event.groupId,
+          kind: event.kind,
+          action: 'group_event',
+        });
+        this.dispatchGroupEvent(id, event);
+      },
+      onCall: (event: IncomingCallEvent): void => {
+        if (!this.isLiveEngine(id, engine)) return;
+        this.logger.log(`Incoming call from ${event.from}`, {
+          sessionId: id,
+          callId: event.callId,
+          isVideo: event.isVideo,
+          isGroup: event.isGroup,
+          action: 'call_received',
+        });
+        const payload: Record<string, unknown> = { ...event };
+        this.eventsGateway.emitCallReceived(id, payload);
+        void this.webhookService.dispatch(id, 'call.received', payload);
+        // Opt-in auto-reject runs AFTER the dispatch so a reject failure can never eat the event.
+        void this.maybeAutoRejectCall(id, engine, event.callId);
+      },
       onDisconnected: (reason: string): void => {
         if (!this.isLiveEngine(id, engine)) return;
         // Shared with the liveness watchdog (see handleEngineDisconnected). The handler re-reads the
@@ -1459,6 +1486,103 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const editedPayload = message as unknown as Record<string, unknown>;
     this.eventsGateway.emitMessageEdited(id, editedPayload);
     void this.webhookService.dispatch(id, 'message.edited', editedPayload);
+  }
+
+  /**
+   * Reflect an OUTBOUND edit (REST MessageService.editMessage) in the stored row, routed through the
+   * same per-message mutation queue as the inbound edit/reaction paths so the two writers cannot
+   * interleave (latest-write-wins holds across both directions). Same best-effort semantics as
+   * applyMessageEdit: a missing row or a failed write must not fail the request — the engine edit
+   * already succeeded. Resolves once the queued write has run.
+   */
+  async recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
+    await new Promise<void>(resolve => {
+      this.enqueueMessageMutation(sessionId, messageId, async () => {
+        try {
+          await this.messageRepository.update({ sessionId, waMessageId: messageId }, { body });
+        } catch (err) {
+          this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
+        } finally {
+          resolve();
+        }
+      });
+    });
+  }
+
+  /**
+   * Fan a neutral engine GroupEvent out to consumers: the WebSocket room and the webhook stream.
+   * The `kind` selects the event name (`group.join` / `group.leave` / `group.update`); the payload
+   * is the same plain camelCase shape on both channels, with `kind` itself carried by the name.
+   * There is no persistence here — group membership/metadata lives in the engine, not the message
+   * store — so unlike message edits there is nothing to apply before notifying.
+   */
+  private dispatchGroupEvent(id: string, event: GroupEvent): void {
+    const payload: Record<string, unknown> = {
+      groupId: event.groupId,
+      participantIds: event.participantIds,
+      timestamp: event.timestamp,
+    };
+    // Optional fields are added only when present so consumers never see explicit `undefined`s.
+    if (event.actorId !== undefined) {
+      payload.actorId = event.actorId;
+    }
+    if (event.changes !== undefined) {
+      payload.changes = event.changes;
+    }
+
+    switch (event.kind) {
+      case 'join':
+        this.eventsGateway.emitGroupJoin(id, payload);
+        void this.webhookService.dispatch(id, 'group.join', payload);
+        break;
+      case 'leave':
+        this.eventsGateway.emitGroupLeave(id, payload);
+        void this.webhookService.dispatch(id, 'group.leave', payload);
+        break;
+      case 'update':
+        this.eventsGateway.emitGroupUpdate(id, payload);
+        void this.webhookService.dispatch(id, 'group.update', payload);
+        break;
+    }
+  }
+
+  /**
+   * Reject a ringing call when the session opted in via `config.autoRejectCalls`. The session row
+   * is re-read here rather than trusting initializeEngine's closure snapshot — a call can arrive
+   * long after start, and the row is the only always-current source (mirrors
+   * handleEngineDisconnected). `config` is an untyped JSON column: only a strict boolean `true`
+   * opts in — truthy strings/numbers are ignored (the coercion discipline of
+   * resolveReconnectConfig). Never throws: a reject failure is logged, and the `call.received`
+   * dispatch already happened before this ran.
+   */
+  private async maybeAutoRejectCall(id: string, engine: IWhatsAppEngine, callId: string): Promise<void> {
+    let session: Session | null;
+    try {
+      session = await this.sessionRepository.findOne({ where: { id } });
+    } catch (err) {
+      this.logger.error('Failed to reload the session for call auto-reject', String(err), {
+        sessionId: id,
+        action: 'call_auto_reject_error',
+      });
+      return;
+    }
+    if (session?.config?.autoRejectCalls !== true) {
+      return;
+    }
+    try {
+      await engine.rejectCall(callId);
+      this.logger.log('Auto-rejected incoming call', {
+        sessionId: id,
+        callId,
+        action: 'call_auto_rejected',
+      });
+    } catch (err) {
+      this.logger.warn('Failed to auto-reject incoming call', {
+        sessionId: id,
+        callId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

@@ -90,6 +90,15 @@ type DeleteMessageRequest struct {
 	ForEveryone *bool  `json:"forEveryone,omitempty"`
 }
 
+// EditMessageRequest edits the text of a message sent by this account. Body is
+// the replacement text, capped at 4096 chars server-side (the same limit as
+// send-text — an edit cannot exceed what a send allows).
+type EditMessageRequest struct {
+	ChatID    string `json:"chatId"`
+	MessageID string `json:"messageId"`
+	Body      string `json:"body"`
+}
+
 // ListMessagesQuery filters GET /sessions/:id/messages.
 type ListMessagesQuery struct {
 	ChatID *string

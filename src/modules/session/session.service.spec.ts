@@ -20,7 +20,13 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
-import { IncomingMessage, EngineEventCallbacks, EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import {
+  IncomingMessage,
+  EngineEventCallbacks,
+  EngineStatus,
+  GroupEvent,
+  IncomingCallEvent,
+} from '../../engine/interfaces/whatsapp-engine.interface';
 import { BaileysSessionStore } from '../../engine/adapters/baileys-session-store';
 import {
   getSessionReconnectAttemptsTotal,
@@ -112,6 +118,7 @@ describe('SessionService', () => {
       deleteChat: jest.fn().mockResolvedValue(true),
       sendChatState: jest.fn().mockResolvedValue(undefined),
       resolveContactPhone: jest.fn().mockResolvedValue('628111222333'),
+      rejectCall: jest.fn().mockResolvedValue(undefined),
     };
 
     engineFactory = {
@@ -129,6 +136,10 @@ describe('SessionService', () => {
       emitMessageRevoked: jest.fn(),
       emitMessageReaction: jest.fn(),
       emitMessageEdited: jest.fn(),
+      emitGroupJoin: jest.fn(),
+      emitGroupLeave: jest.fn(),
+      emitGroupUpdate: jest.fn(),
+      emitCallReceived: jest.fn(),
       emitQRCode: jest.fn(),
     };
 
@@ -3268,6 +3279,273 @@ describe('SessionService', () => {
 
       expect(eventsGateway.emitMessageEdited).toHaveBeenCalledTimes(1);
       expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'message.edited', edited());
+    });
+  });
+
+  // ── recordOutboundMessageEdit (REST outbound edit -> the same mutation queue) ──
+
+  describe('recordOutboundMessageEdit', () => {
+    const startAndCaptureEditCallback = async (): Promise<NonNullable<EngineEventCallbacks['onMessageEdited']>> => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const initializeCall = mockEngine.initialize.mock.calls[0] as unknown[];
+      const callbacks = initializeCall[0] as EngineEventCallbacks;
+      return callbacks.onMessageEdited!;
+    };
+
+    const inboundEdit = {
+      messageId: 'WA_MSG_EDIT_1',
+      chatId: '123@c.us',
+      body: 'inbound edit',
+      senderId: '123@c.us',
+      from: '123@c.us',
+      to: '456@c.us',
+      fromMe: false,
+      isGroup: false,
+      type: 'text' as const,
+      hasMedia: false,
+      timestamp: 1700000005,
+    };
+
+    it('serializes the outbound write with a queued inbound edit on the same message', async () => {
+      const releases: Array<() => void> = [];
+      (messageRepository.update as jest.Mock).mockImplementation(
+        () =>
+          new Promise(resolve => {
+            releases.push(() => resolve({ affected: 1 }));
+          }),
+      );
+      const onMessageEdited = await startAndCaptureEditCallback();
+
+      // The inbound edit lands first; the REST outbound edit for the same message must queue BEHIND
+      // it instead of racing the row directly (latest-write-wins across both directions).
+      onMessageEdited(inboundEdit);
+      const outbound = service.recordOutboundMessageEdit('sess-uuid-1', 'WA_MSG_EDIT_1', 'outbound edit');
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(messageRepository.update).toHaveBeenCalledTimes(1); // only the inbound write started
+
+      releases[0]();
+      await new Promise(resolve => setImmediate(resolve)); // chain advances to the queued outbound write
+
+      expect(messageRepository.update).toHaveBeenCalledTimes(2);
+
+      releases[1]();
+      await outbound; // resolves once its own queued write has run
+
+      const bodies = (messageRepository.update as jest.Mock).mock.calls.map(
+        call => (call as [unknown, { body: string }])[1].body,
+      );
+      expect(bodies).toEqual(['inbound edit', 'outbound edit']);
+    });
+
+    it('is best-effort: a missing row / failed write does not reject the request', async () => {
+      (messageRepository.update as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+
+      await expect(service.recordOutboundMessageEdit('sess-uuid-1', 'GONE', 'x')).resolves.toBeUndefined();
+    });
+  });
+
+  // ── onGroupEvent ──────────────────────────────────────────────────
+
+  describe('onGroupEvent callback', () => {
+    const startAndCaptureGroupCallback = async (): Promise<NonNullable<EngineEventCallbacks['onGroupEvent']>> => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const initializeCall = mockEngine.initialize.mock.calls[0] as unknown[];
+      const callbacks = initializeCall[0] as EngineEventCallbacks;
+      return callbacks.onGroupEvent!;
+    };
+
+    const groupEvent = (over: Partial<GroupEvent> = {}): GroupEvent => ({
+      kind: 'join',
+      groupId: '120363@g.us',
+      actorId: '628444@c.us',
+      participantIds: ['628111@c.us'],
+      timestamp: 1700000900,
+      ...over,
+    });
+
+    it('dispatches a join as group.join to BOTH the webhook stream and the socket room', async () => {
+      const onGroupEvent = await startAndCaptureGroupCallback();
+
+      onGroupEvent(groupEvent());
+
+      const payload = {
+        groupId: '120363@g.us',
+        participantIds: ['628111@c.us'],
+        timestamp: 1700000900,
+        actorId: '628444@c.us',
+      };
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'group.join', payload);
+      expect(eventsGateway.emitGroupJoin).toHaveBeenCalledWith('sess-uuid-1', payload);
+      expect(eventsGateway.emitGroupLeave).not.toHaveBeenCalled();
+      expect(eventsGateway.emitGroupUpdate).not.toHaveBeenCalled();
+    });
+
+    it('dispatches a leave as group.leave', async () => {
+      const onGroupEvent = await startAndCaptureGroupCallback();
+
+      onGroupEvent(groupEvent({ kind: 'leave' }));
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        'group.leave',
+        expect.objectContaining({ groupId: '120363@g.us', participantIds: ['628111@c.us'] }),
+      );
+      expect(eventsGateway.emitGroupLeave).toHaveBeenCalledTimes(1);
+      expect(eventsGateway.emitGroupJoin).not.toHaveBeenCalled();
+    });
+
+    it('dispatches an update as group.update, carrying the changes delta', async () => {
+      const onGroupEvent = await startAndCaptureGroupCallback();
+
+      onGroupEvent(
+        groupEvent({ kind: 'update', participantIds: [], changes: { subject: 'New name', announce: true } }),
+      );
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        'group.update',
+        expect.objectContaining({
+          groupId: '120363@g.us',
+          participantIds: [],
+          changes: { subject: 'New name', announce: true },
+          timestamp: 1700000900,
+        }),
+      );
+      expect(eventsGateway.emitGroupUpdate).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ changes: { subject: 'New name', announce: true } }),
+      );
+      expect(eventsGateway.emitGroupJoin).not.toHaveBeenCalled();
+    });
+
+    it('omits the actorId/changes keys entirely when the engine did not report them', async () => {
+      const onGroupEvent = await startAndCaptureGroupCallback();
+
+      onGroupEvent({ kind: 'join', groupId: '120363@g.us', participantIds: [], timestamp: 1700000901 });
+
+      const dispatchCalls = (webhookService.dispatch as jest.Mock).mock.calls as Array<
+        [string, string, Record<string, unknown>]
+      >;
+      const dispatched = dispatchCalls.find(call => call[1] === 'group.join')?.[2];
+      expect(dispatched).toEqual({ groupId: '120363@g.us', participantIds: [], timestamp: 1700000901 });
+      // Absent, not explicit-undefined: consumers diffing on key presence see no actor/delta at all.
+      expect(Object.keys(dispatched ?? {})).toEqual(['groupId', 'participantIds', 'timestamp']);
+    });
+
+    it('drops the event when it arrives from a stale (superseded) engine', async () => {
+      const onGroupEvent = await startAndCaptureGroupCallback();
+      // A newer engine now owns the id (restart/reconnect window): the captured callback is stale.
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      engines.set('sess-uuid-1', { marker: 'engine-B' });
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      onGroupEvent(groupEvent());
+
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+      expect(eventsGateway.emitGroupJoin).not.toHaveBeenCalled();
+      expect(eventsGateway.emitGroupLeave).not.toHaveBeenCalled();
+      expect(eventsGateway.emitGroupUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── onCall ────────────────────────────────────────────────────────
+
+  describe('onCall callback', () => {
+    const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+    const startAndCaptureCallCallback = async (
+      config: Record<string, unknown> = {},
+    ): Promise<NonNullable<EngineEventCallbacks['onCall']>> => {
+      const session = createMockSession({ config });
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const initializeCall = mockEngine.initialize.mock.calls[0] as unknown[];
+      const callbacks = initializeCall[0] as EngineEventCallbacks;
+      return callbacks.onCall!;
+    };
+
+    const callEvent = (over: Partial<IncomingCallEvent> = {}): IncomingCallEvent => ({
+      callId: 'CALL1',
+      from: '628111@c.us',
+      isVideo: false,
+      isGroup: false,
+      timestamp: 1700000900,
+      ...over,
+    });
+
+    it('dispatches call.received to BOTH the webhook stream and the socket room', async () => {
+      const onCall = await startAndCaptureCallCallback();
+
+      onCall(callEvent());
+
+      const payload = {
+        callId: 'CALL1',
+        from: '628111@c.us',
+        isVideo: false,
+        isGroup: false,
+        timestamp: 1700000900,
+      };
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'call.received', payload);
+      expect(eventsGateway.emitCallReceived).toHaveBeenCalledWith('sess-uuid-1', payload);
+    });
+
+    it('auto-rejects via the engine when config.autoRejectCalls is strictly true', async () => {
+      const onCall = await startAndCaptureCallCallback({ autoRejectCalls: true });
+
+      onCall(callEvent());
+      await flush();
+
+      expect(mockEngine.rejectCall).toHaveBeenCalledWith('CALL1');
+      // The event is still emitted — auto-reject never suppresses dispatch.
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'call.received', expect.anything());
+    });
+
+    it.each([{ autoRejectCalls: 'yes' }, { autoRejectCalls: 1 }, {}])(
+      'does NOT auto-reject for a truthy non-boolean or absent flag: %o',
+      async config => {
+        const onCall = await startAndCaptureCallCallback(config);
+
+        onCall(callEvent());
+        await flush();
+
+        expect(mockEngine.rejectCall).not.toHaveBeenCalled();
+        // Dispatch is unaffected by the flag either way.
+        expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'call.received', expect.anything());
+      },
+    );
+
+    it('still dispatches the event when the auto-reject itself fails', async () => {
+      const onCall = await startAndCaptureCallCallback({ autoRejectCalls: true });
+      mockEngine.rejectCall.mockRejectedValue(new Error('call already ended'));
+
+      onCall(callEvent());
+      await flush(); // must not produce an unhandled rejection
+
+      expect(webhookService.dispatch).toHaveBeenCalledWith('sess-uuid-1', 'call.received', expect.anything());
+      expect(eventsGateway.emitCallReceived).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops the event when it arrives from a stale (superseded) engine', async () => {
+      const onCall = await startAndCaptureCallCallback({ autoRejectCalls: true });
+      // A newer engine now owns the id (restart/reconnect window): the captured callback is stale.
+      const engines = (service as unknown as { engines: Map<string, unknown> }).engines;
+      engines.set('sess-uuid-1', { marker: 'engine-B' });
+      (webhookService.dispatch as jest.Mock).mockClear();
+
+      onCall(callEvent());
+      await flush();
+
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+      expect(eventsGateway.emitCallReceived).not.toHaveBeenCalled();
+      expect(mockEngine.rejectCall).not.toHaveBeenCalled();
     });
   });
 

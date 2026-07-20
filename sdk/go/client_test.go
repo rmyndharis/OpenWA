@@ -738,3 +738,311 @@ func TestChannelMessagesDecodeEngineShape(t *testing.T) {
 		t.Errorf("MediaURL: %q", msg.MediaURL)
 	}
 }
+
+func TestEditMessage(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"messageId":"m1","timestamp":1700000001}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Messages.EditMessage(context.Background(), "s1", EditMessageRequest{
+		ChatID:    "628123@c.us",
+		MessageID: "m1",
+		Body:      "edited",
+	})
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	if res.MessageID != "m1" || res.Timestamp != 1700000001 {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+
+	wantPath := "/api/sessions/s1/messages/edit"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	if rt.lastReq.Method != "POST" {
+		t.Fatalf("method = %q, want POST", rt.lastReq.Method)
+	}
+
+	var sent EditMessageRequest
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent.ChatID != "628123@c.us" || sent.MessageID != "m1" || sent.Body != "edited" {
+		t.Fatalf("sent body = %+v", sent)
+	}
+}
+
+func TestEditMessageNotFound(t *testing.T) {
+	rt := &recordTransport{
+		status: 404,
+		body:   `{"statusCode":404,"message":"Message not found","error":"Not Found"}`,
+	}
+	c := newTestClient(t, rt)
+
+	_, err := c.Messages.EditMessage(context.Background(), "s1", EditMessageRequest{
+		ChatID: "x", MessageID: "nope", Body: "y",
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("errors.Is ErrNotFound = false for %v", err)
+	}
+}
+
+func TestJoinGroup(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true,"groupId":"120363@g.us"}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Groups.JoinGroup(context.Background(), "s1", JoinGroupRequest{InviteCode: "abc123"})
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+	if !res.Success || res.GroupID != "120363@g.us" {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+
+	var sent JoinGroupRequest
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent.InviteCode != "abc123" {
+		t.Fatalf("sent body = %+v", sent)
+	}
+}
+
+func TestGetGroupSettings(t *testing.T) {
+	// ephemeralSeconds is absent when the engine does not report it — it must
+	// decode as nil, not as a zero-valued present field.
+	rt := &recordTransport{status: 200, body: `{"announce":true,"locked":false}`}
+	c := newTestClient(t, rt)
+
+	got, err := c.Groups.GetGroupSettings(context.Background(), "s1", "g1")
+	if err != nil {
+		t.Fatalf("GetGroupSettings: %v", err)
+	}
+	if got.Announce == nil || !*got.Announce {
+		t.Errorf("Announce: %+v", got.Announce)
+	}
+	if got.Locked == nil || *got.Locked {
+		t.Errorf("Locked: %+v", got.Locked)
+	}
+	if got.EphemeralSeconds != nil {
+		t.Errorf("EphemeralSeconds should be nil when absent, got %+v", *got.EphemeralSeconds)
+	}
+}
+
+// An update must only touch the settings that were set — unset pointer fields
+// are omitted from the body so the server leaves them alone.
+func TestUpdateGroupSettingsOmitsUnsetFields(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true,"message":"Group settings updated"}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Groups.UpdateGroupSettings(context.Background(), "s1", "g1", GroupSettings{Announce: Ptr(true)})
+	if err != nil {
+		t.Fatalf("UpdateGroupSettings: %v", err)
+	}
+	if !res.Success || res.Message != "Group settings updated" {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+	if rt.lastReq.Method != "PUT" {
+		t.Fatalf("method = %q, want PUT", rt.lastReq.Method)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent["announce"] != true {
+		t.Fatalf("announce = %v", sent["announce"])
+	}
+	if _, ok := sent["locked"]; ok {
+		t.Fatal("unset locked should be omitted from body")
+	}
+	if _, ok := sent["ephemeralSeconds"]; ok {
+		t.Fatal("unset ephemeralSeconds should be omitted from body")
+	}
+}
+
+// Setting ephemeralSeconds on the whatsapp-web.js engine surfaces as 501.
+func TestUpdateGroupSettingsNotImplemented(t *testing.T) {
+	rt := &recordTransport{
+		status: 501,
+		body:   `{"statusCode":501,"message":"Engine does not support ephemeral messages","error":"Not Implemented"}`,
+	}
+	c := newTestClient(t, rt)
+
+	_, err := c.Groups.UpdateGroupSettings(context.Background(), "s1", "g1", GroupSettings{EphemeralSeconds: Ptr(86400)})
+	if !errors.Is(err, ErrNotImplemented) {
+		t.Fatalf("errors.Is ErrNotImplemented = false for %v", err)
+	}
+}
+
+func TestSetProfileName(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true,"message":"Profile name updated"}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Profile.SetProfileName(context.Background(), "s1", SetProfileNameRequest{Name: "Acme"})
+	if err != nil {
+		t.Fatalf("SetProfileName: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+
+	wantPath := "/api/sessions/s1/profile/name"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	var sent SetProfileNameRequest
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent.Name != "Acme" {
+		t.Fatalf("sent body = %+v", sent)
+	}
+}
+
+// An empty status clears the about text — the field must still be sent.
+func TestSetProfileStatusEmptyClears(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true,"message":"Profile status updated"}`}
+	c := newTestClient(t, rt)
+
+	if _, err := c.Profile.SetProfileStatus(context.Background(), "s1", SetProfileStatusRequest{Status: ""}); err != nil {
+		t.Fatalf("SetProfileStatus: %v", err)
+	}
+	if !strings.Contains(string(rt.lastRaw), `"status":""`) {
+		t.Fatalf("empty status must be sent, body = %s", rt.lastRaw)
+	}
+}
+
+// The picture body is either {url} or {base64, mimetype} — never a mix, and
+// empty alternates are omitted.
+func TestSetProfilePictureBody(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true,"message":"Profile picture updated"}`}
+	c := newTestClient(t, rt)
+
+	if _, err := c.Profile.SetProfilePicture(context.Background(), "s1", SetProfilePictureRequest{
+		Base64:   "aW1hZ2U=",
+		Mimetype: "image/jpeg",
+	}); err != nil {
+		t.Fatalf("SetProfilePicture: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent["base64"] != "aW1hZ2U=" || sent["mimetype"] != "image/jpeg" {
+		t.Fatalf("sent body = %v", sent)
+	}
+	if _, ok := sent["url"]; ok {
+		t.Fatal("empty url should be omitted from body")
+	}
+}
+
+func TestRejectCall(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"success":true}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Calls.RejectCall(context.Background(), "s1", "call-1")
+	if err != nil {
+		t.Fatalf("RejectCall: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+
+	wantPath := "/api/sessions/s1/calls/call-1/reject"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	if rt.lastReq.Method != "POST" {
+		t.Fatalf("method = %q, want POST", rt.lastReq.Method)
+	}
+}
+
+// A call that is no longer ringing surfaces as 404.
+func TestRejectCallNotRinging(t *testing.T) {
+	rt := &recordTransport{
+		status: 404,
+		body:   `{"statusCode":404,"message":"Call not found or no longer ringing","error":"Not Found"}`,
+	}
+	c := newTestClient(t, rt)
+
+	_, err := c.Calls.RejectCall(context.Background(), "s1", "call-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("errors.Is ErrNotFound = false for %v", err)
+	}
+}
+
+// The Event* constants are the wire values of the server's WEBHOOK_EVENTS
+// catalog — a typo here silently subscribes to nothing.
+func TestWebhookEventWireValues(t *testing.T) {
+	want := map[WebhookEvent]string{
+		EventMessageReceived:      "message.received",
+		EventMessageSent:          "message.sent",
+		EventMessageAck:           "message.ack",
+		EventMessageFailed:        "message.failed",
+		EventMessageRevoked:       "message.revoked",
+		EventMessageReaction:      "message.reaction",
+		EventMessageEdited:        "message.edited",
+		EventSessionStatus:        "session.status",
+		EventSessionQR:            "session.qr",
+		EventSessionAuthenticated: "session.authenticated",
+		EventSessionDisconnected:  "session.disconnected",
+		EventSessionReconnectLoop: "session.reconnect_loop",
+		EventGroupJoin:            "group.join",
+		EventGroupLeave:           "group.leave",
+		EventGroupUpdate:          "group.update",
+		EventCallReceived:         "call.received",
+		EventAll:                  "*",
+	}
+	for got, w := range want {
+		if got != w {
+			t.Errorf("event constant = %q, want %q", got, w)
+		}
+	}
+}
+
+// The group event payload decodes join/leave (participants, no changes) and
+// update (changes delta, empty participants) shapes alike.
+func TestGroupEventPayloadDecodes(t *testing.T) {
+	join := `{"groupId":"120363@g.us","actorId":"628@c.us","participantIds":["629@c.us"],"timestamp":1700000000}`
+	var j GroupEventPayload
+	if err := json.Unmarshal([]byte(join), &j); err != nil {
+		t.Fatalf("join payload: %v", err)
+	}
+	if j.GroupID != "120363@g.us" || j.ActorID == nil || *j.ActorID != "628@c.us" {
+		t.Fatalf("join decode: %+v", j)
+	}
+	if len(j.ParticipantIDs) != 1 || j.ParticipantIDs[0] != "629@c.us" {
+		t.Fatalf("join participants: %+v", j.ParticipantIDs)
+	}
+	if j.Changes != nil {
+		t.Fatalf("join should carry no changes, got %+v", j.Changes)
+	}
+
+	update := `{"groupId":"120363@g.us","participantIds":[],"changes":{"subject":"New","locked":true},"timestamp":1700000001}`
+	var u GroupEventPayload
+	if err := json.Unmarshal([]byte(update), &u); err != nil {
+		t.Fatalf("update payload: %v", err)
+	}
+	if u.Changes == nil || u.Changes.Subject == nil || *u.Changes.Subject != "New" {
+		t.Fatalf("update changes: %+v", u.Changes)
+	}
+	if u.Changes.Locked == nil || !*u.Changes.Locked {
+		t.Fatalf("update locked: %+v", u.Changes.Locked)
+	}
+	if u.Changes.Announce != nil || u.Changes.Description != nil {
+		t.Fatalf("unchanged settings must stay nil: %+v", u.Changes)
+	}
+}
+
+func TestCallReceivedPayloadDecodes(t *testing.T) {
+	body := `{"callId":"call-1","from":"628@c.us","isVideo":true,"isGroup":false,"timestamp":1700000000}`
+	var p CallReceivedPayload
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatalf("call payload: %v", err)
+	}
+	if p.CallID != "call-1" || p.From != "628@c.us" || !p.IsVideo || p.IsGroup || p.Timestamp != 1700000000 {
+		t.Fatalf("call decode: %+v", p)
+	}
+}

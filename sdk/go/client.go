@@ -67,6 +67,8 @@ type Client struct {
 	Health    *HealthService
 	Search    *SearchService
 	Auth      *AuthService
+	Profile   *ProfileService
+	Calls     *CallsService
 }
 
 var localhostHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
@@ -146,6 +148,8 @@ func New(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	c.Health = &HealthService{client: c}
 	c.Search = &SearchService{client: c}
 	c.Auth = &AuthService{client: c}
+	c.Profile = &ProfileService{client: c}
+	c.Calls = &CallsService{client: c}
 	return c, nil
 }
 

@@ -75,4 +75,48 @@ export class GroupService {
   revokeGroupInviteCode(sessionId: string, groupId: string) {
     return this.getEngine(sessionId).revokeGroupInviteCode(groupId);
   }
+
+  joinGroupViaInviteCode(sessionId: string, inviteCode: string) {
+    return this.getEngine(sessionId).joinGroupViaInviteCode(inviteCode);
+  }
+
+  /** Read the group's announce/locked/ephemeral settings; 404s (via getGroupInfo) when unknown. */
+  async getGroupSettings(sessionId: string, groupId: string) {
+    const group = await this.getGroupInfo(sessionId, groupId);
+    return {
+      announce: group.announce,
+      locked: group.locked,
+      ...(group.ephemeralSeconds !== undefined ? { ephemeralSeconds: group.ephemeralSeconds } : {}),
+    };
+  }
+
+  /**
+   * Apply the given settings; each present field maps to one engine call, absent fields stay
+   * untouched. An empty patch is a client error. EngineNotSupportedError (e.g. ephemeralSeconds on
+   * the wwjs engine) propagates as 501.
+   *
+   * Ordering matters: ephemeralSeconds is applied FIRST because it is the only field with a
+   * deterministic per-engine refusal (wwjs always 501s it). Applying announce/locked first would
+   * leave a silently half-applied patch behind when the ephemeral call then throws.
+   */
+  async updateGroupSettings(
+    sessionId: string,
+    groupId: string,
+    settings: { announce?: boolean; locked?: boolean; ephemeralSeconds?: number },
+  ) {
+    const { announce, locked, ephemeralSeconds } = settings;
+    if (announce === undefined && locked === undefined && ephemeralSeconds === undefined) {
+      throw new BadRequestException('At least one of announce, locked, ephemeralSeconds must be provided');
+    }
+    const engine = this.getEngine(sessionId);
+    if (ephemeralSeconds !== undefined) {
+      await engine.setGroupEphemeral(groupId, ephemeralSeconds);
+    }
+    if (announce !== undefined) {
+      await engine.setGroupMessagesAdminsOnly(groupId, announce);
+    }
+    if (locked !== undefined) {
+      await engine.setGroupInfoAdminsOnly(groupId, locked);
+    }
+  }
 }

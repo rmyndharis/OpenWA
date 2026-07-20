@@ -24,6 +24,7 @@
  */
 
 import { request, encodeSegment, warnIfInsecureHttpUrl, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
+import { CallsResource } from './resources/calls.js';
 import { CatalogResource } from './resources/catalog.js';
 import { ChannelsResource } from './resources/channels.js';
 import { ChatsResource } from './resources/chats.js';
@@ -32,6 +33,7 @@ import { GroupsResource } from './resources/groups.js';
 import { HealthResource } from './resources/health.js';
 import { LabelsResource } from './resources/labels.js';
 import { MessagesResource } from './resources/messages.js';
+import { ProfileResource } from './resources/profile.js';
 import { SearchResource } from './resources/search.js';
 import { SessionsResource } from './resources/sessions.js';
 import { StatusResource } from './resources/status.js';
@@ -85,6 +87,8 @@ export class OpenWAClient {
   readonly catalog = new CatalogResource(this);
   readonly templates = new TemplatesResource(this);
   readonly search = new SearchResource(this);
+  readonly profile = new ProfileResource(this);
+  readonly calls = new CallsResource(this);
 
   // ── Auth ─────────────────────────────────────────────────────────
 

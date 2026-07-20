@@ -106,6 +106,26 @@ class ResourcesTest extends TestCase
         $this->assertStringContainsString('/revoke', $backend->calls()[4]['url']);
     }
 
+    public function testGroupJoinAndSettings(): void
+    {
+        $backend = new MockBackend();
+        $backend->on(200, ['success' => true, 'groupId' => 'g1@g.us']);
+        $backend->on(200, ['announce' => true, 'locked' => false]);
+        $backend->on(200, ['success' => true, 'message' => 'Group settings updated']);
+        $client = $backend->makeClient();
+        $joined = $client->groups->joinGroup('s', 'AbCdEf123');
+        $this->assertSame('POST', $backend->calls()[0]['method']);
+        $this->assertSame('/api/sessions/s/groups/join', $backend->calls()[0]['path']);
+        $this->assertSame(['inviteCode' => 'AbCdEf123'], $backend->calls()[0]['body']);
+        $this->assertSame('g1@g.us', $joined['groupId']);
+        $settings = $client->groups->getGroupSettings('s', 'g1@g.us');
+        $this->assertSame('/api/sessions/s/groups/g1@g.us/settings', $backend->calls()[1]['path']);
+        $this->assertTrue($settings['announce']);
+        $client->groups->updateGroupSettings('s', 'g1@g.us', ['announce' => true, 'ephemeralSeconds' => 604800]);
+        $this->assertSame('PUT', $backend->calls()[2]['method']);
+        $this->assertSame(['announce' => true, 'ephemeralSeconds' => 604800], $backend->calls()[2]['body']);
+    }
+
     // ── Contacts ──────────────────────────────────────────────────────
 
     public function testContactPaths(): void

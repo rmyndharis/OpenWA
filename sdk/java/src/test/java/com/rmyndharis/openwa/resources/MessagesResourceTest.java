@@ -10,6 +10,7 @@ import com.rmyndharis.openwa.model.BulkMessageContent;
 import com.rmyndharis.openwa.model.BulkMessageItem;
 import com.rmyndharis.openwa.model.BulkMessageType;
 import com.rmyndharis.openwa.model.DeleteMessageRequest;
+import com.rmyndharis.openwa.model.EditMessageRequest;
 import com.rmyndharis.openwa.model.ForwardMessageRequest;
 import com.rmyndharis.openwa.model.ListMessagesQuery;
 import com.rmyndharis.openwa.model.MessageHistoryQuery;
@@ -157,6 +158,17 @@ class MessagesResourceTest {
         assertEquals("http://h/api/sessions/s/messages/react", tx.lastRequest().url());
         assertEquals(HttpMethod.POST, tx.lastRequest().method());
         assertTrue(tx.lastRequest().body().contains("react-msg"));
+    }
+
+    @Test
+    void editMessageHitsEditPath() {
+        tx.respond(200, MSG);
+        client.messages.editMessage(
+            "s", EditMessageRequest.builder().chatId("628@c.us").messageId("edit-msg").body("edited-text").build());
+        assertEquals("http://h/api/sessions/s/messages/edit", tx.lastRequest().url());
+        assertEquals(HttpMethod.POST, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("edit-msg"));
+        assertTrue(tx.lastRequest().body().contains("edited-text"));
     }
 
     @Test

@@ -89,14 +89,28 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}${occurrence}`;
 
     case 'group.join':
-      return `grp_${toStr(data.groupId)}_${toStr(data.participantId)}_join`;
+      // A membership change carries no unique id and repeats with identical content (the same user
+      // leaves and rejoins the same group). Key on the affected participants and salt with
+      // occurredAt (captured once per dispatch, reused across retries) so a genuine re-join is not
+      // deduped onto the earlier delivery.
+      return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_join${occurrence}`;
 
     case 'group.leave':
-      return `grp_${toStr(data.groupId)}_${toStr(data.participantId)}_leave`;
+      // Same recurring-occurrence treatment as group.join.
+      return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_leave${occurrence}`;
 
     case 'group.update':
-      // Include what changed for uniqueness
-      return `grp_${toStr(data.groupId)}_update_${hashData(data)}`;
+      // Key on WHAT changed (a subject set to "X" twice is one logical change; announce toggling
+      // back and forth is several), salted per occurrence so identical repeat updates stay distinct.
+      // `changes` is pre-stringified: hashData's allowlist replacer only keeps TOP-LEVEL keys, so a
+      // nested object would serialize as {} and hash every distinct change identically.
+      return `grp_${toStr(data.groupId)}_update_${hashData({ changes: JSON.stringify(data.changes ?? null) })}${occurrence}`;
+
+    case 'call.received':
+      // A call id is unique per call, so keying on (session, callId) gives each occurrence a
+      // distinct key with no occurredAt salt, while retries of the same dispatch regenerate the
+      // same key (same stability contract as the message.* keys). Scoped by sessionId like `msg_`.
+      return `call_${toStr(data.sessionId)}_${toStr(data.callId)}`;
 
     default:
       // Fallback: hash entire payload for determinism

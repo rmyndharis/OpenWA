@@ -7,7 +7,17 @@
 
 import { encodeSegment } from '../http.js';
 import type { OpenWAClient } from '../client.js';
-import type { CreateGroupRequest, GroupInfo, GroupSummary, InviteCodeResponse, SuccessResult } from '../types.js';
+import type {
+  CreateGroupRequest,
+  GroupInfo,
+  GroupSettingsResponse,
+  GroupSummary,
+  InviteCodeResponse,
+  JoinGroupRequest,
+  JoinGroupResponse,
+  SuccessResult,
+  UpdateGroupSettingsRequest,
+} from '../types.js';
 
 export interface ListGroupsQuery {
   limit?: number;
@@ -39,6 +49,15 @@ export class GroupsResource {
     return this.client.request<GroupInfo>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups`,
+      body,
+    });
+  }
+
+  /** Join a group via an invite code. */
+  joinGroup(sessionId: string, body: JoinGroupRequest): Promise<JoinGroupResponse> {
+    return this.client.request<JoinGroupResponse>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/join`,
       body,
     });
   }
@@ -94,6 +113,26 @@ export class GroupsResource {
       method: 'PUT',
       path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/description`,
       body: { description },
+    });
+  }
+
+  /** Get the group settings (announce / locked / ephemeral timer). */
+  getGroupSettings(sessionId: string, groupId: string): Promise<GroupSettingsResponse> {
+    return this.client.request<GroupSettingsResponse>({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/settings`,
+    });
+  }
+
+  /**
+   * Update the group settings. At least one field is required; `ephemeralSeconds`
+   * is unsupported on the whatsapp-web.js engine (the server answers 501).
+   */
+  updateGroupSettings(sessionId: string, groupId: string, body: UpdateGroupSettingsRequest): Promise<SuccessResult> {
+    return this.client.request<SuccessResult>({
+      method: 'PUT',
+      path: `/api/sessions/${encodeSegment(sessionId)}/groups/${encodeSegment(groupId)}/settings`,
+      body,
     });
   }
 

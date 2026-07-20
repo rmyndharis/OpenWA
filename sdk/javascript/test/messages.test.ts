@@ -87,6 +87,15 @@ describe('MessagesResource — exact paths', () => {
     expect(t.lastCall!.url).toContain('/messages/delete');
   });
 
+  it('editMessage posts to /messages/edit and returns the MessageResponse shape', async () => {
+    const t = new MockTransport().on('POST', /\/messages\/edit$/, { body: { messageId: 'm1', timestamp: 4 } });
+    const res = await client(t).messages.editMessage('s', { chatId: 'a@c.us', messageId: 'm1', body: 'edited' });
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s/messages/edit');
+    expect(t.lastCall!.body).toEqual({ chatId: 'a@c.us', messageId: 'm1', body: 'edited' });
+    expect(res.messageId).toBe('m1');
+    expect(res.timestamp).toBe(4);
+  });
+
   it('history puts chatId in the path', async () => {
     const t = new MockTransport().on('GET', /\/messages\/[^/]+\/history$/, { body: [] });
     await client(t).messages.history('s', 'a@c.us', { limit: 5 });

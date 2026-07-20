@@ -126,6 +126,18 @@ class MessagesResource
     }
 
     /**
+     * Edit the text of a message sent by this account. Body is
+     * {chatId, messageId, body}; 404 when the message is not found.
+     *
+     * @param array<string,mixed> $body
+     * @return array<string,mixed>
+     */
+    public function editMessage(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/edit", [], $body);
+    }
+
+    /**
      * @param array<string,mixed> $query
      * @return array<int,array<string,mixed>>
      */

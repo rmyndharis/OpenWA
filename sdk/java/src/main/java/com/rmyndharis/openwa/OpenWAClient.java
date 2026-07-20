@@ -10,6 +10,7 @@ import com.rmyndharis.openwa.http.HttpRequestData;
 import com.rmyndharis.openwa.http.HttpResponseData;
 import com.rmyndharis.openwa.http.HttpTransport;
 import com.rmyndharis.openwa.model.AuthValidateResponse;
+import com.rmyndharis.openwa.resources.CallsResource;
 import com.rmyndharis.openwa.resources.CatalogResource;
 import com.rmyndharis.openwa.resources.ChannelsResource;
 import com.rmyndharis.openwa.resources.ChatsResource;
@@ -18,6 +19,7 @@ import com.rmyndharis.openwa.resources.GroupsResource;
 import com.rmyndharis.openwa.resources.HealthResource;
 import com.rmyndharis.openwa.resources.LabelsResource;
 import com.rmyndharis.openwa.resources.MessagesResource;
+import com.rmyndharis.openwa.resources.ProfileResource;
 import com.rmyndharis.openwa.resources.SearchResource;
 import com.rmyndharis.openwa.resources.SessionsResource;
 import com.rmyndharis.openwa.resources.StatusResource;
@@ -58,6 +60,8 @@ public final class OpenWAClient {
     public final StatusResource status = new StatusResource(this);
     public final TemplatesResource templates = new TemplatesResource(this);
     public final HealthResource health = new HealthResource(this);
+    public final ProfileResource profile = new ProfileResource(this);
+    public final CallsResource calls = new CallsResource(this);
 
     public OpenWAClient(ClientConfig config) {
         // ClientConfig's constructor validates baseUrl/apiKey/timeout, so config is already sound here.

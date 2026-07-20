@@ -6,6 +6,7 @@ import {
   ReactMessageDto,
   DeleteMessageDto,
   ForwardMessageDto,
+  EditMessageDto,
 } from './message-actions.dto';
 
 /**
@@ -90,6 +91,25 @@ describe('message action DTOs', () => {
   it('ForwardMessageDto: requires all three ids', async () => {
     const errs = await errorsFor(ForwardMessageDto, { fromChatId: 'a@c.us' });
     expect(errs.some(e => e.property === 'toChatId')).toBe(true);
+    expect(errs.some(e => e.property === 'messageId')).toBe(true);
+  });
+
+  it('EditMessageDto: a valid edit passes', async () => {
+    expect(await errorsFor(EditMessageDto, { chatId: 'x@c.us', messageId: 'm1', body: 'new text' })).toHaveLength(0);
+  });
+
+  it('EditMessageDto: an empty body is rejected (an edit needs text)', async () => {
+    const errs = await errorsFor(EditMessageDto, { chatId: 'x@c.us', messageId: 'm1', body: '' });
+    expect(errs.some(e => e.property === 'body')).toBe(true);
+  });
+
+  it('EditMessageDto: a body over 4096 chars is rejected (same cap as send-text)', async () => {
+    const errs = await errorsFor(EditMessageDto, { chatId: 'x@c.us', messageId: 'm1', body: 'x'.repeat(4097) });
+    expect(errs.some(e => e.property === 'body')).toBe(true);
+  });
+
+  it('EditMessageDto: missing messageId is rejected', async () => {
+    const errs = await errorsFor(EditMessageDto, { chatId: 'x@c.us', body: 'new text' });
     expect(errs.some(e => e.property === 'messageId')).toBe(true);
   });
 });

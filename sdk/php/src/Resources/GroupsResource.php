@@ -44,6 +44,17 @@ class GroupsResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups", [], $body);
     }
 
+    /**
+     * Join a group via an invite code (the token from a chat.whatsapp.com/<code>
+     * link). Returns {success: true, groupId}.
+     *
+     * @return array<string,mixed>
+     */
+    public function joinGroup(string $sessionId, string $inviteCode): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/join", [], ['inviteCode' => $inviteCode]);
+    }
+
     /** @return array<string,mixed> */
     public function addParticipants(string $sessionId, string $groupId, array $participants): array
     {
@@ -78,6 +89,30 @@ class GroupsResource
     public function setDescription(string $sessionId, string $groupId, string $description): array
     {
         return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/description", [], ['description' => $description]);
+    }
+
+    /**
+     * Get group settings. Only the settings the active engine supports are
+     * present — any of {announce, locked, ephemeralSeconds} may be absent.
+     *
+     * @return array<string,mixed>
+     */
+    public function getGroupSettings(string $sessionId, string $groupId): array
+    {
+        return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/settings");
+    }
+
+    /**
+     * Update group settings. At least one of {announce, locked,
+     * ephemeralSeconds} is required (400 otherwise); ephemeralSeconds responds
+     * 501 on engines without disappearing-message support (whatsapp-web.js).
+     *
+     * @param array<string,mixed> $settings
+     * @return array<string,mixed>
+     */
+    public function updateGroupSettings(string $sessionId, string $groupId, array $settings): array
+    {
+        return $this->http->request('PUT', "/api/sessions/{$this->http->encodeSegment($sessionId)}/groups/{$this->http->encodeSegment($groupId)}/settings", [], $settings);
     }
 
     /** @return array<string,mixed> */

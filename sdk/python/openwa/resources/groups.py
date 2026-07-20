@@ -11,8 +11,11 @@ from .._http import quote_segment
 from ..types import (
     CreateGroupRequest,
     GroupInfo,
+    GroupSettings,
     GroupSummary,
     InviteCodeResponse,
+    JoinGroupRequest,
+    JoinGroupResponse,
     SuccessResult,
 )
 
@@ -84,4 +87,24 @@ class GroupsResource:
     def revoke_invite_code(self, session_id: str, group_id: str) -> InviteCodeResponse:
         return self._http.request(
             "POST", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}/invite-code/revoke"
+        )
+
+    def join_group(self, session_id: str, body: JoinGroupRequest) -> JoinGroupResponse:
+        """Join a group via an invite code. Requires an OPERATOR-level key."""
+        return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/groups/join", body=body)
+
+    def get_group_settings(self, session_id: str, group_id: str) -> GroupSettings:
+        """Read the group's announce/locked/ephemeral settings."""
+        return self._http.request(
+            "GET", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}/settings"
+        )
+
+    def update_group_settings(self, session_id: str, group_id: str, body: GroupSettings) -> SuccessResult:
+        """Update group settings — at least one of announce/locked/ephemeralSeconds is required.
+
+        Requires an OPERATOR-level key. ``ephemeralSeconds`` is unsupported on the
+        whatsapp-web.js engine (the request then fails with 501).
+        """
+        return self._http.request(
+            "PUT", f"/api/sessions/{quote_segment(session_id)}/groups/{quote_segment(group_id)}/settings", body=body
         )
