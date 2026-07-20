@@ -796,6 +796,9 @@
         "sessionScopePlaceholder": "Déjalo en blanco para todas las sesiones",
         "verifyToken": "Token de verificación (opcional)",
         "verifyTokenPlaceholder": "Token que el proveedor devuelve al verificar",
+        "secret": "Secreto de ingress (opcional)",
+        "secretPlaceholder": "Secreto del webhook del proveedor (p. ej. Chatwoot)",
+        "secretHint": "Déjalo en blanco para generarlo automáticamente (se muestra una sola vez). Si el proveedor fija su propio secreto de webhook, pégalo aquí: uno autogenerado no coincidirá.",
         "config": "Configuración (JSON opcional)",
         "configPlaceholder": "{ }"
       },
@@ -830,6 +833,7 @@
       "errors": {
         "invalidId": "El ID de instancia debe contener letras, números, guiones o guiones bajos (máx. 64).",
         "invalidJson": "La configuración debe ser JSON válido.",
+        "invalidSecret": "El secreto debe tener al menos 16 caracteres, o déjalo en blanco para generarlo automáticamente.",
         "duplicateId": "Ya existe una instancia con ese ID."
       },
       "toasts": {

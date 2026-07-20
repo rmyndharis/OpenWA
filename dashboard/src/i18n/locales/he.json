@@ -797,6 +797,9 @@
         "sessionScopePlaceholder": "השאירו ריק לכל ה-Sessions",
         "verifyToken": "טוקן אימות (אופציונלי)",
         "verifyTokenPlaceholder": "הטוקן שהספק מחזיר בעת האימות",
+        "secret": "סוד Ingress (אופציונלי)",
+        "secretPlaceholder": "סוד ה-webhook של הספק (למשל Chatwoot)",
+        "secretHint": "השאר ריק ליצירה אוטומטית (מוצג פעם אחת). אם הספק קובע סוד webhook משלו, הדבק אותו כאן — סוד אוטומטי לא יתאים.",
         "config": "תצורה (JSON אופציונלי)",
         "configPlaceholder": "{ }"
       },
@@ -831,6 +834,7 @@
       "errors": {
         "invalidId": "מזהה המופע חייב לכלול אותיות, מספרים, מקפים או קווים תחתונים (עד 64 תווים).",
         "invalidJson": "התצורה חייבת להיות JSON תקין.",
+        "invalidSecret": "הסוד חייב להכיל לפחות 16 תווים, או השאר ריק ליצירה אוטומטית.",
         "duplicateId": "כבר קיים מופע עם מזהה זה."
       },
       "toasts": {

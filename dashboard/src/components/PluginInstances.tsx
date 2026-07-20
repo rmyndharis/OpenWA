@@ -9,12 +9,12 @@ import {
   useUpdateInstanceMutation,
   useDeleteInstanceMutation,
 } from '../hooks/queries';
-import { isValidInstanceId, parseInstanceConfig } from '../utils/instanceForm';
+import { isValidInstanceId, isValidInstanceSecret, parseInstanceConfig } from '../utils/instanceForm';
 import { copyToClipboard } from '../utils/clipboard';
 import { useToast } from './Toast';
 import './PluginInstances.css';
 
-const emptyForm = { instanceId: '', sessionScope: '', verifyToken: '', config: '' };
+const emptyForm = { instanceId: '', sessionScope: '', verifyToken: '', secret: '', config: '' };
 
 export function PluginInstances({ pluginId }: { pluginId: string }) {
   const { t } = useTranslation();
@@ -59,11 +59,16 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
       setFormError(t('plugins.instances.errors.invalidJson'));
       return;
     }
+    if (!isValidInstanceSecret(form.secret)) {
+      setFormError(t('plugins.instances.errors.invalidSecret'));
+      return;
+    }
     try {
       const created = await createM.mutateAsync({
         instanceId: form.instanceId,
         sessionScope: form.sessionScope.trim() || undefined,
         verifyToken: form.verifyToken.trim() || undefined,
+        secret: form.secret.trim() || undefined,
         config: parsed.value,
       });
       setShowForm(false);
@@ -228,6 +233,14 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
                 placeholder={t('plugins.instances.form.verifyTokenPlaceholder')}
                 onChange={e => setForm({ ...form, verifyToken: e.target.value })}
               />
+              <label>{t('plugins.instances.form.secret')}</label>
+              <input
+                type="text"
+                value={form.secret}
+                placeholder={t('plugins.instances.form.secretPlaceholder')}
+                onChange={e => setForm({ ...form, secret: e.target.value })}
+              />
+              <p className="pi-hint">{t('plugins.instances.form.secretHint')}</p>
               <label>{t('plugins.instances.form.config')}</label>
               <textarea
                 value={form.config}

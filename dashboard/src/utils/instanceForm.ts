@@ -6,6 +6,11 @@ export function isValidInstanceId(id: string): boolean {
 
 type ParseResult = { ok: true; value: Record<string, unknown> | undefined } | { ok: false };
 
+/** Blank → auto-generate (server-side). Otherwise must be a real secret (>= 16 chars), mirroring the server DTO. */
+export function isValidInstanceSecret(raw: string): boolean {
+  return raw.trim() === '' || raw.trim().length >= 16;
+}
+
 /** Blank → no config (undefined). Otherwise must parse to a plain JSON object. */
 export function parseInstanceConfig(raw: string): ParseResult {
   if (raw.trim() === '') return { ok: true, value: undefined };

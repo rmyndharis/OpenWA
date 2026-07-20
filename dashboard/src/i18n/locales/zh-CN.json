@@ -796,6 +796,9 @@
         "sessionScopePlaceholder": "留空表示所有会话",
         "verifyToken": "验证令牌（可选）",
         "verifyTokenPlaceholder": "服务商在验证时回传的令牌",
+        "secret": "Ingress 密钥（可选）",
+        "secretPlaceholder": "服务商的 webhook 密钥（如 Chatwoot）",
+        "secretHint": "留空则自动生成（仅显示一次）。如果服务商使用自己固定的 webhook 密钥，请粘贴到此处——自动生成的密钥将无法匹配。",
         "config": "配置（可选 JSON）",
         "configPlaceholder": "{ }"
       },
@@ -830,6 +833,7 @@
       "errors": {
         "invalidId": "实例 ID 只能包含字母、数字、连字符或下划线（最多 64 个字符）。",
         "invalidJson": "配置必须是有效的 JSON。",
+        "invalidSecret": "密钥至少 16 个字符，或留空以自动生成。",
         "duplicateId": "已存在具有该 ID 的实例。"
       },
       "toasts": {

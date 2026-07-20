@@ -1059,6 +1059,8 @@ export interface CreateInstanceInput {
   instanceId: string;
   sessionScope?: string;
   verifyToken?: string;
+  /** Provider-fixed webhook secret (e.g. Chatwoot's). Omit to auto-generate one (shown once). */
+  secret?: string;
   config?: Record<string, unknown>;
 }
 

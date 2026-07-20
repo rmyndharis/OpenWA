@@ -796,6 +796,9 @@
         "sessionScopePlaceholder": "留空表示套用至所有工作階段",
         "verifyToken": "驗證權杖（選填）",
         "verifyTokenPlaceholder": "服務商在驗證時回傳的權杖",
+        "secret": "Ingress 密鑰（可選）",
+        "secretPlaceholder": "供應商的 webhook 密鑰（如 Chatwoot）",
+        "secretHint": "留空則自動產生（只顯示一次）。如果供應商使用自己固定的 webhook 密鑰，請貼在此處——自動產生的密鑰將無法匹配。",
         "config": "設定（選填 JSON）",
         "configPlaceholder": "{ }"
       },
@@ -830,6 +833,7 @@
       "errors": {
         "invalidId": "執行個體 ID 只能包含字母、數字、連字號或底線（最多 64 個字元）。",
         "invalidJson": "設定必須是有效的 JSON。",
+        "invalidSecret": "密鑰至少 16 個字元，或留空以自動產生。",
         "duplicateId": "已存在使用該 ID 的執行個體。"
       },
       "toasts": {

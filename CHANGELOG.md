@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The dashboard's integration-instance create form now offers an optional **ingress secret** field,
+  so providers that fix their own webhook signing secret (e.g. Chatwoot's per-webhook secret, which
+  cannot be replaced with a custom value) can be integrated without resorting to the REST API.
+  Previously the form always auto-generated a secret that could never match the provider's, so every
+  webhook delivery failed HMAC verification with a 401 and agent replies never arrived (#821). The
+  field mirrors the API's validation rule (blank = auto-generate, otherwise at least 16 characters).
+
 ## [0.10.1] - 2026-07-20
 
 ### Added

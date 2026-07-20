@@ -796,6 +796,9 @@
         "sessionScopePlaceholder": "Leave blank for all sessions",
         "verifyToken": "Verify token (optional)",
         "verifyTokenPlaceholder": "Token the provider echoes on verification",
+        "secret": "Ingress secret (optional)",
+        "secretPlaceholder": "Provider's webhook secret (e.g. Chatwoot)",
+        "secretHint": "Leave blank to auto-generate (shown once). If the provider fixes its own webhook secret, paste it here — an auto-generated secret won't match.",
         "config": "Config (optional JSON)",
         "configPlaceholder": "{ }"
       },
@@ -830,6 +833,7 @@
       "errors": {
         "invalidId": "Instance ID must be letters, numbers, hyphens or underscores (max 64).",
         "invalidJson": "Config must be valid JSON.",
+        "invalidSecret": "Secret must be at least 16 characters, or leave blank to auto-generate.",
         "duplicateId": "An instance with that ID already exists."
       },
       "toasts": {

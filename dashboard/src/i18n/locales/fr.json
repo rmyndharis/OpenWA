@@ -796,6 +796,9 @@
         "sessionScopePlaceholder": "Laissez vide pour toutes les sessions",
         "verifyToken": "Jeton de vérification (facultatif)",
         "verifyTokenPlaceholder": "Jeton renvoyé par le fournisseur lors de la vérification",
+        "secret": "Secret d'ingress (facultatif)",
+        "secretPlaceholder": "Secret webhook du fournisseur (p. ex. Chatwoot)",
+        "secretHint": "Laissez vide pour le générer automatiquement (affiché une seule fois). Si le fournisseur impose son propre secret webhook, collez-le ici : un secret généré ne correspondra pas.",
         "config": "Configuration (JSON facultatif)",
         "configPlaceholder": "{ }"
       },
@@ -830,6 +833,7 @@
       "errors": {
         "invalidId": "L'ID de l'instance doit contenir des lettres, des chiffres, des tirets ou des underscores (64 max).",
         "invalidJson": "La configuration doit être un JSON valide.",
+        "invalidSecret": "Le secret doit contenir au moins 16 caractères, ou laissez vide pour le générer automatiquement.",
         "duplicateId": "Une instance avec cet ID existe déjà."
       },
       "toasts": {
