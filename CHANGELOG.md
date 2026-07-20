@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use (lid resolution, webhook payloads, group ids). The composer send icon was also enlarged to
   better match its 48 px button.
 
+### Fixed
+
+- The chat header no longer formats a LID privacy id as a fake phone number (e.g. "+26 281 346
+  125 0071"): digit-only LIDs and group ids are rejected by the phone formatter, and personal @lid
+  chats now resolve and display the real number through the engine (cached a day). Chat list rows
+  also render profile pictures now, sharing the room header's 1-hour cache instead of static icons.
+- Chat-list avatars no longer burst into HTTP 429s: profile pictures for the whole sidebar are
+  batch-resolved in ONE request (`GET .../contacts/profile-pictures?ids=…`, up to 50 ids) instead
+  of one parallel fetch per row, which exhausted the per-IP throttle.
+- Chat-list avatars no longer stall on long sidebars: the batch endpoint caps engine lookups at a
+  per-id deadline (a hanging id resolves null instead of holding the whole batch), and the request
+  now resolves the sidebar's TOP 50 ids in list order so visible rows get their pictures first.
+
 ## [0.10.0] - 2026-07-19
 
 ### Added
@@ -77,27 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Chat-list avatars no longer stall on long sidebars: the batch endpoint caps engine lookups at a
-  per-id deadline (a hanging id resolves null instead of holding the whole batch), and the request
-  now resolves the sidebar's TOP 50 ids in list order so visible rows get their pictures first.
-
-
-- Chat-list avatars no longer burst into HTTP 429s: profile pictures for the whole sidebar are
-  batch-resolved in ONE request (`GET .../contacts/profile-pictures?ids=…`, up to 50 ids) instead
-  of one parallel fetch per row, which exhausted the per-IP throttle.
-
-
-- The chat header no longer formats a LID privacy id as a fake phone number (e.g. "+26 281 346
-  125 0071"): digit-only LIDs and group ids are rejected by the phone formatter, and personal @lid
-  chats now resolve and display the real number through the engine (cached a day). Chat list rows
-  also render profile pictures now, sharing the room header's 1-hour cache instead of static icons.
-
-
 - Boot no longer warns about (and the plugin list no longer shows) ghost entries for the legacy
   bundled extensions removed in v0.7 (`auto-reply`, `translation`): when their code directory has no
   manifest, the stale registry entry is pruned at startup. The guard is scoped to those known ids so
   a temporarily unreadable plugin directory never loses its persisted config.
-
 - Long-lived sessions no longer die permanently after hours of uptime. A dead whatsapp-web.js
   Chromium (browser process exit, renderer crash, or closed page) is now detected through the
   puppeteer lifecycle handles and driven through the standard disconnect → reconnect pipeline, and
