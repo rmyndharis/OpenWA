@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-20
+
 ### Added
 - Design draft `docs/28-multitenancy.md`: the enterprise multitenancy proposal — tenant entity,
   named users with per-tenant roles, TOTP two-factor auth, per-tenant branding/isolation/quotas,
