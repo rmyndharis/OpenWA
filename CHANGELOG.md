@@ -77,6 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Chat-list avatars no longer stall on long sidebars: the batch endpoint caps engine lookups at a
+  per-id deadline (a hanging id resolves null instead of holding the whole batch), and the request
+  now resolves the sidebar's TOP 50 ids in list order so visible rows get their pictures first.
+
+
 - Chat-list avatars no longer burst into HTTP 429s: profile pictures for the whole sidebar are
   batch-resolved in ONE request (`GET .../contacts/profile-pictures?ids=…`, up to 50 ids, 3 engine
   lookups at a time) instead of one parallel fetch per row, which exhausted the per-IP throttle.

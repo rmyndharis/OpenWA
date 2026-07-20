@@ -70,7 +70,7 @@ describe('ContactService', () => {
     expect(getProfilePicture).toHaveBeenCalledTimes(50);
   });
 
-  it('runs batch lookups at most 3 concurrently', async () => {
+  it('runs batch lookups at most 5 concurrently', async () => {
     let active = 0;
     let maxActive = 0;
     const getProfilePicture = jest.fn().mockImplementation(async () => {
@@ -80,8 +80,19 @@ describe('ContactService', () => {
       active -= 1;
       return null;
     });
-    const ids = Array.from({ length: 9 }, (_, i) => `${i}@c.us`);
+    const ids = Array.from({ length: 12 }, (_, i) => `${i}@c.us`);
     await makeService({ getProfilePicture }).getProfilePictures('s1', ids);
-    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(maxActive).toBeLessThanOrEqual(5);
   });
+
+  it('yields null (not a stalled batch) when an engine lookup hangs past the per-id deadline', async () => {
+    const getProfilePicture = jest
+      .fn()
+      .mockResolvedValueOnce('https://pps/1.jpg')
+      .mockImplementationOnce(() => new Promise(() => undefined)); // never settles
+    const started = Date.now();
+    const out = await makeService({ getProfilePicture }).getProfilePictures('s1', ['a@c.us', 'b@c.us']);
+    expect(out).toEqual({ 'a@c.us': 'https://pps/1.jpg', 'b@c.us': null });
+    expect(Date.now() - started).toBeLessThan(12_000);
+  }, 15_000);
 });
