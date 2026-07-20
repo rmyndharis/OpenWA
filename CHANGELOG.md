@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-20
+
+### Added
+
+- The README gains an end-user-facing **"Before you connect a number"** section that consolidates
+  the recurring ban-risk / safe-sending questions: it states plainly that OpenWA is unofficial (it
+  uses `whatsapp-web.js` and `@whiskeysockets/baileys`, not Meta's Cloud API), includes a per-engine
+  ban-risk vs. resource-cost trade-off table, six practical safe-sending guardrails (warm-up,
+  no cold-blast, rate-limit, opt-in recipients, keep a fallback, mind the hosting IP), calls out the
+  known cold-contact first-send silent drop (tracked in #830) as server-side WhatsApp policy rather
+  than an OpenWA bug, and points regulated deployments to the official Cloud API. Responds to the
+  ban-risk questions raised in discussions #87, #154, #436, #687, and #694.
+
 ### Fixed
+
+- `BODY_SIZE_LIMIT` now actually takes effect under Docker Compose. The variable was documented in
+  `.env.example` and read correctly by the app (`src/main.ts` → `resolveBodyLimit()`), but neither
+  `docker-compose.yml` nor `docker-compose.dev.yml` forwarded it into the container, so a value set
+  in `.env` stayed on the host and the app fell back to its default — large base64 media sends
+  returned `413 Payload Too Large`. Both compose files now pass `BODY_SIZE_LIMIT` through, matching
+  the existing `${VAR:-}` convention; blank/unset keeps the 25 MB app default. Reported in #540,
+  tracked in #831, fixed in #832.
 - The dashboard's integration-instance create form now offers an optional **ingress secret** field,
   so providers that fix their own webhook signing secret (e.g. Chatwoot's per-webhook secret, which
   cannot be replaced with a custom value) can be integrated without resorting to the REST API.
@@ -18,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.10.1] - 2026-07-20
 
 ### Added
+
 - Design draft `docs/28-multitenancy.md`: the enterprise multitenancy proposal — tenant entity,
   named users with per-tenant roles, TOTP two-factor auth, per-tenant branding/isolation/quotas,
   and the migration path from single-operator deployments (nothing implemented yet).
