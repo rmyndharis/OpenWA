@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Typing a session name in the dashboard's **Create New Session** dialog no longer
+  stalls after the first character. The shared `Modal` component ran its initial-focus
+  step inside a `useEffect` whose dependency array included `onClose`, and callers pass
+  an inline arrow for that prop (`onClose={() => setShowCreateModal(false)}`) — a fresh
+  reference on every parent render. Each keystroke updated the field, re-rendered the
+  page, produced a new `onClose`, re-ran the effect, and the initial-focus step yanked
+  focus back to the dialog's close button, so only one character could be typed before
+  the input lost focus. The `onClose` is now held in a ref and the open/close effect
+  depends on `[open]` alone, so focus is applied once when the dialog opens and stays
+  put across parent re-renders. Reported in #837, fixed in #838.
+
 ## [0.10.2] - 2026-07-20
 
 ### Added
