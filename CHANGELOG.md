@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Design draft `docs/28-multitenancy.md`: the enterprise multitenancy proposal — tenant entity,
+  named users with per-tenant roles, TOTP two-factor auth, per-tenant branding/isolation/quotas,
+  and the migration path from single-operator deployments (nothing implemented yet).
 
 - The Chats room header now shows the contact or group profile picture (fetched through the existing
   `GET /sessions/:id/contacts/:id/profile-picture` endpoint, cached for one hour, with the icon
