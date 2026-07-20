@@ -166,6 +166,9 @@ services:
       - RATE_LIMIT_MEDIUM_LIMIT=${RATE_LIMIT_MEDIUM_LIMIT:-}
       - RATE_LIMIT_LONG_TTL=${RATE_LIMIT_LONG_TTL:-}
       - RATE_LIMIT_LONG_LIMIT=${RATE_LIMIT_LONG_LIMIT:-}
+      # Max request body size. Base64 media sends ride in the JSON body, so the default is generous;
+      # raise this for large documents (e.g. BODY_SIZE_LIMIT=50mb). Blank keeps the app default of 25mb.
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-}
       # Plugins
       - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       # Security
