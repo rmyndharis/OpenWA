@@ -33,6 +33,18 @@ export function Modal({ open, onClose, title, children, footer, className, close
   const titleId = useId();
   const cardRef = useRef<HTMLDivElement>(null);
 
+  // Keep the latest onClose in a ref so the open/close effect below can depend on `[open]` only.
+  // Callers commonly pass an inline arrow (`onClose={() => setShow(false)}`), which is a fresh
+  // reference on every parent render. If `onClose` were a useEffect dependency, the effect would
+  // re-run on every keystroke that re-renders the parent — and because that effect performs the
+  // initial-focus step, focus would be yanked back to the first focusable (the header close button)
+  // after every character, making text inputs inside the modal unusable (issue #837). Reading via
+  // the ref breaks that coupling without holding a stale handler.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
   useEffect(() => {
     if (!open) return undefined;
 
@@ -41,7 +53,7 @@ export function Modal({ open, onClose, title, children, footer, className, close
         // Capture phase: nested widgets (selects, menus) may also listen for Escape — the dialog
         // owns dismissal while it is open.
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key === 'Tab') {
@@ -68,6 +80,7 @@ export function Modal({ open, onClose, title, children, footer, className, close
     document.body.style.overflow = 'hidden';
 
     // Initial focus: the first visible focusable in the dialog, else the dialog card itself.
+    // Runs only when `open` flips true (not on parent re-renders) thanks to the `[open]` dep above.
     const card = cardRef.current;
     const initial =
       card && (Array.from(card.querySelectorAll<HTMLElement>(FOCUSABLE)).find(el => el.offsetParent !== null) ?? null);
@@ -77,7 +90,7 @@ export function Modal({ open, onClose, title, children, footer, className, close
       document.removeEventListener('keydown', onKeyDown, true);
       document.body.style.overflow = previousOverflow;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
