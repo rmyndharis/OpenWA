@@ -378,15 +378,17 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     try {
       // Build puppeteer args, including proxy if configured
-      const puppeteerArgs = this.config.puppeteer?.args || [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-      ];
+      const puppeteerArgs = this.config.puppeteer?.args
+        ? [...this.config.puppeteer.args]
+        : [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
+          ];
 
       // Add proxy configuration if provided — but only when the URL parses to a supported scheme, so
       // a malformed/stored proxy value can't break the Chromium launch or smuggle a non-proxy scheme.
