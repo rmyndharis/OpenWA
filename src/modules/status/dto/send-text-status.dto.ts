@@ -11,6 +11,7 @@ import {
   ArrayMaxSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 export class SendTextStatusDto {
   @ApiProperty({ description: 'Status text body.', example: 'Out for delivery 📦', maxLength: 4096 })
@@ -25,6 +26,7 @@ export class SendTextStatusDto {
   backgroundColor?: string;
 
   @ApiPropertyOptional({ description: 'Font family index (0–5).', example: 0, minimum: 0, maximum: 5 })
+  @ToStrictNumber()
   @IsOptional()
   @IsInt()
   @Min(0)

@@ -14,6 +14,7 @@ import {
   ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 
 class BulkMediaDto {
   @ApiPropertyOptional({ description: 'Media URL (http/https)' })
@@ -37,6 +38,7 @@ class BulkMediaDto {
   filename?: string;
 
   @ApiPropertyOptional({ description: 'Audio only: send as a WhatsApp voice note (PTT)' })
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   ptt?: boolean;
@@ -112,11 +114,13 @@ class BulkMessageOptionsDto {
   delayBetweenMessages?: number;
 
   @ApiPropertyOptional({ description: 'Add random 0-2s to delay', default: true })
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   randomizeDelay?: boolean;
 
   @ApiPropertyOptional({ description: 'Stop batch on first error', default: false })
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   stopOnError?: boolean;

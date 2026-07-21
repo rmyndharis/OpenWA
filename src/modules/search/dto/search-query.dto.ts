@@ -3,6 +3,7 @@ import { IsString, IsNotEmpty, IsOptional, IsEnum, IsNumber, Min } from 'class-v
 import { Type } from 'class-transformer';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
+import { ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 /**
  * Request shape for GET /search. Numeric fields are coerced from query-string strings via
@@ -45,12 +46,14 @@ export class SearchQueryDto {
   type?: MessageType;
 
   @ApiPropertyOptional({ description: 'Epoch-ms lower bound (inclusive)', type: Number })
+  @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   dateFrom?: number;
 
   @ApiPropertyOptional({ description: 'Epoch-ms upper bound (inclusive)', type: Number })
+  @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -65,6 +68,7 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({ description: 'Pagination offset', type: Number })
   @IsOptional()
+  @ToStrictNumber()
   @Type(() => Number)
   @IsNumber()
   @Min(0)

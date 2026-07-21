@@ -17,6 +17,7 @@ import { Webhook } from '../entities/webhook.entity';
 import { WebhookFilters } from '../filters/filter-types';
 import { IsValidWebhookFilters } from '../filters/filter-validation';
 import { IsHeaderMap } from './is-header-map.validator';
+import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 const FILTERS_API_DESCRIPTION =
   'Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.';
@@ -108,6 +109,7 @@ export class CreateWebhookDto {
     minimum: 0,
     maximum: 5,
   })
+  @ToStrictNumber()
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -151,11 +153,13 @@ export class UpdateWebhookDto {
   filters?: WebhookFilters | null;
 
   @ApiPropertyOptional({ description: 'Enable/disable webhook' })
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   active?: boolean;
 
   @ApiPropertyOptional({ description: 'Retry count' })
+  @ToStrictNumber()
   @IsOptional()
   @IsInt()
   @Min(0)

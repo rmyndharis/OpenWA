@@ -11,7 +11,7 @@ import {
   ArrayMaxSize,
   MaxLength,
 } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 /**
  * Validated DTOs for the message action endpoints. These replaced inline
@@ -26,10 +26,12 @@ export class SendLocationDto {
   chatId: string;
 
   @ApiProperty({ example: -6.2088 })
+  @ToStrictNumber()
   @IsLatitude()
   latitude: number;
 
   @ApiProperty({ example: 106.8456 })
+  @ToStrictNumber()
   @IsLongitude()
   longitude: number;
 

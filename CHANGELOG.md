@@ -7,30 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- **Resolved every known advisory in the dependency tree (17 → 0, including one critical).** The
-  critical one was a set of path-traversal and symlink issues in `node-tar`, reached only through
-  `sqlite3@5` → `node-gyp` → `tar`. `sqlite3` moves to `6.0.1`, which drops the `node-gyp`
-  dependency entirely in favour of `prebuild-install` and pulls a patched `tar@7`; `typeorm` moves
-  to `0.3.31`, the first release declaring `sqlite3@^6` as a supported peer. `shell-quote` (reached
-  through the `concurrently` dev dependency, and with no upstream fix available on any release
-  line) is pinned forward with an `overrides` entry.
-
-  The bundled SQLite build advances to 3.52.0. Migrations, the FTS5 full-text search tables, both
-  database connections and a full boot were verified against the new driver.
-
-### Changed
-
-- **The security audit runs as its own CI job.** `npm audit` reports against the advisory database
-  rather than against the diff, so a newly published advisory turns red on unrelated pull requests.
-  While it was the first step of the Lint job, that failure aborted the job before ESLint, the
-  type-check, the format check, the version-consistency check and the OpenAPI drift gate had run —
-  so an advisory silently switched off every code-quality gate at once. It is still blocking (the
-  build job depends on it) but can no longer mask an unrelated result.
-
 ### Added
-
 - **Outbound message edit.** `POST /api/sessions/:sessionId/messages/edit` edits the text of a
   message sent by the account, on both engines (whatsapp-web.js `Message.edit`, Baileys
   `sendMessage` with an `edit` key). Attempting to edit another sender's message fails with `403`,
@@ -75,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/23-community-integrations.md` clarifies that it lists community projects only.
 
 ### Changed
+- **The security audit runs as its own CI job.** `npm audit` reports against the advisory database
+  rather than against the diff, so a newly published advisory turns red on unrelated pull requests.
+  While it was the first step of the Lint job, that failure aborted the job before ESLint, the
+  type-check, the format check, the version-consistency check and the OpenAPI drift gate had run —
+  so an advisory silently switched off every code-quality gate at once. It is still blocking (the
+  build job depends on it) but can no longer mask an unrelated result.
 
 - **Status posts now pass the `message:sending` plugin gate.** `POST /api/sessions/:sessionId/status/{text,image,video}`
   publish content from the linked account, but were the only content-bearing senders that did not
@@ -89,7 +72,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A handler that reads `input.chatId` unconditionally should branch on `source` or `type` first.
 
 ### Fixed
-
 - **`forEveryone: false` on message delete is honoured again.** `POST /api/sessions/:sessionId/messages/delete`
   defaults `forEveryone` to `true`, so sending it at all means "delete only for me" — but a request
   that carried the value as a string (any form-encoded body, since that parser produces only string
@@ -99,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — `1`, `0`, `yes`, `no` — is now rejected with `400` instead of being read as `true`.** JSON
   clients and all five SDKs send real booleans and are unaffected. `allowMultipleAnswers` on poll
   send is read the same way, which is what its validation always claimed to do.
+
+- **Every boolean and numeric request field is now read strictly, and a test keeps it that way.**
+  The same coercion applied to every such field: a boolean took any non-empty string as `true`, and
+  a numeric field took a blank value as `0`. Fourteen more fields are covered — `active` and
+  `retryCount` on webhooks (a blank `retryCount` silently meant "no retries"), `enabled` on
+  integration instances, `ptt` on audio and bulk sends, `randomizeDelay` and `stopOnError` on bulk
+  batches, `latitude`/`longitude` on location sends (a blank pair became the valid coordinates
+  `0, 0`), `dateFrom`/`dateTo`/`offset` on search, and `font` on text status. Values that were
+  already correct still work — a numeric field still accepts `"5"`, and a boolean still accepts
+  `"true"`/`"false"` — so only input that was previously being guessed at is now refused with `400`.
+  A drift test walks class-validator's registry and fails the build if any boolean or numeric
+  request field, including one in a class that is never exported, accepts a value the pipe would
+  otherwise coerce. The published OpenAPI schema is unchanged.
 
 - Running more than one session no longer corrupts the Chromium launch flags of every
   session started after the first. The whatsapp-web.js adapter appended its per-session
@@ -125,6 +120,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the input lost focus. The `onClose` is now held in a ref and the open/close effect
   depends on `[open]` alone, so focus is applied once when the dialog opens and stays
   put across parent re-renders. Reported in #837, fixed in #838.
+
+### Security
+- **Resolved every known advisory in the dependency tree (17 → 0, including one critical).** The
+  critical one was a set of path-traversal and symlink issues in `node-tar`, reached only through
+  `sqlite3@5` → `node-gyp` → `tar`. `sqlite3` moves to `6.0.1`, which drops the `node-gyp`
+  dependency entirely in favour of `prebuild-install` and pulls a patched `tar@7`; `typeorm` moves
+  to `0.3.31`, the first release declaring `sqlite3@^6` as a supported peer. `shell-quote` (reached
+  through the `concurrently` dev dependency, and with no upstream fix available on any release
+  line) is pinned forward with an `overrides` entry.
+
+  The bundled SQLite build advances to 3.52.0. Migrations, the FTS5 full-text search tables, both
+  database connections and a full boot were verified against the new driver.
 
 ## [0.10.2] - 2026-07-20
 

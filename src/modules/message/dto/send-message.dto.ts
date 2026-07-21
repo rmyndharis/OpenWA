@@ -10,6 +10,7 @@ import {
   ArrayMaxSize,
   IsBoolean,
 } from 'class-validator';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 
 const MENTIONS_DESCRIPTION =
   'WIDs to @mention (e.g. ["62811@c.us"]). The text/caption must also contain the @<number> token.';
@@ -111,6 +112,7 @@ export class SendAudioMessageDto extends SendMediaMessageDto {
       'bytes for reliable playback; when the mimetype is omitted it defaults to that for voice notes. ' +
       'Expects a JSON boolean. Default false = plain audio file. Only valid on send-audio.',
   })
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   ptt?: boolean;
