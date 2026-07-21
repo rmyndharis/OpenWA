@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A release image is only tagged after it has been proven to start.** The release workflow
+  published `X.Y.Z`, `X.Y` and `latest` in the same step that built the image, and only then ran
+  the boot smoke test — so an image that could not start was already pullable by the time the
+  test that catches it failed, which is exactly what happened with `0.10.3`. The build now
+  publishes a throwaway `smoke-<run-id>` tag, the smoke test boots that on both architectures,
+  and a new promote step re-points the release tags at the identical manifest (no rebuild, so
+  provenance and SBOM attestations carry over) only once it passes. The GitHub Release depends
+  on the promote step, and the staging tag is cleaned up afterwards.
+- The smoke test no longer starts containers with `--rm`, so a container that exits on its own
+  survives long enough for `docker logs` to report why. The `0.10.3` failure reported
+  "No such container" instead of the actual error.
+
 ## [0.10.4] - 2026-07-21
 
 > ⚠️ **Use this release, not `0.10.3`.** The `0.10.3` container image does not start: its
