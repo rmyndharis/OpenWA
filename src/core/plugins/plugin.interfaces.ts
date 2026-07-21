@@ -566,4 +566,11 @@ export interface PluginRegistryEntry {
   activeSessions?: string[];
   // Per-session config overrides (keyed by sessionId), merged over `config` per session at hook time.
   sessionConfig?: Record<string, Record<string, unknown>>;
+  // The operator's standing decision, as opposed to `status`, which is where the runtime currently is.
+  // `status` is reset to INSTALLED on every load (enabling runs the lifecycle and is never inherited
+  // from a previous process), so it cannot carry intent across a restart — a restart used to silently
+  // turn every extension plugin off (#856). This field is what bootstrap restores from. Written only by
+  // the operator-facing enable/disable, never by the loader's own teardown. Absent on pre-#856 rows,
+  // which are adopted from a lingering ENABLED status on first load.
+  enabledByOperator?: boolean;
 }

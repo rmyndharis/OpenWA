@@ -129,11 +129,17 @@ export class PluginsService {
     }
 
     if (plugin.status === PluginStatus.ENABLED) {
+      // Converge the persisted decision even on the no-op path, so a plugin left running by an older
+      // build (which had no such field) is still restored after the next restart.
+      this.pluginLoader.setOperatorEnabled(id, true);
       return { success: true, message: `Plugin ${id} is already enabled` };
     }
 
     try {
       await this.pluginLoader.enablePlugin(id);
+      // Only after the lifecycle actually succeeded: a plugin that failed to enable must not be
+      // restored on every boot just to fail again.
+      this.pluginLoader.setOperatorEnabled(id, true);
       return { success: true, message: `Plugin ${id} enabled successfully` };
     } catch (error) {
       return {
@@ -155,11 +161,15 @@ export class PluginsService {
     }
 
     if (plugin.status !== PluginStatus.ENABLED) {
+      // Clear the decision here too: a plugin sitting in ERROR after a failed restore is not ENABLED,
+      // and disabling it must stop the gateway retrying it on every boot.
+      this.pluginLoader.setOperatorEnabled(id, false);
       return { success: true, message: `Plugin ${id} is not enabled` };
     }
 
     try {
       await this.pluginLoader.disablePlugin(id);
+      this.pluginLoader.setOperatorEnabled(id, false);
       return { success: true, message: `Plugin ${id} disabled successfully` };
     } catch (error) {
       return {

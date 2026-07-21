@@ -146,6 +146,22 @@ export class PluginStorageService {
     }
   }
 
+  /**
+   * Record the operator's standing enable decision, which outlives the process (#856). Deliberately
+   * separate from setPluginStatus: `status` tracks where the runtime is right now and is reset on every
+   * load, so writing intent through it would lose it on the next boot. Call this only from the
+   * operator-facing enable/disable — never from the shutdown teardown, which disables every running
+   * plugin and would otherwise erase the decision on the way out.
+   */
+  setPluginEnabledByOperator(pluginId: string, enabled: boolean): void {
+    const entry = this.registry.get(pluginId);
+    if (entry) {
+      entry.enabledByOperator = enabled;
+      entry.updatedAt = new Date();
+      this.saveRegistry();
+    }
+  }
+
   // ============================================================================
   // Config Management
   // ============================================================================

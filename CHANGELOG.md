@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Plugins you enabled stay enabled across a restart.** Every restart of the gateway — an upgrade, a
+  host reboot, a container restart policy — silently switched off every extension plugin, with nothing
+  written to the log and nothing shown in the dashboard. An integration such as the Chatwoot adapter
+  simply stopped relaying until someone noticed and turned it back on by hand. Your enable decision is
+  now remembered separately from whether the plugin happens to be running, and the plugins you had
+  enabled are started again once the gateway has finished coming up. A plugin that fails to start is
+  logged and left disabled rather than holding up the gateway. Enabling still runs the plugin's full
+  lifecycle, and a plugin you disabled stays disabled. Nothing to do on upgrade: a plugin that is
+  enabled when you upgrade is carried over automatically ([#856](https://github.com/rmyndharis/OpenWA/issues/856)).
+
 - **The chat list no longer shows a stray `0` next to every conversation.** Each row in the Chats
   sidebar rendered a literal `0` where the last message's time belongs, on every chat. A conversation
   with no messages reports a timestamp of zero, and the check that was meant to hide the time in that

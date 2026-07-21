@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
+import { Injectable, OnApplicationBootstrap, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { toNeutralJid, userPart } from '../../engine/identity/wa-id';
@@ -167,7 +167,7 @@ export function seedConfigDefaults(
 }
 
 @Injectable()
-export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
+export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = createLogger('PluginLoaderService');
   private readonly plugins = new Map<string, PluginInstance>();
   /** Plugin ids whose enable() is in flight — a synchronous lock so concurrent enables can't double-run. */
@@ -208,6 +208,37 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       action: 'plugins_loaded',
       count: this.plugins.size,
     });
+  }
+
+  /**
+   * Re-enable the plugins the operator had enabled (#856). `status` cannot carry that across a restart
+   * — it describes the runtime, and loading never runs a plugin — so the decision is read from the
+   * separately persisted `enabledByOperator`. Without this, every restart (an upgrade, a host reboot, a
+   * Docker restart policy) silently switched off every extension, and a relay simply stopped relaying.
+   *
+   * Runs at bootstrap rather than in onModuleInit so the rest of the app is wired before any plugin
+   * code executes. Built-ins are skipped: an engine is enabled by EngineFactory against the configured
+   * engine.type, and enabling a non-active engine here would be rejected anyway.
+   *
+   * Best-effort and sequential, like the shutdown teardown: a plugin that cannot come back is logged
+   * and left in ERROR, and never holds up the gateway.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    const restorable = this.getAllPlugins().filter(
+      p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
+    );
+    for (const plugin of restorable) {
+      const pluginId = plugin.manifest.id;
+      try {
+        await this.enablePlugin(pluginId);
+      } catch (error) {
+        this.logger.error(
+          `Failed to restore plugin ${pluginId} on startup; it stays disabled until re-enabled`,
+          error instanceof Error ? error.message : String(error),
+          { pluginId, action: 'plugin_restore_failed' },
+        );
+      }
+    }
   }
 
   /**
@@ -341,13 +372,18 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
    * load into a 500). Does NOT enable or run the plugin — boot never auto-executes plugin code.
    */
   private ensureRegistryEntry(manifest: PluginManifest, builtIn: boolean): void {
-    // Reconcile the persisted entry with the freshly-loaded runtime: the runtime always loads
-    // INSTALLED and is never auto-enabled on boot (enabling must stay an explicit ADMIN action that
-    // runs the lifecycle), so the entry's status is (re)set to INSTALLED to match — a previously
-    // enabled plugin must be re-enabled after a restart. The operator's persisted config is preserved
-    // so secrets/settings survive. Best-effort: saveRegistry swallows fs errors, so a disk failure
-    // never turns a load into a 500.
+    // Reconcile the persisted entry with the freshly-loaded runtime: loading never runs the plugin, so
+    // the entry's status is (re)set to INSTALLED to match the runtime. Enabling is a separate step that
+    // runs the lifecycle — at bootstrap for a plugin the operator had enabled (see
+    // onApplicationBootstrap), or on an explicit ADMIN action. The operator's persisted config and
+    // enable decision are preserved so settings/secrets and the decision itself survive. Best-effort:
+    // saveRegistry swallows fs errors, so a disk failure never turns a load into a 500.
     const existing = this.pluginStorage.getPluginEntry(manifest.id);
+    // The operator's standing enable decision (#856). `status` below is deliberately reset, so intent
+    // has to live in its own field or a restart loses it. A pre-#856 row has no such field: adopt it
+    // from a status of ENABLED, which can only have been written by an explicit enable since the last
+    // boot (every boot rewrites the status to INSTALLED), so it is a faithful record of the intent.
+    const enabledByOperator = existing?.enabledByOperator ?? existing?.status === PluginStatus.ENABLED;
     this.pluginStorage.setPluginEntry({
       id: manifest.id,
       type: manifest.type,
@@ -364,7 +400,20 @@ export class PluginLoaderService implements OnModuleInit, OnModuleDestroy {
       // carried over or every boot wipes them from disk (lost after the second restart).
       activeSessions: existing?.activeSessions,
       sessionConfig: existing?.sessionConfig,
+      enabledByOperator,
     });
+  }
+
+  /**
+   * Record that the operator wants this plugin on (or off), so bootstrap can restore it (#856).
+   *
+   * Call this ONLY from an operator-facing action. In particular it must never be called from
+   * disablePlugin: onModuleDestroy disables every running plugin during a graceful shutdown, and
+   * treating that as "the operator turned it off" would erase the decision on the way out — which is
+   * the very bug this exists to fix, just moved somewhere harder to see.
+   */
+  setOperatorEnabled(pluginId: string, enabled: boolean): void {
+    this.pluginStorage.setPluginEnabledByOperator(pluginId, enabled);
   }
 
   async enablePlugin(pluginId: string): Promise<void> {
