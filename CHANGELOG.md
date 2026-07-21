@@ -90,6 +90,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`forEveryone: false` on message delete is honoured again.** `POST /api/sessions/:sessionId/messages/delete`
+  defaults `forEveryone` to `true`, so sending it at all means "delete only for me" — but a request
+  that carried the value as a string (any form-encoded body, since that parser produces only string
+  scalars) had it read as `true`, retracting the message from the recipient's device instead of
+  hiding it locally. That is not reversible, and the recipient sees a "message deleted" placeholder.
+  The field now accepts a real boolean or the exact strings `"true"`/`"false"`; **any other spelling
+  — `1`, `0`, `yes`, `no` — is now rejected with `400` instead of being read as `true`.** JSON
+  clients and all five SDKs send real booleans and are unaffected. `allowMultipleAnswers` on poll
+  send is read the same way, which is what its validation always claimed to do.
+
 - Running more than one session no longer corrupts the Chromium launch flags of every
   session started after the first. The whatsapp-web.js adapter appended its per-session
   arguments (`--proxy-server`, and the `--openwa-session=<id>` process marker) directly

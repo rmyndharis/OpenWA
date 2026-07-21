@@ -14,8 +14,17 @@ import {
  * runtime validation). e2e is deferred (broken harness), so we validate the
  * decorators directly via class-validator.
  */
+// The transform option has to match src/config/app-validation.ts. Without it these specs exercise a
+// stricter pipe than the one that actually runs, so a payload rejected here can still be accepted in
+// production — which is exactly how a stringly-typed boolean stayed invisible.
+const PIPE_TRANSFORM_OPTS = { enableImplicitConversion: true };
+
 function errorsFor<T extends object>(cls: new () => T, obj: object): Promise<ValidationError[]> {
-  return validate(plainToInstance(cls, obj));
+  return validate(plainToInstance(cls, obj, PIPE_TRANSFORM_OPTS));
+}
+
+function instanceFor<T extends object>(cls: new () => T, obj: object): T {
+  return plainToInstance(cls, obj, PIPE_TRANSFORM_OPTS);
 }
 
 describe('message action DTOs', () => {
@@ -86,6 +95,25 @@ describe('message action DTOs', () => {
 
   it('DeleteMessageDto: forEveryone is optional', async () => {
     expect(await errorsFor(DeleteMessageDto, { chatId: 'x@c.us', messageId: 'm1' })).toHaveLength(0);
+  });
+
+  // The service defaults an absent forEveryone to true, so `false` is the only reason to send the
+  // field at all. Asserting the VALUE, not just the error count: a form-encoded "false" read as
+  // `true` would retract the message from the recipient instead of hiding it locally, and that
+  // cannot be undone.
+  it('DeleteMessageDto: a form-encoded "false" stays false', () => {
+    const base = { chatId: 'x@c.us', messageId: 'm1' };
+    expect(instanceFor(DeleteMessageDto, { ...base, forEveryone: 'false' }).forEveryone).toBe(false);
+    expect(instanceFor(DeleteMessageDto, { ...base, forEveryone: 'true' }).forEveryone).toBe(true);
+    expect(instanceFor(DeleteMessageDto, { ...base, forEveryone: false }).forEveryone).toBe(false);
+    expect(instanceFor(DeleteMessageDto, { ...base, forEveryone: true }).forEveryone).toBe(true);
+  });
+
+  it('DeleteMessageDto: rejects an ambiguous forEveryone rather than defaulting it to true', async () => {
+    for (const value of ['yes', 'no', '0', '1', 'FALSE']) {
+      const errs = await errorsFor(DeleteMessageDto, { chatId: 'x@c.us', messageId: 'm1', forEveryone: value });
+      expect(errs.some(e => e.property === 'forEveryone')).toBe(true);
+    }
   });
 
   it('ForwardMessageDto: requires all three ids', async () => {

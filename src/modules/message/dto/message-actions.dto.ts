@@ -11,6 +11,7 @@ import {
   ArrayMaxSize,
   MaxLength,
 } from 'class-validator';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 
 /**
  * Validated DTOs for the message action endpoints. These replaced inline
@@ -92,6 +93,10 @@ export class SendPollDto {
   options: string[];
 
   @ApiPropertyOptional({ description: 'Allow voters to pick several options (default single choice)' })
+  // Read strictly for the same reason as DeleteMessageDto.forEveryone: without it the pipe's
+  // implicit conversion turns any non-empty string into `true`, and this file's own spec has always
+  // asserted that a non-boolean here is rejected.
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   allowMultipleAnswers?: boolean;
@@ -162,6 +167,11 @@ export class DeleteMessageDto {
   messageId: string;
 
   @ApiPropertyOptional({ description: 'Delete for everyone (default true)' })
+  // The field's only purpose is to say "no, delete locally" — the default is already true
+  // (message.service.ts). Under the pipe's implicit conversion a string `"false"` would become
+  // boolean `true`, turning an explicit local-only delete into an irreversible retraction from the
+  // recipient's device, so the value is read strictly rather than interpreted.
+  @ToStrictBoolean()
   @IsOptional()
   @IsBoolean()
   forEveryone?: boolean;
