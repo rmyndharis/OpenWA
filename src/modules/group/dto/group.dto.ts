@@ -10,6 +10,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 
 export class CreateGroupDto {
   @ApiProperty({ description: 'Group subject/name', maxLength: 100 })
@@ -67,11 +68,13 @@ export class JoinGroupDto {
  */
 export class GroupSettingsDto {
   @ApiPropertyOptional({ description: 'Only admins can send messages (announce group)' })
+  @ToStrictBoolean()
   @ValidateIf((o: GroupSettingsDto) => o.announce !== undefined)
   @IsBoolean()
   announce?: boolean;
 
   @ApiPropertyOptional({ description: 'Only admins can edit group info (locked group)' })
+  @ToStrictBoolean()
   @ValidateIf((o: GroupSettingsDto) => o.locked !== undefined)
   @IsBoolean()
   locked?: boolean;

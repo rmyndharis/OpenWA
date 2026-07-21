@@ -377,7 +377,11 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Session not active or invalid request',
+    description: 'Session not active, invalid request, or the send was blocked by a plugin',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The message was not sent by this account, or the engine refused the edit',
   })
   @ApiResponse({ status: 404, description: 'Message not found' })
   async edit(@Param('sessionId') sessionId: string, @Body() dto: EditMessageDto): Promise<MessageResponseDto> {

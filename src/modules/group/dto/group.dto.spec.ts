@@ -10,11 +10,19 @@ import {
   GroupSettingsDto,
 } from './group.dto';
 
-// Mirror the global ValidationPipe options (src/main.ts): whitelist + forbidNonWhitelisted.
+// Mirror the global ValidationPipe: whitelist + forbidNonWhitelisted from src/main.ts, AND the
+// enableImplicitConversion transform option from src/config/app-validation.ts. The transform
+// option has to be applied here too — without it a spec exercises a stricter pipe than the one
+// that actually runs, so a payload this file rejects can still be accepted in production.
 const PIPE_OPTS = { whitelist: true, forbidNonWhitelisted: true };
+const PIPE_TRANSFORM_OPTS = { enableImplicitConversion: true };
 
 function errorsFor<T extends object>(cls: new () => T, payload: unknown): Promise<ValidationError[]> {
-  return validate(plainToInstance(cls, payload as object), PIPE_OPTS);
+  return validate(plainToInstance(cls, payload as object, PIPE_TRANSFORM_OPTS), PIPE_OPTS);
+}
+
+function instanceFor<T extends object>(cls: new () => T, payload: unknown): T {
+  return plainToInstance(cls, payload as object, PIPE_TRANSFORM_OPTS);
 }
 
 describe('group DTO validation', () => {
@@ -81,5 +89,22 @@ describe('group DTO validation', () => {
   it('GroupSettingsDto still rejects unknown properties (forbidNonWhitelisted intact)', async () => {
     const errors = await errorsFor(GroupSettingsDto, { announce: true, hacker: true });
     expect(errors.some(e => e.property === 'hacker')).toBe(true);
+  });
+
+  // A form-encoded body reaches the DTO as string scalars, and the pipe converts implicitly. These
+  // assert the resulting VALUE, not just the error count: the failure mode being pinned is
+  // `announce=false` arriving as `announce: true` and silently restricting the group.
+  it('GroupSettingsDto reads a form-encoded "false" as false, not true', () => {
+    expect(instanceFor(GroupSettingsDto, { announce: 'false' }).announce).toBe(false);
+    expect(instanceFor(GroupSettingsDto, { locked: 'false' }).locked).toBe(false);
+    expect(instanceFor(GroupSettingsDto, { announce: 'true' }).announce).toBe(true);
+    expect(instanceFor(GroupSettingsDto, { locked: 'true' }).locked).toBe(true);
+  });
+
+  it('GroupSettingsDto rejects ambiguous boolean spellings rather than defaulting them to true', async () => {
+    for (const value of ['yes', 'no', '0', '1', 'FALSE']) {
+      expect((await errorsFor(GroupSettingsDto, { announce: value })).length).toBeGreaterThan(0);
+      expect((await errorsFor(GroupSettingsDto, { locked: value })).length).toBeGreaterThan(0);
+    }
   });
 });

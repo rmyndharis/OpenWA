@@ -9,7 +9,7 @@ import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
-import { HookManager } from '../../core/hooks';
+import { HookManager, applySendingGate } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
 import { renderTemplate } from '../../common/utils/template-render';
 import { createLogger } from '../../common/services/logger.service';
@@ -93,20 +93,12 @@ export class MessageService {
   /**
    * Run the pre-send `message:sending` plugin gate for one outbound message and return the
    * (possibly plugin-modified) input, or throw BadRequestException if a plugin blocked the send.
-   * Centralised so EVERY public sender — text, media, and extended (location/contact/poll/sticker/
-   * reply/forward) — passes through the same moderation chokepoint, instead of only `sendText`.
+   * Centralised so EVERY public sender — text, media, extended (location/contact/poll/sticker/
+   * reply/forward) and edit — passes through the same moderation chokepoint, instead of only
+   * `sendText`. The implementation is shared with StatusService via core/hooks/sending-gate.
    */
-  private async applySendingGate<T extends object>(sessionId: string, type: string, input: T): Promise<T> {
-    const { continue: shouldContinue, data: hookData } = await this.hookManager.execute(
-      'message:sending',
-      { sessionId, input, type },
-      { sessionId, source: 'MessageService' },
-    );
-    if (!shouldContinue) {
-      throw new BadRequestException('Message sending blocked by plugin');
-    }
-    // Use the potentially plugin-modified input.
-    return (hookData as { input: T }).input;
+  private applySendingGate<T extends object>(sessionId: string, type: string, input: T): Promise<T> {
+    return applySendingGate(this.hookManager, sessionId, type, input, 'MessageService');
   }
 
   /**
@@ -675,12 +667,16 @@ export class MessageService {
     dto: { chatId: string; messageId: string; body: string },
   ): Promise<MessageResponseDto> {
     const engine = this.getEngine(sessionId);
-    const result = await engine.editMessage(dto.chatId, dto.messageId, dto.body);
+    // An edit replaces the text the recipient sees, so it is content leaving the account and goes
+    // through the same moderation chokepoint as every other sender. A plugin can rewrite `body`
+    // here exactly as it can for a first send.
+    const finalDto = await this.applySendingGate(sessionId, 'edit', dto);
+    const result = await engine.editMessage(finalDto.chatId, finalDto.messageId, finalDto.body);
 
     // Best-effort: reflect the new body in the stored copy (mirrors deleteMessage's revoked flag),
     // serialized with the inbound edit/reaction writers through the session's per-message mutation
     // queue. A missing row must not fail the request — the engine edit already succeeded.
-    await this.sessionService.recordOutboundMessageEdit(sessionId, dto.messageId, dto.body);
+    await this.sessionService.recordOutboundMessageEdit(sessionId, finalDto.messageId, finalDto.body);
     return { messageId: result.id, timestamp: result.timestamp };
   }
 

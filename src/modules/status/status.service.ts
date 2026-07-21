@@ -2,10 +2,24 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { SessionService } from '../session/session.service';
 import type { Status, StatusResult, StatusPostOptions } from '../../engine/interfaces/whatsapp-engine.interface';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from '../message/media-cap.util';
+import { HookManager, applySendingGate } from '../../core/hooks';
 
 @Injectable()
 export class StatusService {
-  constructor(private readonly sessionService: SessionService) {}
+  // HookManager comes from the @Global() HooksModule, so no module import is needed here.
+  constructor(
+    private readonly sessionService: SessionService,
+    private readonly hookManager: HookManager,
+  ) {}
+
+  /**
+   * A status post is content published from the account, so it goes through the same
+   * `message:sending` moderation gate as a chat send. `source` distinguishes it from MessageService
+   * for plugins that only want to police one of the two.
+   */
+  private gate<T extends object>(sessionId: string, type: string, input: T): Promise<T> {
+    return applySendingGate(this.hookManager, sessionId, type, input, 'StatusService');
+  }
 
   async getStatuses(sessionId: string): Promise<Status[]> {
     const engine = this.sessionService.getEngine(sessionId);
@@ -28,7 +42,8 @@ export class StatusService {
     if (!engine) {
       throw new NotFoundException(`Session ${sessionId} not found or not connected`);
     }
-    return engine.postTextStatus(text, options);
+    const gated = await this.gate(sessionId, 'status-text', { text, options });
+    return engine.postTextStatus(gated.text, gated.options);
   }
 
   async postImageStatus(
@@ -47,7 +62,11 @@ export class StatusService {
     if (!engine) {
       throw new NotFoundException(`Session ${sessionId} not found or not connected`);
     }
-    return engine.postImageStatus({ mimetype: mimetype ?? 'image/jpeg', data: base64 || url || '' }, options);
+    const gated = await this.gate(sessionId, 'status-image', {
+      media: { mimetype: mimetype ?? 'image/jpeg', data: base64 || url || '' },
+      options,
+    });
+    return engine.postImageStatus(gated.media, gated.options);
   }
 
   async postVideoStatus(
@@ -66,7 +85,11 @@ export class StatusService {
     if (!engine) {
       throw new NotFoundException(`Session ${sessionId} not found or not connected`);
     }
-    return engine.postVideoStatus({ mimetype: mimetype ?? 'video/mp4', data: base64 || url || '' }, options);
+    const gated = await this.gate(sessionId, 'status-video', {
+      media: { mimetype: mimetype ?? 'video/mp4', data: base64 || url || '' },
+      options,
+    });
+    return engine.postVideoStatus(gated.media, gated.options);
   }
 
   async deleteStatus(sessionId: string, statusId: string): Promise<void> {

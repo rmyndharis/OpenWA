@@ -909,7 +909,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       if (call.fromMe) {
         return;
       }
-      this.cacheLiveCall(call.id, call);
+      // whatsapp-web.js fires this handler from a patched `internalCallMap.set()`, which runs on
+      // every write to that map — including updates to a call already ringing — so the same call id
+      // can arrive more than once. Cache first and emit only for an id not already live, otherwise
+      // one call surfaces as several `call.received` events.
+      if (!this.cacheLiveCall(call.id, call)) {
+        return;
+      }
       const payload: IncomingCallEvent = {
         callId: call.id,
         from: call.from ?? '',
@@ -931,15 +937,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * already-expired entries, so a session that receives calls but never rejects them can't grow
    * the map without bound; an entry that never sees another call is tiny and is dropped on
    * teardown (beginClientTeardown) or at the next call. No per-entry timer to clean up.
+   *
+   * Returns true when `callId` was not already ringing, which is what makes `call.received` fire
+   * once per call rather than once per upstream map write. A repeat write still refreshes the
+   * entry, so a long-ringing call stays rejectable for a full TTL from the most recent signal.
    */
-  private cacheLiveCall(callId: string, call: Call): void {
+  private cacheLiveCall(callId: string, call: Call): boolean {
     const now = Date.now();
     for (const [id, entry] of this.liveCalls) {
       if (entry.expiresAt <= now) {
         this.liveCalls.delete(id);
       }
     }
+    const isNewCall = !this.liveCalls.has(callId);
     this.liveCalls.set(callId, { call, expiresAt: now + WhatsAppWebJsAdapter.LIVE_CALL_TTL_MS });
+    return isNewCall;
   }
 
   /**
@@ -2280,7 +2292,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     let groupId: string | undefined;
     try {
       groupId = await this.client!.acceptInvite(inviteCode);
-    } catch {
+    } catch (error) {
+      // A refused invite and a broken page both land here, and only the first is the caller's
+      // fault. Surface the transport case to the liveness path and keep the original error in the
+      // log: without it an upstream rename turns every join into an unexplained 400.
+      this.reportIfPageTransportError(error, 'joinGroupViaInviteCode');
+      this.logger.warn(`Failed to accept group invite: ${String(error)}`);
       groupId = undefined;
     }
     if (!groupId) {

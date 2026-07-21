@@ -2771,6 +2771,43 @@ describe('BaileysAdapter call events (call offer) + rejectCall', () => {
     expect(firstCallEvent(onCall).from).toBe('628222@c.us');
   });
 
+  // Baileys folds both the `offer` and `offer_notice` wire tags onto status 'offer' with the same
+  // call-id, so one ringing call can reach the handler more than once.
+  it('emits once per call id even when the same offer arrives repeatedly', async () => {
+    const { onCall } = await readyWithCallEvents();
+
+    fakeSock.fire('call', [offer()]);
+    fakeSock.fire('call', [offer()]);
+    fakeSock.fire('call', [offer()]);
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates repeats delivered in a single batch', async () => {
+    const { onCall } = await readyWithCallEvents();
+
+    fakeSock.fire('call', [offer(), offer()]);
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('still emits for a genuinely different call id', async () => {
+    const { onCall } = await readyWithCallEvents();
+
+    fakeSock.fire('call', [offer({ id: 'CALL1' }), offer({ id: 'CALL2' })]);
+
+    expect(onCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a repeatedly-offered call rejectable (the repeat refreshes the cached entry)', async () => {
+    const { adapter } = await readyWithCallEvents();
+
+    fakeSock.fire('call', [offer()]);
+    fakeSock.fire('call', [offer()]);
+
+    await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
+  });
+
   it.each(['ringing', 'preaccept', 'transport', 'relaylatency', 'timeout', 'reject', 'accept', 'terminate'])(
     'skips status %s (lifecycle update, not a new incoming call)',
     async status => {

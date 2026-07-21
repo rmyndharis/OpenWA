@@ -1032,6 +1032,41 @@ describe('MessageService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(mockEngine.editMessage).not.toHaveBeenCalled();
     });
+
+    // An edit replaces the text the recipient sees, so it belongs to the same moderation
+    // chokepoint as every other sender rather than going out unseen by plugins.
+    it('runs the message:sending gate tagged as an edit', async () => {
+      await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' });
+
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'message:sending',
+        expect.objectContaining({ type: 'edit' }),
+        expect.any(Object),
+      );
+    });
+
+    it('lets a plugin block an edit before the engine is called', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({ continue: false, data: {} });
+
+      await expect(
+        service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' }),
+      ).rejects.toThrow('Message sending blocked by plugin');
+
+      expect(mockEngine.editMessage).not.toHaveBeenCalled();
+      expect(sessionService.recordOutboundMessageEdit).not.toHaveBeenCalled();
+    });
+
+    it('threads a plugin-rewritten edit body through to the engine and the stored row', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { input: { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'redacted' } },
+      });
+
+      await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'secret' });
+
+      expect(mockEngine.editMessage).toHaveBeenCalledWith('test@c.us', 'wa-msg-1', 'redacted');
+      expect(sessionService.recordOutboundMessageEdit).toHaveBeenCalledWith('sess-1', 'wa-msg-1', 'redacted');
+    });
   });
 
   /**

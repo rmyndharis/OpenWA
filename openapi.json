@@ -2052,7 +2052,10 @@
             }
           },
           "400": {
-            "description": "Session not active or invalid request"
+            "description": "Session not active, invalid request, or the send was blocked by a plugin"
+          },
+          "403": {
+            "description": "The message was not sent by this account, or the engine refused the edit"
           },
           "404": {
             "description": "Message not found"
@@ -3066,6 +3069,9 @@
         "responses": {
           "200": {
             "description": "Joined the group"
+          },
+          "400": {
+            "description": "Invalid or expired invite code, or session is not started"
           }
         },
         "summary": "Join a group via invite code",
@@ -3147,7 +3153,13 @@
             "description": "Group settings updated"
           },
           "400": {
-            "description": "No setting provided"
+            "description": "No setting provided, or a value is not a boolean"
+          },
+          "403": {
+            "description": "The engine refused the change (the account is not a group admin)"
+          },
+          "404": {
+            "description": "Group not found"
           },
           "501": {
             "description": "The active engine does not support a requested setting"
@@ -3585,6 +3597,12 @@
         "responses": {
           "200": {
             "description": "Profile name updated"
+          },
+          "400": {
+            "description": "Session is not started"
+          },
+          "403": {
+            "description": "The engine refused the name change"
           }
         },
         "summary": "Set the account display name",
@@ -3620,6 +3638,9 @@
         "responses": {
           "200": {
             "description": "Profile status updated"
+          },
+          "400": {
+            "description": "Session is not started"
           }
         },
         "summary": "Set the account about/status text",
@@ -3657,7 +3678,13 @@
             "description": "Profile picture updated"
           },
           "400": {
-            "description": "Neither url nor base64 provided, or base64 without mimetype"
+            "description": "Neither url nor base64 provided, base64 without mimetype, or session is not started"
+          },
+          "403": {
+            "description": "The engine refused the picture change"
+          },
+          "413": {
+            "description": "Decoded base64 image exceeds the configured media cap"
           }
         },
         "summary": "Set the account profile picture (URL or base64 image)",

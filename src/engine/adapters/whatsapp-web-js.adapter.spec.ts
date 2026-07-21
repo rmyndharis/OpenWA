@@ -2097,6 +2097,39 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
     expect(onCall).not.toHaveBeenCalled();
   });
 
+  // The upstream handler is driven by a patched internalCallMap.set(), which fires on every write
+  // to that map rather than only on insertion, so the same ringing call reaches the adapter more
+  // than once.
+  it('emits once per call id even when the same call is signalled repeatedly', () => {
+    const { onCall, client } = wireCallHandler();
+
+    client.emit('call', liveCall());
+    client.emit('call', liveCall());
+    client.emit('call', liveCall());
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('still emits for a genuinely different call id', () => {
+    const { onCall, client } = wireCallHandler();
+
+    client.emit('call', liveCall({ id: 'CALL1' }));
+    client.emit('call', liveCall({ id: 'CALL2' }));
+
+    expect(onCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a repeatedly-signalled call rejectable (the repeat refreshes the cached entry)', async () => {
+    const { adapter, client } = wireCallHandler();
+    const call = liveCall();
+
+    client.emit('call', call);
+    client.emit('call', call);
+
+    await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
+    expect(call.reject).toHaveBeenCalledTimes(1);
+  });
+
   it.each([{ id: '' }, { id: undefined }, { from: '' }, { from: undefined }, null])(
     'drops a malformed call (%o) — nothing emitted, nothing cached',
     async malformed => {
@@ -3270,6 +3303,30 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
     expect(onDisconnected).toHaveBeenCalledTimes(1);
     expect(onDisconnected).toHaveBeenCalledWith('Page transport error during getContacts');
     expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  // joinGroupViaInviteCode answers 400 for every acceptInvite failure, because a refused invite is
+  // indistinguishable from a page error at that call site. The 400 stays, but a dead page still has
+  // to reach the liveness path rather than being reported purely as the caller's bad invite code.
+  it('detects a transport error during joinGroupViaInviteCode (still a 400 to the caller)', async () => {
+    const acceptInvite = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
+    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+
+    await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(InvalidInviteCodeError);
+
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith('Page transport error during joinGroupViaInviteCode');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  it('does not report an ordinary refused invite as a disconnect', async () => {
+    const acceptInvite = jest.fn().mockRejectedValue(new Error('Evaluation failed: invite revoked'));
+    const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
+
+    await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
+
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
   });
 
   it('reports nothing when the failure happens during an intentional teardown', async () => {

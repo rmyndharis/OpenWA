@@ -900,7 +900,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
     let jid: string | undefined;
     try {
       jid = await this.sock!.groupAcceptInvite(inviteCode);
-    } catch {
+    } catch (error) {
+      // A refused invite and a socket/protocol failure both land here, and only the first is the
+      // caller's fault. The client-facing answer stays 400, but the original error is kept in the
+      // log: without it an upstream change turns every join into an unexplained 400.
+      this.logger.warn('Failed to accept group invite', { error: String(error) });
       jid = undefined;
     }
     if (!jid) {
@@ -1502,7 +1506,13 @@ export class BaileysAdapter implements IWhatsAppEngine {
           continue;
         }
       }
-      this.cacheLiveCall(call.id, call.from);
+      // Baileys maps both the `offer` and `offer_notice` wire tags onto status 'offer' carrying the
+      // same call-id, so a single call can reach this loop more than once. Cache first and emit
+      // only for an id not already live, otherwise one call surfaces as several `call.received`
+      // events.
+      if (!this.cacheLiveCall(call.id, call.from)) {
+        continue;
+      }
       const payload: IncomingCallEvent = {
         callId: call.id,
         // callerPn is the phone-dialect twin of a lid caller: prefer it so the neutral caller id
@@ -1526,15 +1536,21 @@ export class BaileysAdapter implements IWhatsAppEngine {
    * call drops already-expired entries, so a session that receives calls but never rejects them
    * can't grow the map without bound; an entry that never sees another call is tiny and is dropped
    * on teardown (disconnect/logout/destroy) or at the next call. No per-entry timer to clean up.
+   *
+   * Returns true when `callId` was not already ringing, which is what makes `call.received` fire
+   * once per call rather than once per upstream offer tag. A repeat offer still refreshes the
+   * entry, so a long-ringing call stays rejectable for a full TTL from the most recent signal.
    */
-  private cacheLiveCall(callId: string, callFrom: string): void {
+  private cacheLiveCall(callId: string, callFrom: string): boolean {
     const now = Date.now();
     for (const [id, entry] of this.liveCalls) {
       if (entry.expiresAt <= now) {
         this.liveCalls.delete(id);
       }
     }
+    const isNewCall = !this.liveCalls.has(callId);
     this.liveCalls.set(callId, { callFrom, expiresAt: now + BaileysAdapter.LIVE_CALL_TTL_MS });
+    return isNewCall;
   }
 
   /**

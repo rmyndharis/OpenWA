@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sendMessage` with an `edit` key). Attempting to edit another sender's message fails with `403`,
   an unknown message/chat with `404`, and the stored record's body is updated through the same
   serialized mutation queue as inbound edit events. `message.edited` continues to cover inbound edits.
+  An edit passes the `message:sending` plugin gate like every other sender, so a plugin can rewrite
+  or block the replacement text.
 - **Live group events.** `group.join`, `group.leave`, and `group.update` are now actually
   dispatched — to webhooks (HMAC-signed, with stable idempotency keys) and to Socket.IO
   subscribers — on both engines. They were previously accepted in subscriptions but never emitted
@@ -51,12 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`announce`, `locked`) and the disappearing-message timer (`ephemeralSeconds`, Baileys only — it
   returns a documented `501` on whatsapp-web.js, which has no such API). A settings patch applies
   the timer first, so a `501` can never silently follow an already-applied flag change, and
-  explicit `null` fields are rejected with `400`.
+  explicit `null` fields are rejected with `400`. `announce` and `locked` accept only a real boolean
+  or the exact strings `"true"`/`"false"`; any other spelling is rejected with `400` rather than
+  being interpreted, so a form-encoded `announce=false` can never restrict a group.
 - **Own-profile management.** `PUT /api/sessions/:sessionId/profile/name`, `/status`, and
   `/picture` set the linked account's display name, about text, and profile picture on both engines.
 - **Incoming-call handling.** A new `call.received` webhook + Socket.IO event fires when an
   incoming call starts ringing (both engines; stale offers replayed from an offline window and the
-  account's own outgoing calls are not emitted). `POST /api/sessions/:sessionId/calls/:callId/reject`
+  account's own outgoing calls are not emitted). It fires once per call: both engines signal a
+  ringing call more than once (whatsapp-web.js on every write to its internal call map, Baileys via
+  the `offer` and `offer_notice` tags), and only the first is dispatched.
+  `POST /api/sessions/:sessionId/calls/:callId/reject`
   rejects a ringing call, and the per-session `config.autoRejectCalls: true` flag (settable at
   session creation) rejects every incoming call automatically — the event is still dispatched
   first. Unknown or expired call ids return `404`.
@@ -64,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first-party Integration Fabric plugins (Chatwoot, Typebot, …) in the
   [OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins) repo, and
   `docs/23-community-integrations.md` clarifies that it lists community projects only.
+
+### Changed
+
+- **Status posts now pass the `message:sending` plugin gate.** `POST /api/sessions/:sessionId/status/{text,image,video}`
+  publish content from the linked account, but were the only content-bearing senders that did not
+  consult plugins first. They now run the same gate as chat sends, tagged `status-text`,
+  `status-image` and `status-video`, with the hook context `source` set to `StatusService` so a
+  plugin can distinguish a status post from a chat send. **A plugin that blocks broadly will now
+  also block status posts, where it previously had no visibility into them.**
 
 ### Fixed
 

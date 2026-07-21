@@ -38,6 +38,7 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiBody({ type: JoinGroupDto })
   @ApiResponse({ status: 200, description: 'Joined the group' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired invite code, or session is not started' })
   async join(@Param('sessionId') sessionId: string, @Body() dto: JoinGroupDto) {
     const groupId = await this.groupService.joinGroupViaInviteCode(sessionId, dto.inviteCode);
     return { success: true, groupId };
@@ -60,7 +61,9 @@ export class GroupController {
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })
   @ApiResponse({ status: 200, description: 'Group settings updated' })
-  @ApiResponse({ status: 400, description: 'No setting provided' })
+  @ApiResponse({ status: 400, description: 'No setting provided, or a value is not a boolean' })
+  @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
+  @ApiResponse({ status: 404, description: 'Group not found' })
   @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
   async updateSettings(
     @Param('sessionId') sessionId: string,
