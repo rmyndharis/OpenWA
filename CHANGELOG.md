@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The chat list no longer shows a stray `0` next to every conversation.** Each row in the Chats
+  sidebar rendered a literal `0` where the last message's time belongs, on every chat. A conversation
+  with no messages reports a timestamp of zero, and the check that was meant to hide the time in that
+  case ended up displaying the zero itself. The time is now simply omitted when there is no last
+  message, as intended. The unread-count badge was unaffected.
+
 - **A message send that is retried after a recipient-address change is now recorded in the log.** When
   whatsapp-web.js reports that a contact's cached address is stale, the gateway re-resolves the address
   and sends again. That retry was silent, so in the case where the engine reports a failure for a
