@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Resolved every known advisory in the dependency tree (17 → 0, including one critical).** The
+  critical one was a set of path-traversal and symlink issues in `node-tar`, reached only through
+  `sqlite3@5` → `node-gyp` → `tar`. `sqlite3` moves to `6.0.1`, which drops the `node-gyp`
+  dependency entirely in favour of `prebuild-install` and pulls a patched `tar@7`; `typeorm` moves
+  to `0.3.31`, the first release declaring `sqlite3@^6` as a supported peer. `shell-quote` (reached
+  through the `concurrently` dev dependency, and with no upstream fix available on any release
+  line) is pinned forward with an `overrides` entry.
+
+  The bundled SQLite build advances to 3.52.0. Migrations, the FTS5 full-text search tables, both
+  database connections and a full boot were verified against the new driver.
+
+### Changed
+
+- **The security audit runs as its own CI job.** `npm audit` reports against the advisory database
+  rather than against the diff, so a newly published advisory turns red on unrelated pull requests.
+  While it was the first step of the Lint job, that failure aborted the job before ESLint, the
+  type-check, the format check, the version-consistency check and the OpenAPI drift gate had run —
+  so an advisory silently switched off every code-quality gate at once. It is still blocking (the
+  build job depends on it) but can no longer mask an unrelated result.
+
 ### Added
 
 - **Outbound message edit.** `POST /api/sessions/:sessionId/messages/edit` edits the text of a
