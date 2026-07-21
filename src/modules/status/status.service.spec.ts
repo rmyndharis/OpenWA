@@ -116,5 +116,56 @@ describe('StatusService media validation and selection', () => {
 
       expect(engine.postTextStatus).toHaveBeenCalledWith('redacted', { recipients: [] });
     });
+
+    it('sends plugin-rewritten media rather than the original, for image and video', async () => {
+      hookManager.execute.mockResolvedValue({
+        continue: true,
+        data: { input: { media: { mimetype: 'image/png', data: 'UkVX' }, options: { recipients: [] } } },
+      });
+
+      await service.postImageStatus('s1', { base64: 'QUJD', mimetype: 'image/png' }, { recipients: [] });
+      await service.postVideoStatus('s1', { base64: 'QUJD', mimetype: 'video/mp4' }, { recipients: [] });
+
+      expect(engine.postImageStatus).toHaveBeenCalledWith({ mimetype: 'image/png', data: 'UkVX' }, { recipients: [] });
+      expect(engine.postVideoStatus).toHaveBeenCalledWith({ mimetype: 'image/png', data: 'UkVX' }, { recipients: [] });
+    });
+
+    // The chat path gates first and validates afterwards, so a rewritten chat payload is always
+    // re-checked. The status path validates the caller's input before the gate, so the gate's
+    // OUTPUT has to be re-checked explicitly or a plugin rewrite becomes a way past the byte cap.
+    it('re-applies the media byte cap to a plugin rewrite', async () => {
+      const previous = process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+      process.env.MEDIA_DOWNLOAD_MAX_BYTES = '2';
+      hookManager.execute.mockResolvedValue({
+        continue: true,
+        data: { input: { media: { mimetype: 'image/png', data: 'QUJDREVGRw' }, options: { recipients: [] } } },
+      });
+      try {
+        // The caller's own payload is within the cap; only the plugin's replacement exceeds it.
+        await expect(
+          service.postImageStatus('s1', { base64: 'QQ', mimetype: 'image/png' }, { recipients: [] }),
+        ).rejects.toBeInstanceOf(PayloadTooLargeException);
+        expect(engine.postImageStatus).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete process.env.MEDIA_DOWNLOAD_MAX_BYTES;
+        else process.env.MEDIA_DOWNLOAD_MAX_BYTES = previous;
+      }
+    });
+
+    it('strips a data-URI prefix a plugin reintroduces', async () => {
+      hookManager.execute.mockResolvedValue({
+        continue: true,
+        data: {
+          input: {
+            media: { mimetype: 'image/png', data: 'data:image/png;base64,UkVX' },
+            options: { recipients: [] },
+          },
+        },
+      });
+
+      await service.postImageStatus('s1', { base64: 'QUJD', mimetype: 'image/png' }, { recipients: [] });
+
+      expect(engine.postImageStatus).toHaveBeenCalledWith({ mimetype: 'image/png', data: 'UkVX' }, { recipients: [] });
+    });
   });
 });

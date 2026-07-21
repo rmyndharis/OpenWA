@@ -107,4 +107,18 @@ describe('group DTO validation', () => {
       expect((await errorsFor(GroupSettingsDto, { locked: value })).length).toBeGreaterThan(0);
     }
   });
+
+  // Same class of hole as the booleans above: Number('') and Number('  ') are both 0, and 0 is a
+  // meaningful value here (it turns disappearing messages OFF), so an empty form field must not be
+  // read as a deliberate request to disable the timer.
+  it('GroupSettingsDto rejects an empty ephemeralSeconds instead of reading it as 0', async () => {
+    for (const value of ['', '   ']) {
+      expect((await errorsFor(GroupSettingsDto, { ephemeralSeconds: value })).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('GroupSettingsDto still accepts a numeric-string ephemeralSeconds from a form body', () => {
+    expect(instanceFor(GroupSettingsDto, { ephemeralSeconds: '86400' }).ephemeralSeconds).toBe(86400);
+    expect(instanceFor(GroupSettingsDto, { ephemeralSeconds: '0' }).ephemeralSeconds).toBe(0);
+  });
 });

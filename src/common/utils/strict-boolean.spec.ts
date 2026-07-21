@@ -2,7 +2,8 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { IsBoolean, ValidateIf } from 'class-validator';
-import { ToStrictBoolean } from './strict-boolean';
+import { IsInt } from 'class-validator';
+import { ToStrictBoolean, ToStrictNumber } from './strict-boolean';
 
 // Mirrors the real pipe: whitelist + forbidNonWhitelisted from src/main.ts, and the
 // enableImplicitConversion transform option from src/config/app-validation.ts. Leaving the
@@ -70,5 +71,53 @@ describe('ToStrictBoolean', () => {
       expect(instance.flag).toBe(true);
       expect(errors).toHaveLength(0);
     }
+  });
+});
+
+class NumberSubject {
+  @ToStrictNumber()
+  @ValidateIf((o: NumberSubject) => o.count !== undefined)
+  @IsInt()
+  count?: number;
+}
+
+class UnguardedNumber {
+  @ValidateIf((o: UnguardedNumber) => o.count !== undefined)
+  @IsInt()
+  count?: number;
+}
+
+describe('ToStrictNumber', () => {
+  it('preserves real numbers and converts fully-numeric strings', async () => {
+    for (const [input, expected] of [
+      [7, 7],
+      [0, 0],
+      ['86400', 86400],
+      ['0', 0],
+    ] as const) {
+      const { instance, errors } = await run(NumberSubject, { count: input });
+      expect(instance.count).toBe(expected);
+      expect(errors).toHaveLength(0);
+    }
+  });
+
+  it('rejects blank and non-numeric strings instead of reading them as 0', async () => {
+    for (const value of ['', '   ', 'abc', '1abc']) {
+      const { errors } = await run(NumberSubject, { count: value });
+      expect(errors.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('leaves an absent property absent', async () => {
+    const { instance, errors } = await run(NumberSubject, {});
+    expect(instance.count).toBeUndefined();
+    expect(errors).toHaveLength(0);
+  });
+
+  // The behaviour the decorator exists to prevent: a blank form field arriving as a valid zero.
+  it('documents the unguarded behaviour it replaces: a blank string becomes 0', async () => {
+    const { instance, errors } = await run(UnguardedNumber, { count: '' });
+    expect(instance.count).toBe(0);
+    expect(errors).toHaveLength(0);
   });
 });

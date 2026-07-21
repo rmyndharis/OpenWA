@@ -10,7 +10,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+import { ToStrictBoolean, ToStrictNumber } from '../../../common/utils/strict-boolean';
 
 export class CreateGroupDto {
   @ApiProperty({ description: 'Group subject/name', maxLength: 100 })
@@ -84,6 +84,7 @@ export class GroupSettingsDto {
       'Disappearing-messages timer in seconds; 0 disables. Known values: 86400 (24h), 604800 (7d), 7776000 (90d)',
     minimum: 0,
   })
+  @ToStrictNumber()
   @ValidateIf((o: GroupSettingsDto) => o.ephemeralSeconds !== undefined)
   @IsInt()
   @Min(0)

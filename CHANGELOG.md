@@ -55,7 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the timer first, so a `501` can never silently follow an already-applied flag change, and
   explicit `null` fields are rejected with `400`. `announce` and `locked` accept only a real boolean
   or the exact strings `"true"`/`"false"`; any other spelling is rejected with `400` rather than
-  being interpreted, so a form-encoded `announce=false` can never restrict a group.
+  being interpreted, so a form-encoded `announce=false` can never restrict a group. `ephemeralSeconds`
+  is read the same way — a blank value is a `400`, not a silent `0` that would switch the
+  disappearing-message timer off.
 - **Own-profile management.** `PUT /api/sessions/:sessionId/profile/name`, `/status`, and
   `/picture` set the linked account's display name, about text, and profile picture on both engines.
 - **Incoming-call handling.** A new `call.received` webhook + Socket.IO event fires when an
@@ -78,8 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publish content from the linked account, but were the only content-bearing senders that did not
   consult plugins first. They now run the same gate as chat sends, tagged `status-text`,
   `status-image` and `status-video`, with the hook context `source` set to `StatusService` so a
-  plugin can distinguish a status post from a chat send. **A plugin that blocks broadly will now
-  also block status posts, where it previously had no visibility into them.**
+  plugin can distinguish a status post from a chat send. A blocked post returns `400`, now declared
+  on all three operations. A plugin may also rewrite the post; a rewritten media payload is
+  re-checked against the data-URI and `MEDIA_DOWNLOAD_MAX_BYTES` guards before it reaches the engine.
+  **Two notes for plugin authors:** a plugin that blocks broadly will now also block status posts,
+  where it previously had no visibility into them; and the gate `input` for a status post is **not**
+  a send DTO — it carries no `chatId`, but `{ text, options }` or `{ media: { mimetype, data }, options }`.
+  A handler that reads `input.chatId` unconditionally should branch on `source` or `type` first.
 
 ### Fixed
 

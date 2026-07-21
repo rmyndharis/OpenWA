@@ -2119,7 +2119,7 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
     expect(onCall).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps a repeatedly-signalled call rejectable (the repeat refreshes the cached entry)', async () => {
+  it('a deduplicated repeat does not evict the live call', async () => {
     const { adapter, client } = wireCallHandler();
     const call = liveCall();
 
@@ -2128,6 +2128,39 @@ describe('WhatsAppWebJsAdapter call event + rejectCall', () => {
 
     await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
     expect(call.reject).toHaveBeenCalledTimes(1);
+  });
+
+  // Discriminating on the REFRESH specifically: the second signal lands 90s in, so the entry is
+  // only expired at 150s if its expiry was never extended. LIVE_CALL_TTL_MS is 120s.
+  it('a repeat extends the rejectable window from the latest signal, not the first', async () => {
+    jest.useFakeTimers();
+    try {
+      const { adapter, client } = wireCallHandler();
+      const call = liveCall();
+
+      client.emit('call', call);
+      jest.advanceTimersByTime(90_000);
+      client.emit('call', call);
+      jest.advanceTimersByTime(60_000); // 150s after the first signal, 60s after the second
+
+      await expect(adapter.rejectCall('CALL1')).resolves.toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a call still expires when no repeat arrives', async () => {
+    jest.useFakeTimers();
+    try {
+      const { adapter, client } = wireCallHandler();
+
+      client.emit('call', liveCall());
+      jest.advanceTimersByTime(150_000);
+
+      await expect(adapter.rejectCall('CALL1')).rejects.toBeInstanceOf(CallNotFoundError);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it.each([{ id: '' }, { id: undefined }, { from: '' }, { from: undefined }, null])(

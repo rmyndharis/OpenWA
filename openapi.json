@@ -4256,6 +4256,9 @@
         "responses": {
           "201": {
             "description": "Text status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
+          },
+          "400": {
+            "description": "Invalid request, or the post was blocked by a plugin."
           }
         },
         "summary": "Post a text status",
@@ -4290,6 +4293,9 @@
         "responses": {
           "201": {
             "description": "Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
+          },
+          "400": {
+            "description": "Neither url nor base64 provided, or the post was blocked by a plugin."
           },
           "413": {
             "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."
@@ -4327,6 +4333,9 @@
         "responses": {
           "201": {
             "description": "Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts to the account's status-privacy audience."
+          },
+          "400": {
+            "description": "Neither url nor base64 provided, or the post was blocked by a plugin."
           },
           "413": {
             "description": "Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES."

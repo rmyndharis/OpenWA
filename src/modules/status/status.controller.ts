@@ -34,6 +34,7 @@ export class StatusController {
       'Text status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
       "to the account's status-privacy audience.",
   })
+  @ApiResponse({ status: 400, description: 'Invalid request, or the post was blocked by a plugin.' })
   async sendTextStatus(@Param('sessionId') sessionId: string, @Body() dto: SendTextStatusDto) {
     return this.statusService.postTextStatus(sessionId, dto.text, {
       recipients: dto.recipients,
@@ -51,6 +52,10 @@ export class StatusController {
       'Image status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
       "to the account's status-privacy audience.",
   })
+  @ApiResponse({
+    status: 400,
+    description: 'Neither url nor base64 provided, or the post was blocked by a plugin.',
+  })
   @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
   async sendImageStatus(@Param('sessionId') sessionId: string, @Body() dto: SendImageStatusDto) {
     return this.statusService.postImageStatus(sessionId, dto.image, {
@@ -67,6 +72,10 @@ export class StatusController {
     description:
       'Video status posted. The recipients allow-list is honored on Baileys only; whatsapp-web.js broadcasts ' +
       "to the account's status-privacy audience.",
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Neither url nor base64 provided, or the post was blocked by a plugin.',
   })
   @ApiResponse({ status: 413, description: 'Base64 media exceeds MEDIA_DOWNLOAD_MAX_BYTES.' })
   async sendVideoStatus(@Param('sessionId') sessionId: string, @Body() dto: SendVideoStatusDto) {

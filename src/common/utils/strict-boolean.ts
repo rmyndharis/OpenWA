@@ -17,6 +17,10 @@ import { Transform, TransformFnParams } from 'class-transformer';
  *
  * Only exact `'true'` / `'false'` are mapped. Anything else keeps its original value and fails
  * validation — for a permission flag, an ambiguous spelling is safer refused than guessed.
+ *
+ * Because it reads `obj` and never `value`, it does NOT compose: class-transformer threads each
+ * `@Transform` result into the next, and this one discards whatever a previously-registered
+ * transform produced. Do not stack another `@Transform` on a property that uses it.
  */
 export function coerceStrictBoolean({ obj, key }: Pick<TransformFnParams, 'obj' | 'key'>): unknown {
   const raw = (obj as Record<string, unknown> | undefined)?.[key];
@@ -28,3 +32,25 @@ export function coerceStrictBoolean({ obj, key }: Pick<TransformFnParams, 'obj' 
 
 /** Property decorator form of {@link coerceStrictBoolean}. Pair it with `@IsBoolean()`. */
 export const ToStrictBoolean = (): PropertyDecorator => Transform(coerceStrictBoolean);
+
+/**
+ * The numeric counterpart, for the same reason and with the same `obj[key]` trick.
+ *
+ * Implicit conversion applies `Number(value)` to a `number`-typed property, and `Number('')` and
+ * `Number('  ')` are both `0` — so an empty form field arrives as a real, valid zero rather than
+ * being rejected as missing. On a field where `0` is itself meaningful (a disappearing-message
+ * timer, where `0` means "off") that silently performs an action the caller never asked for.
+ *
+ * Only a genuine number or a string that is entirely a finite number is converted. Everything else
+ * keeps its original value and fails `@IsInt()`/`@IsNumber()`.
+ */
+export function coerceStrictNumber({ obj, key }: Pick<TransformFnParams, 'obj' | 'key'>): unknown {
+  const raw = (obj as Record<string, unknown> | undefined)?.[key];
+  if (typeof raw === 'number') return raw;
+  if (typeof raw !== 'string' || raw.trim() === '') return raw;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : raw;
+}
+
+/** Property decorator form of {@link coerceStrictNumber}. Pair it with `@IsInt()` / `@IsNumber()`. */
+export const ToStrictNumber = (): PropertyDecorator => Transform(coerceStrictNumber);
