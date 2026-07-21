@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { Client, LocalAuth, MessageMedia } from 'whatsapp-web.js';
+import { Client, LocalAuth, Message, MessageMedia } from 'whatsapp-web.js';
 import * as qrcode from 'qrcode';
 import * as path from 'path';
 import {
@@ -28,6 +28,7 @@ import {
   PaginatedProducts,
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
+import { MessageNotSentError } from '../errors/message-not-sent.error';
 import {
   GroupChat,
   MessageWithReactions,
@@ -42,6 +43,11 @@ export interface WhatsAppWebJsConfig {
   puppeteer?: {
     headless?: boolean;
     args?: string[];
+    /**
+     * Browser to launch. When unset, falls back to PUPPETEER_EXECUTABLE_PATH and then to whichever
+     * build Puppeteer resolves for itself.
+     */
+    executablePath?: string;
   };
   // Phase 3: Proxy per session
   proxy?: {
@@ -88,6 +94,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         );
       }
 
+      // Resolved here because both creation paths (the engine plugin and the factory fallback) converge
+      // on this adapter. Without it, PUPPETEER_EXECUTABLE_PATH is silently ignored and Puppeteer insists
+      // on its own downloaded build — which fails outright on hosts that only have a system Chrome.
+      const executablePath =
+        this.config.puppeteer?.executablePath || process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+
+      if (executablePath) {
+        this.logger.log(`Launching browser from ${executablePath}`);
+      }
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: this.config.sessionId,
@@ -96,6 +112,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         puppeteer: {
           headless: this.config.puppeteer?.headless ?? true,
           args: puppeteerArgs,
+          ...(executablePath ? { executablePath } : {}),
         },
       });
 
@@ -269,13 +286,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.pushName;
   }
 
-  async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
-    this.ensureReady();
-    const msg = await this.client!.sendMessage(chatId, text);
+  /**
+   * whatsapp-web.js returns undefined from a send it could not complete instead of throwing, so every
+   * send has to be checked before its result is read.
+   */
+  private toMessageResult(msg: Message | undefined, chatId: string): MessageResult {
+    if (!msg) {
+      throw new MessageNotSentError(chatId);
+    }
+
     return {
       id: msg.id._serialized,
       timestamp: msg.timestamp,
     };
+  }
+
+  async sendTextMessage(chatId: string, text: string): Promise<MessageResult> {
+    this.ensureReady();
+    const msg = await this.client!.sendMessage(chatId, text);
+    return this.toMessageResult(msg, chatId);
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -316,10 +345,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       caption: media.caption,
     });
 
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg, chatId);
   }
 
   async getContacts(): Promise<Contact[]> {
@@ -391,10 +417,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       address: location.address || '',
     });
     const msg = await this.client!.sendMessage(chatId, loc);
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg, chatId);
   }
 
   async sendContactMessage(chatId: string, contact: ContactCard): Promise<MessageResult> {
@@ -411,10 +434,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.client!.sendMessage(chatId, vcard, {
       parseVCards: true,
     });
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg, chatId);
   }
 
   async sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
@@ -434,10 +454,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     const msg = await this.client!.sendMessage(chatId, messageMedia, {
       sendMediaAsSticker: true,
     });
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg, chatId);
   }
 
   async replyToMessage(chatId: string, quotedMsgId: string, text: string): Promise<MessageResult> {
@@ -452,10 +469,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
 
     const msg = await quotedMsg.reply(text);
-    return {
-      id: msg.id._serialized,
-      timestamp: msg.timestamp,
-    };
+    return this.toMessageResult(msg, chatId);
   }
 
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {

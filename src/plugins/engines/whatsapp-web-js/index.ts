@@ -11,6 +11,7 @@ export interface WhatsAppWebJsConfig {
   sessionDataPath?: string;
   headless?: boolean;
   puppeteerArgs?: string[];
+  executablePath?: string;
 }
 
 export class WhatsAppWebJsPlugin implements IEnginePlugin {
@@ -51,6 +52,8 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
       puppeteer: {
         headless,
         args: puppeteerArgs,
+        // Undefined here falls through to PUPPETEER_EXECUTABLE_PATH inside the adapter.
+        executablePath: this.context?.config.executablePath as string | undefined,
       },
       proxy: proxyUrl
         ? {

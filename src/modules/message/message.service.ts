@@ -6,6 +6,7 @@ import { SendTextMessageDto, SendMediaMessageDto, MessageResponseDto } from './d
 import { MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
+import { MessageNotSentError } from '../../engine/errors/message-not-sent.error';
 
 export interface GetMessagesOptions {
   chatId?: string;
@@ -21,6 +22,15 @@ export class MessageService {
     private readonly sessionService: SessionService,
     private readonly hookManager: HookManager,
   ) {}
+
+  /**
+   * A message WhatsApp would not send is the caller's problem, not a server fault: the number may not be
+   * registered, or the chat id may be malformed. Answer 400 with the reason rather than letting it surface
+   * as a bare 500, which tells the caller nothing about what to change.
+   */
+  private toHttpError(error: unknown): unknown {
+    return error instanceof MessageNotSentError ? new BadRequestException(error.message) : error;
+  }
 
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
     // Execute hook before sending - plugins can modify or block
@@ -78,7 +88,7 @@ export class MessageService {
         { sessionId, source: 'MessageService' },
       );
 
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -109,7 +119,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -140,7 +150,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -170,7 +180,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -201,7 +211,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -265,7 +275,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -301,7 +311,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -331,7 +341,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -364,7 +374,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 
@@ -397,7 +407,7 @@ export class MessageService {
     } catch (error) {
       message.status = MessageStatus.FAILED;
       await this.messageRepository.save(message);
-      throw error;
+      throw this.toHttpError(error);
     }
   }
 

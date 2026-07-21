@@ -99,6 +99,7 @@ export class EngineFactory implements OnModuleInit {
       puppeteer: {
         headless: this.configService.get<boolean>('engine.puppeteer.headless') ?? true,
         args: this.configService.get<string[]>('engine.puppeteer.args') ?? ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: this.configService.get<string>('engine.puppeteer.executablePath'),
       },
       proxy: options.proxyUrl
         ? {
