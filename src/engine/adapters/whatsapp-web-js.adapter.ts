@@ -1456,6 +1456,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       if (fresh === to) {
         throw err;
       }
+      // The first send threw, but wwjs can throw after the message is already on the wire — so this
+      // retry may produce a duplicate. Log it: without this the second copy is invisible.
+      this.logger.warn('Send retried against a re-resolved id after "No LID for user"; may duplicate', {
+        chatId,
+        staleId: to,
+        freshId: fresh,
+      });
       return send(fresh);
     }
   }
