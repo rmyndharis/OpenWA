@@ -76,9 +76,22 @@ export class SendMediaMessageDto {
 }
 
 export class MessageResponseDto {
-  @ApiProperty({ example: 'true_628123456789@c.us_3EB0123456789' })
-  messageId: string;
+  @ApiProperty({
+    example: 'true_628123456789@c.us_3EB0123456789',
+    nullable: true,
+    description: 'Null when the send could not be confirmed — see `unconfirmed`.',
+  })
+  messageId: string | null;
 
   @ApiProperty({ example: 1706868000 })
   timestamp: number;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'Present when WhatsApp accepted the send but no message could be resolved to confirm it. The ' +
+      'message has very likely been delivered, but there is no id to track it by. Do not retry on this ' +
+      'alone — the recipient may already have it.',
+  })
+  unconfirmed?: boolean;
 }

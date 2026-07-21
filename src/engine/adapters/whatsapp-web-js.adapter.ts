@@ -28,7 +28,6 @@ import {
   PaginatedProducts,
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
-import { MessageNotSentError } from '../errors/message-not-sent.error';
 import {
   GroupChat,
   MessageWithReactions,
@@ -287,12 +286,29 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   /**
-   * whatsapp-web.js returns undefined from a send it could not complete instead of throwing, so every
-   * send has to be checked before its result is read.
+   * whatsapp-web.js returns undefined from a send rather than throwing, and that does NOT mean the
+   * message failed. Its injected sendMessage dispatches through `addAndSendMsgToChat` and only then looks
+   * the message back up by key; against current WhatsApp Web builds that lookup returns nothing, so a
+   * successfully delivered message still comes back undefined. Verified by delivery to a real handset
+   * while this returned falsy.
+   *
+   * The library collapses "chat could not be opened" and "sent but not found" into the same undefined, so
+   * they cannot be told apart here. Reporting failure would be wrong in the common case and, for
+   * alerting, would re-send on every pass something the recipient already has. Report it as unconfirmed
+   * instead and let the caller decide.
    */
   private toMessageResult(msg: Message | undefined, chatId: string): MessageResult {
     if (!msg) {
-      throw new MessageNotSentError(chatId);
+      this.logger.warn(
+        `Send to ${chatId} returned no message. It has probably been delivered but cannot be confirmed, ` +
+          `so no message id is available.`,
+      );
+
+      return {
+        id: null,
+        timestamp: Math.floor(Date.now() / 1000),
+        unconfirmed: true,
+      };
     }
 
     return {

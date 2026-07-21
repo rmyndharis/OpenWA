@@ -10,9 +10,16 @@ export enum EngineStatus {
 }
 
 export interface MessageResult {
-  id: string;
+  /** Null when WhatsApp accepted the send but the message could not be looked up afterwards. */
+  id: string | null;
   timestamp: number;
   ack?: number;
+  /**
+   * True when the send was dispatched but no message could be resolved to confirm it. The message has
+   * very likely gone out — reporting a failure here produces false negatives, which for alerting means
+   * re-sending something the recipient already received on every subsequent pass.
+   */
+  unconfirmed?: boolean;
 }
 
 export interface MediaInput {

@@ -25,8 +25,10 @@ export class Message {
   @Index()
   sessionId: string;
 
-  @Column({ nullable: true })
-  waMessageId: string;
+  // Nullable in the database already; typed to match, since an unconfirmed send has no id to record.
+  // The column type must be explicit: TypeORM reflects `string | null` as Object, which SQLite rejects.
+  @Column({ type: 'varchar', nullable: true })
+  waMessageId: string | null;
 
   @Column()
   chatId: string;

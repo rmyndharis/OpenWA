@@ -11,7 +11,7 @@ import {
 } from './entities/message-batch.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { SessionService } from '../session/session.service';
-import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 
 // Type definitions for bulk message content
 interface BulkMessageContent {
@@ -166,8 +166,10 @@ export class BulkMessageService {
         // Send message based on type
         const messageResult = await this.sendMessage(engine, msg.chatId, msg.type, content);
 
+        // An unconfirmed send still counts as sent for the batch: it has very likely been delivered, and
+        // marking it failed would invite a retry that double-sends to the recipient. It simply has no id.
         result.status = BatchMessageStatus.SENT;
-        result.messageId = messageResult.id;
+        result.messageId = messageResult.id ?? undefined;
         result.sentAt = new Date();
         batch.progress.sent++;
         batch.progress.pending--;
@@ -252,7 +254,7 @@ export class BulkMessageService {
     chatId: string,
     type: string,
     content: BulkMessageContent,
-  ): Promise<{ id: string }> {
+  ): Promise<MessageResult> {
     switch (type) {
       case 'text':
         return engine.sendTextMessage(chatId, content.text || '');
