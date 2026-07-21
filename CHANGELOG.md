@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A message send that is retried after a recipient-address change is now recorded in the log.** When
+  whatsapp-web.js reports that a contact's cached address is stale, the gateway re-resolves the address
+  and sends again. That retry was silent, so in the case where the engine reports a failure for a
+  message it had in fact already delivered, the resulting second copy appeared nowhere in the logs and
+  could only be noticed on the recipient's phone. The retry now logs a warning naming the chat and both
+  addresses. Sending behaviour is unchanged.
+
 - **The login screen shows the gateway's actual version again.** The dashboard resolved its version
   from whichever `package.json` sat in the working directory the build ran from, which meant
   `dashboard/package.json` — a file a release never touches — rather than the root `package.json` that
