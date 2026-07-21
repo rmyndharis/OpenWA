@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The login screen shows the gateway's actual version again.** The dashboard resolved its version
+  from whichever `package.json` sat in the working directory the build ran from, which meant
+  `dashboard/package.json` — a file a release never touches — rather than the root `package.json` that
+  a release bumps. The two had drifted, so the login screen advertised an older version than the
+  gateway was running. Everywhere else in the dashboard hid this, because the sidebar replaces the
+  build-time value with the live version from the API once you are signed in; the login screen has no
+  session yet and shows the constant as-is. The version is now resolved relative to the build config
+  itself, so it no longer depends on where the build was started from.
+
 ### Changed
 
 - **A release image is only tagged after it has been proven to start.** The release workflow
