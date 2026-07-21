@@ -953,7 +953,12 @@ export function Chats() {
                           <span className="chat-item-name" title={chat.name || chat.id}>
                             {chat.name || chat.id.split('@')[0]}
                           </span>
-                          {chat.timestamp && <span className="chat-item-time">{formatChatTime(chat.timestamp)}</span>}
+                          {/* Ternary, not `&&`: a chat with no messages carries timestamp 0, and React
+                              renders the number 0 as text — so `0 && <span/>` painted a literal "0"
+                              where the time belongs, on every such row. */}
+                          {chat.timestamp ? (
+                            <span className="chat-item-time">{formatChatTime(chat.timestamp)}</span>
+                          ) : null}
                         </div>
                         <div className="chat-item-bottom">
                           <span className="chat-item-snippet" title={formatLastMessageSnippet(chat)}>
