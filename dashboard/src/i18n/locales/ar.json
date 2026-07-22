@@ -768,7 +768,11 @@
       "installed": "تم تثبيت الإضافة",
       "installFailed": "فشل التثبيت",
       "uninstalled": "تمت إزالة الإضافة",
-      "uninstallFailed": "فشلت الإزالة"
+      "uninstallFailed": "فشلت الإزالة",
+      "enableFailedTitle": "فشل التفعيل",
+      "disableFailedTitle": "فشل التعطيل",
+      "configRequiredTitle": "الإعداد مطلوب",
+      "configRequiredDesc": "املأ الحقول المطلوبة قبل التفعيل: {{fields}}"
     },
     "sessions": {
       "activationTitle": "التشغيل لـ",

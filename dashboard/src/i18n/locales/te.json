@@ -764,7 +764,11 @@
       "installed": "ప్లగిన్ ఇన్‌స్టాల్ చేయబడింది",
       "installFailed": "ఇన్‌స్టాల్ విఫలమైంది",
       "uninstalled": "ప్లగిన్ అన్‌ఇన్‌స్టాల్ చేయబడింది",
-      "uninstallFailed": "అన్‌ఇన్‌స్టాల్ విఫలమైంది"
+      "uninstallFailed": "అన్‌ఇన్‌స్టాల్ విఫలమైంది",
+      "enableFailedTitle": "ప్రారంభించడం విఫలమైంది",
+      "disableFailedTitle": "నిలిపివేయడం విఫలమైంది",
+      "configRequiredTitle": "కాన్ఫిగరేషన్ అవసరం",
+      "configRequiredDesc": "ప్రారంభించే ముందు అవసరమైన ఫీల్డ్‌లను పూరించండి: {{fields}}"
     },
     "sessions": {
       "activationTitle": "దీని కోసం రన్ చేయండి",

@@ -764,7 +764,11 @@
       "installed": "Plugin installé",
       "installFailed": "Échec de l'installation",
       "uninstalled": "Plugin désinstallé",
-      "uninstallFailed": "Échec de la désinstallation"
+      "uninstallFailed": "Échec de la désinstallation",
+      "enableFailedTitle": "Échec de l'activation",
+      "disableFailedTitle": "Échec de la désactivation",
+      "configRequiredTitle": "Configuration requise",
+      "configRequiredDesc": "Renseignez les champs obligatoires avant l'activation : {{fields}}"
     },
     "sessions": {
       "activationTitle": "Exécuter pour",

@@ -764,7 +764,11 @@
       "installed": "外掛已安裝",
       "installFailed": "安裝失敗",
       "uninstalled": "外掛已解除安裝",
-      "uninstallFailed": "解除安裝失敗"
+      "uninstallFailed": "解除安裝失敗",
+      "enableFailedTitle": "啟用失敗",
+      "disableFailedTitle": "停用失敗",
+      "configRequiredTitle": "需要設定",
+      "configRequiredDesc": "啟用前請填寫必填項：{{fields}}"
     },
     "sessions": {
       "activationTitle": "執行對象",

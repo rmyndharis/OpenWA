@@ -1635,6 +1635,54 @@ describe('SessionService', () => {
       ...overrides,
     });
 
+    // A plugin returning `continue: false` means "stop the handler chain" — the plugins after it do not
+    // run. It must NOT also delete the message from the operator's records. Honouring it here used to
+    // skip the insert, the webhook and the websocket emit, so an auto-reply plugin doing the ordinary
+    // thing (keeping other bots off a message it answered) silently erased the customer's message from
+    // history, leaving bot replies answering nothing. Both branches had no coverage at all.
+    it('still persists and dispatches an inbound message when a plugin stops the hook chain', async () => {
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, data: unknown) =>
+        Promise.resolve({ continue: event !== 'message:received', data }),
+      );
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage?.(makeMessage({ id: 'wa-swallowed-in' }));
+      await flush();
+
+      expect(messageRepository.insert).toHaveBeenCalled();
+      expect(dispatchedEvents('message.received')).toHaveLength(1);
+      expect(eventsGateway.emitMessage).toHaveBeenCalled();
+    });
+
+    it('still persists and dispatches an outgoing message when a plugin stops the hook chain', async () => {
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, data: unknown) =>
+        Promise.resolve({ continue: event !== 'message:sent', data }),
+      );
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageCreate!(makeMessage({ id: 'wa-swallowed-out', from: 'me@c.us', fromMe: true }));
+      await flush();
+
+      expect(messageRepository.insert).toHaveBeenCalled();
+      expect(dispatchedEvents('message.sent')).toHaveLength(1);
+    });
+
+    // The transform half of the contract must survive: a plugin that rewrites the payload and stops the
+    // chain still has its edit persisted, rather than the original being written back.
+    it('persists the plugin-modified payload even when that plugin stops the chain', async () => {
+      (hookManager.execute as jest.Mock).mockImplementation((event: string, data: unknown) =>
+        event === 'message:received'
+          ? Promise.resolve({ continue: false, data: { ...(data as object), body: 'rewritten by plugin' } })
+          : Promise.resolve({ continue: true, data }),
+      );
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage?.(makeMessage({ id: 'wa-rewritten', body: 'original' }));
+      await flush();
+
+      expect(messageRepository.create).toHaveBeenCalledWith(expect.objectContaining({ body: 'rewritten by plugin' }));
+    });
+
     it('dispatches message.sent exactly once for an outgoing (message_create) event', async () => {
       const callbacks = await startAndCaptureCallbacks();
       expect(typeof callbacks.onMessageCreate).toBe('function');

@@ -765,7 +765,11 @@
       "installed": "התוסף הותקן",
       "installFailed": "ההתקנה נכשלה",
       "uninstalled": "התוסף הוסר",
-      "uninstallFailed": "ההסרה נכשלה"
+      "uninstallFailed": "ההסרה נכשלה",
+      "enableFailedTitle": "ההפעלה נכשלה",
+      "disableFailedTitle": "ההשבתה נכשלה",
+      "configRequiredTitle": "נדרשת הגדרה",
+      "configRequiredDesc": "מלא את שדות החובה לפני ההפעלה: {{fields}}"
     },
     "sessions": {
       "activationTitle": "הפעלה עבור",

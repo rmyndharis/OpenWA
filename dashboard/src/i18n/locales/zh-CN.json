@@ -764,7 +764,11 @@
       "installed": "插件已安装",
       "installFailed": "安装失败",
       "uninstalled": "插件已卸载",
-      "uninstallFailed": "卸载失败"
+      "uninstallFailed": "卸载失败",
+      "enableFailedTitle": "启用失败",
+      "disableFailedTitle": "停用失败",
+      "configRequiredTitle": "需要配置",
+      "configRequiredDesc": "启用前请填写必填项：{{fields}}"
     },
     "sessions": {
       "activationTitle": "运行范围",

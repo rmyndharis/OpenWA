@@ -764,7 +764,11 @@
       "installed": "Plugin installed",
       "installFailed": "Install failed",
       "uninstalled": "Plugin uninstalled",
-      "uninstallFailed": "Uninstall failed"
+      "uninstallFailed": "Uninstall failed",
+      "enableFailedTitle": "Enable failed",
+      "disableFailedTitle": "Disable failed",
+      "configRequiredTitle": "Configuration required",
+      "configRequiredDesc": "Fill in the required field(s) before enabling: {{fields}}"
     },
     "sessions": {
       "activationTitle": "Run for",

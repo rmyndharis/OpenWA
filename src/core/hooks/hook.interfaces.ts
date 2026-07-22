@@ -70,7 +70,19 @@ export interface HookContext<T = unknown> {
 }
 
 export interface HookResult<T = unknown> {
-  continue: boolean; // false = stop processing chain
+  /**
+   * `false` stops the handler chain: the handlers registered after this one do not run.
+   *
+   * That is its whole meaning on a notification event (`message:received`, `message:sent`, …). The
+   * message has already arrived at, or left, WhatsApp — a handler can keep other plugins from acting on
+   * it, but the gateway still records it and still dispatches it to webhooks and the websocket. Use it
+   * to claim an event ("I answered this, don't let another bot answer too"), not to hide one.
+   *
+   * On a pre-action event it is a veto, because the action has not happened yet: `false` on
+   * `message:sending` blocks the send (core/hooks/sending-gate.ts), and on `webhook:before` it cancels
+   * that delivery.
+   */
+  continue: boolean;
   data?: T; // Modified data (optional)
   error?: Error; // Error to propagate
 }

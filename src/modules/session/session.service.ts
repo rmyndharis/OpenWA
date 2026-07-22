@@ -868,11 +868,23 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: id,
             source: 'Engine',
           })
-          .then(async ({ continue: shouldContinue, data: finalMessage }) => {
-            if (!shouldContinue) {
-              // A plugin handled the event and asked to stop the chain (continue: false).
-              return;
-            }
+          .then(async ({ data: finalMessage }) => {
+            // `continue: false` is deliberately NOT read here. It means "stop the handler chain", which
+            // HookManager has already done — the plugins after the one that returned it never ran. It
+            // does not mean "this message never happened".
+            //
+            // Honouring it here used to skip everything below: the message was never written to the
+            // messages table, never dispatched to webhooks, and never emitted over the websocket. An
+            // auto-reply plugin returning `false` for its ordinary purpose — keeping other bots from
+            // answering the same message — silently erased the customer's message from the operator's
+            // own history, leaving a thread of bot replies answering nothing. Nothing in the hook
+            // contract (`HookResult.continue`, docs/19) or the webhook contract (`message.received`
+            // fires when "an inbound message arrives", docs/06) hinted at that, and a sandboxed
+            // marketplace plugin could swallow a session's entire inbound traffic with no audit trail.
+            //
+            // The message has already arrived at WhatsApp. A plugin can stop other plugins from acting
+            // on it; it cannot make the gateway forget it. Pre-action hooks are where a veto belongs —
+            // `message:sending` blocks a send that has not happened yet (core/hooks/sending-gate.ts).
 
             // Persist the incoming message so the dashboard chats view can render history.
             const incoming: IncomingMessage = finalMessage;
@@ -1017,10 +1029,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: id,
             source: 'Engine',
           })
-          .then(async ({ continue: shouldContinue, data: finalMessage }) => {
-            if (!shouldContinue) {
-              return;
-            }
+          .then(async ({ data: finalMessage }) => {
+            // `continue: false` is not read here, for the same reason as the message:received path
+            // above: the send has already happened, so a plugin can stop the handler chain but cannot
+            // un-send it. Skipping the persist below dropped the operator's own outgoing message from
+            // history and from `message.sent` webhooks.
 
             // Persist the outgoing message so local history reflects sends composed on a linked phone
             // (message_create is the ONLY event those produce). It also fires for API-originated sends,

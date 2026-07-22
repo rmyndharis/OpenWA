@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Messages handled by a plugin are no longer missing from your history.** When an auto-reply plugin
+  answered a message, it told the gateway to stop passing that message to the remaining plugins — and
+  the gateway took that as a cue to forget the message entirely. It was never saved, never sent to your
+  webhooks, and never appeared in the dashboard. A chat handled by a bot therefore read as a series of
+  replies answering nothing, and any integration downstream never learned the customer had written. The
+  same applied to outgoing messages. Stopping the plugin chain now does exactly that and nothing more:
+  the message is recorded and delivered to webhooks as usual. Plugin authors: this is a behaviour change
+  if you relied on it to hide messages — see [19 — Plugin Architecture](docs/19-plugin-architecture.md).
+- **A plugin configuration that fails to save no longer reports success.** The dashboard showed "Saved"
+  and closed the dialog even when the gateway had rejected the change, so the edit appeared to have been
+  applied and was silently gone the next time the dialog was opened. The failure and its reason are now
+  shown. The same fix applies to a plugin that fails to disable, which previously reported nothing at
+  all.
+
+### Fixed
+
 - **A plugin that ships its own settings editor no longer shows two editors at once.** When a plugin
   provided a custom editor, the dashboard rendered the generated form underneath it as well — so every
   field appeared twice, followed by a second Save button that behaved differently from the editor's own.

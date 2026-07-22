@@ -360,7 +360,25 @@ sequenceDiagram
 
 A handler returns `{ continue: false }` to stop the chain. To transform the event it returns
 `{ continue: true, data: <new value> }`; the next handler (and the host) sees that `data`. (There is
-no `modified` field — the result type uses `data`.)
+no `modified` field — the result type uses `data`.) A handler that both transforms and stops the chain
+still has its `data` applied.
+
+**What `continue: false` does and does not do.** On a **notification** event — `message:received`,
+`message:sent` — it stops the remaining handlers and nothing else. The message has already arrived at,
+or left, WhatsApp, so the gateway still persists it and still dispatches `message.received` /
+`message.sent` to webhooks and the websocket. This is the flag an auto-reply plugin uses to claim a
+message ("I answered this, don't let another bot answer it too"); it is not a way to hide a message from
+the operator's own history.
+
+On a **pre-action** event it is a veto, because the action has not been taken yet: `false` on
+`message:sending` blocks the send (the caller gets a `400`), and on `webhook:before` it cancels that one
+delivery.
+
+> Until 0.10.5, `continue: false` on the two notification events also skipped persistence, the webhook
+> and the websocket emit. An auto-reply plugin returning it for its ordinary purpose therefore erased
+> the triggering message from the dashboard's chat history and from every integration downstream. If you
+> wrote a plugin that relied on that to hide messages, it no longer does — filter on the consumer side
+> instead.
 
 ### Hook events
 

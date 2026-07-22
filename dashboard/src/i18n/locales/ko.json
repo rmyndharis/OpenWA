@@ -764,7 +764,11 @@
       "installed": "플러그인이 설치되었습니다",
       "installFailed": "설치 실패",
       "uninstalled": "플러그인이 제거되었습니다",
-      "uninstallFailed": "제거 실패"
+      "uninstallFailed": "제거 실패",
+      "enableFailedTitle": "활성화 실패",
+      "disableFailedTitle": "비활성화 실패",
+      "configRequiredTitle": "설정 필요",
+      "configRequiredDesc": "활성화하기 전에 필수 항목을 입력하세요: {{fields}}"
     },
     "sessions": {
       "activationTitle": "실행 대상",
