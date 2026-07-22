@@ -18,7 +18,7 @@ import { BuiltInFtsProvider } from './builtin-fts.provider';
  */
 async function boot(): Promise<{ ds: DataSource; provider: BuiltInFtsProvider }> {
   const ds = new DataSource({
-    type: 'sqlite',
+    type: 'better-sqlite3',
     database: ':memory:',
     entities: [Session, Message],
     synchronize: true,
@@ -66,7 +66,7 @@ describe('search dual-DB + import/export round-trip safety (sqlite)', () => {
     // Boot a DataSource WITHOUT running AddMessagesFts → messages_fts is absent. The provider must
     // detect this and throw NotImplementedException (→ HTTP 501), not crash on a missing table.
     const ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Message],
       synchronize: true,
@@ -82,7 +82,7 @@ describe('search dual-DB + import/export round-trip safety (sqlite)', () => {
     // end-to-end above (and in builtin-fts.provider.spec.ts); the PG branch lives in the PG-gated
     // spec. This pins the branch decision so a future refactor can't silently drop the dialect read.
     const sqlite = await boot();
-    expect((sqlite.provider as unknown as { dataSource: DataSource }).dataSource.options.type).toBe('sqlite');
+    expect((sqlite.provider as unknown as { dataSource: DataSource }).dataSource.options.type).toBe('better-sqlite3');
     await sqlite.ds.destroy();
   });
 });

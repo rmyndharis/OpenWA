@@ -5,7 +5,7 @@ describe('AddTemplateNameUnique migration', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:' });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:' });
     await ds.initialize();
     // Minimal templates table mirroring the AddTemplates sqlite schema.
     await ds.query(

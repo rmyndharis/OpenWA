@@ -25,7 +25,7 @@ const dataMigrations = [sourceGlob('migrations', '*{.ts,.js}')];
 
 // SQLite configuration
 const sqliteDataSourceOptions: DataSourceOptions = {
-  type: 'sqlite',
+  type: 'better-sqlite3',
   database: process.env.DATABASE_NAME || './data/openwa.sqlite',
   entities: dataEntities,
   migrations: dataMigrations,

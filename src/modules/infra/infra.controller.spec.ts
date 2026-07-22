@@ -502,7 +502,7 @@ describe('InfraController.importData round-trips export-data (no silent message/
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [
         Session,
@@ -784,7 +784,7 @@ describe('InfraController.import/export preserves every data-DB table', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Webhook, Message, MessageBatch, Template, BaileysStoredMessage, LidMapping],
       synchronize: true,

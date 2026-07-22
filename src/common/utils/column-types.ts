@@ -9,7 +9,7 @@
  *
  * DATA CONNECTION ONLY. These resolve the dialect of the *data* connection from the global
  * `DATABASE_TYPE` env var. Use them only on entities bound to the data connection. Entities on the
- * MAIN connection (auth, audit) are ALWAYS SQLite — it is hardcoded `type: 'sqlite'` in
+ * MAIN connection (auth, audit) are ALWAYS SQLite — it is hardcoded `type: 'better-sqlite3'` in
  * app.module.ts regardless of DATABASE_TYPE — so they must hardcode `simple-json` / `datetime`
  * (see audit-log.entity.ts) and must NOT call these helpers, or a Postgres deployment would emit a
  * `jsonb`/`timestamp` column on the always-SQLite main DB.

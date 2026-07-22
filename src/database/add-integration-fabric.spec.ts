@@ -4,7 +4,7 @@ import { AddIntegrationFabric1781900000000 } from './migrations/1781900000000-Ad
 describe('AddIntegrationFabric migration (sqlite)', () => {
   let ds: DataSource;
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [], migrations: [] });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [], migrations: [] });
     await ds.initialize();
   });
   afterEach(async () => {

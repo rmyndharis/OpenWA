@@ -28,7 +28,7 @@ describe('BaileysMessageStoreService', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       // Session must be present so the @ManyToOne relation metadata resolves and synchronize
       // can emit the CASCADE FK on the baileys_stored_messages table.

@@ -86,7 +86,7 @@ describe('NormalizeSynchronizeUuidColumns migration', () => {
 
   // ---- SQLite: absolute no-op ----
   it('is a no-op on SQLite — issues no query and never probes tables', async () => {
-    const qr = makeQueryRunner({ type: 'sqlite', uuidColumns: new Set(['sessions.id']) });
+    const qr = makeQueryRunner({ type: 'better-sqlite3', uuidColumns: new Set(['sessions.id']) });
     await migration.up(qr as unknown as QueryRunner);
     expect(qr.query).not.toHaveBeenCalled();
     expect(qr.hasTable).not.toHaveBeenCalled();
@@ -256,7 +256,7 @@ describe('NormalizeSynchronizeUuidColumns migration', () => {
   });
 
   it('down() is a no-op on SQLite', async () => {
-    const qr = makeQueryRunner({ type: 'sqlite' });
+    const qr = makeQueryRunner({ type: 'better-sqlite3' });
     await migration.down(qr as unknown as QueryRunner);
     expect(qr.query).not.toHaveBeenCalled();
   });

@@ -10,7 +10,7 @@ describe('CreateAuthAuditTables migration', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [], synchronize: false });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [], synchronize: false });
     await ds.initialize();
   });
 

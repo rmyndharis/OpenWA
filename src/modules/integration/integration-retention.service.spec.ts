@@ -15,7 +15,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [IngressEvent, IntegrationDeliveryFailure],
       synchronize: true,

@@ -19,7 +19,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Message],
       synchronize: true,
@@ -115,7 +115,7 @@ describe('AddMessagesFts migration (sqlite)', () => {
     // return early (no CREATE VIRTUAL TABLE) so a non-FTS5 build doesn't crash boot.
     const calls: string[] = [];
     const stub = {
-      connection: { options: { type: 'sqlite' as const } },
+      connection: { options: { type: 'better-sqlite3' as const } },
       query: jest.fn((stmt: string) => {
         calls.push(stmt);
         if (stmt.includes("sqlite_compileoption_used('ENABLE_FTS5')")) {
@@ -143,7 +143,7 @@ describe('AddMessagesFts — dual-DB safety', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Message],
       synchronize: true,

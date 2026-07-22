@@ -27,7 +27,7 @@ describe('ScopeBatchIdUniqueToSession migration', () => {
     ]);
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:' });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:' });
     await ds.initialize();
     await ds.query(BASELINE_DDL);
   });

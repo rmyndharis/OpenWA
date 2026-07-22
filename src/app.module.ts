@@ -116,7 +116,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         const synchronize = configService.get<boolean>('database.synchronize', true);
         return {
           name: 'main',
-          type: 'sqlite' as const,
+          type: 'better-sqlite3' as const,
           database: configService.get<string>('database.database', './data/main.sqlite'),
           entities: [
             __dirname + '/modules/auth/**/*.entity{.ts,.js}',
@@ -207,7 +207,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
         return {
           ...baseConfig,
           name: 'data',
-          type: 'sqlite' as const,
+          type: 'better-sqlite3' as const,
           database: configService.get<string>('dataDatabase.database', './data/openwa.sqlite'),
           synchronize,
           migrationsRun: !synchronize,

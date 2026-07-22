@@ -77,6 +77,7 @@
     "@whiskeysockets/baileys": "7.0.0-rc13",
     "adm-zip": "^0.6.0",
     "archiver": "^8.0.0",
+    "better-sqlite3": "^12.11.1",
     "bullmq": "^5.80.10",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -88,7 +89,6 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
-    "sqlite3": "^5.1.7",
     "tar-stream": "^3.2.0",
     "typeorm": "^0.3.31",
     "undici": "^8.8.0",
@@ -213,8 +213,6 @@
     "testEnvironment": "node"
   },
   "overrides": {
-    "shell-quote": "^1.10.0",
-    "node-gyp": "^12.4.0",
-    "tar": "^7.5.20"
+    "shell-quote": "^1.10.0"
   }
 }

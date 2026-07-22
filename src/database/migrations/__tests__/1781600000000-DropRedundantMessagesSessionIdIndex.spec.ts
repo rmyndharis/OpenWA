@@ -5,7 +5,7 @@ describe('DropRedundantMessagesSessionIdIndex migration', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:' });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:' });
     await ds.initialize();
     await ds.query(
       `CREATE TABLE "messages" ("id" varchar PRIMARY KEY NOT NULL, "sessionId" varchar NOT NULL, ` +

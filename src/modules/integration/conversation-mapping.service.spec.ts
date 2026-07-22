@@ -7,7 +7,12 @@ describe('ConversationMappingService', () => {
   let ds: DataSource;
   let service: ConversationMappingService;
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [ConversationMapping], migrations: [] });
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [ConversationMapping],
+      migrations: [],
+    });
     await ds.initialize();
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);

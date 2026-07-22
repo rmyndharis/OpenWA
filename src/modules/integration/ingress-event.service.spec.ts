@@ -8,7 +8,7 @@ describe('IngressEventService.recordOrSkip', () => {
   let ds: DataSource;
   let service: IngressEventService;
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [IngressEvent], migrations: [] });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [IngressEvent], migrations: [] });
     await ds.initialize();
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);

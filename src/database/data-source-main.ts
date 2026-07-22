@@ -19,7 +19,7 @@ loadCliEnv();
  * Usage: `npm run migration:run:main` (dev) / `migration:run:main:prod` (compiled).
  */
 const mainDataSource = new DataSource({
-  type: 'sqlite',
+  type: 'better-sqlite3',
   // Mirrors the runtime main path (configuration.ts) — MAIN_DATABASE_NAME overrides the default
   // ./data/main.sqlite (e.g. e2e points it at a temp file), so the CLI and the app never target
   // different main databases.

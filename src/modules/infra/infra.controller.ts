@@ -1256,6 +1256,18 @@ export class InfraController {
           this.logger.debug('Skipped clearing a table that does not exist during import', { table });
         }
       };
+      // The INSERTs below are written once, in Postgres' `$N` placeholder form. better-sqlite3 differs
+      // from the legacy sqlite3 driver on raw queries in two ways: SQLite parses `$N` as a NAMED
+      // parameter, which cannot be bound from the positional array TypeORM passes through (RangeError),
+      // and strict binding rejects booleans/undefined — which a Postgres-made backup carries (real
+      // booleans survive the JSON round-trip). Postgres needs `$N` and binds booleans natively, so both
+      // rewrites apply only on the SQLite path. Safe: every `$N` below occurs once, in ascending order.
+      const isPostgres = this.dataDataSource.options.type === 'postgres';
+      const insert = (text: string, params: unknown[]): Promise<unknown> =>
+        queryRunner.query(
+          isPostgres ? text : text.replace(/\$\d+/g, '?'),
+          isPostgres ? params : params.map(v => (typeof v === 'boolean' ? Number(v) : (v ?? null))),
+        );
       await queryRunner.query('DELETE FROM webhooks');
       await clearTable('messages');
       await clearTable('message_batches');
@@ -1285,7 +1297,7 @@ export class InfraController {
             continue;
           }
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO sessions (id, name, status, phone, "pushName", config, "proxyUrl", "proxyType", "connectedAt", "lastActiveAt", "createdAt", "updatedAt") 
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
               [
@@ -1315,7 +1327,7 @@ export class InfraController {
       if (data.tables.webhooks?.length) {
         for (const webhook of data.tables.webhooks) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO webhooks (id, "sessionId", url, events, secret, headers, filters, active, "retryCount", "lastTriggeredAt", "createdAt", "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
               [
@@ -1349,7 +1361,7 @@ export class InfraController {
       if (data.tables.messages?.length) {
         for (const msg of data.tables.messages) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "chatName", "from", "to", body, type, direction, "timestamp", metadata, status, "createdAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
               [
@@ -1385,7 +1397,7 @@ export class InfraController {
       if (data.tables.messageBatches?.length) {
         for (const batch of data.tables.messageBatches) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO message_batches (id, batch_id, session_id, status, messages, options, progress, results, current_index, created_at, updated_at, started_at, completed_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
               [
@@ -1428,7 +1440,7 @@ export class InfraController {
       if (data.tables.templates?.length) {
         for (const tpl of data.tables.templates) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO templates (id, "sessionId", name, body, header, footer, "createdAt", "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
               [
@@ -1454,7 +1466,7 @@ export class InfraController {
       if (data.tables.baileysStoredMessages?.length) {
         for (const bsm of data.tables.baileysStoredMessages) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO baileys_stored_messages (id, "sessionId", "waMessageId", "serializedMessage", "createdAt")
                VALUES ($1, $2, $3, $4, $5)`,
               [bsm.id, bsm.sessionId, bsm.waMessageId, bsm.serializedMessage, bsm.createdAt],
@@ -1471,10 +1483,12 @@ export class InfraController {
       if (data.tables.lidMappings?.length) {
         for (const lm of data.tables.lidMappings) {
           try {
-            await queryRunner.query(
-              `INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`,
-              [lm.lid, lm.phone ?? null, lm.sessionId ?? null, lm.updatedAt],
-            );
+            await insert(`INSERT INTO lid_mappings (lid, phone, "sessionId", "updatedAt") VALUES ($1, $2, $3, $4)`, [
+              lm.lid,
+              lm.phone ?? null,
+              lm.sessionId ?? null,
+              lm.updatedAt,
+            ]);
             lidMappingsCount++;
           } catch (err) {
             warnings.push(`Failed to import lid mapping ${lm.lid}: ${err}`);
@@ -1487,7 +1501,7 @@ export class InfraController {
       if (data.tables.pluginInstances?.length) {
         for (const pi of data.tables.pluginInstances) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO plugin_instances (id, "pluginId", "instanceId", "sessionScope", secret, "verifyToken", config, enabled, "createdAt", "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
               [
@@ -1515,7 +1529,7 @@ export class InfraController {
       if (data.tables.conversationMappings?.length) {
         for (const cm of data.tables.conversationMappings) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO conversation_mappings (id, "sessionId", "chatId", "pluginId", "instanceId", "providerConversationId", "handoverState", metadata, "updatedAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
               [
@@ -1546,7 +1560,7 @@ export class InfraController {
       if (data.tables.ingressEvents?.length) {
         for (const ie of data.tables.ingressEvents) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO ingress_events (id, "instanceId", "pluginId", "providerDeliveryId", route, payload, "sessionId", "createdAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
               [
@@ -1572,7 +1586,7 @@ export class InfraController {
       if (data.tables.webhookDeliveryFailures?.length) {
         for (const wf of data.tables.webhookDeliveryFailures) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO webhook_delivery_failures (id, "webhookId", "sessionId", event, url, "idempotencyKey", "deliveryId", attempts, "lastStatusCode", "lastError", "createdAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
               [
@@ -1601,7 +1615,7 @@ export class InfraController {
       if (data.tables.integrationDeliveryFailures?.length) {
         for (const df of data.tables.integrationDeliveryFailures) {
           try {
-            await queryRunner.query(
+            await insert(
               `INSERT INTO integration_delivery_failures (id, direction, "pluginId", "instanceId", "sessionId", "deliveryId", attempts, "lastError", payload, redriven, "createdAt")
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
               [

@@ -85,7 +85,7 @@ describe('BuiltInFtsProvider satisfies the SearchProvider contract', () => {
 
   runProviderContract(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Message],
       synchronize: true,

@@ -5,7 +5,7 @@ describe('AddWebhookDeliveryFailures migration', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:' });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:' });
     await ds.initialize();
   });
 

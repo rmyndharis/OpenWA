@@ -251,6 +251,10 @@ docker compose up -d
 
 ### Migration Script (Legacy)
 
+> **Note:** This example uses the standalone `sqlite3` npm package, which is no longer part of
+> OpenWA's dependencies (the app itself uses `better-sqlite3`). Install it ad hoc before running:
+> `npm install --no-save sqlite3`.
+
 ```typescript
 // scripts/migrate-sqlite-to-postgres.ts
 

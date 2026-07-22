@@ -5,7 +5,7 @@ import mainDataSource from './data-source-main';
 // DataSource exists so the CLI can run/generate the main-owned migrations too.
 describe('main CLI DataSource', () => {
   it('targets the always-SQLite main connection', () => {
-    expect(mainDataSource.options.type).toBe('sqlite');
+    expect(mainDataSource.options.type).toBe('better-sqlite3');
   });
 
   it('uses the main-owned migrations dir, not the data migrations dir', () => {

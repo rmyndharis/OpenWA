@@ -10,7 +10,12 @@ describe('BuiltInFtsProvider (sqlite)', () => {
   let provider: BuiltInFtsProvider;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [Session, Message], synchronize: true });
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Message],
+      synchronize: true,
+    });
     await ds.initialize();
     await new AddMessagesFts1782400000000().up(ds.createQueryRunner());
     provider = new BuiltInFtsProvider(ds);

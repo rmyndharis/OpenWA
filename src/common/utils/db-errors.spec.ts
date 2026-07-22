@@ -1,8 +1,10 @@
 import { QueryFailedError } from 'typeorm';
 import { isUniqueViolation, isMissingTableError } from './db-errors';
 
-// Realistic driver errors: sqlite3 / pg both throw an Error carrying a `code` property, which TypeORM
-// wraps in QueryFailedError (message copied from the driver error).
+// Realistic driver errors: better-sqlite3 / pg both throw an Error carrying a `code` property, which
+// TypeORM wraps in QueryFailedError (message copied from the driver error). better-sqlite3 messages are
+// UNPREFIXED ('no such table: x'); the legacy sqlite3 driver prefixed them ('SQLITE_ERROR: no such
+// table: x') — the classifiers must keep matching both shapes.
 const driverErr = (message: string, code: string): Error => Object.assign(new Error(message), { code });
 const qfe = (message: string, code: string): QueryFailedError =>
   new QueryFailedError('DELETE FROM x', [], driverErr(message, code));
@@ -14,6 +16,19 @@ describe('isMissingTableError', () => {
 
   it('recognizes a SQLite missing table by MESSAGE, not by its generic code', () => {
     expect(isMissingTableError(qfe('SQLITE_ERROR: no such table: templates', 'SQLITE_ERROR'))).toBe(true);
+  });
+
+  it("recognizes better-sqlite3's unprefixed shapes (missing table and unique violation)", () => {
+    expect(isMissingTableError(qfe('no such table: templates', 'SQLITE_ERROR'))).toBe(true);
+    expect(isUniqueViolation(qfe('UNIQUE constraint failed: templates.name', 'SQLITE_CONSTRAINT_UNIQUE'))).toBe(true);
+  });
+
+  it('recognizes the RAW SqliteError better-sqlite3 throws at prepare() time (never wrapped by TypeORM)', () => {
+    // TypeORM's BetterSqlite3QueryRunner prepares the statement outside its try/catch, so a DELETE on a
+    // missing table escapes as the raw driver error — QueryFailedError never enters the picture.
+    const raw = Object.assign(new Error('no such table: plugin_instances'), { code: 'SQLITE_ERROR' });
+    raw.name = 'SqliteError';
+    expect(isMissingTableError(raw)).toBe(true);
   });
 
   it('does NOT treat a genuine SQLite failure as missing-table (it must surface)', () => {

@@ -8,7 +8,7 @@ describe('PluginInstanceService', () => {
   let ds: DataSource;
   let service: PluginInstanceService;
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [PluginInstance], migrations: [] });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [PluginInstance], migrations: [] });
     await ds.initialize();
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);
@@ -111,7 +111,7 @@ describe('PluginInstanceService provisioning', () => {
   let ds: DataSource;
   let service: PluginInstanceService;
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:', entities: [PluginInstance], migrations: [] });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [PluginInstance], migrations: [] });
     await ds.initialize();
     const runner = ds.createQueryRunner();
     await new AddIntegrationFabric1781900000000().up(runner);

@@ -17,7 +17,7 @@ describe('WebhookService session-scoped access', () => {
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Webhook],
       synchronize: true,

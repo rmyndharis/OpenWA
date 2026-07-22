@@ -35,7 +35,7 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
 
   beforeEach(async () => {
     ds = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [Session, Message],
       synchronize: true,

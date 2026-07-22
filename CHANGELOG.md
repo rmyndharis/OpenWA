@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The SQLite driver is now `better-sqlite3`.** The `sqlite3` package that previously drove both the
+  always-SQLite main database (auth and audit) and the default data database is unmaintained upstream —
+  its repository was archived in July 2026 — and its final release still bundles an outdated SQLite
+  library. The gateway now uses the actively maintained `better-sqlite3` driver, which carries a current
+  SQLite (3.53.x) including the recent FTS5 fixes the old line will never receive. Nothing changes in
+  how you configure or run OpenWA: `DATABASE_TYPE` keeps its `sqlite`/`postgres` values, existing
+  database files are opened as-is, and all migrations apply unchanged. PostgreSQL deployments are
+  affected only in the main (auth/audit) database, which has always been SQLite. Prebuilt binaries
+  cover the same platforms as before, including Alpine/musl and arm64
+  ([#848](https://github.com/rmyndharis/OpenWA/issues/848)).
+
 ### Fixed
 
 - **The Sessions overview on the dashboard labels its last column correctly instead of printing `DASHBOARD.COLUMNS.ACTIONS`.** The header above the View and Disconnect buttons rendered the uppercased translation key verbatim, in every language, because the table referenced a `dashboard.columns.actions` key that no locale file defined. The missing key has been added to every supported locale, so the column now reads "Actions" (or its equivalent) as the other columns do.

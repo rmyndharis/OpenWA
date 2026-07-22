@@ -23,9 +23,15 @@ export function isUniqueViolation(err: unknown): boolean {
  * QueryFailedError so a future TypeORM change to the nesting fails toward the regex still matching.
  */
 export function isMissingTableError(err: unknown): boolean {
-  if (!(err instanceof QueryFailedError)) return false;
-  const driver = err.driverError as { code?: string; message?: string } | undefined;
-  if (driver?.code === '42P01') return true; // postgres undefined_table
-  const message = `${driver?.message ?? ''} ${err.message ?? ''}`;
-  return /no such table/i.test(message);
+  if (err instanceof QueryFailedError) {
+    const driver = err.driverError as { code?: string; message?: string } | undefined;
+    if (driver?.code === '42P01') return true; // postgres undefined_table
+    const message = `${driver?.message ?? ''} ${err.message ?? ''}`;
+    return /no such table/i.test(message);
+  }
+  // better-sqlite3 validates SQL at prepare() time, and TypeORM's BetterSqlite3QueryRunner creates the
+  // statement OUTSIDE its try/catch — so a missing-table error surfaces as the RAW SqliteError, never
+  // wrapped in QueryFailedError. Recognize that exact shape (class name + message); a plain Error whose
+  // text happens to mention a missing table must still NOT classify.
+  return err instanceof Error && err.name === 'SqliteError' && /no such table/i.test(err.message);
 }

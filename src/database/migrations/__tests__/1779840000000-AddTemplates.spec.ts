@@ -5,7 +5,7 @@ describe('AddTemplates migration', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = new DataSource({ type: 'sqlite', database: ':memory:' });
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:' });
     await ds.initialize();
     // up() declares a CASCADE FK to sessions; create a minimal stand-in (mirrors the sibling specs).
     await ds.query(`CREATE TABLE "sessions" ("id" varchar PRIMARY KEY NOT NULL)`);
