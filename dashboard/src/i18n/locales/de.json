@@ -1,0 +1,865 @@
+{
+  "toast": {
+    "connectionLost": {
+      "title": "Serververbindung unterbrochen",
+      "message": "Der Backend-Server ist nicht erreichbar. Bitte prüfe, ob der Server läuft."
+    }
+  },
+  "common": {
+    "appName": "OpenWA",
+    "loading": "Wird geladen...",
+    "cancel": "Abbrechen",
+    "delete": "Löschen",
+    "create": "Erstellen",
+    "close": "Schließen",
+    "showApiKey": "API-Schlüssel anzeigen",
+    "hideApiKey": "API-Schlüssel ausblenden",
+    "search": "Suchen",
+    "status": "Status",
+    "name": "Name",
+    "role": "Rolle",
+    "url": "URL",
+    "port": "Port",
+    "host": "Host",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "active": "Aktiv",
+    "inactive": "Inaktiv",
+    "connected": "Verbunden",
+    "disconnected": "Getrennt",
+    "never": "Nie",
+    "justNow": "Gerade eben",
+    "minAgo": "vor {{count}} Min.",
+    "hoursAgo": "vor {{count}} Std.",
+    "optional": "optional",
+    "language": "Sprache",
+    "back": "Zurück",
+    "next": "Weiter",
+    "previous": "Zurück",
+    "expand": "Ausklappen",
+    "collapse": "Einklappen",
+    "logout": "Abmelden",
+    "refresh": "Aktualisieren",
+    "errorGeneric": "Ein Fehler ist aufgetreten",
+    "unknownError": "Unbekannter Fehler",
+    "retry": "Erneut versuchen"
+  },
+  "theme": {
+    "light": "Hell",
+    "dark": "Dunkel",
+    "system": "System",
+    "label": "Design: {{value}}",
+    "appearance": "Darstellung",
+    "mode": "Modus",
+    "toggleTo": "Zu {{value}} wechseln"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "sessions": "Sitzungen",
+    "chats": "Chats",
+    "webhooks": "Webhooks",
+    "templates": "Vorlagen",
+    "apiKeys": "API-Schlüssel",
+    "messageTester": "Nachrichtentester",
+    "infrastructure": "Infrastruktur",
+    "plugins": "Plugins",
+    "logs": "Protokolle"
+  },
+  "chats": {
+    "media": {
+      "location": "Standort",
+      "call": "Anruf",
+      "callMissed": "Verpasster Anruf",
+      "callVideo": "Videoanruf",
+      "callVideoMissed": "Verpasster Videoanruf",
+      "omitted": "Medien",
+      "image": "Bild"
+    },
+    "subtitle": "WhatsApp-Nachrichten in Echtzeit senden und beantworten",
+    "noSessionsTitle": "Keine verbundenen Sitzungen",
+    "noSessionsDesc": "Bitte verbinde zuerst im Menü <1>Sitzungen</1> eine WhatsApp-Sitzung, um die Chat-Funktion zu verwenden.",
+    "sessionLabel": "WhatsApp-Sitzung",
+    "noPhone": "Keine Telefonnummer",
+    "searchPlaceholder": "Chats durchsuchen...",
+    "loadingChats": "Chats werden geladen...",
+    "empty": "Keine Chats",
+    "noMessageYet": "Noch keine Nachrichten",
+    "unreadBadge": "{{count}} ungelesene Nachrichten",
+    "loadingMessages": "Nachrichten werden geladen...",
+    "noMessagesInChat": "Noch keine Nachrichten. Sende die erste Nachricht, um zu beginnen!",
+    "downloadDocument": "Dokument herunterladen",
+    "actions": {
+      "reply": "Antworten",
+      "react": "Reagieren",
+      "delete": "Nachricht löschen"
+    },
+    "replyingTo": "Antwort an {{name}}",
+    "you": "Du",
+    "youPrefix": "Du: ",
+    "yesterday": "Gestern",
+    "attachTitle": "Datei/Bild senden",
+    "emojiTitle": "Emoji auswählen",
+    "captionPlaceholder": "Beschriftung hinzufügen...",
+    "messagePlaceholder": "Nachricht eingeben...",
+    "noPermission": "Du bist nicht berechtigt, Nachrichten zu senden",
+    "send": "Senden",
+    "placeholderTitle": "Unterhaltung beginnen",
+    "placeholderDesc": "Wähle eine Unterhaltung aus, um sie zu lesen und zu beantworten.",
+    "scrollToBottom": "Zur neuesten Nachricht springen",
+    "groupSubtitle": "Gruppe",
+    "privateContactSubtitle": "Privater Kontakt",
+    "deleteConfirm": "Diese Nachricht für alle löschen?",
+    "messageDeleted": "🚫 Diese Nachricht wurde gelöscht",
+    "messageMasked": "🔒 Von WhatsApp für verknüpfte Geräte ausgeblendet — prüfe dein Haupttelefon",
+    "errors": {
+      "loadSessions": "Sitzungen konnten nicht geladen werden",
+      "loadChats": "Chats konnten nicht geladen werden",
+      "markRead": "Chat konnte nicht als gelesen markiert werden",
+      "send": "Nachricht konnte nicht gesendet werden",
+      "react": "Reaktion auf die Nachricht fehlgeschlagen",
+      "delete": "Nachricht konnte nicht gelöscht werden"
+    },
+    "loadMessagesError": "Nachrichten konnten nicht geladen werden. Prüfe die Serverprotokolle."
+  },
+  "errorBoundary": {
+    "title": "Etwas ist schiefgelaufen",
+    "description": "Im Dashboard ist ein unerwarteter Fehler aufgetreten.",
+    "reload": "Dashboard neu laden"
+  },
+  "login": {
+    "apiKey": "API-Schlüssel",
+    "apiKeyPlaceholder": "API-Schlüssel eingeben",
+    "apiKeyRequired": "API-Schlüssel ist erforderlich",
+    "connect": "Verbinden",
+    "connecting": "Verbindung wird hergestellt...",
+    "invalidKey": "Ungültiger API-Schlüssel",
+    "connectionError": "Verbindung zum Server nicht möglich. Bitte versuche es erneut.",
+    "help": "Brauchst du Hilfe?",
+    "viewDocs": "Dokumentation ansehen",
+    "footer": "Mit ❤️ erstellt von Yudhi Armyndharis und der OpenWA-Community",
+    "version": "v{{version}} · {{date}}"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Übersicht über deine WhatsApp-Sitzungen und Aktivitäten",
+    "stats": {
+      "activeSessions": "Verbundene Sitzungen",
+      "sessionsDetail": "{{running}} aktiv · {{total}} insgesamt",
+      "messagesToday": "Nachrichten heute",
+      "webhooksConfigured": "Konfigurierte Webhooks",
+      "totalMessages": "Nachrichten insgesamt"
+    },
+    "sessionsOverview": "Sitzungsübersicht",
+    "showingSessions": "{{shown}} von {{total}} Sitzungen werden angezeigt",
+    "columns": {
+      "sessionId": "Sitzungs-ID",
+      "phone": "Telefonnummer",
+      "status": "Status",
+      "lastActive": "Zuletzt aktiv",
+      "actions": "Aktionen"
+    },
+    "noSessions": "Keine Sitzungen gefunden. Erstelle eine, um zu beginnen.",
+    "view": "Ansehen",
+    "disconnect": "Trennen",
+    "errorPrefix": "Fehler: {{message}}",
+    "loadError": "Daten konnten nicht geladen werden",
+    "charts": {
+      "title": "Nachrichtenanalyse",
+      "period": {
+        "24h": "24 Std.",
+        "7d": "7 Tage",
+        "30d": "30 Tage"
+      },
+      "overTime": "Nachrichten im Zeitverlauf",
+      "byType": "Nachrichten nach Typ",
+      "topChats": "Top-Chats",
+      "sent": "Gesendet",
+      "received": "Empfangen",
+      "messages": "Nachrichten",
+      "empty": "In diesem Zeitraum gab es keine Nachrichtenaktivität.",
+      "error": "Die Nachrichtenanalyse konnte nicht geladen werden. Prüfe die Serverprotokolle."
+    }
+  },
+  "sessionStatus": {
+    "created": "Neu",
+    "idle": "Inaktiv",
+    "initializing": "Wird gestartet...",
+    "connecting": "Verbindung wird hergestellt...",
+    "qr_ready": "QR-Code scannen",
+    "ready": "Verbunden",
+    "disconnected": "Getrennt"
+  },
+  "sessions": {
+    "title": "Sitzungen",
+    "subtitle": "WhatsApp-Sitzungen und QR-Code-Verbindungen verwalten",
+    "newSession": "Neue Sitzung",
+    "searchPlaceholder": "Sitzungen durchsuchen...",
+    "filter": {
+      "all": "Alle Status",
+      "active": "Aktiv (verbunden)",
+      "inactive": "Inaktiv",
+      "connecting": "Verbindung wird hergestellt"
+    },
+    "empty": {
+      "title": "Keine Sitzungen gefunden",
+      "description": "Erstelle eine neue Sitzung, um zu beginnen"
+    },
+    "create": {
+      "title": "Neue Sitzung erstellen",
+      "label": "Sitzungsname",
+      "placeholder": "z. B. marketing-bot",
+      "hint": "Verwende nur Kleinbuchstaben, Zahlen und Bindestriche. Beispiel: <code>customer-support</code>, <code>bot-1</code>",
+      "invalidChars": "Ungültige Zeichen. Es sind nur Kleinbuchstaben, Zahlen und Bindestriche erlaubt.",
+      "tooLong": "Der Name darf höchstens 50 Zeichen lang sein ({{length}}/50).",
+      "duplicate": "Eine Sitzung mit diesem Namen existiert bereits.",
+      "successTitle": "Sitzung erstellt",
+      "successDesc": "Sitzung „{{name}}“ wurde erfolgreich erstellt",
+      "errorTitle": "Erstellung fehlgeschlagen",
+      "errorDefault": "Sitzung konnte nicht erstellt werden"
+    },
+    "delete": {
+      "title": "Löschen bestätigen",
+      "message": "Möchtest du die Sitzung <strong>„{{name}}“</strong> wirklich löschen?",
+      "warning": "Diese Aktion kann nicht rückgängig gemacht werden.",
+      "successTitle": "Sitzung gelöscht",
+      "successDescNamed": "Sitzung „{{name}}“ wurde gelöscht",
+      "successDescGeneric": "Sitzung wurde gelöscht",
+      "errorTitle": "Löschen fehlgeschlagen",
+      "errorDefault": "Sitzung konnte nicht gelöscht werden"
+    },
+    "qr": {
+      "title": "QR-Code scannen",
+      "step1": "<strong>1.</strong> Öffne WhatsApp auf deinem Telefon",
+      "step2": "<strong>2.</strong> Tippe auf <strong>Menü</strong> → <strong>Verknüpfte Geräte</strong>",
+      "step3": "<strong>3.</strong> Tippe auf <strong>Gerät verknüpfen</strong> und scanne diesen QR-Code",
+      "autoRefresh": "Der QR-Code wird alle 5 Sekunden automatisch aktualisiert",
+      "generating": "QR-Code wird erstellt...",
+      "preparing": "QR-Code wird vorbereitet...",
+      "showQr": "QR-Code anzeigen",
+      "loading": "Wird geladen...",
+      "scanToConnect": "QR-Code scannen, um die Verbindung herzustellen"
+    },
+    "details": {
+      "title": "Sitzungsdetails",
+      "name": "Name",
+      "status": "Status",
+      "sessionId": "Sitzungs-ID",
+      "phone": "Telefonnummer",
+      "phoneNone": "Nicht verbunden",
+      "created": "Erstellt",
+      "lastActive": "Zuletzt aktiv"
+    },
+    "actions": {
+      "view": "Ansehen",
+      "start": "Starten",
+      "stop": "Stoppen",
+      "reconnect": "Erneut verbinden",
+      "delete": "Löschen",
+      "killStuck": "Hängende Sitzung beenden"
+    },
+    "toasts": {
+      "readyTitle": "Sitzung bereit",
+      "readyDesc": "Die WhatsApp-Sitzung ist jetzt verbunden",
+      "disconnectedTitle": "Sitzung getrennt",
+      "disconnectedDesc": "Die WhatsApp-Sitzung wurde getrennt",
+      "failedTitle": "Sitzung fehlgeschlagen",
+      "failedDesc": "Die WhatsApp-Sitzung konnte nicht gestartet werden. Öffne die Sitzung, um den Grund anzuzeigen."
+    },
+    "card": {
+      "phone": "Telefon",
+      "sessionId": "Sitzungs-ID",
+      "lastActive": "Zuletzt aktiv",
+      "error": "Fehler"
+    },
+    "forceKill": {
+      "title": "Hängende Sitzung zwangsweise beenden",
+      "message": "Möchtest du die Sitzung „{{name}}“ wirklich zwangsweise beenden?",
+      "warning": "Dadurch wird der WhatsApp-Browserprozess zwangsweise beendet. Nach dem Neustart muss die Sitzung möglicherweise erneut gescannt werden.",
+      "confirm": "Sitzung beenden",
+      "successTitle": "Sitzung beendet",
+      "success": "Die Sitzung wurde zwangsweise beendet. Du kannst sie jetzt neu starten.",
+      "failedTitle": "Zwangsbeendigung fehlgeschlagen",
+      "failed": "Die Sitzung konnte nicht zwangsweise beendet werden."
+    },
+    "pairing": {
+      "tabQr": "QR-Code",
+      "tabPhone": "Mit Telefonnummer verknüpfen",
+      "phoneLabel": "Telefonnummer",
+      "phonePlaceholder": "z. B. 491701234567",
+      "phoneHint": "Nur Ziffern im internationalen Format (Ländervorwahl + Nummer), ohne +, Leerzeichen oder Bindestriche.",
+      "invalidPhone": "Gib eine gültige Telefonnummer ein: 6–15 Ziffern, zuerst die Ländervorwahl, keine Sonderzeichen.",
+      "generateButton": "Kopplungscode erstellen",
+      "generating": "Kopplungscode wird erstellt...",
+      "codeLabel": "Dein Kopplungscode",
+      "changeNumber": "Nummer ändern / neuen Code anfordern",
+      "instructions": "Anleitung zur Kopplung",
+      "step1": "<strong>1.</strong> Öffne WhatsApp auf deinem Telefon",
+      "step2": "<strong>2.</strong> Tippe auf <strong>Menü</strong> oder <strong>Einstellungen</strong> und wähle <strong>Verknüpfte Geräte</strong>",
+      "step3": "<strong>3.</strong> Tippe auf <strong>Gerät verknüpfen</strong> und anschließend auf <strong>Stattdessen mit Telefonnummer verknüpfen</strong>",
+      "step4": "<strong>4.</strong> Gib den oben angezeigten 8-stelligen Code auf deinem Telefon ein",
+      "waitingConnection": "Es wird darauf gewartet, dass dein Telefon die Verbindung herstellt…"
+    }
+  },
+  "webhooks": {
+    "title": "Webhooks",
+    "subtitle": "HTTP-Callbacks für Ereignisbenachrichtigungen in Echtzeit konfigurieren",
+    "addWebhook": "Webhook hinzufügen",
+    "createTitle": "Webhook erstellen",
+    "editTitle": "Webhook bearbeiten",
+    "deleteTitle": "Webhook löschen",
+    "deleteConfirm": "Möchtest du diesen Webhook wirklich löschen?",
+    "selectSession": "Sitzung auswählen...",
+    "session": "Sitzung",
+    "events": "Ereignisse",
+    "available": "Verfügbare Ereignisse",
+    "saveChanges": "Änderungen speichern",
+    "filters": {
+      "title": "Filter (optional)",
+      "hint": "Wird nur ausgelöst, wenn alle Bedingungen erfüllt sind. Gilt für Nachrichtenereignisse.",
+      "badge": "{{count}} Filter",
+      "addCondition": "Bedingung hinzufügen",
+      "removeCondition": "Bedingung entfernen",
+      "caseSensitive": "Groß-/Kleinschreibung beachten",
+      "contactPlaceholder": "Nummer oder WhatsApp-ID...",
+      "textPlaceholder": "Abzugleichender Text...",
+      "addValue": "„{{value}}“ hinzufügen",
+      "yes": "Ja",
+      "no": "Nein",
+      "fields": {
+        "sender": "Absender",
+        "recipient": "Empfänger",
+        "body": "Nachrichteninhalt",
+        "type": "Nachrichtentyp",
+        "isGroup": "Ist Gruppenchat",
+        "fromMe": "Von mir gesendet",
+        "hasMedia": "Enthält Medien",
+        "mentions": "Erwähnungen"
+      },
+      "operators": {
+        "is": "ist",
+        "isNot": "ist nicht",
+        "contains": "enthält",
+        "equals": "entspricht"
+      }
+    },
+    "columns": {
+      "url": "URL",
+      "events": "Ereignisse",
+      "session": "Sitzung",
+      "status": "Status",
+      "actions": "Aktionen"
+    },
+    "empty": {
+      "title": "Keine Webhooks konfiguriert",
+      "description": "Füge einen Webhook hinzu, um Ereignisbenachrichtigungen in Echtzeit zu erhalten"
+    },
+    "toasts": {
+      "created": "Webhook wurde erfolgreich erstellt",
+      "createFailed": "Webhook konnte nicht erstellt werden: {{message}}",
+      "deleted": "Webhook wurde erfolgreich gelöscht",
+      "deleteFailed": "Webhook konnte nicht gelöscht werden: {{message}}",
+      "updated": "Webhook wurde erfolgreich aktualisiert",
+      "updateFailed": "Webhook konnte nicht aktualisiert werden: {{message}}",
+      "testOk": "Webhook-Test erfolgreich! Status: {{status}}",
+      "testFailed": "Webhook-Test fehlgeschlagen: {{message}}",
+      "testError": "Webhook konnte nicht getestet werden: {{message}}"
+    },
+    "actions": {
+      "test": "Testen",
+      "edit": "Bearbeiten",
+      "delete": "Löschen"
+    },
+    "eventDescriptions": {
+      "message.received": "Wenn eine Nachricht empfangen wird",
+      "message.sent": "Wenn eine Nachricht gesendet wird",
+      "session.connected": "Wenn eine Sitzung verbunden wird",
+      "session.disconnected": "Wenn eine Sitzung getrennt wird",
+      "session.qr": "Wenn ein QR-Code erstellt wird",
+      "all": "Alle Ereignisse"
+    }
+  },
+  "templates": {
+    "title": "Vorlagen",
+    "subtitle": "Wiederverwendbare Nachrichtenvorlagen für jede WhatsApp-Sitzung erstellen",
+    "createTitle": "Vorlage erstellen",
+    "editTitle": "Vorlage bearbeiten",
+    "newTemplate": "Neue Vorlage",
+    "createTemplate": "Vorlage erstellen",
+    "saveChanges": "Änderungen speichern",
+    "viewOnly": "Nur ansehen",
+    "noSessions": "Keine Sitzungen",
+    "sessionHint": "Gespeichert unter {{name}}",
+    "namePlaceholder": "z. B. bestellbestaetigung",
+    "header": "Kopfzeile",
+    "headerPlaceholder": "Optionale Einleitungszeile",
+    "body": "Text",
+    "bodyPlaceholder": "Hallo {{customer}}, deine Bestellung {{orderId}} ist bereit.",
+    "footer": "Fußzeile",
+    "footerPlaceholder": "Optionale Abschlusszeile",
+    "previewTitle": "Vorschau",
+    "previewValuePlaceholder": "Beispielwert",
+    "previewEmpty": "Beginne mit dem Schreiben einer Vorlage, um hier eine Vorschau anzuzeigen.",
+    "noPlaceholders": "Verwende Platzhalter wie {{name}}, um Ersetzungen zu testen.",
+    "savedTitle": "Gespeicherte Vorlagen",
+    "count": "{{count}} insgesamt",
+    "deleteTitle": "Vorlage löschen",
+    "deleteConfirm": "Vorlage „{{name}}“ löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+    "actions": {
+      "copyName": "Vorlagenname kopieren"
+    },
+    "empty": {
+      "title": "Keine Vorlagen gespeichert",
+      "description": "Erstelle eine wiederverwendbare Vorlage, um häufige Antworten und Benachrichtigungen schneller zu versenden.",
+      "noSessionsTitle": "Keine Sitzungen verfügbar",
+      "noSessionsDesc": "Erstelle eine WhatsApp-Sitzung, bevor du Vorlagen hinzufügst."
+    },
+    "toasts": {
+      "created": "Vorlage wurde erfolgreich erstellt",
+      "createFailed": "Vorlage konnte nicht erstellt werden: {{message}}",
+      "updated": "Vorlage wurde erfolgreich aktualisiert",
+      "updateFailed": "Vorlage konnte nicht aktualisiert werden: {{message}}",
+      "deleted": "Vorlage wurde erfolgreich gelöscht",
+      "deleteFailed": "Vorlage konnte nicht gelöscht werden: {{message}}",
+      "copied": "Vorlagenname wurde kopiert"
+    }
+  },
+  "apiKeys": {
+    "title": "API-Schlüssel",
+    "subtitle": "API-Schlüssel für Authentifizierung und Zugriffskontrolle verwalten",
+    "createBtn": "API-Schlüssel erstellen",
+    "modalTitle": "API-Schlüssel erstellen",
+    "createdTitle": "API-Schlüssel erstellt",
+    "createdHint": "Kopiere diesen Schlüssel jetzt. Du kannst ihn später nicht erneut anzeigen.",
+    "namePlaceholder": "z. B. Produktionsschlüssel",
+    "rolesTitle": "Rollenübersicht",
+    "roles": {
+      "admin": "Administrator",
+      "operator": "Operator",
+      "viewer": "Betrachter"
+    },
+    "roleDescriptions": {
+      "admin": "Vollzugriff auf alle Ressourcen",
+      "operator": "Verwaltung von Sitzungen und Nachrichten",
+      "viewer": "Nur Lesezugriff"
+    },
+    "columns": {
+      "name": "Name",
+      "key": "Schlüssel",
+      "role": "Rolle",
+      "status": "Status",
+      "lastUsed": "Zuletzt verwendet",
+      "actions": "Aktionen"
+    },
+    "statuses": {
+      "active": "Aktiv",
+      "revoked": "Widerrufen"
+    },
+    "empty": {
+      "title": "Keine API-Schlüssel erstellt",
+      "description": "Erstelle einen API-Schlüssel, um deine Anfragen zu authentifizieren"
+    },
+    "confirm": {
+      "deleteTitle": "API-Schlüssel löschen",
+      "revokeTitle": "API-Schlüssel widerrufen",
+      "deleteMessage": "Möchtest du <strong>{{name}}</strong> wirklich dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+      "revokeMessage": "Möchtest du <strong>{{name}}</strong> wirklich widerrufen? Der Schlüssel funktioniert anschließend nicht mehr.",
+      "delete": "Löschen",
+      "revoke": "Widerrufen"
+    },
+    "actions": {
+      "copy": "Kopieren",
+      "revoke": "Widerrufen",
+      "delete": "Löschen"
+    }
+  },
+  "logs": {
+    "title": "Audit-Protokolle",
+    "subtitle": "Alle API-Aktionen und Systemereignisse verfolgen und prüfen",
+    "exportCsv": "CSV exportieren",
+    "searchPlaceholder": "Protokolle durchsuchen...",
+    "severity": {
+      "all": "Alle Schweregrade",
+      "info": "Info",
+      "warn": "Warnung",
+      "error": "Fehler"
+    },
+    "columns": {
+      "timestamp": "Zeitstempel",
+      "action": "Aktion",
+      "session": "Sitzung",
+      "apiKey": "API-Schlüssel",
+      "ip": "IP-Adresse",
+      "severity": "Schweregrad"
+    },
+    "empty": {
+      "title": "Keine Protokolle gefunden",
+      "description": "Audit-Protokolle werden hier angezeigt, sobald Aktionen ausgeführt werden"
+    }
+  },
+  "messageTester": {
+    "title": "Nachrichtentester",
+    "subtitle": "Testnachrichten über die API senden",
+    "compose": "Testnachricht senden",
+    "responseTitle": "API-Antwort",
+    "session": "Sitzung",
+    "noReadySessions": "Keine bereiten Sitzungen",
+    "sessionOptionPhoneNone": "Keine Telefonnummer",
+    "recipientType": "Empfängertyp",
+    "personal": "Privat",
+    "group": "Gruppe",
+    "selectGroup": "Gruppe auswählen",
+    "recipientPhone": "Telefonnummer des Empfängers",
+    "loadingGroups": "Gruppen werden geladen...",
+    "noGroupsFound": "Keine Gruppen gefunden",
+    "selectGroupHint": "Wähle eine Gruppe aus deinem WhatsApp-Konto aus",
+    "phoneHint": "Verwende das internationale Format ohne Leerzeichen",
+    "messageType": "Nachrichtentyp",
+    "types": {
+      "text": "Text",
+      "image": "Bild",
+      "video": "Video",
+      "audio": "Audio",
+      "document": "Dokument",
+      "location": "Standort",
+      "contact": "Kontakt",
+      "sticker": "Sticker",
+      "poll": "Umfrage",
+      "forward": "Weiterleiten",
+      "bulk": "Massenversand"
+    },
+    "messageContent": "Nachrichteninhalt",
+    "messagePlaceholder": "Gib hier deine Nachricht ein...",
+    "mediaUrl": "Medien-URL",
+    "uploadFile": "Datei hochladen",
+    "browse": "Durchsuchen",
+    "removeFile": "Datei entfernen",
+    "fileReadError": "Datei konnte nicht gelesen werden",
+    "fileTooLarge": "Die Datei ist zu groß (max. 18 MB)",
+    "caption": "Beschriftung",
+    "filename": "Dateiname",
+    "captionPlaceholder": "Beschriftung eingeben...",
+    "filenamePlaceholder": "dokument.pdf",
+    "locationLatitude": "Breitengrad",
+    "locationLongitude": "Längengrad",
+    "locationDescription": "Beschreibung",
+    "locationAddress": "Adresse",
+    "contactName": "Kontaktname",
+    "contactNamePlaceholder": "Max Mustermann",
+    "contactNumber": "Kontaktnummer",
+    "pollQuestion": "Umfragefrage",
+    "pollQuestionPlaceholder": "Wo sollen wir uns treffen?",
+    "pollOptions": "Umfrageoptionen",
+    "pollOptionPlaceholder": "Option {{index}}",
+    "pollOptionsHint": "Zwischen 2 und 12 Optionen",
+    "addOption": "Option hinzufügen",
+    "removeOption": "Option entfernen",
+    "allowMultipleAnswers": "Mehrfachantworten erlauben",
+    "forwardFromChatId": "Quell-Chat-ID",
+    "forwardFromPlaceholder": "491701234567@c.us",
+    "forwardFromHint": "Leer lassen, um vom aktuellen Empfänger weiterzuleiten",
+    "forwardToChatId": "Ziel-Chat-ID",
+    "forwardToPlaceholder": "Telefonnummer oder Chat-ID",
+    "forwardMessageId": "Nachrichten-ID",
+    "forwardMessageIdHint": "ID der weiterzuleitenden Nachricht",
+    "bulkRecipients": "Empfänger",
+    "bulkRecipientsPlaceholder": "+491701234567",
+    "bulkRecipientsHint": "Eine Telefonnummer oder Chat-ID pro Zeile (max. 100)",
+    "bulkRecipientsCount": "Empfänger: {{count}}",
+    "bulkDelay": "Verzögerung zwischen Nachrichten (ms)",
+    "bulkDelayHint": "1000–60000 ms (Standard: 3000)",
+    "send": "Nachricht senden",
+    "sending": "Wird gesendet...",
+    "viewOnly": "Nur ansehen",
+    "responseEmpty": "Sende eine Nachricht, um die API-Antwort anzuzeigen",
+    "successLabel": "Erfolgreich",
+    "failedLabel": "Fehlgeschlagen",
+    "response": {
+      "timestamp": "Zeitstempel",
+      "messageId": "Nachrichten-ID",
+      "batchId": "Batch-ID",
+      "error": "Fehler"
+    },
+    "sendFailed": "Nachricht konnte nicht gesendet werden",
+    "notOnWhatsApp": "Diese Nummer ist nicht bei WhatsApp registriert",
+    "batch": {
+      "status": {
+        "pending": "Ausstehend",
+        "processing": "Wird verarbeitet",
+        "completed": "Abgeschlossen",
+        "cancelled": "Abgebrochen",
+        "failed": "Fehlgeschlagen"
+      },
+      "progress": "{{sent}} von {{total}} gesendet · {{failed}} fehlgeschlagen · {{pending}} ausstehend",
+      "cancel": "Batch abbrechen",
+      "cancelling": "Wird abgebrochen..."
+    }
+  },
+  "infrastructure": {
+    "title": "Infrastruktur",
+    "subtitle": "Server-, Datenbank-, Cache-, Speicher- und Engine-Einstellungen konfigurieren",
+    "saveConfig": "Konfiguration speichern",
+    "saving": "Wird gespeichert...",
+    "database": {
+      "title": "Datenbankkonfiguration",
+      "sqlite": "SQLite",
+      "sqliteDesc": "Lokale dateibasierte Datenbank",
+      "postgres": "PostgreSQL",
+      "postgresDesc": "Produktionsreife Datenbank",
+      "useBuiltIn": "Integrierten PostgreSQL-Container verwenden",
+      "builtInDesc": "OpenWA verwaltet einen PostgreSQL-Container für dich",
+      "dbName": "Datenbankname",
+      "schema": "Schema",
+      "schemaDesc": "PostgreSQL-Schema (wird bei SQLite ignoriert). Standard: „public“. Das Schema muss bereits existieren.",
+      "poolSize": "Pool-Größe",
+      "ssl": "SSL-Verbindung",
+      "sslDesc": "TLS/SSL für sichere Datenbankverbindungen aktivieren",
+      "sslRejectUnauthorized": "SSL-Zertifikat überprüfen",
+      "sslRejectUnauthorizedDesc": "Selbstsignierte oder ungültige Zertifikate ablehnen. Bei verwaltetem PostgreSQL mit selbstsignierten Zertifikaten deaktivieren (Supabase, Heroku, Render, Railway).",
+      "migrationsTitle": "Datenbankmigrationen",
+      "migrationsStatus": "Das Schema wird automatisch mit TypeORM synchronisiert",
+      "migrationsHint": "Migrationen werden automatisch verwaltet. Verwende die CLI für manuelle Migrationen."
+    },
+    "engine": {
+      "title": "WhatsApp-Engine",
+      "builtIn": "Integriert",
+      "headless": "Headless-Modus",
+      "headlessDesc": "Browser ohne sichtbare Benutzeroberfläche ausführen (für den Produktivbetrieb empfohlen).",
+      "sessionDataPath": "Pfad für Sitzungsdaten",
+      "browserArgs": "Browserargumente",
+      "noBrowser": "Diese Engine stellt die Verbindung über WebSocket her — sie besitzt keinen Browser. Daher gibt es keine Einstellungen für Headless-Modus oder Browserargumente. Die aktive Engine wird nach einem Neustart angewendet.",
+      "restartNote": "Der Wechsel der Engine wird nach einem Serverneustart wirksam.",
+      "webVersion": "WhatsApp-Web-Build",
+      "webVersionNative": "automatisch (Standard von whatsapp-web.js)",
+      "webVersionSource": {
+        "pinned": "über WWEBJS_WEB_VERSION festgelegt",
+        "auto": "automatisch ermittelt, aktuell als stabil bekannter Build",
+        "native": "native automatische Auswahl von whatsapp-web.js"
+      }
+    },
+    "redis": {
+      "title": "Redis",
+      "enable": "Redis aktivieren",
+      "enableDesc": "Erforderlich für Caching, Sitzungsspeicherung und BullMQ-Warteschlangen",
+      "useBuiltIn": "Integrierten Redis-Container verwenden",
+      "builtInDesc": "OpenWA verwaltet einen Redis-Container für dich",
+      "queueTitle": "BullMQ-Warteschlangensystem aktivieren",
+      "queueDesc": "Nachrichtenwarteschlangen für die zuverlässige Zustellung von Nachrichten und Webhooks verwenden",
+      "statsTitle": "Warteschlangenstatistiken",
+      "webhookQueue": "Webhook-Warteschlange",
+      "pending": "Ausstehend",
+      "completed": "Abgeschlossen",
+      "failed": "Fehlgeschlagen",
+      "viewBullMq": "BullMQ-Dashboard ansehen",
+      "disabledTitle": "Redis ist deaktiviert",
+      "disabledDesc": "Aktiviere Redis für Caching, Sitzungsspeicherung und BullMQ-Nachrichtenwarteschlangen.",
+      "passwordOptional": "(optional)",
+      "bullMqUrlCopied": "URL des BullMQ-Dashboards kopiert",
+      "bullMqUrlHint": "Öffne es mit einem ADMIN-API-Schlüssel — ein Browser-Tab kann sich nicht authentifizieren."
+    },
+    "storage": {
+      "title": "Speicherkonfiguration",
+      "s3Unreachable": "S3 (nicht erreichbar)",
+      "local": "Lokales Dateisystem",
+      "localDesc": "Mediendateien lokal speichern",
+      "s3": "Amazon S3",
+      "s3Desc": "Cloud-Speicher (S3-kompatibel)",
+      "useBuiltIn": "Integrierten MinIO-Container verwenden",
+      "builtInDesc": "OpenWA verwaltet einen MinIO-Container (S3-kompatibel) für dich",
+      "storagePath": "Speicherpfad",
+      "bucket": "Bucket-Name",
+      "region": "Region",
+      "accessKey": "Zugriffsschlüssel",
+      "secretKey": "Geheimer Schlüssel",
+      "endpoint": "Benutzerdefinierter Endpunkt (optional)",
+      "endpointHint": "Für MinIO oder andere S3-kompatible Dienste"
+    },
+    "statusLabels": {
+      "connected": "Verbunden",
+      "disconnected": "Getrennt",
+      "disabled": "Deaktiviert"
+    },
+    "envPinNote": "Durch eine Umgebungsvariable festgelegt — dies ist der aktuell verwendete Wert. Änderungen im Dashboard werden erst angewendet, wenn diese Variable entfernt wurde.",
+    "migration": {
+      "title": "Achtung — dadurch wird das Daten-Backend geändert",
+      "dbWarning": "Die neue Datenbank ist zunächst leer. Lade jetzt eine Sicherung deiner aktuellen Daten herunter, solange noch die alte Datenbank aktiv ist, und stelle sie nach dem Neustart wieder her.",
+      "storageWarning": "Vorhandene Mediendateien werden nicht automatisch in das neue Speicher-Backend verschoben; sie verbleiben am bisherigen Speicherort.",
+      "downloadBackup": "Zuerst Sicherung herunterladen",
+      "backupTitle": "Datensicherung und Wiederherstellung",
+      "backupHint": "Exportiere vor dem Datenbankwechsel alle Daten als JSON und importiere sie anschließend wieder. Die Sicherung enthält Webhook-Geheimnisse und Proxy-Zugangsdaten im Klartext — speichere sie sicher und lösche sie nach der Wiederherstellung.",
+      "export": "Daten exportieren",
+      "import": "Daten importieren",
+      "exportFailed": "Daten konnten nicht exportiert werden",
+      "importFailed": "Daten konnten nicht importiert werden",
+      "importOk": "Daten wurden importiert",
+      "importConfirm": "Beim Import werden alle aktuellen Daten durch die Sicherung ERSETZT ({{rows}} Zeilen). Dies kann nicht rückgängig gemacht werden. Fortfahren?",
+      "invalidFile": "Diese Datei ist keine gültige OpenWA-Datensicherung.",
+      "importTooLarge": "Die Sicherung ist für das Anfragelimit zu groß. Erhöhe BODY_SIZE_LIMIT auf dem Server und versuche es erneut."
+    },
+    "restart": {
+      "idleTitle": "Konfiguration gespeichert",
+      "restartingTitle": "Server wird neu gestartet…",
+      "waitingTitle": "Bitte warten…",
+      "successTitle": "Server bereit",
+      "errorTitle": "Neustart fehlgeschlagen",
+      "idleDesc": "Die Konfiguration wurde in <code>.env.generated</code> gespeichert.<br/>Ein Serverneustart ist erforderlich, um die Änderungen anzuwenden.",
+      "later": "Später neu starten",
+      "now": "Jetzt neu starten",
+      "restartingMsg": "Server wird neu gestartet... {{count}} s",
+      "checking": "Serverstatus wird geprüft...",
+      "dontClose": "Bitte schließe dieses Fenster nicht",
+      "successMsg": "Der Server ist wieder online! Die Seite wird automatisch neu geladen.",
+      "errorMsg": "Der Server hat nach 30 Sekunden nicht geantwortet. Prüfe die Docker-Protokolle und starte ihn manuell neu.",
+      "reload": "Seite neu laden"
+    },
+    "toasts": {
+      "saveFailed": "Speichern fehlgeschlagen"
+    },
+    "statusLoadError": "Der aktuelle Infrastrukturstatus konnte nicht geladen werden. Aktualisiere die Seite und versuche es erneut."
+  },
+  "plugins": {
+    "title": "Plugins",
+    "subtitle": "Erweiterungen installieren, konfigurieren und verwalten",
+    "refresh": "Aktualisieren",
+    "builtIn": "Integriert",
+    "noDescription": "Keine Beschreibung verfügbar",
+    "enable": "Aktivieren",
+    "disable": "Deaktivieren",
+    "healthCheck": "Funktionsprüfung",
+    "configure": "Konfigurieren",
+    "install": "Plugin installieren",
+    "uninstall": "Deinstallieren",
+    "uninstallConfirm": "„{{name}}“ deinstallieren? Dadurch werden die zugehörigen Dateien gelöscht.",
+    "empty": {
+      "title": "Keine Plugins installiert",
+      "description": "Installiere ein Plugin, um den Funktionsumfang von OpenWA zu erweitern."
+    },
+    "config": {
+      "title": "{{name}} konfigurieren",
+      "noOptions": "Für dieses Plugin sind keine Konfigurationsoptionen verfügbar",
+      "uiHandshakeError": "Die Benutzeroberfläche zur Plugin-Konfiguration konnte nicht initialisiert werden. Verwende, sofern verfügbar, das Schemaformular unten.",
+      "save": "Konfiguration speichern",
+      "addItem": "Hinzufügen",
+      "tabConfig": "Konfiguration",
+      "tabSessions": "Sitzungen"
+    },
+    "rail": {
+      "enabled": "aktiviert",
+      "installed": "installiert",
+      "active": "Aktive Plugins",
+      "none": "Noch keine aktiviert"
+    },
+    "installModal": {
+      "title": "Plugin installieren",
+      "hint": "Lade ein als ZIP-Datei verpacktes Plugin mit einer manifest.json hoch. Nach der Aktivierung wird es in einer Sandbox ausgeführt.",
+      "choose": "ZIP-Datei auswählen…",
+      "tooLarge": "Die Datei überschreitet das Limit von 5 MB."
+    },
+    "toasts": {
+      "errorTitle": "Plugin-Fehler",
+      "errorDefault": "Plugin-Status konnte nicht geändert werden",
+      "healthOk": "Funktionsprüfung erfolgreich",
+      "healthFail": "Funktionsprüfung fehlgeschlagen",
+      "healthError": "Fehler bei der Funktionsprüfung",
+      "savedTitle": "Konfiguration gespeichert",
+      "savedDesc": "Ein Serverneustart ist erforderlich, um die Änderungen anzuwenden.",
+      "saveFailed": "Speichern fehlgeschlagen",
+      "installed": "Plugin installiert",
+      "installFailed": "Installation fehlgeschlagen",
+      "uninstalled": "Plugin deinstalliert",
+      "uninstallFailed": "Deinstallation fehlgeschlagen",
+      "enableFailedTitle": "Aktivierung fehlgeschlagen",
+      "disableFailedTitle": "Deaktivierung fehlgeschlagen",
+      "configRequiredTitle": "Konfiguration erforderlich",
+      "configRequiredDesc": "Fülle vor der Aktivierung die erforderlichen Felder aus: {{fields}}"
+    },
+    "sessions": {
+      "activationTitle": "Ausführen für",
+      "activationDesc": "Wähle aus, für welche Sitzungen dieses Plugin ausgeführt wird.",
+      "allSessions": "Alle Sitzungen",
+      "specificSessions": "Bestimmte Sitzungen",
+      "noSessions": "Noch keine Sitzungen vorhanden.",
+      "saveActivation": "Aktivierung speichern",
+      "perSessionTitle": "Sitzungsspezifische Konfiguration",
+      "perSessionDesc": "Überschreibe die globale Konfiguration für eine Sitzung; unveränderte Felder übernehmen den globalen Wert.",
+      "selectSession": "Sitzung auswählen…",
+      "saveOverride": "Überschreibung speichern",
+      "clearOverride": "Überschreibung entfernen"
+    },
+    "instances": {
+      "title": "Instanzen",
+      "description": "Erstelle kontobezogene Instanzen für diese Integration. Jede Instanz besitzt ein eigenes Signaturgeheimnis und eine eigene Ingress-URL.",
+      "create": "Instanz erstellen",
+      "empty": "Noch keine Instanzen vorhanden. Erstelle eine, um eine Ingress-URL und ein Geheimnis zu erhalten.",
+      "loadError": "Instanzen konnten nicht geladen werden.",
+      "allSessions": "Alle Sitzungen",
+      "enabled": "Aktiviert",
+      "disabled": "Deaktiviert",
+      "form": {
+        "instanceId": "Instanz-ID",
+        "instanceIdPlaceholder": "z. B. acme-support",
+        "instanceIdHint": "Buchstaben, Zahlen, Bindestriche und Unterstriche (max. 64).",
+        "sessionScope": "Sitzungsbereich (optional)",
+        "sessionScopePlaceholder": "Für alle Sitzungen leer lassen",
+        "verifyToken": "Verifizierungstoken (optional)",
+        "verifyTokenPlaceholder": "Token, das der Anbieter bei der Verifizierung zurückgibt",
+        "secret": "Ingress-Geheimnis (optional)",
+        "secretPlaceholder": "Webhook-Geheimnis des Anbieters (z. B. Chatwoot)",
+        "secretHint": "Leer lassen, um es automatisch zu erstellen; es wird nur einmal angezeigt. Falls der Anbieter ein eigenes Webhook-Geheimnis vorgibt, füge es hier ein — ein automatisch erstelltes Geheimnis würde nicht übereinstimmen.",
+        "config": "Konfiguration (optionales JSON)",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "Instanz erstellt",
+        "hint": "Kopiere das Geheimnis jetzt — es wird nur einmal angezeigt.",
+        "secret": "Signaturgeheimnis",
+        "ingressUrls": "Ingress-URL(s)"
+      },
+      "regenerate": {
+        "title": "Geheimnis neu erstellen",
+        "confirm": "Signaturgeheimnis für {{id}} neu erstellen? Das aktuelle Geheimnis funktioniert anschließend sofort nicht mehr.",
+        "action": "Neu erstellen"
+      },
+      "edit": {
+        "title": "{{id}} bearbeiten"
+      },
+      "delete": {
+        "title": "Instanz löschen",
+        "confirm": "Instanz {{id}} löschen? Ihre Ingress-URL und ihr Geheimnis funktionieren anschließend sofort nicht mehr.",
+        "action": "Löschen"
+      },
+      "actions": {
+        "regenerate": "Geheimnis neu erstellen",
+        "edit": "Bearbeiten",
+        "delete": "Löschen",
+        "copy": "Kopieren",
+        "save": "Speichern",
+        "enable": "Aktivieren",
+        "disable": "Deaktivieren"
+      },
+      "errors": {
+        "invalidId": "Die Instanz-ID darf nur Buchstaben, Zahlen, Bindestriche oder Unterstriche enthalten (max. 64).",
+        "invalidJson": "Die Konfiguration muss gültiges JSON enthalten.",
+        "invalidSecret": "Das Geheimnis muss mindestens 16 Zeichen lang sein. Alternativ leer lassen, um es automatisch zu erstellen.",
+        "duplicateId": "Eine Instanz mit dieser ID existiert bereits."
+      },
+      "toasts": {
+        "created": "Instanz erstellt",
+        "updated": "Instanz aktualisiert",
+        "deleted": "Instanz gelöscht",
+        "secretRegenerated": "Geheimnis neu erstellt",
+        "actionFailed": "Aktion fehlgeschlagen"
+      }
+    }
+  },
+  "search": {
+    "placeholder": "Nachrichten durchsuchen…",
+    "results": "{{count}} Ergebnisse",
+    "empty": "Keine Nachrichten gefunden.",
+    "error": "Suche fehlgeschlagen. Versuche es erneut.",
+    "unavailable": "Die Suche ist nicht konfiguriert.",
+    "scope": {
+      "current": "Diese Sitzung"
+    },
+    "loading": "Suche läuft…"
+  }
+}

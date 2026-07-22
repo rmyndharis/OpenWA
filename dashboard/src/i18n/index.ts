@@ -2,6 +2,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import en from './locales/en.json';
+import de from './locales/de.json';
 import es from './locales/es.json';
 import he from './locales/he.json';
 import zhCN from './locales/zh-CN.json';
@@ -13,13 +14,14 @@ import it from './locales/it.json';
 import ptBR from './locales/pt-BR.json';
 import ko from './locales/ko.json';
 
-export const supportedLanguages = ['en', 'es', 'he', 'zh-CN', 'zh-HK', 'ar', 'te', 'fr', 'it', 'pt-BR', 'ko'] as const;
+export const supportedLanguages = ['en', 'de', 'es', 'he', 'zh-CN', 'zh-HK', 'ar', 'te', 'fr', 'it', 'pt-BR', 'ko'] as const;
 export type SupportedLanguage = (typeof supportedLanguages)[number];
 
 export const rtlLanguages: SupportedLanguage[] = ['he', 'ar'];
 
 export const languageOptions: Array<{ value: SupportedLanguage; label: string; compactLabel: string }> = [
   { value: 'en', label: 'English', compactLabel: 'EN' },
+  { value: 'de', label: 'Deutsch', compactLabel: 'DE' },
   { value: 'es', label: 'Español', compactLabel: 'ES' },
   { value: 'he', label: 'עברית', compactLabel: 'עברית' },
   { value: 'zh-CN', label: '简体中文', compactLabel: '简中' },
@@ -54,6 +56,7 @@ void i18n
   .init({
     resources: {
       en: { translation: en },
+      de: { translation: de },
       es: { translation: es },
       he: { translation: he },
       'zh-CN': { translation: zhCN },

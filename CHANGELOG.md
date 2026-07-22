@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **German (`de`) dashboard translation.** The dashboard now ships a full German locale and offers
+  "Deutsch" in the language switcher. All 688 translation keys are covered, so German users get a
+  fully localized UI instead of the English fallback. Thanks @rjsebening.
+
 ### Fixed
 
 - **Chat list unread badge shape and overflow.** The unread-count badge in the chats sidebar rendered as an uneven oval and grew without bound as the count climbed. It now uses a fixed height with border-box sizing so a single digit is a true circle and larger counts form a rounded pill, and its label is capped at `99+`. The badge also exposes the exact unread count to assistive technology and as a hover tooltip.
