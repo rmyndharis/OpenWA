@@ -11,6 +11,8 @@ import {
 } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { MessageQuote } from '../message/entities/message-quote.entity';
+import { MessageReaction } from '../message/entities/message-reaction.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
@@ -55,6 +57,8 @@ describe('SessionService', () => {
   let service: SessionService;
   let repository: jest.Mocked<Partial<Repository<Session>>>;
   let messageRepository: jest.Mocked<Partial<Repository<Message>>>;
+  let messageQuoteRepository: jest.Mocked<Partial<Repository<MessageQuote>>>;
+  let messageReactionRepository: jest.Mocked<Partial<Repository<MessageReaction>>>;
   let dataSource: jest.Mocked<Partial<DataSource>>;
   let engineFactory: jest.Mocked<Partial<EngineFactory>>;
   let eventsGateway: jest.Mocked<Partial<EventsGateway>>;
@@ -92,6 +96,11 @@ describe('SessionService', () => {
         raw: undefined,
       }),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    messageQuoteRepository = { upsert: jest.fn().mockResolvedValue(undefined) };
+    messageReactionRepository = {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
     };
 
     dataSource = {
@@ -172,6 +181,8 @@ describe('SessionService', () => {
           provide: getRepositoryToken(Message, 'data'),
           useValue: messageRepository,
         },
+        { provide: getRepositoryToken(MessageQuote, 'data'), useValue: messageQuoteRepository },
+        { provide: getRepositoryToken(MessageReaction, 'data'), useValue: messageReactionRepository },
         {
           provide: getDataSourceToken('data'),
           useValue: dataSource,
@@ -2065,6 +2076,20 @@ describe('SessionService', () => {
       );
     });
 
+    it('also persists the current reaction in the additive typed relation', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      (messageRepository.findOne as jest.Mock).mockResolvedValue({ id: 'message-uuid', metadata: {} });
+      (messageRepository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      callbacks.onMessageReaction!({ messageId: 'wa-1', chatId: 'c', senderId: 'alice@lid', reaction: '👍' });
+      for (let i = 0; i < 3; i++) await flush();
+
+      expect(messageReactionRepository.upsert).toHaveBeenCalledWith(
+        { messageId: 'message-uuid', senderId: 'alice@lid', sessionId: 'sess-uuid-1', emoji: '👍' },
+        ['messageId', 'senderId'],
+      );
+    });
+
     it('removes a sender reaction on a cleared reaction event (delete branch)', async () => {
       const callbacks = await startAndCaptureCallbacks();
       type Row = { metadata?: Record<string, unknown> };
@@ -2217,6 +2242,31 @@ describe('SessionService', () => {
       expect(payload.message.id).toBeTruthy(); // the DB-generated id, not undefined
       expect(payload.message.id).toBe('gen-uuid-1'); // merged from InsertResult.identifiers[0]
       expect(persistedCalls[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', source: 'SessionService' });
+    });
+
+    it('persists a live inbound quote in the additive typed relation', async () => {
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage!(
+        makeMessage({
+          id: 'wa-quoted-reply',
+          quotedMessage: { id: 'wa-parent', body: 'parent body' },
+        }),
+      );
+      await flush();
+
+      expect(messageQuoteRepository.upsert).toHaveBeenCalledWith(
+        {
+          messageId: 'gen-uuid-1',
+          sessionId: 'sess-uuid-1',
+          quotedWaMessageId: 'wa-parent',
+          body: 'parent body',
+        },
+        ['messageId'],
+      );
     });
 
     it('does not emit message:persisted on a duplicate re-fire (loses the dedup insert race)', async () => {

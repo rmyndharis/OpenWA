@@ -181,6 +181,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'AUTO_START_SESSIONS',
     'STORE_EPHEMERAL_MESSAGES',
     'RESOLVE_LID_TO_PHONE',
+    'AGENT_CONTEXT_ENABLED',
     'SIMULATE_TYPING',
     'SEARCH_ENABLED',
   ]) {

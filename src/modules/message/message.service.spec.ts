@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { BadRequestException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { MessageService } from './message.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
+import { MessageQuote } from './entities/message-quote.entity';
 import { SessionService } from '../session/session.service';
 import { HookManager } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
@@ -38,6 +39,7 @@ function createMockEngine() {
 describe('MessageService', () => {
   let service: MessageService;
   let repository: jest.Mocked<Partial<Repository<Message>>>;
+  let quoteRepository: jest.Mocked<Partial<Repository<MessageQuote>>>;
   let sessionService: jest.Mocked<Partial<SessionService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let templateService: jest.Mocked<Partial<TemplateService>>;
@@ -63,6 +65,7 @@ describe('MessageService', () => {
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       createQueryBuilder: jest.fn(),
     };
+    quoteRepository = { upsert: jest.fn().mockResolvedValue(undefined) };
 
     mockEngine = createMockEngine();
 
@@ -90,6 +93,7 @@ describe('MessageService', () => {
       providers: [
         MessageService,
         { provide: getRepositoryToken(Message, 'data'), useValue: repository },
+        { provide: getRepositoryToken(MessageQuote, 'data'), useValue: quoteRepository },
         { provide: SessionService, useValue: sessionService },
         { provide: HookManager, useValue: hookManager },
         { provide: TemplateService, useValue: templateService },
@@ -790,6 +794,25 @@ describe('MessageService', () => {
       });
 
       expect(mockEngine.replyToMessage).toHaveBeenCalledWith('test@c.us', 'wa-quoted-1', 'This is a reply');
+    });
+
+    it('persists the reply quote in the additive typed relation', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue({ body: 'quoted body' });
+      await service.reply('sess-1', {
+        chatId: 'test@c.us',
+        quotedMessageId: 'wa-quoted-1',
+        text: 'This is a reply',
+      });
+
+      expect(quoteRepository.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'msg-uuid-1',
+          sessionId: 'sess-1',
+          quotedWaMessageId: 'wa-quoted-1',
+          body: 'quoted body',
+        }),
+        ['messageId'],
+      );
     });
   });
 

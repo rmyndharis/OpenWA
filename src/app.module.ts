@@ -11,6 +11,7 @@ import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
 import { MessageModule } from './modules/message/message.module';
+import { AgentContextModule } from './modules/agent-context/agent-context.module';
 import { TemplateModule } from './modules/template/template.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
 import { HealthModule } from './modules/health/health.module';
@@ -56,6 +57,13 @@ if (process.env.QUEUE_ENABLED === 'true') {
 const searchModules: Array<Type | DynamicModule> = [];
 if (process.env.SEARCH_ENABLED !== 'false') {
   searchModules.push(SearchModule);
+}
+
+// Opt-in by design: the agent-context surface is a narrow read-only boundary, but deployments that
+// do not explicitly need it must expose neither its route nor its providers.
+const agentContextModules: Array<Type | DynamicModule> = [];
+if (process.env.AGENT_CONTEXT_ENABLED === 'true') {
+  agentContextModules.push(AgentContextModule);
 }
 
 // Only mount the MCP server if explicitly enabled to avoid startup cost and
@@ -270,6 +278,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     EngineModule,
     SessionModule,
     MessageModule,
+    ...agentContextModules,
     TemplateModule,
     WebhookModule,
     HealthModule,

@@ -13,6 +13,8 @@ export interface FeatureFlags {
   storeEphemeralMessages: boolean;
   /** Inline @lid -> phone resolution for inbound privacy-id senders. Opt-in — default OFF. */
   resolveLidToPhone: boolean;
+  /** Bounded GET-only context endpoint for one inbound message. Opt-in — default OFF. */
+  agentContext: boolean;
   /** Humanising typing indicator before single (non-bulk) sends. Default ON. */
   simulateTyping: boolean;
   /** Upper bound (ms) on the humanising typing pause. Default 5000. */
@@ -33,6 +35,7 @@ export function computeFeatureFlags(env: NodeJS.ProcessEnv = process.env): Featu
     autoStartSessions: env.AUTO_START_SESSIONS === 'true',
     storeEphemeralMessages: env.STORE_EPHEMERAL_MESSAGES !== 'false',
     resolveLidToPhone: env.RESOLVE_LID_TO_PHONE === 'true',
+    agentContext: env.AGENT_CONTEXT_ENABLED === 'true',
     simulateTyping: env.SIMULATE_TYPING !== 'false',
     simulateTypingMaxMs: Number(env.SIMULATE_TYPING_MAX_MS) || 5000,
   };

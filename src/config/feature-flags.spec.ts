@@ -8,18 +8,21 @@ describe('feature-flags', () => {
         autoStartSessions: false, // opt-in
         storeEphemeralMessages: true, // opt-out
         resolveLidToPhone: false, // opt-in
+        agentContext: false, // opt-in
         simulateTyping: true, // opt-out
         simulateTypingMaxMs: 5000,
       });
     });
 
-    it('treats opt-in flags (autoStart, resolveLid) as ON only for the exact string "true"', () => {
+    it('treats opt-in flags (autoStart, resolveLid, agentContext) as ON only for the exact string "true"', () => {
       expect(computeFeatureFlags({ AUTO_START_SESSIONS: 'true' }).autoStartSessions).toBe(true);
       expect(computeFeatureFlags({ RESOLVE_LID_TO_PHONE: 'true' }).resolveLidToPhone).toBe(true);
+      expect(computeFeatureFlags({ AGENT_CONTEXT_ENABLED: 'true' }).agentContext).toBe(true);
       // Anything else stays OFF.
       for (const v of ['false', 'TRUE', '1', 'yes', '']) {
         expect(computeFeatureFlags({ AUTO_START_SESSIONS: v }).autoStartSessions).toBe(false);
         expect(computeFeatureFlags({ RESOLVE_LID_TO_PHONE: v }).resolveLidToPhone).toBe(false);
+        expect(computeFeatureFlags({ AGENT_CONTEXT_ENABLED: v }).agentContext).toBe(false);
       }
     });
 

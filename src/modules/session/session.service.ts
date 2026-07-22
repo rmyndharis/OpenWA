@@ -16,6 +16,8 @@ import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeor
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
+import { MessageQuote } from '../message/entities/message-quote.entity';
+import { MessageReaction } from '../message/entities/message-reaction.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
@@ -228,6 +230,10 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly sessionRepository: Repository<Session>,
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
+    @InjectRepository(MessageQuote, 'data')
+    private readonly messageQuoteRepository: Repository<MessageQuote>,
+    @InjectRepository(MessageReaction, 'data')
+    private readonly messageReactionRepository: Repository<MessageReaction>,
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
     private readonly engineFactory: EngineFactory,
@@ -975,6 +981,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // in the DB. The webhook/WS dispatch below stays fail-open — a real inbound message must
             // never be dropped on a transient DB failure; only the hook requires a durable row.
             if (persisted) {
+              await this.persistMessageQuote(id, dbMessage, incoming.quotedMessage);
               void this.hookManager
                 .execute(
                   'message:persisted',
@@ -1101,6 +1108,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
                 }
               }
               if (persisted) {
+                await this.persistMessageQuote(id, dbMessage, outgoing.quotedMessage);
                 // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-
                 // composed sends exactly like API sends.
                 void this.hookManager
@@ -1458,12 +1466,46 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         metadata,
       } as QueryDeepPartialEntity<Message>);
 
+      // Keep the existing JSON snapshot for public websocket/webhook compatibility, while writing
+      // the minimal typed current state used by the opt-in agent projection. This does not retain a
+      // reaction-event log: a cleared reaction removes the sender's current row.
+      if (!event.reaction) {
+        await this.messageReactionRepository.delete({ messageId: msg.id, senderId: event.senderId });
+      } else {
+        await this.messageReactionRepository.upsert(
+          { messageId: msg.id, senderId: event.senderId, sessionId: id, emoji: event.reaction },
+          ['messageId', 'senderId'],
+        );
+      }
+
       this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
       // Webhook parity with the WebSocket broadcast: same payload (event + post-apply snapshot), so a
       // webhook-only consumer observes reactions too. Idempotency for this event is salted per dispatch.
       void this.webhookService.dispatch(id, 'message.reaction', { ...event, reactions });
     } catch (err) {
       this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
+    }
+  }
+
+  /** Persist only known quote fields; failure must never block a real WhatsApp event. */
+  private async persistMessageQuote(
+    sessionId: string,
+    message: Pick<Message, 'id'>,
+    quote?: { id: string; body: string },
+  ): Promise<void> {
+    if (!message.id || !quote?.id) return;
+    try {
+      await this.messageQuoteRepository.upsert(
+        {
+          messageId: message.id,
+          sessionId,
+          quotedWaMessageId: quote.id,
+          body: quote.body || undefined,
+        },
+        ['messageId'],
+      );
+    } catch (err) {
+      this.logger.error(`Failed to persist message quote for ${message.id}`, String(err));
     }
   }
 

@@ -9,6 +9,7 @@ import { SendTemplateMessageDto } from './dto/send-template.dto';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
 import { MediaInput, IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
+import { MessageQuote } from './entities/message-quote.entity';
 import { HookManager, applySendingGate } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
 import { renderTemplate } from '../../common/utils/template-render';
@@ -49,6 +50,8 @@ export class MessageService {
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
+    @InjectRepository(MessageQuote, 'data')
+    private readonly messageQuoteRepository: Repository<MessageQuote>,
     private readonly sessionService: SessionService,
     private readonly hookManager: HookManager,
     private readonly templateService: TemplateService,
@@ -171,7 +174,6 @@ export class MessageService {
         media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
-
     let result: MessageResult;
     try {
       result = await engine.sendImageMessage(finalDto.chatId, media);
@@ -195,7 +197,6 @@ export class MessageService {
         media: { mimetype: finalDto.mimetype, filename: finalDto.filename, data: media.data },
       },
     });
-
     let result: MessageResult;
     try {
       result = await engine.sendVideoMessage(finalDto.chatId, media);
@@ -451,6 +452,22 @@ export class MessageService {
         quotedMessage: { id: finalDto.quotedMessageId, body: quotedBody },
       },
     });
+    // Keep the established metadata preview for existing clients, plus an additive typed relation for
+    // the opt-in agent context. A quote persistence fault cannot turn a valid WhatsApp reply into a
+    // failed send.
+    try {
+      await this.messageQuoteRepository.upsert(
+        {
+          messageId: message.id,
+          sessionId,
+          quotedWaMessageId: finalDto.quotedMessageId,
+          body: quotedBody || undefined,
+        },
+        ['messageId'],
+      );
+    } catch (err) {
+      this.logger.warn(`Failed to persist quote for reply ${message.id}`, { error: String(err) });
+    }
 
     let result: MessageResult;
     try {
