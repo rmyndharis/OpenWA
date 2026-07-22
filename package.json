@@ -57,7 +57,7 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/client-s3": "^3.1092.0",
     "@bull-board/api": "^8.1.2",
     "@bull-board/express": "^8.1.2",
     "@bull-board/nestjs": "^8.1.2",
@@ -77,7 +77,7 @@
     "@whiskeysockets/baileys": "7.0.0-rc13",
     "adm-zip": "^0.6.0",
     "archiver": "^8.0.0",
-    "bullmq": "^5.80.8",
+    "bullmq": "^5.80.10",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "dockerode": "^5.0.1",
@@ -91,7 +91,7 @@
     "sqlite3": "^5.1.7",
     "tar-stream": "^3.2.0",
     "typeorm": "^0.3.31",
-    "undici": "^8.7.0",
+    "undici": "^8.8.0",
     "whatsapp-web.js": "^1.34.7",
     "zod": "^4.4.3"
   },
@@ -116,7 +116,7 @@
     "eslint-plugin-prettier": "^5.5.6",
     "globals": "^17.7.0",
     "jest": "^30.4.2",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.4.11",
@@ -124,7 +124,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
-    "typescript-eslint": "^8.64.0"
+    "typescript-eslint": "^8.65.0"
   },
   "jest": {
     "moduleFileExtensions": [
