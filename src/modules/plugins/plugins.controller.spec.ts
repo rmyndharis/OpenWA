@@ -21,6 +21,8 @@ describe('PluginsController authorization', () => {
   ] as const;
 
   it.each(adminOnly)('%s requires the ADMIN role', method => {
+    // Metadata lookup key, never invoked — see the same note in infra.controller.spec.ts.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const handler = PluginsController.prototype[method];
     const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, handler);
     expect(role).toBe(ApiKeyRole.ADMIN);

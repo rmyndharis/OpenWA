@@ -66,6 +66,10 @@ describe('InfraController access control (Vuln 2)', () => {
   ] as const;
 
   it.each(adminOnly)('%s requires the ADMIN role', method => {
+    // The handler is only ever a lookup key for reflector metadata — it is never invoked, so there is
+    // no `this` to lose. unbound-method (tightened in typescript-eslint 8.65) cannot tell the two
+    // apart, and the cast below does not satisfy it either.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     const handler = InfraController.prototype[method as keyof InfraController] as unknown as (
       ...args: unknown[]
     ) => unknown;
