@@ -24,6 +24,7 @@ import {
   IPlugin,
   PluginType,
   PluginLogger,
+  PluginMessageAnnotationsCapability,
   PluginConfigSchema,
   validateIngressManifest,
   warnUnauthenticatedIngressRoutes,
@@ -47,6 +48,7 @@ import type { ConversationMappingService } from '../../modules/integration/conve
 import type { PluginInstanceService } from '../../modules/integration/plugin-instance.service';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 import type { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
+import type { MessageAnnotationService } from '../../modules/message/message-annotation.service';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
@@ -770,6 +772,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.moduleRef.get(mod.SessionService, { strict: false });
   }
 
+  /** Lazy like MessageService so annotation storage stays independent of the plugin module graph. */
+  private getMessageAnnotationService(): MessageAnnotationService {
+    const mod =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('../../modules/message/message-annotation.service') as typeof import('../../modules/message/message-annotation.service');
+    return this.moduleRef.get(mod.MessageAnnotationService, { strict: false });
+  }
+
   /**
    * Same lazy-require pattern as getMessageService/getSessionService: a static import of the
    * integration module would add a top-level edge back into plugin-loader's own module graph.
@@ -1330,6 +1340,13 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
         },
       } satisfies PluginMappingsCapability,
+      annotations: {
+        upsert: async (sessionId, messageId, input) => {
+          this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGE_ANNOTATIONS_WRITE);
+          this.assertSessionActive(plugin, sessionId);
+          return this.getMessageAnnotationService().upsert(sessionId, messageId, plugin.manifest.id, input);
+        },
+      } satisfies PluginMessageAnnotationsCapability,
     };
   }
 

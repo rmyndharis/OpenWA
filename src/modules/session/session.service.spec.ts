@@ -13,6 +13,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageQuote } from '../message/entities/message-quote.entity';
 import { MessageReaction } from '../message/entities/message-reaction.entity';
+import { MessageAnnotationService } from '../message/message-annotation.service';
 import { MessageBatch } from '../message/entities/message-batch.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
@@ -66,6 +67,7 @@ describe('SessionService', () => {
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let configService: jest.Mocked<Partial<ConfigService>>;
   let lidMappingStore: jest.Mocked<Partial<LidMappingStoreService>>;
+  let messageAnnotationService: { requestForMessage: jest.Mock };
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -169,6 +171,7 @@ describe('SessionService', () => {
       getCached: jest.fn().mockReturnValue(undefined),
       lidsForPhone: jest.fn().mockReturnValue([]),
     };
+    messageAnnotationService = { requestForMessage: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -193,6 +196,7 @@ describe('SessionService', () => {
         { provide: HookManager, useValue: hookManager },
         { provide: ConfigService, useValue: configService },
         { provide: LidMappingStoreService, useValue: lidMappingStore },
+        { provide: MessageAnnotationService, useValue: messageAnnotationService },
       ],
     }).compile();
 
@@ -1663,6 +1667,20 @@ describe('SessionService', () => {
       expect(messageRepository.insert).toHaveBeenCalled();
       expect(dispatchedEvents('message.received')).toHaveLength(1);
       expect(eventsGateway.emitMessage).toHaveBeenCalled();
+    });
+
+    it('announces a persisted inbound media row through the annotation lifecycle', async () => {
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessage?.(makeMessage({ id: 'wa-voice-1', type: 'voice', body: '', fromMe: false }));
+      await flush();
+
+      expect(messageAnnotationService.requestForMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'gen-uuid-1', sessionId: 'sess-uuid-1', type: 'voice' }),
+      );
     });
 
     it('still persists and dispatches an outgoing message when a plugin stops the hook chain', async () => {

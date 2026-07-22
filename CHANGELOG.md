@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Plugins can now store bounded, provider-neutral transcript annotations without changing normal message or webhook payloads.** The additive `message_annotations` store is scoped to a session and a persisted message, validates a small typed transcript record, and keeps transcript text outside `Message.metadata`. An opt-in plugin declares `message-annotations:write` to call the write-only `ctx.annotations.upsert` capability; it cannot list, search, or read annotations through this foundation. Eligible live media emits minimal annotation lifecycle hooks, while no transcription provider, external AI dependency, or annotation REST endpoint is enabled by default.
+
 ## [0.10.6] - 2026-07-22
 
 ### Changed

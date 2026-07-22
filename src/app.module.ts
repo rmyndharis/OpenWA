@@ -11,6 +11,7 @@ import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
 import { MessageModule } from './modules/message/message.module';
+import { MessageAnnotationsModule } from './modules/message/message-annotations.module';
 import { AgentContextModule } from './modules/agent-context/agent-context.module';
 import { TemplateModule } from './modules/template/template.module';
 import { WebhookModule } from './modules/webhook/webhook.module';
@@ -276,6 +277,7 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
     ...queueModules,
     AuthModule,
     EngineModule,
+    MessageAnnotationsModule,
     SessionModule,
     MessageModule,
     ...agentContextModules,

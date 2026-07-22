@@ -6,3 +6,12 @@ describe('message:persisted hook event', () => {
     expect(KNOWN_HOOK_EVENTS.has('message:persisted')).toBe(true);
   });
 });
+
+describe('message annotation hook events', () => {
+  it('keeps the request and update lifecycle names in the finite sandbox allowlist', () => {
+    expect(isKnownHookEvent('message:annotation-requested')).toBe(true);
+    expect(isKnownHookEvent('message:annotation-updated')).toBe(true);
+    expect(KNOWN_HOOK_EVENTS.has('message:annotation-requested')).toBe(true);
+    expect(KNOWN_HOOK_EVENTS.has('message:annotation-updated')).toBe(true);
+  });
+});

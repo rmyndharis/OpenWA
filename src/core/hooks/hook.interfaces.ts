@@ -19,6 +19,8 @@ export type HookEvent =
   | 'message:failed'
   | 'message:ack'
   | 'message:persisted'
+  | 'message:annotation-requested'
+  | 'message:annotation-updated'
   // Webhook lifecycle
   | 'webhook:before'
   | 'webhook:queued' // After webhook job added to queue (queue mode only)
@@ -46,6 +48,8 @@ const HOOK_EVENT_REGISTRY: Record<HookEvent, true> = {
   'message:failed': true,
   'message:ack': true,
   'message:persisted': true,
+  'message:annotation-requested': true,
+  'message:annotation-updated': true,
   'webhook:before': true,
   'webhook:queued': true,
   'webhook:delivered': true,

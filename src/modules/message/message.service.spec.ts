@@ -11,6 +11,7 @@ import { TemplateService } from '../template/template.service';
 import { Template } from '../template/entities/template.entity';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { MessageAnnotationService } from './message-annotation.service';
 
 const mockEngineResult = { id: 'wa-msg-1', timestamp: 1706868000 };
 
@@ -44,6 +45,7 @@ describe('MessageService', () => {
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let templateService: jest.Mocked<Partial<TemplateService>>;
   let lidMappingStore: { lidsForPhone: jest.Mock };
+  let messageAnnotationService: { requestForMessage: jest.Mock };
   let mockEngine: ReturnType<typeof createMockEngine>;
 
   // Auto-typing is on by default; disable it for the unrelated send tests so they don't incur the
@@ -88,6 +90,7 @@ describe('MessageService', () => {
     };
 
     lidMappingStore = { lidsForPhone: jest.fn().mockReturnValue([]) };
+    messageAnnotationService = { requestForMessage: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -98,6 +101,7 @@ describe('MessageService', () => {
         { provide: HookManager, useValue: hookManager },
         { provide: TemplateService, useValue: templateService },
         { provide: LidMappingStoreService, useValue: lidMappingStore },
+        { provide: MessageAnnotationService, useValue: messageAnnotationService },
       ],
     }).compile();
 
@@ -860,6 +864,19 @@ describe('MessageService', () => {
           sessionId: 'sess-1',
           direction: MessageDirection.INCOMING,
         }),
+      );
+    });
+
+    it('announces an eligible persisted media row to the bounded annotation lifecycle', async () => {
+      await service.saveIncomingMessage('sess-1', {
+        waMessageId: 'wa-in-media-1',
+        chatId: 'sender@c.us',
+        type: 'voice',
+        metadata: { media: { data: 'must-not-cross-the-hook' } },
+      });
+
+      expect(messageAnnotationService.requestForMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'msg-uuid-1', sessionId: 'sess-1', type: 'voice' }),
       );
     });
   });

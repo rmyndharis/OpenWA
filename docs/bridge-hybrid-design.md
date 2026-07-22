@@ -196,12 +196,17 @@ type MessageAnnotationV1 = {
 };
 ```
 
-The generic hook is `message:annotation-requested` for eligible media and
-`message:annotation-updated` after a provider writes a validated annotation. A provider is opt-in,
-session scoped, and needs future explicit permissions such as `media:read` and
-`message-annotations:write`. The normal message webhook carries only a status/ref by default;
-`includeAnnotations=transcript` is an authenticated, session-scoped opt-in. This prevents a large
-transcript from unexpectedly becoming part of every webhook or SDK response.
+Phase 3 implements the foundation: `message:annotation-requested` fires for an eligible persisted media
+row with only `{ messageId, kind, messageType }`; `message:annotation-updated` emits a text-free status
+projection after a provider writes a validated annotation. A provider is opt-in and session-scoped. Its
+only new capability is `message-annotations:write`, which binds the annotation provider to its manifest
+id and has no get/list/search operation. Media retrieval remains a future, separately permissioned
+`media:read` decision.
+
+This foundation intentionally does **not** change the default message or webhook projection and exposes
+no annotation HTTP API. A future authenticated, session-scoped annotation-read contract may add an
+explicit `includeAnnotations=transcript` opt-in; it must not make transcripts part of ordinary webhooks,
+SDK responses, or agent context by default.
 
 The local bridge's current `src/transcribe.ts` can be adapted as one provider. Its current generic
 upload filename and 25 MiB bound are useful implementation evidence, but its OpenAI dependency is

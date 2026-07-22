@@ -35,6 +35,9 @@ function makeContext() {
       get: jest.fn().mockResolvedValue(null),
       getByProvider: jest.fn().mockResolvedValue(null),
     },
+    annotations: {
+      upsert: jest.fn().mockResolvedValue({ messageId: 'm4', kind: 'transcript', status: 'complete' }),
+    },
   };
 }
 
@@ -111,6 +114,13 @@ describe('dispatchCapabilityVerb', () => {
       ['upsert', [{ sessionId: 's', chatId: 'c', instanceId: 'i' }, 'conv1']],
       ['getByProvider', ['i', 'conv1']],
     ]);
+  });
+
+  it('routes annotation writes only through the explicit allowlisted verb', async () => {
+    const ctx = makeContext();
+    const input = { kind: 'transcript', status: 'pending', processorVersion: '1', externalProcessing: false };
+    await dispatchCapabilityVerb(ctx, 'annotations.upsert', ['s', 'm4', input]);
+    expect(ctx.annotations.upsert).toHaveBeenCalledWith('s', 'm4', input);
   });
 
   it('rejects an unknown verb — only allowlisted capabilities are reachable', async () => {

@@ -56,6 +56,7 @@ import {
   deliveryStatusToAck,
   ackStatusTransitionFrom,
 } from '../message/message-status.util';
+import { MessageAnnotationService } from '../message/message-annotation.service';
 
 // Message types that carry downloadable media. Any persisted row of these types must have a media
 // marker in metadata — never NULL — or the dashboard renders an empty bubble (no placeholder) and the
@@ -251,6 +252,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // service degrades to today's behaviour if it is ever constructed without the (global) LoggerModule.
     @Optional()
     private readonly shutdownService?: ShutdownService,
+    @Optional()
+    private readonly messageAnnotationService?: MessageAnnotationService,
   ) {}
 
   /**
@@ -982,6 +985,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // never be dropped on a transient DB failure; only the hook requires a durable row.
             if (persisted) {
               await this.persistMessageQuote(id, dbMessage, incoming.quotedMessage);
+              void this.messageAnnotationService?.requestForMessage(dbMessage).catch(() => undefined);
               void this.hookManager
                 .execute(
                   'message:persisted',

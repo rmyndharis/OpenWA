@@ -1,8 +1,9 @@
 import { ConversationSendEnvelope, PluginContext } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
+import { UpsertMessageAnnotationInput } from '../../../modules/message/message-annotation.service';
 
 /** The subset of the plugin context a sandboxed plugin reaches across the bridge. */
-export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'storage' | 'net'> & {
+export type CapabilityContext = Pick<PluginContext, 'messages' | 'engine' | 'storage' | 'net' | 'annotations'> & {
   conversations: {
     send(env: ConversationSendEnvelope): Promise<unknown>;
   };
@@ -76,6 +77,8 @@ export async function dispatchCapabilityVerb(
       return context.mappings.get(args[0] as { sessionId: string; chatId: string; instanceId: string });
     case 'mappings.getByProvider':
       return context.mappings.getByProvider(s(0), s(1));
+    case 'annotations.upsert':
+      return context.annotations.upsert(s(0), s(1), args[2] as UpsertMessageAnnotationInput);
     default:
       throw new Error(`Unknown capability verb: ${verb}`);
   }

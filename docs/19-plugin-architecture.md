@@ -124,7 +124,7 @@ a host version. The config schema is the top-level `configSchema` (note: not nes
 
   "main": "dist/index.js",
 
-  "permissions": ["messages:send", "engine:read", "net:fetch"],
+  "permissions": ["messages:send", "engine:read", "net:fetch", "message-annotations:write"],
 
   "sessionScoped": true,
   "sessions": ["*"],
@@ -279,6 +279,7 @@ export interface PluginContext {
   messages: PluginMessagingCapability; // requires 'messages:send'
   engine: PluginEngineReadCapability;  // requires 'engine:read' (read-only)
   net: PluginNetCapability;            // requires 'net:fetch' (SSRF-guarded, net.allow-scoped)
+  annotations: PluginMessageAnnotationsCapability; // requires 'message-annotations:write' (write-only)
 }
 
 export interface PluginLogger {
@@ -295,8 +296,8 @@ event emitter. Hook handlers use the host `HookContext` / `HookResult` shape (se
 
 ### Capability facade
 
-A plugin reaches WhatsApp, the engine, and the network **only** through these three namespaces. Each
-call is gated by the matching declared permission (and, for `messages`/`engine`, the session scope) —
+A plugin reaches host capabilities only through the documented namespaces. Each call is gated by the
+matching declared permission (and, where a session id is supplied, the session scope) —
 a missing grant throws a `PluginCapabilityError`.
 
 ```typescript
@@ -319,11 +320,38 @@ export interface PluginEngineReadCapability {
 export interface PluginNetCapability {
   fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
 }
+
+// ctx.annotations — requires 'message-annotations:write'. Session-scoped write only.
+export interface PluginMessageAnnotationsCapability {
+  upsert(sessionId: string, messageId: string, input: UpsertMessageAnnotationInput): Promise<{
+    messageId: string;
+    provider: string;
+    kind: 'transcript';
+    status: 'pending' | 'complete' | 'failed' | 'expired';
+    language?: string;
+    externalProcessing: boolean;
+  }>;
+}
 ```
 
 `ctx.net.fetch` returns a serializable response (`{ ok, status, statusText, headers, body }`, body as
 a string) — no streaming and no live `Response` object, because it must cross the worker boundary via
 structured clone. The request has a default 15 s / hard-cap 30 s timeout and a 10 MB response cap.
+
+### Derived-content annotations
+
+An annotation provider can register `message:annotation-requested` and then call
+`ctx.annotations.upsert(sessionId, messageId, input)`. The host binds `provider` to the manifest id,
+checks the manifest session scope and operator activation before looking up the message, and selects only
+the message id for that scoped parent check. The store accepts only `kind: 'transcript'` today; status,
+language, SHA-256 media fingerprint, processor version, external-processing flag, transcript text, expiry,
+and a small scalar-only metadata object are bounded and validated.
+
+The capability is intentionally write-only: it has no `get`, `list`, or search operation. Neither the
+`Message` entity nor normal message/webhook projections gain annotations or transcript text. The lifecycle
+events carry only a media request `{ messageId, kind, messageType }` or a text-free status projection.
+There is no annotation REST endpoint in this foundation; an explicit, separately authorized read contract
+is required before any transcript retrieval is added.
 
 ### Plugin Storage
 
@@ -400,6 +428,9 @@ export type HookEvent =
   | 'message:sent'
   | 'message:failed'
   | 'message:ack'
+  | 'message:persisted'
+  | 'message:annotation-requested'
+  | 'message:annotation-updated'
   // Webhook lifecycle
   | 'webhook:before'
   | 'webhook:queued'
@@ -586,8 +617,8 @@ URL / catalog), not an npm/github source descriptor.
 
 ### Permission model
 
-There are exactly **three** capability permissions, declared in the manifest `permissions` array and
-enforced at the capability boundary:
+Capability permissions are declared in the manifest `permissions` array and enforced at the capability
+boundary:
 
 ```typescript
 // src/core/plugins/plugin.interfaces.ts
@@ -599,6 +630,12 @@ export const PluginCapabilityPermission = {
   ENGINE_READ: 'engine:read',
   /** ctx.net.fetch — SSRF-guarded outbound HTTP, scoped to the manifest net.allow host list. */
   NET_FETCH: 'net:fetch',
+  /** ctx.registerWebhook — claim a validated inbound route. */
+  WEBHOOK_INGRESS: 'webhook:ingress',
+  /** ctx.conversations.send and conversation mappings/handover. */
+  CONVERSATION_SEND: 'conversation:send',
+  /** ctx.annotations.upsert — session-scoped derived-content write only. */
+  MESSAGE_ANNOTATIONS_WRITE: 'message-annotations:write',
 } as const;
 ```
 
@@ -621,7 +658,7 @@ private assertPermission(manifest: PluginManifest, permission: PluginCapabilityP
 
 Two further checks apply on top of the permission:
 
-- **Session scope.** `messages` and `engine` calls run `assertSessionAllowed(manifest, sessionId)` —
+- **Session scope.** `messages`, `engine`, and `annotations` calls run `assertSessionAllowed(manifest, sessionId)` —
   the plugin may only act on sessions in its manifest `sessions` list (`['*']` = all). The `sessionId`
   comes from the plugin, so this is the security boundary; it is static (editing config can't widen it).
 - **Network allowlist.** `ctx.net.fetch` additionally requires the target host to be in `manifest.net.allow`,

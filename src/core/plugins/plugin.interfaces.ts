@@ -9,6 +9,10 @@ import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.in
 import type { PluginNetRequestInit, PluginNetResponse } from './plugin-net';
 import type { HandoverState } from '../../modules/integration/entities/conversation-mapping.entity';
 import type { WebhookRequest, WebhookResponse, WebhookHandler } from './sandbox/worker-webhooks';
+import type {
+  MessageAnnotationLifecycle,
+  UpsertMessageAnnotationInput,
+} from '../../modules/message/message-annotation.service';
 
 // Re-export the ingress webhook types on the public SDK surface so plugin authors can type their
 // handler without importing from sandbox internals.
@@ -170,6 +174,8 @@ export const PluginCapabilityPermission = {
   WEBHOOK_INGRESS: 'webhook:ingress',
   /** `ctx.conversations.send` — normalized outbound send translated to MessageService. */
   CONVERSATION_SEND: 'conversation:send',
+  /** `ctx.annotations.upsert` — provider-owned derived-content write; no read/list capability. */
+  MESSAGE_ANNOTATIONS_WRITE: 'message-annotations:write',
 } as const;
 export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[keyof typeof PluginCapabilityPermission];
 
@@ -426,6 +432,15 @@ export interface PluginMappingsCapability {
   ): Promise<{ sessionId: string; chatId: string; handoverState: HandoverState } | null>;
 }
 
+/** Provider-owned derived-content write only. No list/get/search method is intentionally exposed. */
+export interface PluginMessageAnnotationsCapability {
+  upsert(
+    sessionId: string,
+    messageId: string,
+    input: UpsertMessageAnnotationInput,
+  ): Promise<MessageAnnotationLifecycle>;
+}
+
 // ============================================================================
 // Plugin Context (passed to plugin on initialization)
 // ============================================================================
@@ -471,6 +486,9 @@ export interface PluginContext {
 
   // Create/read the WA-chat <-> provider-conversation mapping. Requires `conversation:send`.
   mappings: PluginMappingsCapability;
+
+  // Bounded, session-scoped annotation write. It cannot read transcript text back or search messages.
+  annotations: PluginMessageAnnotationsCapability;
 }
 
 export interface PluginLogger {

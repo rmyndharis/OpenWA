@@ -60,5 +60,14 @@ describe('buildSandboxContext', () => {
 
     await ctx.storage.set('k', { a: 1 });
     expect(call).toHaveBeenCalledWith('storage.set', ['k', { a: 1 }]);
+
+    const annotation = {
+      kind: 'transcript' as const,
+      status: 'pending' as const,
+      processorVersion: '1',
+      externalProcessing: false,
+    };
+    await ctx.annotations.upsert('s', 'm', annotation);
+    expect(call).toHaveBeenCalledWith('annotations.upsert', ['s', 'm', annotation]);
   });
 });

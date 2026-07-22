@@ -13,6 +13,7 @@ import {
 } from './plugin.interfaces';
 import { MessageService } from '../../modules/message/message.service';
 import { SessionService } from '../../modules/session/session.service';
+import { MessageAnnotationService } from '../../modules/message/message-annotation.service';
 
 function makePlugin(
   sessions?: string[],
@@ -280,5 +281,73 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
   it('denies net.fetch when the host is not in the manifest net.allow list', async () => {
     const ctx = contextFor(loaderWith(), netPlugin(['net:fetch'], ['only.example.com:443']));
     await expect(ctx.net.fetch('https://api.example.com/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+  });
+});
+
+describe('PluginLoaderService capability facade — ctx.annotations', () => {
+  let loader: PluginLoaderService;
+  let annotations: { upsert: jest.Mock };
+  let moduleRef: { get: jest.Mock };
+
+  beforeEach(() => {
+    annotations = { upsert: jest.fn().mockResolvedValue({ messageId: 'm1', kind: 'transcript', status: 'pending' }) };
+    moduleRef = {
+      get: jest.fn().mockImplementation((token: unknown) => {
+        if (token === MessageAnnotationService) return annotations;
+        return { getEngine: jest.fn() };
+      }),
+    };
+    loader = new PluginLoaderService(
+      { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService,
+      new HookManager(),
+      { createPluginStorage: jest.fn().mockReturnValue({}) } as unknown as PluginStorageService,
+      moduleRef as unknown as ModuleRef,
+    );
+  });
+
+  function contextFor(plugin: PluginInstance): PluginContext {
+    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
+      plugin,
+    );
+  }
+
+  it('writes only for the activated session and binds provider identity to the manifest', async () => {
+    const ctx = contextFor(makePlugin(['sess-1'], ['message-annotations:write'], ['sess-1']));
+    const input = {
+      kind: 'transcript' as const,
+      status: 'pending' as const,
+      processorVersion: '1',
+      externalProcessing: false,
+    };
+
+    await ctx.annotations.upsert('sess-1', 'message-1', input);
+
+    expect(annotations.upsert).toHaveBeenCalledWith('sess-1', 'message-1', 'test-ext', input);
+  });
+
+  it('denies annotation writes without the dedicated permission before resolving the store', async () => {
+    const ctx = contextFor(makePlugin(['sess-1'], [], ['sess-1']));
+    const input = {
+      kind: 'transcript' as const,
+      status: 'pending' as const,
+      processorVersion: '1',
+      externalProcessing: false,
+    };
+
+    await expect(ctx.annotations.upsert('sess-1', 'message-1', input)).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(moduleRef.get).not.toHaveBeenCalled();
+  });
+
+  it('denies annotation writes outside the active session before resolving the store', async () => {
+    const ctx = contextFor(makePlugin(['*'], ['message-annotations:write'], ['sess-1']));
+    const input = {
+      kind: 'transcript' as const,
+      status: 'pending' as const,
+      processorVersion: '1',
+      externalProcessing: false,
+    };
+
+    await expect(ctx.annotations.upsert('sess-2', 'message-1', input)).rejects.toBeInstanceOf(PluginCapabilityError);
+    expect(moduleRef.get).not.toHaveBeenCalled();
   });
 });

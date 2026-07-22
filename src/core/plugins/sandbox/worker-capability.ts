@@ -1,6 +1,10 @@
 import { WorkerToHostMessage, HostToWorkerMessage } from './protocol';
 import { ConversationSendEnvelope } from '../plugin.interfaces';
 import { HandoverState } from '../../../modules/integration/entities/conversation-mapping.entity';
+import type {
+  MessageAnnotationLifecycle,
+  UpsertMessageAnnotationInput,
+} from '../../../modules/message/message-annotation.service';
 
 /**
  * Worker-side correlation for capability calls. Each `call` posts a `cap` request and resolves when
@@ -67,6 +71,13 @@ export interface SandboxCapabilityContext {
     get(key: { sessionId: string; chatId: string; instanceId: string }): Promise<unknown>;
     getByProvider(instanceId: string, providerConversationId: string): Promise<unknown>;
   };
+  annotations: {
+    upsert(
+      sessionId: string,
+      messageId: string,
+      input: UpsertMessageAnnotationInput,
+    ): Promise<MessageAnnotationLifecycle>;
+  };
 }
 
 /** Build the proxy capability context handed to a sandboxed plugin in the worker. */
@@ -107,6 +118,10 @@ export function buildSandboxContext(client: WorkerCapabilityClient): SandboxCapa
       get: key => client.call('mappings.get', [key]),
       getByProvider: (instanceId, providerConversationId) =>
         client.call('mappings.getByProvider', [instanceId, providerConversationId]),
+    },
+    annotations: {
+      upsert: (sessionId, messageId, input) =>
+        client.call('annotations.upsert', [sessionId, messageId, input]) as Promise<MessageAnnotationLifecycle>,
     },
   };
 }

@@ -19,6 +19,7 @@ import { userPart } from '../../engine/identity/wa-id';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
+import { MessageAnnotationService } from './message-annotation.service';
 
 export interface GetMessagesOptions {
   chatId?: string;
@@ -58,6 +59,8 @@ export class MessageService {
     private readonly lidMappingStore: LidMappingStoreService,
     @Optional()
     private readonly configService?: ConfigService,
+    @Optional()
+    private readonly messageAnnotationService?: MessageAnnotationService,
   ) {}
 
   async sendText(sessionId: string, dto: SendTextMessageDto): Promise<MessageResponseDto> {
@@ -512,7 +515,9 @@ export class MessageService {
       sessionId,
       direction: MessageDirection.INCOMING,
     });
-    return this.messageRepository.save(message);
+    const saved = await this.messageRepository.save(message);
+    void this.messageAnnotationService?.requestForMessage(saved).catch(() => undefined);
+    return saved;
   }
 
   /**
@@ -558,6 +563,7 @@ export class MessageService {
     void this.hookManager
       .execute('message:persisted', { sessionId, message: saved }, { sessionId, source: 'MessageService' })
       .catch(() => undefined);
+    void this.messageAnnotationService?.requestForMessage(saved).catch(() => undefined);
     return saved;
   }
 
