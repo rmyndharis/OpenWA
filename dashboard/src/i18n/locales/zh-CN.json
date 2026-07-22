@@ -154,7 +154,8 @@
       "sessionId": "会话 ID",
       "phone": "电话号码",
       "status": "状态",
-      "lastActive": "上次活跃"
+      "lastActive": "上次活跃",
+      "actions": "操作"
     },
     "noSessions": "未找到会话。创建一个即可开始。",
     "view": "查看",

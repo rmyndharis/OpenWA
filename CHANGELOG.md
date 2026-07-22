@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Sessions overview on the dashboard labels its last column correctly instead of printing `DASHBOARD.COLUMNS.ACTIONS`.** The header above the View and Disconnect buttons rendered the uppercased translation key verbatim, in every language, because the table referenced a `dashboard.columns.actions` key that no locale file defined. The missing key has been added to every supported locale, so the column now reads "Actions" (or its equivalent) as the other columns do.
+
 ## [0.10.5] - 2026-07-22
 
 ### Fixed

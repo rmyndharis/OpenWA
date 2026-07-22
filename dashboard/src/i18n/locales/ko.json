@@ -154,7 +154,8 @@
       "sessionId": "세션 ID",
       "phone": "전화번호",
       "status": "상태",
-      "lastActive": "마지막 활동"
+      "lastActive": "마지막 활동",
+      "actions": "작업"
     },
     "noSessions": "세션이 없습니다. 세션을 생성해 시작하세요.",
     "view": "보기",

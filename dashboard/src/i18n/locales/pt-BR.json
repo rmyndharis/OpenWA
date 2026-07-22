@@ -154,7 +154,8 @@
       "sessionId": "ID da sessão",
       "phone": "Número de telefone",
       "status": "Status",
-      "lastActive": "Última atividade"
+      "lastActive": "Última atividade",
+      "actions": "Ações"
     },
     "noSessions": "Nenhuma sessão encontrada. Crie uma para começar.",
     "view": "Ver",

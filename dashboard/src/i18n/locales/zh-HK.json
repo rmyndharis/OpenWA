@@ -154,7 +154,8 @@
       "sessionId": "工作階段 ID",
       "phone": "電話號碼",
       "status": "狀態",
-      "lastActive": "上次活躍"
+      "lastActive": "上次活躍",
+      "actions": "操作"
     },
     "noSessions": "找不到工作階段。建立一個即可開始。",
     "view": "查看",

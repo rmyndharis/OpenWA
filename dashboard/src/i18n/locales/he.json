@@ -154,7 +154,8 @@
       "sessionId": "מזהה Session",
       "phone": "מספר טלפון",
       "status": "סטטוס",
-      "lastActive": "פעילות אחרונה"
+      "lastActive": "פעילות אחרונה",
+      "actions": "פעולות"
     },
     "noSessions": "לא נמצאו Sessions. יש ליצור אחד כדי להתחיל.",
     "view": "צפייה",
