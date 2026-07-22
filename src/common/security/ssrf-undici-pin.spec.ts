@@ -40,6 +40,14 @@ describe('undici honors the SSRF connect.lookup pin (real connection)', () => {
 
   it('control: the same host is genuinely unresolvable without the pin', async () => {
     // Proves the test above succeeds because of the pin, not because the host happens to resolve.
-    await expect(fetch(`http://pinned.invalid:${port}/`)).rejects.toThrow();
+    //
+    // Bounded by our own signal rather than left to the resolver: a `.invalid` lookup returns NXDOMAIN
+    // instantly on most machines, but a resolver that black-holes unknown TLDs instead makes the OS
+    // retry through its own multi-second schedule, which blew past Jest's 5s default and failed this
+    // suite in CI while passing everywhere else. The claim under test is "without the pin this request
+    // does not reach the server", and an abort satisfies it exactly as a DNS failure does. It does not
+    // weaken the control: had the host resolved, the connection is to 127.0.0.1 and would have
+    // succeeded well inside the budget, resolving the promise and failing this assertion.
+    await expect(fetch(`http://pinned.invalid:${port}/`, { signal: AbortSignal.timeout(2000) })).rejects.toThrow();
   });
 });
