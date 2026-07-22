@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plugin that ships its own settings editor no longer shows two editors at once.** When a plugin
+  provided a custom editor, the dashboard rendered the generated form underneath it as well — so every
+  field appeared twice, followed by a second Save button that behaved differently from the editor's own.
+  The Chat Flow settings dialog was the visible case. A plugin's own editor now replaces the generated
+  form and owns saving; plugins without one are unchanged, form and Save button included.
+- **A plugin's own settings editor follows the dashboard theme.** The editor runs in a sandboxed frame
+  that cannot see the dashboard's theme, so it had no way to match it and stayed light — a bright panel
+  in the middle of a dark dialog. The dashboard now tells the editor which theme is in use. Plugin
+  authors: the theme arrives with the existing settings handshake and can be ignored safely; see
+  [19 — Plugin Architecture](docs/19-plugin-architecture.md) for the contract.
+
+### Fixed
+
 - **Plugins you enabled stay enabled across a restart.** Every restart of the gateway — an upgrade, a
   host reboot, a container restart policy — silently switched off every extension plugin, with nothing
   written to the log and nothing shown in the dashboard. An integration such as the Chatwoot adapter
