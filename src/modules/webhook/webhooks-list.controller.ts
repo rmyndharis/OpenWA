@@ -19,15 +19,21 @@ export class WebhooksListController {
   @ApiQuery({ name: 'limit', required: false, description: 'Max records to return (1-1000, default 1000)' })
   @ApiQuery({ name: 'offset', required: false, description: 'Number of records to skip (for paging)' })
   async deliveryFailures(
+    @CurrentApiKey() apiKey?: ApiKey,
     @Query('sessionId') sessionId?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ): Promise<WebhookDeliveryFailure[]> {
-    return this.webhookService.listDeliveryFailures({
-      sessionId,
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
-    });
+    // Scope to the calling key's allowedSessions so a session-restricted ADMIN key cannot read another
+    // session's failed-delivery URLs/errors via the `sessionId` query param (which bypasses the guard).
+    return this.webhookService.listDeliveryFailures(
+      {
+        sessionId,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        offset: offset ? parseInt(offset, 10) : undefined,
+      },
+      apiKey?.allowedSessions,
+    );
   }
 
   @Get()

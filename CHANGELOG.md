@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Session scoping on the audit-log and webhook delivery-failure list endpoints.** `GET /api/audit`
+  and `GET /api/webhooks/delivery-failures` now scope their results to the calling key's allowed
+  sessions, matching the rest of the API (`GET /webhooks`, `GET /search`). These two endpoints take
+  `sessionId` as a query parameter, which the API-key session fence — resolved only from route
+  params — did not cover, so a key restricted to a subset of sessions saw rows for every session
+  (and `GET /api/audit` with no `sessionId` returned every session's rows). A query `sessionId` may
+  now only narrow within the key's allowed sessions; unrestricted keys are unaffected. A structural
+  test now fails the build if any handler accepts a `sessionId` query param without scoping to the
+  calling key, so the gap cannot reappear.
+
 - **Chat list unread badge shape and overflow.** The unread-count badge in the chats sidebar rendered as an uneven oval and grew without bound as the count climbed. It now uses a fixed height with border-box sizing so a single digit is a true circle and larger counts form a rounded pill, and its label is capped at `99+`. The badge also exposes the exact unread count to assistive technology and as a hover tooltip.
 
 ## [0.10.7] - 2026-07-23

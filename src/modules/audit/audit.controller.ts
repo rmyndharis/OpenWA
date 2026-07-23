@@ -2,8 +2,8 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { AuditService, AuditQueryOptions } from './audit.service';
 import { AuditLog, AuditAction, AuditSeverity } from './entities/audit-log.entity';
-import { RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { RequireRole, CurrentApiKey } from '../auth/decorators/auth.decorators';
+import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('audit')
 @Controller('audit')
@@ -24,6 +24,7 @@ export class AuditController {
     description: 'Paginated list of audit logs',
   })
   async findAll(
+    @CurrentApiKey() apiKey?: ApiKey,
     @Query('action') action?: AuditAction,
     @Query('severity') severity?: AuditSeverity,
     @Query('sessionId') sessionId?: string,
@@ -39,6 +40,8 @@ export class AuditController {
     if (limit) options.limit = parseInt(limit, 10);
     if (offset) options.offset = parseInt(offset, 10);
 
-    return this.auditService.findAll(options);
+    // Scope to the calling key's allowedSessions so a session-restricted ADMIN key cannot read
+    // another tenant's audit rows via the `sessionId` query param (which bypasses the guard fence).
+    return this.auditService.findAll(options, apiKey?.allowedSessions);
   }
 }

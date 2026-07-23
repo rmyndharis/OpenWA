@@ -17,6 +17,7 @@ import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.enti
 import { recordWebhookDeliveryFailure, statusCodeFromError } from './utils/record-delivery-failure';
 import { CreateWebhookDto, UpdateWebhookDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { resolveSessionScope } from '../../common/security/session-scope';
 import { incrementWebhookDeliveryFailures } from '../../common/metrics/webhook-delivery-metrics';
 import { ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -182,12 +183,20 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   /**
    * Recently-failed webhook deliveries (most recent first), so an operator can see what was lost during
    * a receiver outage. ADMIN-only operational data; an optional sessionId narrows it. Bounded by the
-   * shared pagination window.
+   * shared pagination window. The calling key's allowedSessions is authoritative — the sessionId query
+   * param may only narrow within it — because this endpoint takes sessionId as a query param, which the
+   * ApiKeyGuard fence (route params only) does not scope; otherwise a session-restricted key could read
+   * every session's failed-delivery URLs and errors.
    */
-  async listDeliveryFailures(opts: ListOptions & { sessionId?: string } = {}): Promise<WebhookDeliveryFailure[]> {
+  async listDeliveryFailures(
+    opts: ListOptions & { sessionId?: string } = {},
+    allowedSessions?: string[] | null,
+  ): Promise<WebhookDeliveryFailure[]> {
     const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
+    const sessionScope = resolveSessionScope(allowedSessions, opts.sessionId);
+    if (sessionScope !== null && sessionScope.length === 0) return []; // requested session outside the key's scope
     return this.failureRepository.find({
-      where: opts.sessionId ? { sessionId: opts.sessionId } : {},
+      where: sessionScope ? { sessionId: In(sessionScope) } : {},
       order: { createdAt: 'DESC' },
       take: limit,
       skip: offset,

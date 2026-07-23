@@ -1118,8 +1118,10 @@ describe('WebhookService', () => {
       const out = await service.listDeliveryFailures({ sessionId: 's1', limit: 10 });
 
       expect(out).toHaveLength(1);
+      // sessionId resolves through resolveSessionScope, so the WHERE is an IN over the effective scope
+      // ([s1] here for an unrestricted key narrowing to one session) — behaviourally the same rows.
       expect(failureRepository.find).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { sessionId: 's1' }, order: { createdAt: 'DESC' } }),
+        expect.objectContaining({ where: { sessionId: In(['s1']) }, order: { createdAt: 'DESC' } }),
       );
     });
   });
