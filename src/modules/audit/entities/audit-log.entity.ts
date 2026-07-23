@@ -34,6 +34,15 @@ export enum AuditAction {
   INTEGRATION_INSTANCE_UPDATED = 'integration_instance_updated',
   INTEGRATION_INSTANCE_SECRET_REGENERATED = 'integration_instance_secret_regenerated',
   INTEGRATION_INSTANCE_DELETED = 'integration_instance_deleted',
+
+  // Infrastructure events (ADMIN-only operations on the infra module: credential-bearing config
+  // mutation, server restart / Docker orchestration, and full-DB / storage export+import).
+  INFRA_CONFIG_SAVED = 'infra_config_saved',
+  INFRA_RESTART_REQUESTED = 'infra_restart_requested',
+  INFRA_DATA_EXPORTED = 'infra_data_exported',
+  INFRA_DATA_IMPORTED = 'infra_data_imported',
+  INFRA_STORAGE_EXPORTED = 'infra_storage_exported',
+  INFRA_STORAGE_IMPORTED = 'infra_storage_imported',
 }
 
 export enum AuditSeverity {

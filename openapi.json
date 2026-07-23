@@ -34,7 +34,13 @@
                 "integration_instance_created",
                 "integration_instance_updated",
                 "integration_instance_secret_regenerated",
-                "integration_instance_deleted"
+                "integration_instance_deleted",
+                "infra_config_saved",
+                "infra_restart_requested",
+                "infra_data_exported",
+                "infra_data_imported",
+                "infra_storage_exported",
+                "infra_storage_imported"
               ],
               "type": "string"
             }

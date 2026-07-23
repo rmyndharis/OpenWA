@@ -31,6 +31,8 @@ import { StorageService } from '../../common/storage/storage.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { createLogger } from '../../common/services/logger.service';
 import { isMissingTableError } from '../../common/utils/db-errors';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import { ImportStorageDto } from './dto/import-storage.dto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -487,6 +489,12 @@ export class InfraController {
     @Optional()
     @InjectQueue(QUEUE_NAMES.WEBHOOK)
     private readonly webhookQueue?: Queue,
+    // Best-effort audit emission for the sensitive infra operations below. Injected @Optional and
+    // appended last so it never shifts the existing positional args: the running app always provides
+    // the @Global AuditService, while the direct-construction unit tests omit it — the `?.` at each
+    // call site then makes emission a no-op there instead of forcing every test to wire a mock.
+    @Optional()
+    private readonly auditService?: AuditService,
   ) {}
 
   /** Bound the DB liveness probe so a hung connection can't stall the status read. */
@@ -904,6 +912,13 @@ export class InfraController {
       writeSecretFile(envPath, contents);
       this.logger.log('Configuration saved', { envPath });
 
+      // Audit the credential-bearing env mutation. Fire-and-forget (not awaited) so saveConfig stays
+      // synchronous — its validation rejections must remain synchronous throws the tests assert via
+      // `.toThrow`. Only section names + Docker profiles are recorded; secret values are never logged.
+      void this.auditService?.logInfo(AuditAction.INFRA_CONFIG_SAVED, {
+        metadata: { sections: Object.keys(config ?? {}), profiles },
+      });
+
       const profileMsg = profiles.length > 0 ? ` Docker profiles required: ${profiles.join(', ')}.` : '';
 
       return {
@@ -1014,6 +1029,12 @@ export class InfraController {
         this.logger.error('Failed to write orchestration request', err instanceof Error ? err.message : String(err));
       }
     }
+
+    // Record the operational action (Docker orchestration + scheduled restart) BEFORE starting the
+    // shutdown, awaited so the row is persisted even as the process goes down.
+    await this.auditService?.logInfo(AuditAction.INFRA_RESTART_REQUESTED, {
+      metadata: { profiles, profilesToRemove },
+    });
 
     // Schedule graceful shutdown after the configurable bounded grace (SHUTDOWN_DELAY_MS,
     // default 3s) — readiness reports 503 during the window so traffic drains first.
@@ -1156,6 +1177,26 @@ export class InfraController {
       this.logger.debug('integration_delivery_failures table not available for export', { error: String(error) });
     }
 
+    const counts = {
+      sessions: sessions.length,
+      webhooks: webhooks.length,
+      messages: messages.length,
+      messageBatches: messageBatches.length,
+      templates: templates.length,
+      baileysStoredMessages: baileysStoredMessages.length,
+      lidMappings: lidMappings.length,
+      pluginInstances: pluginInstances.length,
+      conversationMappings: conversationMappings.length,
+      ingressEvents: ingressEvents.length,
+      webhookDeliveryFailures: webhookDeliveryFailures.length,
+      integrationDeliveryFailures: integrationDeliveryFailures.length,
+    };
+
+    // Audit the full-DB export: this payload carries webhook + plugin-instance secrets, so WHO pulled
+    // a dump (and the per-table row counts) is exactly the trail C002 was missing. Data itself is never
+    // logged — only counts.
+    await this.auditService?.logInfo(AuditAction.INFRA_DATA_EXPORTED, { metadata: { counts } });
+
     return {
       exportedAt: new Date().toISOString(),
       dataDbType: this.configService.get<string>('dataDatabase.type', 'sqlite'),
@@ -1173,20 +1214,7 @@ export class InfraController {
         webhookDeliveryFailures,
         integrationDeliveryFailures,
       },
-      counts: {
-        sessions: sessions.length,
-        webhooks: webhooks.length,
-        messages: messages.length,
-        messageBatches: messageBatches.length,
-        templates: templates.length,
-        baileysStoredMessages: baileysStoredMessages.length,
-        lidMappings: lidMappings.length,
-        pluginInstances: pluginInstances.length,
-        conversationMappings: conversationMappings.length,
-        ingressEvents: ingressEvents.length,
-        webhookDeliveryFailures: webhookDeliveryFailures.length,
-        integrationDeliveryFailures: integrationDeliveryFailures.length,
-      },
+      counts,
     };
   }
 
@@ -1676,6 +1704,13 @@ export class InfraController {
       }
 
       await queryRunner.commitTransaction();
+
+      // Audit the destructive replace-all restore, only on the committed-success path (the rollback /
+      // refused-empty branches above return without emitting, since no data actually changed).
+      await this.auditService?.logInfo(AuditAction.INFRA_DATA_IMPORTED, {
+        metadata: { counts, warnings: warnings.length },
+      });
+
       return { imported: true, counts, warnings };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -1742,12 +1777,17 @@ export class InfraController {
       fs.promises.unlink(exportPath).catch(() => undefined);
     }, ttlMs).unref();
 
+    // cwd-relative rather than an absolute host path: doesn't leak the filesystem layout, and the
+    // import round-trip still works because importStorage's existsSync/createReadStream resolve a
+    // relative filePath against the same cwd this was made relative to.
+    const download = path.relative(process.cwd(), exportPath);
+
+    // Audit the bulk media-export (all stored files leave the box as one archive).
+    await this.auditService?.logInfo(AuditAction.INFRA_STORAGE_EXPORTED, { metadata: { download } });
+
     return {
       message: 'Storage export completed',
-      // cwd-relative rather than an absolute host path: doesn't leak the filesystem layout, and the
-      // import round-trip still works because importStorage's existsSync/createReadStream resolve a
-      // relative filePath against the same cwd this was made relative to.
-      download: path.relative(process.cwd(), exportPath),
+      download,
     };
   }
 
@@ -1778,11 +1818,17 @@ export class InfraController {
 
     const readStream = fs.createReadStream(resolved);
     const count = await this.storageService.importFromStream(readStream);
+    const storageType = this.storageService.getCurrentStorageType();
+
+    // Audit the bulk media-import (files written into the active storage backend).
+    await this.auditService?.logInfo(AuditAction.INFRA_STORAGE_IMPORTED, {
+      metadata: { count, storageType },
+    });
 
     return {
       imported: true,
       count,
-      storageType: this.storageService.getCurrentStorageType(),
+      storageType,
     };
   }
 }

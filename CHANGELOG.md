@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Deutsch" in the language switcher. All 689 translation keys are covered, so German users get a
   fully localized UI instead of the English fallback. Thanks @rjsebening.
 
+- **Audit-log coverage for sensitive infrastructure operations.** The admin-only infrastructure
+  endpoints that save configuration, restart the server, and export/import the full database or
+  stored media now record an audit-log entry — attributing the operation to the calling API key and
+  client IP, with non-sensitive context only (section names, row counts; secret values are never
+  logged). Previously these operations, several of which expose or replace credential-bearing data,
+  left no audit trail. The audit-vocabulary coverage gate is extended to these actions, so a future
+  infrastructure operation cannot ship without one.
+
 ### Fixed
 
 - **Session scoping on the audit-log and webhook delivery-failure list endpoints.** `GET /api/audit`
