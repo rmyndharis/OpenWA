@@ -57,12 +57,12 @@
     "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1092.0",
+    "@aws-sdk/client-s3": "^3.1093.0",
     "@bull-board/api": "^8.1.2",
     "@bull-board/express": "^8.1.2",
     "@bull-board/nestjs": "^8.1.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@nestjs-modules/ioredis": "^2.0.2",
+    "@nestjs-modules/ioredis": "^2.2.2",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.1.28",
     "@nestjs/config": "^4.0.2",
@@ -119,7 +119,7 @@
     "prettier": "^3.9.6",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
-    "ts-jest": "^29.4.11",
+    "ts-jest": "^29.4.12",
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
