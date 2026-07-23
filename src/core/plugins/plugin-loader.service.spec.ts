@@ -790,6 +790,8 @@ describe('PluginLoaderService — search-provider enable-failure cleanup', () =>
     module: 'commonjs',
     moduleResolution: 'node',
     resolvePackageJsonExports: false,
+    // TypeScript 6 rejects the legacy resolution pair unless acknowledged. Revisit before TS 7.
+    ignoreDeprecations: '6.0',
   });
 
   // Runs the REAL worker (ts-node) instead of the compiled dist bootstrap, so enableSandboxed
@@ -865,6 +867,8 @@ describe('PluginLoaderService — search-provider worker-crash fallback', () => 
     module: 'commonjs',
     moduleResolution: 'node',
     resolvePackageJsonExports: false,
+    // TypeScript 6 rejects the legacy resolution pair unless acknowledged. Revisit before TS 7.
+    ignoreDeprecations: '6.0',
   });
 
   // Real ts-node worker (so enableSandboxed runs its true path) that captures the host so the test can

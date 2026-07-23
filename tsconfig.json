@@ -13,12 +13,24 @@
     "target": "ES2023",
     "sourceMap": true,
     "outDir": "./dist",
+    // TypeScript 6 requires the layout anchor to be explicit (TS5011). The build config narrows
+    // this to ./src; here it spans src + test for ts-jest and the editor.
+    "rootDir": ".",
     "incremental": true,
     "skipLibCheck": true,
+    // TypeScript 6 no longer auto-includes every node_modules/@types package: the globals the
+    // project relies on must be listed. node covers src; jest covers the colocated *.spec.ts.
+    "types": ["node", "jest"],
     "strictNullChecks": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": true,
     "strictBindCallApply": true,
+    // TypeScript 6 defaults the whole strict family ON. This project opts into strict flags
+    // selectively (see the explicit trues above); these three stay off pending their own migrations —
+    // strictPropertyInitialization alone flags ~260 TypeORM entity properties.
+    "strictPropertyInitialization": false,
+    "strictFunctionTypes": false,
+    "useUnknownInCatchVariables": false,
     "noFallthroughCasesInSwitch": true
   },
   "exclude": ["node_modules", "dist", "dashboard"],

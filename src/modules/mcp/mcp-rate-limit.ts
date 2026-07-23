@@ -64,7 +64,7 @@ export class KeyRateLimiter {
     this.hits.delete(key);
     this.hits.set(key, recent);
     while (this.hits.size > Math.max(1, this.maxKeys)) {
-      const oldest = this.hits.keys().next().value as string | undefined;
+      const oldest = this.hits.keys().next().value;
       if (oldest === undefined) break;
       this.hits.delete(oldest);
     }

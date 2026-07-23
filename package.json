@@ -108,7 +108,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^26.1.1",
     "@types/qrcode": "^1.5.5",
-    "@types/supertest": "^6.0.2",
+    "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.4",
     "concurrently": "^10.0.3",
     "eslint": "^10.7.0",
@@ -123,7 +123,7 @@
     "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.3",
+    "typescript": "~6.0.3",
     "typescript-eslint": "^8.65.0"
   },
   "jest": {
@@ -141,7 +141,8 @@
           "tsconfig": {
             "module": "CommonJS",
             "moduleResolution": "node",
-            "resolvePackageJsonExports": false
+            "resolvePackageJsonExports": false,
+            "ignoreDeprecations": "6.0"
           }
         }
       ]

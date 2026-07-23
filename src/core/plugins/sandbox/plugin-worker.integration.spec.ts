@@ -19,7 +19,14 @@ const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(reso
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
 // worker's transpile to CommonJS (same override the jest/ts-jest config uses) so `require()` works.
 // Production loads the compiled `worker-bootstrap.js` directly and needs none of this.
-const TS_NODE_OPTS = JSON.stringify({ module: 'commonjs', moduleResolution: 'node', resolvePackageJsonExports: false });
+const TS_NODE_OPTS = JSON.stringify({
+  module: 'commonjs',
+  moduleResolution: 'node',
+  resolvePackageJsonExports: false,
+  // Same bridge as the jest/ts-jest override: TypeScript 6 rejects the legacy resolution pair
+  // outright unless the deprecation is acknowledged. Revisit before TypeScript 7.
+  ignoreDeprecations: '6.0',
+});
 
 const makeChannel = (): WorkerThreadChannel =>
   new WorkerThreadChannel({
