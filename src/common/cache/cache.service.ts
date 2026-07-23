@@ -35,9 +35,6 @@ export class CacheService implements OnModuleDestroy {
   private readonly logger = createLogger('CacheService');
   private redis: Redis | null = null;
   private readonly enabled: boolean;
-  private connecting = false;
-  private connectionAttempts = 0;
-  private readonly maxConnectionAttempts = 5;
 
   constructor(private readonly configService: ConfigService) {
     // Check REDIS_ENABLED env var directly (from saved .env.generated)
@@ -46,61 +43,58 @@ export class CacheService implements OnModuleDestroy {
 
     this.logger.log(`CacheService: enabled=${this.enabled}, REDIS_ENABLED=${process.env.REDIS_ENABLED}`);
 
-    // Don't connect immediately - wait for Redis container to be ready
-    // Connection will be established on first use via isAvailable()
+    // Don't connect immediately - the client is created lazily on first use via isAvailable(), so a
+    // Redis container that is not ready at boot doesn't fail startup.
   }
 
   /**
-   * Try to (re)connect to Redis
-   * Returns true if connection succeeded
+   * Lazily create the single shared Redis client. ioredis owns all (re)connection: the retry strategy
+   * never gives up, so the client heals itself whether Redis is down at boot or restarts later — it is
+   * created once here and only torn down on shutdown (onModuleDestroy). The previous manual
+   * connect/attempt-count logic gave up permanently after a fixed number of failures and never cleared
+   * a dead client, so a Redis restart left the cache dead until the whole app was restarted.
    */
-  async tryConnect(): Promise<boolean> {
-    if (!this.enabled) return false;
-    if (this.connecting) return false;
-    if (this.redis && (await this.ping())) return true;
+  private ensureClient(): void {
+    if (this.redis) return;
 
-    this.connecting = true;
-    this.connectionAttempts++;
+    const host = process.env.REDIS_HOST || this.configService.get<string>('REDIS_HOST', 'localhost');
+    const port = parseInt(process.env.REDIS_PORT || '', 10) || this.configService.get<number>('REDIS_PORT', 6379);
 
-    try {
-      const host = process.env.REDIS_HOST || this.configService.get<string>('REDIS_HOST', 'localhost');
-      const port = parseInt(process.env.REDIS_PORT || '', 10) || this.configService.get<number>('REDIS_PORT', 6379);
+    this.logger.log(`Connecting to Redis at ${host}:${port}`);
 
-      this.logger.log(`Connecting to Redis at ${host}:${port} (attempt ${this.connectionAttempts})`);
+    const redis = new Redis({
+      host,
+      port,
+      username: this.configService.get<string>('REDIS_USERNAME'),
+      password: this.configService.get<string>('REDIS_PASSWORD'),
+      db: this.configService.get<number>('REDIS_CACHE_DB', 1),
+      lazyConnect: true,
+      // Cache is best-effort: a command issued while disconnected fails fast (the caller falls back to
+      // the source of truth) instead of being queued and stalling the request until reconnect.
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 3,
+      connectTimeout: this.configService.get<number>('redis.connectTimeoutMs', 5000),
+      // Reconnect forever with bounded backoff. Returning null (the previous behavior after 3 tries)
+      // makes ioredis abandon reconnection permanently, which is exactly what left the cache dead
+      // across a Redis restart.
+      retryStrategy: times => Math.min(times * 500, 5000),
+    });
 
-      this.redis = new Redis({
-        host,
-        port,
-        username: this.configService.get<string>('REDIS_USERNAME'),
-        password: this.configService.get<string>('REDIS_PASSWORD'),
-        db: this.configService.get<number>('REDIS_CACHE_DB', 1),
-        lazyConnect: true,
-        maxRetriesPerRequest: 3,
-        connectTimeout: this.configService.get<number>('redis.connectTimeoutMs', 5000),
-        retryStrategy: times => {
-          if (times > 3) return null;
-          return Math.min(times * 500, 3000);
-        },
-      });
+    redis.on('error', err => {
+      this.logger.warn(`Redis error: ${err.message}`);
+    });
 
-      this.redis.on('error', err => {
-        this.logger.warn(`Redis error: ${err.message}`);
-      });
+    redis.on('connect', () => {
+      this.logger.log('Redis cache connected');
+    });
 
-      this.redis.on('connect', () => {
-        this.logger.log('Redis cache connected');
-        this.connectionAttempts = 0; // Reset on success
-      });
+    this.redis = redis;
 
-      await this.redis.connect();
-      this.connecting = false;
-      return true;
-    } catch (error) {
-      this.logger.warn(`Redis connection failed (attempt ${this.connectionAttempts}): ${String(error)}`);
-      this.redis = null;
-      this.connecting = false;
-      return false;
-    }
+    // Kick off the initial connection but don't await it — ioredis keeps retrying per retryStrategy on
+    // failure, and isAvailable()'s ping reflects the live state, so a down-at-boot Redis never blocks a
+    // caller. The first isAvailable() while still connecting reports false; the next one, once ready,
+    // reports true.
+    redis.connect().catch(() => undefined);
   }
 
   private async ping(): Promise<boolean> {
@@ -140,11 +134,10 @@ export class CacheService implements OnModuleDestroy {
   async isAvailable(): Promise<boolean> {
     if (!this.enabled) return false;
 
-    // If not connected, try to connect (with rate limiting)
-    if (!this.redis && this.connectionAttempts < this.maxConnectionAttempts) {
-      await this.tryConnect();
-    }
-
+    // Create the client on first use, then let ioredis manage (re)connection. A ping reflects whether
+    // the connection is live right now — false during an outage (caller bypasses to the DB), true again
+    // once ioredis has reconnected.
+    this.ensureClient();
     return this.ping();
   }
 

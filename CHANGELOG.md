@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Redis cache now recovers from an outage instead of dying permanently.** When Redis restarted — or
+  was unreachable at startup and came back later — the cache client gave up reconnecting after a few
+  attempts and was never re-established, so caching stayed off until the entire gateway was restarted.
+  The client now reconnects for as long as it takes (bounded backoff) and self-heals the moment Redis
+  returns, and a cache operation attempted while disconnected fails fast to the source of truth rather
+  than stalling the request. Caching remains best-effort throughout, so an outage only removes the
+  speedup — never correctness — and is no longer a latent, restart-only failure.
+
 - **Session scoping on the audit-log and webhook delivery-failure list endpoints.** `GET /api/audit`
   and `GET /api/webhooks/delivery-failures` now scope their results to the calling key's allowed
   sessions, matching the rest of the API (`GET /webhooks`, `GET /search`). These two endpoints take
