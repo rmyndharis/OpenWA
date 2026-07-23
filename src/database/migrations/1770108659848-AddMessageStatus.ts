@@ -14,7 +14,7 @@ export class AddMessageStatus1770108659848 implements MigrationInterface {
       return;
     }
 
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     if (isPostgres) {
       await this.upPostgres(queryRunner);
@@ -24,7 +24,7 @@ export class AddMessageStatus1770108659848 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     if (isPostgres) {
       await this.downPostgres(queryRunner);

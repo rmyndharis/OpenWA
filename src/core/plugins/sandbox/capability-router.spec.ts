@@ -113,6 +113,30 @@ describe('dispatchCapabilityVerb', () => {
     ]);
   });
 
+  it('rejects malformed worker args before they reach the ORM (undefined/empty criteria)', async () => {
+    const ctx = makeContext();
+    // Missing positional string args — the 0.3-era silent-drop would have matched arbitrary rows.
+    await expect(
+      dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'mappings.getByProvider', []),
+    ).rejects.toThrow(/non-empty string/i);
+    await expect(
+      dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'messages.sendText', ['s', undefined, 'hi']),
+    ).rejects.toThrow(/non-empty string/i);
+    // Mapping keys must be complete { sessionId, chatId, instanceId } string triples.
+    await expect(
+      dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'mappings.get', [{ sessionId: 's' }]),
+    ).rejects.toThrow(/sessionId, chatId, instanceId/);
+    await expect(
+      dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'handover.set', [undefined, 'agent']),
+    ).rejects.toThrow(/sessionId, chatId, instanceId/);
+    await expect(
+      dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'mappings.upsert', [
+        { sessionId: 's', chatId: 'c', instanceId: 'i' },
+        undefined,
+      ]),
+    ).rejects.toThrow(/non-empty string/i);
+  });
+
   it('rejects an unknown verb — only allowlisted capabilities are reachable', async () => {
     const ctx = makeContext();
     await expect(dispatchCapabilityVerb(ctx as unknown as CapabilityContext, 'process.exit', [0])).rejects.toThrow(

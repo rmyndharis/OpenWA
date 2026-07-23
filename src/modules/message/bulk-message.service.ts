@@ -351,7 +351,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
         // Honor a cancellation issued by ANOTHER instance / after a restart — the in-memory Map only
         // sees same-process cancels. Re-read the status BEFORE saving so we don't clobber a CANCELLED
         // back to PROCESSING.
-        const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: ['status'] });
+        const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: { status: true } });
         if (fresh?.status === BatchStatus.CANCELLED) {
           cancelledByDb = true;
           this.logger.log(`Batch ${batch.batchId} cancelled (DB) at index ${i}`);
@@ -373,7 +373,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
     // unconditional save below would clobber it back to a terminal non-cancelled status, so re-read
     // once more here unless we already know the batch was cancelled.
     if (!cancelledByDb) {
-      const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: ['status'] });
+      const fresh = await this.batchRepository.findOne({ where: { id: batch.id }, select: { status: true } });
       if (fresh?.status === BatchStatus.CANCELLED) {
         cancelledByDb = true;
       }

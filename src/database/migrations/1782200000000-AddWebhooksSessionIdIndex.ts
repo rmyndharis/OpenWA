@@ -12,7 +12,7 @@ export class AddWebhooksSessionIdIndex1782200000000 implements MigrationInterfac
   name = 'AddWebhooksSessionIdIndex1782200000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type === 'postgres') {
+    if (queryRunner.dataSource.options.type === 'postgres') {
       // Lift the runtime pool's statement_timeout (app.module.ts) for THIS transaction so a CREATE INDEX
       // over a large webhooks table at boot is never aborted. SET LOCAL auto-reverts at COMMIT; SQLite
       // rejects it syntactically, hence the guard.

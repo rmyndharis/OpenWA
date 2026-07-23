@@ -50,7 +50,7 @@ function dtoFiles(dir: string, out: string[] = []): string[] {
 // module has been loaded, so this has to happen before the registry is read.
 const SRC = join(__dirname, '..', '..');
 dtoFiles(SRC).forEach(file => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-call
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   require(file);
 });
 

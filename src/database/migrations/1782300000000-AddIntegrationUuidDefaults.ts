@@ -24,7 +24,7 @@ export class AddIntegrationUuidDefaults1782300000000 implements MigrationInterfa
   private readonly tables = ['conversation_mappings', 'integration_delivery_failures'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
 
     // Probe the server version with a non-erroring catalog query (a caught SQL exception would poison the
     // migration transaction). Only touch pgcrypto on PG <= 12; on 13+ gen_random_uuid() is core and
@@ -57,7 +57,7 @@ export class AddIntegrationUuidDefaults1782300000000 implements MigrationInterfa
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
 
     for (const table of this.tables) {
       if (!(await queryRunner.hasTable(table))) continue;

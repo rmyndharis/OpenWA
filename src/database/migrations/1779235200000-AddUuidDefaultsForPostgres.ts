@@ -30,7 +30,7 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
   private readonly tables = ['sessions', 'webhooks', 'messages', 'message_batches'];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
 
     // gen_random_uuid() is a core built-in from PostgreSQL 13+, so on any modern server we need NO
     // extension — and CREATE EXTENSION requires a privilege that managed Postgres (RDS/Cloud SQL/…)
@@ -71,7 +71,7 @@ export class AddUuidDefaultsForPostgres1779235200000 implements MigrationInterfa
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
 
     for (const table of this.tables) {
       const exists = await queryRunner.hasTable(table);

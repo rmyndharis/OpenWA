@@ -12,7 +12,7 @@ export class AddWebhookDeliveryFailures1781700000000 implements MigrationInterfa
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (await queryRunner.hasTable('webhook_delivery_failures')) return;
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     if (isPostgres) {
       await queryRunner.query(

@@ -10,7 +10,7 @@ export class AddBaileysStoredMessages1781000000000 implements MigrationInterface
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (await queryRunner.hasTable('baileys_stored_messages')) return;
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     if (isPostgres) {
       await queryRunner.query(

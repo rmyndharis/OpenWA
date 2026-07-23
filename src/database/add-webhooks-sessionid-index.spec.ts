@@ -6,7 +6,7 @@ import { AddWebhooksSessionIdIndex1782200000000 } from './migrations/17822000000
 function makeQueryRunner(type: string, hasWebhooks = true) {
   const query = jest.fn(() => Promise.resolve(undefined));
   return {
-    connection: { options: { type } },
+    dataSource: { options: { type } },
     hasTable: jest.fn((t: string) => Promise.resolve(t === 'webhooks' && hasWebhooks)),
     query,
   };

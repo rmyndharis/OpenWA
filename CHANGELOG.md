@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **TypeORM upgraded from 0.3 to 1.1.** The ORM underneath every database operation moves off the
+  now-legacy 0.3 line onto the actively developed 1.x line. No schema change is involved: all existing
+  migrations apply unchanged, database files and PostgreSQL deployments are untouched, and the API
+  surface of the gateway is identical. One behavioral improvement ships with the upgrade: a database
+  lookup or write whose criteria would previously have been silently dropped (a bug class, not a
+  feature) now fails loudly instead of returning or modifying the wrong rows. Every such code path in
+  the gateway was audited as part of this upgrade. For self-hosters running from source, the minimum
+  Node.js version rises from 22.12 to **22.13** (the Docker image is unaffected — it already ships a
+  newer Node).
+
 ## [0.10.6] - 2026-07-22
 
 ### Changed

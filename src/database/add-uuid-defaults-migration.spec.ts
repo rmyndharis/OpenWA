@@ -24,7 +24,7 @@ function makeQueryRunner(type: string, existingTables: Set<string>, opts: Runner
     return Promise.resolve(undefined);
   });
   return {
-    connection: { options: { type } },
+    dataSource: { options: { type } },
     hasTable: jest.fn((t: string) => Promise.resolve(existingTables.has(t))),
     query,
   };

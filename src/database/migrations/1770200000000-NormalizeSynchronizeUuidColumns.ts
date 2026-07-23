@@ -49,7 +49,7 @@ export class NormalizeSynchronizeUuidColumns1770200000000 implements MigrationIn
   ];
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
     // Gate: synchronize builds the WHOLE schema atomically (all-uuid, or synchronize itself errors), so a
     // single representative probe on sessions.id is sufficient to detect a drifted schema. Per-column
     // guards inside the loops below add defense-in-depth for the (non-reachable) partial-drift case.
@@ -104,7 +104,7 @@ export class NormalizeSynchronizeUuidColumns1770200000000 implements MigrationIn
   public async down(queryRunner: QueryRunner): Promise<void> {
     // Best-effort inverse (varchar -> native uuid); only meaningful to re-enable synchronize. USING id::uuid
     // validates every value — Postgres aborts on non-uuid strings (no silent corruption).
-    if (queryRunner.connection.options.type !== 'postgres') return;
+    if (queryRunner.dataSource.options.type !== 'postgres') return;
     if (await this.columnIsUuid(queryRunner, 'sessions', 'id')) return; // already native uuid: nothing to revert
 
     await queryRunner.query(`SET LOCAL statement_timeout = 0`);

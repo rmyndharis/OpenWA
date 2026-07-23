@@ -14,7 +14,7 @@ export class AddMessagesFts1782400000000 implements MigrationInterface {
   name = 'AddMessagesFts1782400000000';
 
   async up(qr: QueryRunner): Promise<void> {
-    const isPostgres = qr.connection.options.type === 'postgres';
+    const isPostgres = qr.dataSource.options.type === 'postgres';
     if (isPostgres) {
       // Lift the runtime statement_timeout (30000ms on the data pool — see app.module.ts) for this
       // migration transaction: the STORED generated column is a full-table rewrite, and the GIN index
@@ -65,7 +65,7 @@ export class AddMessagesFts1782400000000 implements MigrationInterface {
   }
 
   async down(qr: QueryRunner): Promise<void> {
-    const isPostgres = qr.connection.options.type === 'postgres';
+    const isPostgres = qr.dataSource.options.type === 'postgres';
     if (isPostgres) {
       await qr.query(`DROP INDEX IF EXISTS "idx_messages_body_ts"`);
       await qr.query(`ALTER TABLE "messages" DROP COLUMN IF EXISTS "body_ts"`);

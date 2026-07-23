@@ -87,7 +87,7 @@ export class StatsService {
 
   /** The data-connection dialect ('sqlite' | 'postgres'), used to pick portable date SQL. */
   private get dataDbType(): string {
-    return this.messageRepo.manager.connection.options.type;
+    return this.messageRepo.manager.dataSource.options.type;
   }
 
   async getOverview(): Promise<OverviewStats> {

@@ -12,7 +12,7 @@ export class AddTemplates1779840000000 implements MigrationInterface {
   name = 'AddTemplates1779840000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     const exists = await queryRunner.hasTable('templates');
     if (exists) return;

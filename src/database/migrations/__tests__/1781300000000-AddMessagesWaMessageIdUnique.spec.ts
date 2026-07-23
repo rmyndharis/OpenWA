@@ -70,7 +70,7 @@ describe('AddMessagesWaMessageIdUnique migration', () => {
     // connection; this DELETE / CREATE UNIQUE INDEX over the hot messages table must not be aborted.
     const queries: string[] = [];
     const pgRunner = {
-      connection: { options: { type: 'postgres' } },
+      dataSource: { options: { type: 'postgres' } },
       hasTable: jest.fn().mockResolvedValue(true),
       query: jest.fn((sql: string) => {
         queries.push(sql);

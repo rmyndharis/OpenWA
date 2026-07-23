@@ -13,7 +13,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, Not, IsNull, DataSource, FindManyOptions } from 'typeorm';
-import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
+import { QueryDeepPartialEntity } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -676,7 +676,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const chunkIds = ids.slice(i, i + CHUNK);
       const existing = await this.messageRepository.find({
         where: { sessionId: id, waMessageId: In(chunkIds) },
-        select: ['waMessageId'],
+        select: { waMessageId: true },
       });
       const seen = new Set(existing.map(r => r.waMessageId));
       const rows = chunkIds

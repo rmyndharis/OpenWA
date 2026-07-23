@@ -1248,7 +1248,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         assertPermission: this.assertPermission.bind(this),
         assertSessionActive: (sessionId: string) => this.assertSessionActive(plugin, sessionId),
         resolveChatId: async env => {
-          if (!env.instanceId || !env.source) {
+          if (!env.instanceId || !env.source?.externalConversationId) {
             throw new PluginCapabilityError(
               `Plugin ${plugin.manifest.id}: conversation.send requires chatId, or both instanceId and source to resolve one`,
             );

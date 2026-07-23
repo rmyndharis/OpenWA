@@ -14,7 +14,7 @@ export class AddMessagesWaMessageIdUnique1781300000000 implements MigrationInter
   name = 'AddMessagesWaMessageIdUnique1781300000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    if (queryRunner.connection.options.type === 'postgres') {
+    if (queryRunner.dataSource.options.type === 'postgres') {
       // The runtime 'data' pool carries a statement_timeout (app.module.ts) and migrations run on it at
       // boot. Lift it for THIS transaction so the dedup DELETE / CREATE UNIQUE INDEX over the hot messages
       // table is never aborted mid-flight. SET LOCAL is transaction-scoped (auto-reverts at COMMIT) and is

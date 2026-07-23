@@ -88,6 +88,9 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
   }
 
   async getMessage(sessionId: string, messageId: string): Promise<WAMessage | null> {
+    // Baileys retry/poll paths can hand over a key with no id; treat that as not-found rather than
+    // letting an undefined criterion reach the ORM (TypeORM 1.x throws; 0.3 matched an arbitrary row).
+    if (!messageId) return null;
     const row = await this.repo.findOne({ where: { sessionId, waMessageId: messageId } });
     if (!row) {
       return null;
@@ -108,7 +111,7 @@ export class BaileysMessageStoreService implements BaileysMessageStore {
       order: { createdAt: 'DESC', id: 'DESC' },
       skip: limit,
       take: 1,
-      select: ['id', 'createdAt'],
+      select: { id: true, createdAt: true },
     });
     if (cutoff.length === 0) {
       return; // under the cap — nothing to evict

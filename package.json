@@ -6,7 +6,7 @@
   "private": true,
   "license": "MIT",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scarfSettings": {
     "enabled": false
@@ -90,7 +90,7 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
     "tar-stream": "^3.2.0",
-    "typeorm": "^0.3.31",
+    "typeorm": "^1.1.0",
     "undici": "^8.8.0",
     "whatsapp-web.js": "^1.34.7",
     "zod": "^4.4.3"

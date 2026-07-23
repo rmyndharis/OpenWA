@@ -33,7 +33,23 @@ export async function dispatchCapabilityVerb(
   verb: string,
   args: unknown[],
 ): Promise<unknown> {
-  const s = (index: number): string => args[index] as string;
+  // Worker args cross a trust boundary: validate here so a malformed RPC fails the calling plugin
+  // with a clear error instead of reaching the ORM with undefined criteria (TypeORM 1.x throws on
+  // those, and older versions silently DROPPED them — matching rows it should never have matched).
+  const s = (index: number): string => {
+    const v = args[index];
+    if (typeof v !== 'string' || v.length === 0) {
+      throw new Error(`Capability ${verb}: argument ${index} must be a non-empty string`);
+    }
+    return v;
+  };
+  const mappingKey = (index: number): { sessionId: string; chatId: string; instanceId: string } => {
+    const k = args[index] as { sessionId?: unknown; chatId?: unknown; instanceId?: unknown } | null | undefined;
+    if (!k || [k.sessionId, k.chatId, k.instanceId].some(v => typeof v !== 'string' || v.length === 0)) {
+      throw new Error(`Capability ${verb}: argument ${index} must be { sessionId, chatId, instanceId } strings`);
+    }
+    return k as { sessionId: string; chatId: string; instanceId: string };
+  };
   switch (verb) {
     case 'messages.sendText':
       return context.messages.sendText(s(0), s(1), s(2));
@@ -66,14 +82,11 @@ export async function dispatchCapabilityVerb(
     case 'conversation.send':
       return context.conversations.send(args[0] as ConversationSendEnvelope);
     case 'handover.set':
-      return context.handover.set(
-        args[0] as { sessionId: string; chatId: string; instanceId: string },
-        args[1] as HandoverState,
-      );
+      return context.handover.set(mappingKey(0), args[1] as HandoverState);
     case 'mappings.upsert':
-      return context.mappings.upsert(args[0] as { sessionId: string; chatId: string; instanceId: string }, s(1));
+      return context.mappings.upsert(mappingKey(0), s(1));
     case 'mappings.get':
-      return context.mappings.get(args[0] as { sessionId: string; chatId: string; instanceId: string });
+      return context.mappings.get(mappingKey(0));
     case 'mappings.getByProvider':
       return context.mappings.getByProvider(s(0), s(1));
     default:

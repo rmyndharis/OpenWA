@@ -10,7 +10,7 @@ export class AddLidMappings1781200000000 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     if (await queryRunner.hasTable('lid_mappings')) return;
-    const isPostgres = queryRunner.connection.options.type === 'postgres';
+    const isPostgres = queryRunner.dataSource.options.type === 'postgres';
 
     if (isPostgres) {
       await queryRunner.query(
