@@ -114,20 +114,24 @@ export class CacheService implements OnModuleDestroy {
 
     // Bound the teardown: redis.quit() waits for the QUIT reply, which never arrives on a half-open /
     // partitioned socket — leaving app.close() blocked until the orchestrator SIGKILLs the process.
-    // Force-disconnect after a short deadline so shutdown always completes.
+    // Race a graceful QUIT against a short deadline so shutdown always proceeds.
     let timer: NodeJS.Timeout | undefined;
-    const forceDisconnect = new Promise<void>(resolve => {
-      timer = setTimeout(() => {
-        redis.disconnect();
-        resolve();
-      }, CACHE_QUIT_TIMEOUT_MS);
+    const deadline = new Promise<void>(resolve => {
+      timer = setTimeout(resolve, CACHE_QUIT_TIMEOUT_MS);
       timer.unref();
     });
 
     try {
-      await Promise.race([redis.quit().catch(() => undefined), forceDisconnect]);
+      await Promise.race([redis.quit().catch(() => undefined), deadline]);
     } finally {
       if (timer) clearTimeout(timer);
+      // Always release the socket. With the never-give-up retryStrategy, a Redis that is down at
+      // shutdown leaves the client stuck 'reconnecting', and (enableOfflineQueue:false) quit() rejects
+      // instantly WITHOUT closing it — so ioredis's reconnect timer would outlive teardown. disconnect()
+      // is idempotent, so calling it after a clean quit is harmless; this guarantees no live handle
+      // survives onModuleDestroy regardless of connection state, rather than relying on process.exit to
+      // reap it.
+      redis.disconnect();
     }
   }
 

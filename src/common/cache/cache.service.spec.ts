@@ -19,15 +19,18 @@ describe('CacheService.onModuleDestroy (bounded shutdown)', () => {
     await expect(makeService().onModuleDestroy()).resolves.toBeUndefined();
   });
 
-  it('completes via a clean quit() without force-disconnecting', async () => {
+  it('prefers a graceful quit() but always releases the socket afterward', async () => {
     const service = makeService();
     const redis = { quit: jest.fn().mockResolvedValue('OK'), disconnect: jest.fn() };
     withRedis(service, redis);
 
     await service.onModuleDestroy();
 
+    // A clean quit() is used, and disconnect() still runs as the guaranteed final release — a
+    // never-ready client (down Redis + never-give-up retryStrategy) would otherwise leak a live
+    // reconnect timer past teardown. disconnect() is idempotent, so this is safe after a clean quit.
     expect(redis.quit).toHaveBeenCalledTimes(1);
-    expect(redis.disconnect).not.toHaveBeenCalled();
+    expect(redis.disconnect).toHaveBeenCalledTimes(1);
   });
 
   it('force-disconnects when quit() hangs past the deadline (shutdown still completes)', async () => {
@@ -46,11 +49,28 @@ describe('CacheService.onModuleDestroy (bounded shutdown)', () => {
       jest.useRealTimers();
     }
   });
+
+  it('releases a never-ready client whose quit() rejects fast (no leaked reconnect timer)', async () => {
+    const service = makeService();
+    // A down/reconnecting client with enableOfflineQueue:false rejects quit() immediately WITHOUT
+    // closing the socket; onModuleDestroy must still disconnect() it so ioredis's forever-retry timer
+    // does not outlive teardown.
+    const redis = { quit: jest.fn().mockRejectedValue(new Error("Stream isn't writeable")), disconnect: jest.fn() };
+    withRedis(service, redis);
+
+    await expect(service.onModuleDestroy()).resolves.toBeUndefined();
+
+    expect(redis.disconnect).toHaveBeenCalledTimes(1);
+  });
 });
 
-// Regression coverage for the Redis-outage recovery bug: the cache used to give up reconnecting after a
-// fixed number of failures and never cleared a dead client, so a Redis restart (or a Redis that was down
-// at boot and came back) left the cache permanently dead until the whole app was restarted.
+// Redis-outage recovery. The old cache gave up reconnecting after a fixed number of failures and never
+// cleared a dead client, so a restart (or a Redis down at boot) left the cache dead until the app
+// restarted. The client mock here always resolves connect(), so these first tests pin the NEW contract
+// — one client for the process lifetime, isAvailable() tracking live ping state and never latching off —
+// rather than the old-vs-new difference itself. That difference lives entirely in the ioredis options
+// (retryStrategy never null + enableOfflineQueue:false), which the 'configures ioredis…' test below
+// asserts directly; it is the one test that fails against the pre-fix code.
 describe('CacheService Redis-outage resilience', () => {
   const RedisMock = Redis as unknown as jest.Mock;
 
@@ -103,9 +123,11 @@ describe('CacheService Redis-outage resilience', () => {
     expect(RedisMock).toHaveBeenCalledTimes(1);
   });
 
-  it('never permanently gives up: recovers even after many boot-time failures', async () => {
+  it('never latches off: keeps reflecting live state and recovers after a long run of failures', async () => {
     const ping = jest.fn();
-    for (let i = 0; i < 8; i++) ping.mockRejectedValueOnce(new Error('down')); // 8 > the old hard cap of 5
+    // Many consecutive unavailable polls (more than the old code's 5-attempt give-up cap) must not make
+    // isAvailable() stick at false — the single client keeps being re-pinged, never abandoned.
+    for (let i = 0; i < 8; i++) ping.mockRejectedValueOnce(new Error('down'));
     ping.mockResolvedValue('PONG'); // Redis finally reachable
     useClient(ping);
     const service = new CacheService(enabledConfig());

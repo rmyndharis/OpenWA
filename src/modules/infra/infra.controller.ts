@@ -1706,10 +1706,10 @@ export class InfraController {
       await queryRunner.commitTransaction();
 
       // Audit the destructive replace-all restore, only on the committed-success path (the rollback /
-      // refused-empty branches above return without emitting, since no data actually changed).
-      await this.auditService?.logInfo(AuditAction.INFRA_DATA_IMPORTED, {
-        metadata: { counts, warnings: warnings.length },
-      });
+      // refused-empty branches above return without emitting, since no data actually changed). Any
+      // warnings would have taken the rollback branch, so warnings.length is always 0 here — record
+      // only the per-table counts.
+      await this.auditService?.logInfo(AuditAction.INFRA_DATA_IMPORTED, { metadata: { counts } });
 
       return { imported: true, counts, warnings };
     } catch (error) {
