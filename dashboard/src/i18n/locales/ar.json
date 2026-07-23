@@ -84,6 +84,7 @@
     "loadingChats": "جارٍ تحميل المحادثات...",
     "empty": "لا توجد محادثات",
     "noMessageYet": "لا توجد رسائل بعد",
+    "unreadBadge": "{{count}} رسائل غير مقروءة",
     "loadingMessages": "جارٍ تحميل الرسائل...",
     "noMessagesInChat": "لا توجد رسائل بعد. أرسل الرسالة الأولى للبدء!",
     "downloadDocument": "تنزيل المستند",

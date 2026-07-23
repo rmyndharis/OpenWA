@@ -84,6 +84,7 @@
     "loadingChats": "Caricamento chat...",
     "empty": "Nessuna chat",
     "noMessageYet": "Ancora nessun messaggio",
+    "unreadBadge": "{{count}} messaggi non letti",
     "loadingMessages": "Caricamento messaggi...",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",

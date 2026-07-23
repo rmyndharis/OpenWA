@@ -84,6 +84,7 @@
     "loadingChats": "טוען שיחות...",
     "empty": "אין שיחות",
     "noMessageYet": "אין הודעות עדיין",
+    "unreadBadge": "{{count}} הודעות שלא נקראו",
     "loadingMessages": "טוען הודעות...",
     "noMessagesInChat": "אין הודעות עדיין. שלח את ההודעה הראשונה כדי להתחיל!",
     "downloadDocument": "הורדת מסמך",

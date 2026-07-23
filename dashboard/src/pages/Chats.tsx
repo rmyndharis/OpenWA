@@ -966,7 +966,15 @@ export function Chats() {
                               <span className="no-message">{t('chats.noMessageYet')}</span>
                             )}
                           </span>
-                          {chat.unreadCount > 0 && <span className="chat-unread-badge">{chat.unreadCount}</span>}
+                          {chat.unreadCount > 0 && (
+                            <span
+                              className="chat-unread-badge"
+                              title={t('chats.unreadBadge', { count: chat.unreadCount })}
+                              aria-label={t('chats.unreadBadge', { count: chat.unreadCount })}
+                            >
+                              {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

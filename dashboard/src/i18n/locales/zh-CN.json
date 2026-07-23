@@ -84,6 +84,7 @@
     "loadingChats": "正在加载聊天...",
     "empty": "没有聊天",
     "noMessageYet": "暂无消息",
+    "unreadBadge": "{{count}} 条未读消息",
     "loadingMessages": "正在加载消息...",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",

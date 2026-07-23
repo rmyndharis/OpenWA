@@ -84,6 +84,7 @@
     "loadingChats": "채팅 불러오는 중...",
     "empty": "채팅 없음",
     "noMessageYet": "아직 메시지 없음",
+    "unreadBadge": "읽지 않은 메시지 {{count}}개",
     "loadingMessages": "메시지 불러오는 중...",
     "noMessagesInChat": "아직 메시지가 없습니다. 첫 메시지를 보내 대화를 시작하세요!",
     "downloadDocument": "문서 다운로드",
