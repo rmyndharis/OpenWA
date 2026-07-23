@@ -204,7 +204,7 @@ socket.on('message', msg => {
 | --------- | ----------------------------- |
 | Runtime   | Node.js 22 LTS                |
 | Framework | NestJS 11.x                   |
-| Language  | TypeScript 5.x                |
+| Language  | TypeScript 6.x                |
 | WA Engine | Pluggable (`ENGINE_TYPE`): whatsapp-web.js (default) or Baileys |
 | WebSocket | Socket.IO                     |
 | Database  | SQLite (default) / PostgreSQL |

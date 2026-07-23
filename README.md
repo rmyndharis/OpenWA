@@ -362,7 +362,7 @@ The key can be passed as `Authorization: Bearer …` or `X-API-Key: …`. Every 
 | ------------- | ------------------------------------------------------- |
 | **Runtime**   | Node.js 22 LTS                                          |
 | **Framework** | NestJS 11.x                                             |
-| **Language**  | TypeScript 5.x                                          |
+| **Language**  | TypeScript 6.x                                          |
 | **WA Engine** | whatsapp-web.js (default) / baileys — set `ENGINE_TYPE` |
 | **Database**  | SQLite / PostgreSQL                                     |
 | **Cache**     | Redis (optional)                                        |
