@@ -53,9 +53,15 @@ FROM docker.io/node:22-slim AS production
 # to avoid the Debian chromium package's K8s SIGTRAP under strict non-root/seccomp;
 # arm64 installs Debian's chromium instead (it ships a native arm64 build). Both
 # resolve to the same /usr/local/bin/puppeteer-chrome symlink below.
+#
+# chromium-sandbox is listed EXPLICITLY (not left to Recommends) so --no-install-recommends still
+# trims every other Recommends but keeps the setuid sandbox binary available. Our default forces
+# --no-sandbox (configuration.ts) so it goes unused, but a user who overrides PUPPETEER_ARGS to drop
+# --no-sandbox would otherwise get a chromium that can't launch. Verified on real arm64 hardware:
+# with --no-install-recommends the package is dropped, and chromium launches fine under --no-sandbox.
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    $([ "$TARGETARCH" = arm64 ] && echo chromium) \
+    $([ "$TARGETARCH" = arm64 ] && echo "chromium chromium-sandbox") \
     fonts-liberation \
     libappindicator3-1 \
     libasound2 \

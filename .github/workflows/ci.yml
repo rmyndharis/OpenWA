@@ -73,7 +73,11 @@ jobs:
         run: npm ci
 
       - name: Security audit
-        run: npm audit --audit-level=critical
+        # high (not critical): the `overrides` in package.json clear the root tree's HIGH advisories
+        # (brace-expansion CVE-2026-14257, js-yaml GHSA-pm4m-ph32-ghv5), so this threshold now fences
+        # HIGH regressions instead of only catching criticals. Scoped to the root tree; the dashboard
+        # carries its own `overrides` and its remaining HIGH pair (react-router) rides Dependabot.
+        run: npm audit --audit-level=high
 
   test:
     name: Test
