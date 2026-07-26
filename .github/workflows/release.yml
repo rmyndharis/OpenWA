@@ -48,7 +48,9 @@ jobs:
           echo "Tag $TAG matches package.json $PKG_VERSION"
 
       - name: Security audit
-        run: npm audit --audit-level=critical
+        # Matches ci.yml's threshold: high (not critical). The release gate must not be laxer than the
+        # PR gate, or a HIGH advisory blocked on every PR would still sail through at tag time.
+        run: npm audit --audit-level=high
 
       - name: Run ESLint
         run: npm run lint
