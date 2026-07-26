@@ -261,9 +261,17 @@ spec:
       labels:
         app: openwa
     spec:
+      # OS-level containment is the second half of the plugin sandbox boundary (see docs/23-plugin-
+      # sandboxing.md). Without it a worker_thread plugin that abuses Node built-ins (fs, net) runs with
+      # the same privileges as the API and can read host files / open raw sockets outside the capability
+      # model. The shipped Docker image already runs read-only + non-root + cap_drop:ALL; the manifest
+      # below mirrors that so a k8s deploy is not silently weaker.
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
       containers:
         - name: openwa
-          image: ghcr.io/rmyndharis/openwa:0.4.6
+          image: ghcr.io/rmyndharis/openwa:0.10.10
           ports:
             - containerPort: 2785
               name: http
@@ -277,6 +285,14 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+          # Container-level hardening. readOnlyRootFilesystem requires every writable path to be an
+          # explicitly mounted volume — /app/data (SQLite, sessions, media, plugin storage) and /tmp
+          # (Chromium needs a writable HOME/XDG for whatsapp-web.js).
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']
           resources:
             requests:
               memory: '512Mi'
@@ -285,8 +301,10 @@ spec:
               memory: '2Gi'
               cpu: '1000m'
           volumeMounts:
-            - name: session-data
-              mountPath: /app/data/sessions
+            - name: openwa-data
+              mountPath: /app/data
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /api/health
@@ -299,9 +317,12 @@ spec:
               port: 2785
             initialDelaySeconds: 10
             periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
-        name: session-data
+        name: openwa-data
       spec:
         accessModes: ['ReadWriteOnce']
         resources:

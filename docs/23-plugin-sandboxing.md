@@ -9,7 +9,7 @@ it does not — and what changes for plugin authors.
 
 | Tier | Examples | Runs | Capabilities |
 |------|----------|------|--------------|
-| **Built-in (trusted)** | engines (whatsapp-web.js, baileys), bundled extensions (auto-reply, translation) | in-process | direct, full speed |
+| **Built-in (trusted)** | the two engine adapters (whatsapp-web.js, baileys) | in-process | direct, full speed |
 | **Untrusted** | anything in the plugins directory | in a `worker_thread` | only via the host-validated bridge |
 
 The loader routes by tier automatically: a plugin registered programmatically is built-in; one loaded

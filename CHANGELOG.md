@@ -87,6 +87,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remains the source of truth), so the cap trades a re-resolution for bounded memory, never data loss.
   `LID_MAPPING_CACHE_MAX=0` restores the legacy unbounded behaviour.
 
+- **The Kubernetes deployment example now ships with OS-level containment, matching the shipped
+  Docker image.** The StatefulSet in `docs/13-horizontal-scaling.md` previously had no
+  `securityContext`, so an operator following the manifest ran the plugin sandbox without its
+  OS-containment half (read-only rootfs, non-root, `cap_drop: ALL`) — weaker than the threat model
+  assumes. The manifest now sets `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation:
+  false`, and `capabilities.drop: ['ALL']`, with the writable `/app/data` and `/tmp` mounts that
+  `readOnlyRootFilesystem` requires. The stale image tag (`0.4.6`) was also bumped to the current
+  release.
+
+- **The plugin sandboxing doc no longer lists `auto-reply` and `translation` as built-in extensions.**
+  Both ids were removed in v0.7 (`LEGACY_REMOVED_PLUGIN_IDS`), but `docs/23-plugin-sandboxing.md`'s
+  trust-tiers table still named them as built-in examples — misleading an operator about what counts
+  as a trusted in-process plugin. The table now names only the two engine adapters, matching
+  `docs/19-plugin-architecture.md` and the code.
+
 ## [0.10.10] - 2026-07-25
 
 ### Added
