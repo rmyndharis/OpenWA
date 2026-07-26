@@ -150,5 +150,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # dumb-init is PID 1 and handles signal forwarding.
 # It execs docker-entrypoint.sh (as root), which fixes volume ownership and
 # then drops to the openwa user via gosu before starting the node process.
+#
+# NOTE — no `USER openwa` directive on purpose (Trivy DS-0002 will flag it, ignore).
+# The Node process does NOT run as root: docker-entrypoint.sh:30 is
+# `exec gosu openwa "$@"` after the chowns on lines 7 and 25. Adding `USER openwa`
+# here would run the entrypoint as openwa and break the chown-before-drop pattern
+# that makes named-volume mounts work on first boot (#254, #259).
 ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/main"]

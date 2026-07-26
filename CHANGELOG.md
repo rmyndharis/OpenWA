@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **npm dependency vulnerabilities pinned via `overrides` (root + dashboard).**
+  `brace-expansion` bumped to `^5.0.8` (CVE-2026-14257, ReDoS; was present at
+  both 2.1.2 and 5.0.7 in the root tree, and 5.0.6 in the dashboard tree) and
+  `js-yaml` to `^5.2.2` (GHSA-pm4m-ph32-ghv5, exponential parsing DoS) in the
+  root `package.json`. Both fixes are pulled in through transitive dependencies;
+  the overrides consolidate the tree onto the fixed versions with no source
+  changes and shrink `package-lock.json` by ~240 lines from dedup.
+
+### Changed
+
+- **Dockerfile `apt-get install` invocations now use `--no-install-recommends`**
+  (build-stage build deps and production-stage Chromium/Puppeteer deps).
+  Smaller image; no behavior change for the explicitly-listed packages.
+
 ## [0.10.10] - 2026-07-25
 
 ### Added
