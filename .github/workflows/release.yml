@@ -209,7 +209,7 @@ jobs:
     # a matching container image, and a runtime boot check on both architectures (boot-smoke runs the
     # published image on amd64 + arm64). Trades a few minutes of buildx/boot latency for release
     # safety.
-    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, promote, verify-published]
+    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, promote, verify-published]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -378,6 +378,56 @@ jobs:
           done
           exit "$exit_code"
 
+  # ──── Image Vulnerability Scan (amd64 + arm64) ────────────────────
+  # Scans the just-pushed staging image for OS-package and library CVEs and blocks promotion of a
+  # vulnerable image to the public release tags. This is the coverage the `npm audit` gate in ci.yml
+  # cannot give: audit sees the npm tree, but the Debian packages baked into node:22-slim — and, on
+  # arm64 only, the `chromium`/`chromium-sandbox` packages the amd64 image never installs (amd64 uses
+  # a downloaded Chrome-for-Testing binary, not a .deb) — are visible only by scanning the built
+  # artifact. Both architectures are scanned because their OS package sets diverge. Runs at release
+  # time, not on every PR, so it never hits the fork-PR permission limits a push/PR scan would.
+  # `ignore-unfixed` keeps a release from being blocked by a CVE with no fix yet; a fixable
+  # HIGH/CRITICAL fails the job and — via promote's `needs` below — stops the release tags.
+  image-scan:
+    name: Image scan (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    needs: [docker]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve staging image ref
+        id: image
+        env:
+          REPO: ${{ github.repository }}
+        run: echo "ref=ghcr.io/${REPO,,}:smoke-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          # trivy reads TRIVY_PLATFORM for its --platform flag. Scanning is static (it reads the
+          # image layers, it does not run the image), so no QEMU is needed to inspect the arm64
+          # variant of the manifest — only a pull, which the GHCR login above authorizes.
+          TRIVY_PLATFORM: ${{ matrix.platform }}
+        with:
+          scan-type: image
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: table
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
   # Applies the release tags (X.Y.Z, X.Y, latest) to the image boot-smoke just proved can start, on
   # BOTH registries (GHCR + Docker Hub — the metadata-action `images` list emits both, and the loop
   # below promotes each). `imagetools create` re-points tags at the existing manifest list without
@@ -389,7 +439,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
-    needs: [boot-smoke]
+    needs: [boot-smoke, image-scan]
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

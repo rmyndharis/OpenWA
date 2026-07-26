@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the overrides consolidate the tree onto the fixed versions with no source
   changes and shrink `package-lock.json` by ~240 lines from dedup.
 
+- **Release images are now scanned for OS-package CVEs before they get public tags.** A new
+  `image-scan` job in the release workflow runs `trivy image` against the freshly-built staging
+  image on both `linux/amd64` and `linux/arm64`, and blocks the `promote` step (which applies the
+  `X.Y.Z`/`X.Y`/`latest` tags) on any fixable HIGH/CRITICAL. This covers the Debian packages baked
+  into `node:22-slim` — and the arm64-only `chromium` packages — that the source-tree `npm audit`
+  gate cannot see. Runs at release time only, so it never touches fork-PR token permissions.
+
 ### Changed
 
 - **Dockerfile `apt-get install` invocations now use `--no-install-recommends`**
