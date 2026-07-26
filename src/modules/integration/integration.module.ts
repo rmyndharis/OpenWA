@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, DynamicModule, Type } from '@nestjs/common';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PluginInstance } from './entities/plugin-instance.entity';
@@ -25,11 +25,26 @@ import { createLogger } from '../../common/services/logger.service';
  * Queue-vs-inline enqueue is delegated to IngressEnqueueService (its own optional-queue injection),
  * shared with RedriveService so a DLQ replay goes through the exact same path a live delivery would.
  * PluginLoaderService is @Global (PluginsModule), so it injects without importing that module.
+ * QueueModule must be imported here (not only at the app root): @nestjs/bullmq queue providers are
+ * module-scoped, so IngressEnqueueService's @InjectQueue(QUEUE_NAMES.INGRESS) only resolves when this
+ * module imports the module that registered the queue. IngressEnqueueService fails fast at boot if
+ * QUEUE_ENABLED=true but the queue still did not resolve.
  */
+// Only import QueueModule if explicitly enabled to avoid Redis connection errors
+const queueModules: Array<Type | DynamicModule> = [];
+if (process.env.QUEUE_ENABLED === 'true') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const queueModule = require('../queue/queue.module') as {
+    QueueModule: Type;
+  };
+  queueModules.push(queueModule.QueueModule);
+}
+
 @Module({
   imports: [
     SessionModule,
     TypeOrmModule.forFeature([PluginInstance, IngressEvent, IntegrationDeliveryFailure], 'data'),
+    ...queueModules,
   ],
   controllers: [IngressController, RedriveController, IntegrationInstanceController],
   providers: [

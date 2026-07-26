@@ -55,6 +55,42 @@ describe('IngressEnqueueService', () => {
     expect(loader.dispatchWebhookForInstance).toHaveBeenCalledWith(data);
   });
 
+  describe('onApplicationBootstrap (queue-wiring tripwire)', () => {
+    const ORIGINAL = process.env.QUEUE_ENABLED;
+
+    afterEach(() => {
+      if (ORIGINAL === undefined) delete process.env.QUEUE_ENABLED;
+      else process.env.QUEUE_ENABLED = ORIGINAL;
+    });
+
+    it('throws when QUEUE_ENABLED=true but no queue resolved (broken wiring must fail the boot)', () => {
+      process.env.QUEUE_ENABLED = 'true';
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, undefined);
+
+      expect(() => svc.onApplicationBootstrap()).toThrow(
+        /QUEUE_ENABLED=true but the 'ingress-queue' BullMQ queue did not resolve/,
+      );
+    });
+
+    it('does not throw when QUEUE_ENABLED=true and the queue resolved', () => {
+      process.env.QUEUE_ENABLED = 'true';
+      const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, queue as never);
+
+      expect(() => svc.onApplicationBootstrap()).not.toThrow();
+    });
+
+    it.each(['false', undefined])(
+      'does not throw when QUEUE_ENABLED=%s and no queue resolved (inline is the contract)',
+      value => {
+        if (value === undefined) delete process.env.QUEUE_ENABLED;
+        else process.env.QUEUE_ENABLED = value;
+        const svc = new IngressEnqueueService(loader as PluginLoaderService, config as ConfigService, undefined);
+
+        expect(() => svc.onApplicationBootstrap()).not.toThrow();
+      },
+    );
+  });
+
   it('swallows an inline dispatch error and returns outcome "failed" rather than throwing (row stays redrivable)', async () => {
     (loader.dispatchWebhookForInstance as jest.Mock).mockRejectedValue(new Error('boom'));
     (config.get as jest.Mock).mockReturnValue(false);
