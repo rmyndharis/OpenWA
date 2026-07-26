@@ -214,6 +214,8 @@
     "testEnvironment": "node"
   },
   "overrides": {
-    "shell-quote": "^1.10.0"
+    "shell-quote": "^1.10.0",
+    "brace-expansion": "^5.0.8",
+    "js-yaml": "^5.2.2"
   }
 }

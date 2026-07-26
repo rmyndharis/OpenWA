@@ -14,7 +14,7 @@ FROM --platform=$BUILDPLATFORM docker.io/node:22-slim AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
@@ -54,7 +54,7 @@ FROM docker.io/node:22-slim AS production
 # arm64 installs Debian's chromium instead (it ships a native arm64 build). Both
 # resolve to the same /usr/local/bin/puppeteer-chrome symlink below.
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     $([ "$TARGETARCH" = arm64 ] && echo chromium) \
     fonts-liberation \
     libappindicator3-1 \

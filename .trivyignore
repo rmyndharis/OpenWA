@@ -1,0 +1,11 @@
+# Trivy misconfiguration allow-list.
+# Format: one rule ID per line; blank lines and lines starting with '#' ignored.
+
+# DS-0002: "Specify at least 1 USER command in Dockerfile with non-root user as argument"
+# Mitigated. The Node process does NOT run as root — the ENTRYPOINT chain
+# (dumb-init -> docker-entrypoint.sh) starts as root ONLY to fix ownership of
+# the named volume mount and Chromium's XDG dirs, then drops privileges with
+# `exec gosu openwa "$@"` (see docker-entrypoint.sh:30). A bare `USER openwa`
+# in the Dockerfile would break the chown-before-drop pattern and prevent the
+# container from booting on fresh volume mounts (#254, #259).
+DS-0002

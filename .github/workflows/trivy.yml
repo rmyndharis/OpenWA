@@ -1,0 +1,71 @@
+name: Trivy security scan
+
+# Weekly filesystem scan for HIGH/CRITICAL vulnerabilities and Dockerfile
+# misconfigurations. Runs on every push/PR to main plus a weekly cron so newly
+# published CVEs against pinned dependencies get flagged without waiting for a
+# code change.
+#
+# Findings surface in the GitHub Security tab (Code scanning -> Alerts) via SARIF
+# upload. The table-format run below also fails the job when a fixed HIGH is
+# present, so PRs cannot merge new vulnerable versions unnoticed.
+#
+# Suppress hand-reviewed misconfigurations in .trivyignore (one rule ID per line
+# with a comment explaining the mitigation).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Mondays 05:00 UTC — early enough to catch CVEs published over the weekend.
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write  # required to upload SARIF to Code scanning
+
+jobs:
+  scan:
+    name: trivy-fs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # SARIF upload -> GitHub Security tab. Never fails the job so the table
+      # scan below decides pass/fail; this run is for visibility only.
+      - name: Trivy scan (SARIF for Security tab)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          scanners: vuln,secret,misconfig
+          trivyignores: .trivyignore
+          exit-code: 0
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+      # Human-readable output in the job log + gate merges on fixed HIGH/CRITICAL.
+      - name: Trivy scan (fail on fixed HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          scanners: vuln,secret,misconfig
+          trivyignores: .trivyignore
+          exit-code: 1
