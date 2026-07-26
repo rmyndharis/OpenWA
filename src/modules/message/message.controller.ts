@@ -456,7 +456,7 @@ export class MessageController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Batch already completed or cancelled',
+    description: 'Batch already completed, cancelled, or failed (terminal statuses are exclusive)',
   })
   @ApiResponse({
     status: 404,

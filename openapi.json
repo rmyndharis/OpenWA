@@ -2193,7 +2193,7 @@
             "description": "Batch cancelled"
           },
           "400": {
-            "description": "Batch already completed or cancelled"
+            "description": "Batch already completed, cancelled, or failed (terminal statuses are exclusive)"
           },
           "404": {
             "description": "Batch not found"

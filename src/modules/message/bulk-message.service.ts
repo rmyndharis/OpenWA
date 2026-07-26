@@ -206,7 +206,14 @@ export class BulkMessageService implements OnApplicationBootstrap {
       throw new NotFoundException(`Batch '${batchId}' not found`);
     }
 
-    if (batch.status === BatchStatus.COMPLETED || batch.status === BatchStatus.CANCELLED) {
+    // A terminal batch (COMPLETED, CANCELLED, or FAILED) cannot be cancelled — cancelling a FAILED
+    // batch would overwrite the failure outcome to CANCELLED, masking the real delivery failures and
+    // the `message:failed` events that already fired. Each terminal status is exclusive.
+    if (
+      batch.status === BatchStatus.COMPLETED ||
+      batch.status === BatchStatus.CANCELLED ||
+      batch.status === BatchStatus.FAILED
+    ) {
       throw new BadRequestException(`Batch '${batchId}' is already ${batch.status}`);
     }
 

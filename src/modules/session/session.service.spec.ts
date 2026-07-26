@@ -826,6 +826,48 @@ describe('SessionService', () => {
       // maxAttempts:0 means auto-reconnect is OFF, not that 0 attempts were tried and failed.
       expect(i.sessionErrors.get('sess-uuid-1')).toMatch(/auto-reconnect is disabled/i);
     });
+
+    it('evicts the dead engine when the max-attempts budget is exhausted (no leaked slot, restart works)', async () => {
+      // A terminal FAILED session must not hold an engine entry — otherwise isActive() stays true,
+      // the concurrency cap leaks a slot, and a later start() rejects the session as "already started".
+      // This mirrors onError's terminal path, which evicts for exactly that reason.
+      const i = service as unknown as {
+        reconnectStates: Map<string, { attempts: number; timer: null; maxAttempts: number; baseDelay: number }>;
+        sessionErrors: Map<string, string>;
+        engines: Map<string, { forceDestroy: jest.Mock }>;
+        scheduleReconnect: (id: string, session: Session) => void;
+      };
+      const deadEngine = { forceDestroy: jest.fn().mockResolvedValue(undefined) };
+      i.engines.set('sess-uuid-1', deadEngine);
+      i.reconnectStates.set('sess-uuid-1', { attempts: 2, timer: null, maxAttempts: 2, baseDelay: 5000 });
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      expect(service.isActive('sess-uuid-1')).toBe(true);
+
+      i.scheduleReconnect('sess-uuid-1', createMockSession());
+      await new Promise(resolve => setImmediate(resolve));
+
+      // The dead engine is evicted and force-destroyed; the session no longer counts as active.
+      expect(service.isActive('sess-uuid-1')).toBe(false);
+      expect(deadEngine.forceDestroy).toHaveBeenCalledTimes(1);
+      expect(i.sessionErrors.get('sess-uuid-1')).toMatch(/reconnection failed after 2 attempts/i);
+    });
+
+    it('does not throw when the engine was already evicted (executeReconnect-catch path)', () => {
+      // executeReconnect evicts the half-built engine before scheduling a reconnect, so by the time
+      // the maxAttempts branch runs there the engine is gone. The eviction guard must handle that.
+      const i = service as unknown as {
+        reconnectStates: Map<string, { attempts: number; timer: null; maxAttempts: number; baseDelay: number }>;
+        sessionErrors: Map<string, string>;
+        engines: Map<string, unknown>;
+        scheduleReconnect: (id: string, session: Session) => void;
+      };
+      i.reconnectStates.set('sess-uuid-1', { attempts: 0, timer: null, maxAttempts: 0, baseDelay: 5000 });
+      expect(i.engines.has('sess-uuid-1')).toBe(false);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      expect(() => i.scheduleReconnect('sess-uuid-1', createMockSession())).not.toThrow();
+    });
   });
 
   describe('scheduleReconnect (reconnect policy)', () => {

@@ -1919,6 +1919,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           : `Reconnection failed after ${state.attempts} attempts — restart the session.`,
       );
       void this.updateStatus(id, SessionStatus.FAILED);
+      // Terminal path — evict the dead engine so it neither holds a concurrency slot nor makes a
+      // subsequent start() reject the session as "already started". This mirrors onError's terminal
+      // path (the same rationale: leaving the engine in the map wedges the session). The engine may
+      // already be gone in the executeReconnect-catch path (it evicts the half-built engine before
+      // scheduling a reconnect), so guard on its presence — evictAndForceDestroy takes a non-null engine.
+      const deadEngine = this.engines.get(id);
+      if (deadEngine) {
+        this.evictAndForceDestroy(id, deadEngine);
+      }
       return;
     }
 

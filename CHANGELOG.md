@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session that exhausts its reconnect budget no longer leaks a concurrency slot or wedge its
+  restart.** When a session with a finite `config.maxReconnectAttempts` reached the terminal FAILED
+  branch of `scheduleReconnect`, it wrote FAILED but left the dead engine in the in-process map —
+  unlike the sister terminal path in `onError`, which evicts for the explicit reason that a leftover
+  engine holds a concurrency slot and makes the next `start()` reject the session as "already started".
+  The reconnect-exhaustion path now evicts the dead engine the same way `onError` does (guarded on
+  the engine being present, since the `executeReconnect`-catch caller already evicted its half-built
+  engine). Only affects sessions with an explicit finite `maxReconnectAttempts` (the default is
+  unlimited).
+
+- **`cancelBatch` no longer overwrites a terminally FAILED batch to CANCELLED.** The cancel guard
+  checked only COMPLETED and CANCELLED, so a post-completion cancel on a `stopOnError`-failed batch
+  (or any batch that resolved to FAILED) relabelled it CANCELLED, rewrote `progress.cancelled`/
+  `pending`, and masked the real delivery failures and the `message:failed` events that had already
+  fired. FAILED is now in the terminal-status guard, so each terminal status stays exclusive.
+
 ### Security
 
 - **Secret comparisons on the `/api/metrics` Bearer and ingress `shared-secret` auth surfaces no

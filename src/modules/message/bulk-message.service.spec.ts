@@ -388,6 +388,67 @@ describe('BulkMessageService.processBatch', () => {
   });
 });
 
+describe('BulkMessageService.cancelBatch', () => {
+  let service: BulkMessageService;
+  let repo: { findOne: jest.Mock; save: jest.Mock };
+
+  const batchWithStatus = (status: BatchStatus): MessageBatch =>
+    ({
+      id: 'b1',
+      batchId: 'bx',
+      sessionId: 's1',
+      status,
+      messages: [],
+      options: {},
+      progress: { total: 2, sent: 0, failed: 0, pending: 2, cancelled: 0 },
+      results: [],
+    }) as unknown as MessageBatch;
+
+  beforeEach(async () => {
+    repo = { findOne: jest.fn(), save: jest.fn().mockImplementation(b => Promise.resolve(b)) };
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        BulkMessageService,
+        { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
+        { provide: SessionService, useValue: {} },
+        { provide: MessageService, useValue: {} },
+        { provide: HookManager, useValue: { execute: jest.fn() } },
+      ],
+    }).compile();
+    service = module.get(BulkMessageService);
+  });
+
+  it('rejects a cancel on a terminally FAILED batch (does not overwrite the failure to CANCELLED)', async () => {
+    // A FAILED batch reached its terminal state because real sends failed (stopOnError, or all sends
+    // failed). Overwriting it to CANCELLED would mask the delivery failure and the message:failed
+    // events that already fired. FAILED is terminal, like COMPLETED/CANCELLED.
+    repo.findOne.mockResolvedValue(batchWithStatus(BatchStatus.FAILED));
+    await expect(service.cancelBatch('s1', 'bx')).rejects.toThrow(/already failed/i);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cancel on an already-COMPLETED batch', async () => {
+    repo.findOne.mockResolvedValue(batchWithStatus(BatchStatus.COMPLETED));
+    await expect(service.cancelBatch('s1', 'bx')).rejects.toThrow(/already completed/i);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cancel on an already-CANCELLED batch', async () => {
+    repo.findOne.mockResolvedValue(batchWithStatus(BatchStatus.CANCELLED));
+    await expect(service.cancelBatch('s1', 'bx')).rejects.toThrow(/already cancelled/i);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it('cancels a PENDING batch (the supported case) and moves pending items to cancelled', async () => {
+    const batch = batchWithStatus(BatchStatus.PENDING);
+    repo.findOne.mockResolvedValue(batch);
+    const result = await service.cancelBatch('s1', 'bx');
+    expect(result.status).toBe(BatchStatus.CANCELLED);
+    expect(result.progress.cancelled).toBe(2);
+    expect(result.progress.pending).toBe(0);
+  });
+});
+
 describe('BulkMessageService.createBatch base64 media cap', () => {
   let service: BulkMessageService;
   let repo: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock };
