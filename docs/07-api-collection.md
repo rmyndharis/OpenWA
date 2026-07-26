@@ -221,7 +221,7 @@ curl "$BASE/api/sessions/my-session/messages?chatId=628123456789@c.us&limit=20&o
 Fetch chat history live from WhatsApp, bypassing the DB.
 
 ```bash
-curl "$BASE/api/sessions/my-session/628123456789@c.us/history?limit=100&deep=true" \
+curl "$BASE/api/sessions/my-session/messages/628123456789@c.us/history?limit=100&deep=true" \
   -H "X-API-Key: $API_KEY"
 ```
 
@@ -230,7 +230,7 @@ curl "$BASE/api/sessions/my-session/628123456789@c.us/history?limit=100&deep=tru
 Get reactions for a message, grouped by emoji.
 
 ```bash
-curl "$BASE/api/sessions/my-session/628123456789@c.us/true_628123456789@c.us_3EB0ABCD/reactions" \
+curl "$BASE/api/sessions/my-session/messages/628123456789@c.us/true_628123456789@c.us_3EB0ABCD/reactions" \
   -H "X-API-Key: $API_KEY"
 ```
 
