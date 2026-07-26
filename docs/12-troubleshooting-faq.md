@@ -279,9 +279,11 @@ WWEBJS_WEB_VERSION=2.3000.1040641150-alpha
 ```
 
 Restart the container after changing it. Browse newer versions at
-[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder). Set
-`WWEBJS_WEB_VERSION=latest`, `auto`, or `off` (or leave it unset) to use whatsapp-web.js
-auto-version behavior.
+[wppconnect-team/wa-version](https://github.com/wppconnect-team/wa-version) (the `html/` folder). With
+`WWEBJS_WEB_VERSION` unset, `latest`, or `auto` (the default), OpenWA auto-resolves a settled build
+from that registry and pins its HTML — note this HTML is fetched from a third-party repository and
+executed inside the `web.whatsapp.com` origin without an integrity check. Set
+`WWEBJS_WEB_VERSION=off` to disable pinning and use the first-party build served by WhatsApp.
 
 ### Issue: QR generation times out on slow first boot (WSL2 / low-resource)
 

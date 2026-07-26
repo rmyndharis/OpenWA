@@ -1,7 +1,13 @@
+const mockWarn = jest.fn();
+jest.mock('../common/services/logger.service', () => ({
+  createLogger: () => ({ warn: mockWarn, log: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() }),
+}));
+
 import {
   __resetWebVersionCache,
   pickSettledWebVersion,
   resolveCurrentWebVersion,
+  resolveWebVersionPin,
   WEB_VERSION_SETTLE_MS,
 } from './wa-web-version';
 
@@ -118,5 +124,52 @@ describe('resolveCurrentWebVersion', () => {
   it('falls back to currentVersion when the registry carries no versions[]', async () => {
     const fetcher = jest.fn(() => Promise.resolve(json({ currentBeta: null, currentVersion: '2.3000.SOLO-alpha' })));
     await expect(resolveCurrentWebVersion(fetcher as never)).resolves.toBe('2.3000.SOLO-alpha');
+  });
+});
+
+// Remote-HTML pins execute inside the authenticated web.whatsapp.com origin with no integrity
+// check, so taking one MUST be visible to the operator — once per process, with the source and
+// the opt-outs. 'off' (first-party) is the only path that must stay silent.
+describe('resolveWebVersionPin remote-trust warning', () => {
+  const ORIGINAL_ENV = process.env.WWEBJS_WEB_VERSION;
+  const json = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+  beforeEach(() => {
+    __resetWebVersionCache();
+    mockWarn.mockClear();
+  });
+  afterEach(() => {
+    __resetWebVersionCache();
+    if (ORIGINAL_ENV === undefined) delete process.env.WWEBJS_WEB_VERSION;
+    else process.env.WWEBJS_WEB_VERSION = ORIGINAL_ENV;
+  });
+
+  it('warns once (with version, source URL, and opt-out) when an exact version is pinned', async () => {
+    process.env.WWEBJS_WEB_VERSION = '2.3000.1234-alpha';
+    await resolveWebVersionPin();
+    await resolveWebVersionPin(); // second resolve must NOT re-warn
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    const [message, meta] = mockWarn.mock.calls[0] as [string, Record<string, string>];
+    expect(message).toContain('WITHOUT an integrity check');
+    expect(meta.webVersion).toBe('2.3000.1234-alpha');
+    expect(meta.remotePath).toContain('2.3000.1234-alpha');
+    expect(meta.optOut).toContain('WWEBJS_WEB_VERSION=off');
+  });
+
+  it('stays silent when pinning is off (first-party build)', async () => {
+    process.env.WWEBJS_WEB_VERSION = 'off';
+    await expect(resolveWebVersionPin()).resolves.toBeUndefined();
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('warns for the auto-resolved registry pin (the default posture)', async () => {
+    delete process.env.WWEBJS_WEB_VERSION;
+    const fetcher = jest.fn(() => Promise.resolve(json({ currentVersion: '2.3000.SOLO-alpha' })));
+    await resolveWebVersionPin(fetcher as never);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining('WITHOUT an integrity check'),
+      expect.objectContaining({ webVersion: '2.3000.SOLO-alpha' }),
+    );
   });
 });

@@ -502,8 +502,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // output later (after a hard kill of the OpenWA process orphaned them).
       puppeteerArgs.push(`--openwa-session=${this.config.sessionId}`);
 
-      // Pin the WA-Web version when configured (fixes the 1.34.x "stuck at authenticating"
-      // hang on some setups, #251). Opt-in: unset leaves whatsapp-web.js to auto-select.
+      // Pin the WA-Web version (fixes the 1.34.x "stuck at authenticating" hang on some setups,
+      // #251/#488). DEFAULT: auto-resolve a settled build from the wa-version registry and pin its
+      // remote HTML (no integrity check — resolveWebVersionPin logs a loud warning); only
+      // WWEBJS_WEB_VERSION=off leaves whatsapp-web.js to use the first-party build from WhatsApp.
       const versionPin = await resolveWebVersionPin();
       if (this.tearingDown) {
         this.setStatus(EngineStatus.DISCONNECTED);
