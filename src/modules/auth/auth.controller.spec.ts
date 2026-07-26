@@ -1,9 +1,20 @@
+import 'reflect-metadata';
 import type { Request } from 'express';
 import { AuthController } from './auth.controller';
+import { UNSCOPED_KEY } from './decorators/auth.decorators';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import type { ApiKey } from './entities/api-key.entity';
 import type { AuthService } from './auth.service';
 import type { AuditService } from '../audit/audit.service';
+
+// Key-lifecycle routes carry no session dimension, so the guard's allowedSessions fence can never
+// bite on them — the class-level @RequireUnscopedKey marker is what keeps a session-scoped ADMIN
+// key from minting or widening credentials here. Lock that the marker stays on the controller.
+describe('AuthController — scoped-key confinement marker', () => {
+  it('requires unscoped keys at the class level', () => {
+    expect(Reflect.getMetadata(UNSCOPED_KEY, AuthController)).toBe(true);
+  });
+});
 
 // API-key lifecycle operations (create / delete / revoke) must leave an audit trail — they were
 // previously unrecorded. These assert the controller emits the matching audit action with the acting

@@ -189,6 +189,58 @@ describe('ApiKeyGuard', () => {
     await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
   });
 
+  it('rejects a session-scoped key on a @RequireUnscopedKey route, whatever its role', async () => {
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(false) // not public
+      .mockReturnValueOnce(ApiKeyRole.ADMIN) // required role = ADMIN
+      .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(true); // @RequireUnscopedKey
+
+    const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN, allowedSessions: ['sess-A'] });
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.hasPermission as jest.Mock).mockReturnValue(true);
+
+    const context = createMockContext({ 'x-api-key': 'scoped-admin-key' }, {}, '203.0.113.44');
+
+    await expect(guard.canActivate(context)).rejects.toThrow('Session-scoped API keys are not permitted on this route');
+    await new Promise(resolve => setImmediate(resolve)); // let the fire-and-forget audit write settle
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ ipAddress: '203.0.113.44' }),
+    );
+  });
+
+  it('admits an unrestricted key on a @RequireUnscopedKey route', async () => {
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(false) // not public
+      .mockReturnValueOnce(ApiKeyRole.ADMIN) // required role = ADMIN
+      .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(true); // @RequireUnscopedKey
+
+    const apiKey = createMockApiKey({ role: ApiKeyRole.ADMIN, allowedSessions: null });
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+    (authService.hasPermission as jest.Mock).mockReturnValue(true);
+
+    const context = createMockContext({ 'x-api-key': 'admin-key' });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('admits a session-scoped key on routes WITHOUT the @RequireUnscopedKey marker', async () => {
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(false) // not public
+      .mockReturnValueOnce(undefined) // no required role
+      .mockReturnValueOnce(undefined) // not @SessionScoped
+      .mockReturnValueOnce(undefined); // not @RequireUnscopedKey
+
+    const apiKey = createMockApiKey({ allowedSessions: ['sess-A'] });
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(apiKey);
+
+    const context = createMockContext({ 'x-api-key': 'scoped-key' });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
   it('should pass session ID from route params to validateApiKey', async () => {
     reflector.getAllAndOverride.mockReturnValueOnce(false).mockReturnValueOnce(undefined);
 

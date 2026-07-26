@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService } from '../auth.service';
 import { ApiKeyRole } from '../entities/api-key.entity';
-import { REQUIRED_ROLE_KEY, PUBLIC_KEY, SESSION_SCOPED_KEY } from '../decorators/auth.decorators';
+import { REQUIRED_ROLE_KEY, PUBLIC_KEY, SESSION_SCOPED_KEY, UNSCOPED_KEY } from '../decorators/auth.decorators';
 import { resolveClientIp } from '../../../common/utils/ip';
 import { setRequestActor } from '../../../common/services/request-context';
 import { AuditService } from '../../audit/audit.service';
@@ -78,6 +78,18 @@ export class ApiKeyGuard implements CanActivate {
 
     if (requiredRole && !this.authService.hasPermission(apiKey, requiredRole)) {
       throw new ForbiddenException(`Insufficient permissions. Required: ${requiredRole}`);
+    }
+
+    // Routes marked @RequireUnscopedKey carry no session dimension, so the allowedSessions check
+    // above can never bite on them. A session-scoped key reaching such a surface (e.g. API-key
+    // lifecycle management) could mint or widen credentials beyond its own confinement — reject it
+    // outright, whatever its role. The denial is audited by the caller's catch block.
+    const requireUnscoped = this.reflector.getAllAndOverride<boolean>(UNSCOPED_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (requireUnscoped && (apiKey.allowedSessions?.length ?? 0) > 0) {
+      throw new ForbiddenException('Session-scoped API keys are not permitted on this route');
     }
 
     // Attach API key to request for use in controllers

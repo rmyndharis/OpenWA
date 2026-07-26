@@ -3,13 +3,16 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto, ApiKeyCreatedResponseDto } from './dto';
-import { RequireRole, CurrentApiKey } from './decorators/auth.decorators';
+import { RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
 import { type ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from './../audit/entities/audit-log.entity';
 
 @ApiTags('auth')
 @Controller('auth/api-keys')
+// Key lifecycle routes have no session dimension, so a session-scoped ADMIN key could otherwise
+// escape its confinement here (mint an unrestricted key, or clear another key's allowedSessions).
+@RequireUnscopedKey()
 export class AuthController {
   constructor(
     private readonly authService: AuthService,

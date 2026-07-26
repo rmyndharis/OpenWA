@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   NotFoundException,
@@ -11,8 +12,8 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { RequireRole } from '../auth/decorators/auth.decorators';
-import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
+import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
@@ -21,6 +22,7 @@ import { ScopeBindingService } from './scope-binding.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { buildIngressUrls } from './ingress-url';
 import { CreateInstanceDto, InstanceView, UpdateInstanceDto } from './dto/instance.dto';
+import { sessionScopeVisible } from '../../common/security/session-scope';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 // ADMIN-only provisioning surface for per-plugin instances (e.g. one Chatwoot account). Only plugins
@@ -45,8 +47,13 @@ export class IntegrationInstanceController {
       'Instance created. The plaintext ingress secret and verifyToken are revealed once in this response — store them immediately (both masked on every later read).',
     type: InstanceView,
   })
-  async create(@Param('pluginId') pluginId: string, @Body() dto: CreateInstanceDto): Promise<InstanceView> {
+  async create(
+    @Param('pluginId') pluginId: string,
+    @Body() dto: CreateInstanceDto,
+    @CurrentApiKey() apiKey?: ApiKey,
+  ): Promise<InstanceView> {
     const routes = this.assertIngressCapable(pluginId);
+    this.assertScopeWritable(apiKey, dto.sessionScope);
     try {
       const inst = await this.instances.create(pluginId, dto.instanceId, {
         sessionScope: dto.sessionScope,
@@ -67,17 +74,22 @@ export class IntegrationInstanceController {
 
   @Get()
   @ApiResponse({ status: 200, description: 'Instances for the plugin (secrets masked).', type: [InstanceView] })
-  async list(@Param('pluginId') pluginId: string): Promise<InstanceView[]> {
+  async list(@Param('pluginId') pluginId: string, @CurrentApiKey() apiKey?: ApiKey): Promise<InstanceView[]> {
     const routes = this.pluginRoutes(pluginId);
     const rows = await this.instances.list(pluginId);
-    return rows.map(r => this.view(r, routes, false));
+    return rows
+      .filter(r => sessionScopeVisible(apiKey?.allowedSessions, r.sessionScope))
+      .map(r => this.view(r, routes, false));
   }
 
   @Get(':instanceId')
   @ApiResponse({ status: 200, description: 'The instance (secret masked).', type: InstanceView })
-  async getOne(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<InstanceView> {
-    const inst = await this.instances.resolve(pluginId, instanceId);
-    if (!inst) throw new NotFoundException('instance not found');
+  async getOne(
+    @Param('pluginId') pluginId: string,
+    @Param('instanceId') instanceId: string,
+    @CurrentApiKey() apiKey?: ApiKey,
+  ): Promise<InstanceView> {
+    const inst = await this.resolveVisible(pluginId, instanceId, apiKey);
     return this.view(inst, this.pluginRoutes(pluginId), false);
   }
 
@@ -92,8 +104,9 @@ export class IntegrationInstanceController {
   async regenerate(
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
+    @CurrentApiKey() apiKey?: ApiKey,
   ): Promise<InstanceView> {
-    if (!(await this.instances.resolve(pluginId, instanceId))) throw new NotFoundException('instance not found');
+    await this.resolveVisible(pluginId, instanceId, apiKey);
     const inst = await this.instances.regenerateSecret(pluginId, instanceId);
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_SECRET_REGENERATED, {
       metadata: { pluginId, instanceId },
@@ -107,9 +120,10 @@ export class IntegrationInstanceController {
     @Param('pluginId') pluginId: string,
     @Param('instanceId') instanceId: string,
     @Body() dto: UpdateInstanceDto,
+    @CurrentApiKey() apiKey?: ApiKey,
   ): Promise<InstanceView> {
-    let inst: PluginInstance | null = await this.instances.resolve(pluginId, instanceId);
-    if (!inst) throw new NotFoundException('instance not found');
+    let inst: PluginInstance | null = await this.resolveVisible(pluginId, instanceId, apiKey);
+    if (dto.sessionScope !== undefined) this.assertScopeWritable(apiKey, dto.sessionScope);
     const previousScope = inst.sessionScope;
     if (dto.enabled !== undefined) inst = await this.instances.setEnabled(pluginId, instanceId, dto.enabled);
     if (dto.sessionScope !== undefined || dto.config !== undefined) {
@@ -134,15 +148,37 @@ export class IntegrationInstanceController {
   @Delete(':instanceId')
   @HttpCode(204)
   @ApiResponse({ status: 204, description: 'Instance deleted and its session scope torn down.' })
-  async remove(@Param('pluginId') pluginId: string, @Param('instanceId') instanceId: string): Promise<void> {
-    const inst = await this.instances.resolve(pluginId, instanceId);
-    if (!inst) throw new NotFoundException('instance not found');
+  async remove(
+    @Param('pluginId') pluginId: string,
+    @Param('instanceId') instanceId: string,
+    @CurrentApiKey() apiKey?: ApiKey,
+  ): Promise<void> {
+    const inst = await this.resolveVisible(pluginId, instanceId, apiKey);
     const scope = inst.sessionScope;
     // Delete the row FIRST, then tear down its scope: for a wildcard/null scope the teardown lists the
     // remaining instances to decide whether to retire '*', and that check must not count this instance.
     await this.instances.remove(pluginId, instanceId);
     await this.scopeBinding.applyScopeBinding(pluginId, scope, {}, false);
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_DELETED, { metadata: { pluginId, instanceId } });
+  }
+
+  // Resolve an instance the calling key may see: a session-scoped key only reaches instances bound
+  // to one of its own sessions. Out-of-scope instances answer 404 (identical to a missing one) so
+  // the endpoint cannot be used to probe which instances exist on other sessions.
+  private async resolveVisible(pluginId: string, instanceId: string, apiKey?: ApiKey): Promise<PluginInstance> {
+    const inst = await this.instances.resolve(pluginId, instanceId);
+    if (!inst || !sessionScopeVisible(apiKey?.allowedSessions, inst.sessionScope)) {
+      throw new NotFoundException('instance not found');
+    }
+    return inst;
+  }
+
+  // A scoped key may only bind an instance to a session inside its own fence — never to another
+  // session, and never to the all-sessions (omitted/'*') scope.
+  private assertScopeWritable(apiKey: ApiKey | undefined, sessionScope: string | null | undefined): void {
+    if (!sessionScopeVisible(apiKey?.allowedSessions, sessionScope)) {
+      throw new ForbiddenException("sessionScope is outside the API key's allowed sessions");
+    }
   }
 
   // The plugin must exist AND declare ingress + the webhook:ingress permission to have instances.

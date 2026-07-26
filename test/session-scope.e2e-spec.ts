@@ -27,6 +27,8 @@ describe('Session-scoped query endpoints (e2e)', () => {
   let sessB: string;
   let scopedKey: string; // ADMIN, allowedSessions: [sessA]
   let adminKey: string; // ADMIN, unrestricted
+  let throwawayId: string; // a VIEWER key used as the :id target for key-management routes
+  let auditRepo: Repository<AuditLog>;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -35,7 +37,7 @@ describe('Session-scoped query endpoints (e2e)', () => {
     await app.init();
 
     const sessionRepo: Repository<Session> = app.get(getRepositoryToken(Session, 'data'));
-    const auditRepo: Repository<AuditLog> = app.get(getRepositoryToken(AuditLog, 'main'));
+    auditRepo = app.get(getRepositoryToken(AuditLog, 'main'));
     const failureRepo: Repository<WebhookDeliveryFailure> = app.get(getRepositoryToken(WebhookDeliveryFailure, 'data'));
 
     const a = await sessionRepo.save(sessionRepo.create({ name: `e2e-scope-a-${Date.now()}` }));
@@ -65,6 +67,7 @@ describe('Session-scoped query endpoints (e2e)', () => {
       await authService.createApiKey({ name: 'e2e-scoped', role: ApiKeyRole.ADMIN, allowedSessions: [sessA] })
     ).rawKey;
     adminKey = (await authService.createApiKey({ name: 'e2e-admin', role: ApiKeyRole.ADMIN })).rawKey;
+    throwawayId = (await authService.createApiKey({ name: 'e2e-throwaway', role: ApiKeyRole.VIEWER })).apiKey.id;
   });
 
   afterAll(async () => {
@@ -132,6 +135,87 @@ describe('Session-scoped query endpoints (e2e)', () => {
       const sessions = (res.body as WebhookDeliveryFailure[]).map(r => r.sessionId);
       expect(sessions).toContain(sessA);
       expect(sessions).toContain(sessB);
+    });
+  });
+
+  /**
+   * The key-lifecycle routes carry no session id at all (neither route param nor query), so the
+   * guard's route-param fence can never bite: a session-scoped ADMIN key would otherwise mint an
+   * unrestricted key (POST), clear another key's allowedSessions (PUT), or enumerate every
+   * credential (GET). These routes must reject scoped keys outright — while leaving unrestricted
+   * ADMIN keys fully functional.
+   */
+  describe('API-key management routes (/api/auth/api-keys)', () => {
+    it('rejects a scoped ADMIN on POST (cannot mint a key beyond its fence)', async () => {
+      await request(app.getHttpServer())
+        .post('/api/auth/api-keys')
+        .set('X-API-Key', scopedKey)
+        .send({ name: 'escape-attempt', role: 'admin', allowedSessions: [] })
+        .expect(403);
+    });
+
+    it('rejects a scoped ADMIN on GET list (cannot enumerate credentials)', async () => {
+      await request(app.getHttpServer()).get('/api/auth/api-keys').set('X-API-Key', scopedKey).expect(403);
+    });
+
+    it('rejects a scoped ADMIN on GET :id', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/auth/api-keys/${throwawayId}`)
+        .set('X-API-Key', scopedKey)
+        .expect(403);
+    });
+
+    it('rejects a scoped ADMIN on PUT :id (cannot clear another key\u2019s scope)', async () => {
+      await request(app.getHttpServer())
+        .put(`/api/auth/api-keys/${throwawayId}`)
+        .set('X-API-Key', scopedKey)
+        .send({ allowedSessions: [] })
+        .expect(403);
+    });
+
+    it('rejects a scoped ADMIN on DELETE :id', async () => {
+      await request(app.getHttpServer())
+        .delete(`/api/auth/api-keys/${throwawayId}`)
+        .set('X-API-Key', scopedKey)
+        .expect(403);
+    });
+
+    it('rejects a scoped ADMIN on POST :id/revoke', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/auth/api-keys/${throwawayId}/revoke`)
+        .set('X-API-Key', scopedKey)
+        .expect(403);
+    });
+
+    it('leaves an unrestricted ADMIN fully functional across the key lifecycle', async () => {
+      await request(app.getHttpServer()).get('/api/auth/api-keys').set('X-API-Key', adminKey).expect(200);
+      const created = await request(app.getHttpServer())
+        .post('/api/auth/api-keys')
+        .set('X-API-Key', adminKey)
+        .send({ name: 'e2e-lifecycle', role: 'viewer' })
+        .expect(201);
+      const id = (created.body as { id: string }).id;
+      await request(app.getHttpServer())
+        .put(`/api/auth/api-keys/${id}`)
+        .set('X-API-Key', adminKey)
+        .send({ name: 'e2e-lifecycle-renamed' })
+        .expect(200);
+      await request(app.getHttpServer()).post(`/api/auth/api-keys/${id}/revoke`).set('X-API-Key', adminKey).expect(200);
+      await request(app.getHttpServer()).delete(`/api/auth/api-keys/${id}`).set('X-API-Key', adminKey).expect(204);
+    });
+
+    it('audits the scoped denial as a failed-auth event', async () => {
+      await request(app.getHttpServer()).get('/api/auth/api-keys').set('X-API-Key', scopedKey).expect(403);
+      // The audit write is fire-and-forget; poll briefly for it to land.
+      const deadline = Date.now() + 5000;
+      let row: AuditLog | null = null;
+      while (Date.now() < deadline && !row) {
+        row = await auditRepo.findOne({
+          where: { action: AuditAction.API_KEY_AUTH_FAILED, path: '/api/auth/api-keys' },
+        });
+        if (!row) await new Promise(r => setTimeout(r, 100));
+      }
+      expect(row).not.toBeNull();
     });
   });
 });
