@@ -67,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (build-stage build deps and production-stage Chromium/Puppeteer deps).
   Smaller image; no behavior change for the explicitly-listed packages.
 
+- **The in-memory `@lid -> phone` mirror is now bounded by an LRU cap (`LID_MAPPING_CACHE_MAX`,
+  default 5000).** The mirror backs synchronous sender resolution on the dispatch hot path; it was
+  write-through but never evicted, so on a long-running, contact-heavy account it accumulated one
+  entry per distinct privacy-LID sender ever seen — a slow memory leak, and the lone unbounded
+  long-lived map in the process. `getCached` now touches the entry so iteration order tracks recency,
+  and the map evicts the least-recently-used entry when it exceeds the cap; the reverse `phone -> lids`
+  map is reconciled on each eviction. A cache miss falls back to engine re-resolution (the table
+  remains the source of truth), so the cap trades a re-resolution for bounded memory, never data loss.
+  `LID_MAPPING_CACHE_MAX=0` restores the legacy unbounded behaviour.
+
 ## [0.10.10] - 2026-07-25
 
 ### Added

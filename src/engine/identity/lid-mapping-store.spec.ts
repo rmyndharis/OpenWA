@@ -91,3 +91,69 @@ describe('LidMappingStoreService', () => {
     expect(store.getCached('111')).toBeUndefined();
   });
 });
+
+describe('LidMappingStoreService — LRU cap', () => {
+  const prevMax = process.env.LID_MAPPING_CACHE_MAX;
+  afterEach(() => {
+    if (prevMax === undefined) delete process.env.LID_MAPPING_CACHE_MAX;
+    else process.env.LID_MAPPING_CACHE_MAX = prevMax;
+  });
+
+  it('evicts the least-recently-used forward entry when the cap is exceeded (no unbounded growth)', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '3';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    await store.onModuleInit();
+
+    await store.remember('lid-a', '620001');
+    await store.remember('lid-b', '620002');
+    await store.remember('lid-c', '620003');
+    // Touch lid-a so it is the most-recently-used; lid-b becomes the LRU candidate.
+    expect(store.getCached('lid-a')).toBe('620001');
+    // Inserting a fourth evicts the LRU (lid-b, not lid-a).
+    await store.remember('lid-d', '620004');
+
+    expect(store.getCached('lid-b')).toBeUndefined(); // evicted
+    expect(store.getCached('lid-a')).toBe('620001'); // touched, survived
+    expect(store.getCached('lid-c')).toBe('620003');
+    expect(store.getCached('lid-d')).toBe('620004');
+  });
+
+  it('reconciles the reverse map on eviction (no orphan phoneToLids entries)', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '2';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    await store.onModuleInit();
+
+    await store.remember('lid-a', '620001');
+    await store.remember('lid-b', '620001');
+    expect(store.lidsForPhone('620001')).toEqual(expect.arrayContaining(['lid-a', 'lid-b']));
+    // A third entry evicts lid-a (the LRU); the reverse set must drop it.
+    await store.remember('lid-c', '620002');
+    expect(store.lidsForPhone('620001')).toEqual(['lid-b']);
+    expect(store.lidsForPhone('620002')).toEqual(['lid-c']);
+  });
+
+  it('LID_MAPPING_CACHE_MAX=0 disables the cap (legacy unbounded behaviour)', async () => {
+    process.env.LID_MAPPING_CACHE_MAX = '0';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    await store.onModuleInit();
+
+    for (let i = 0; i < 10; i++) {
+      await store.remember(`lid-${i}`, `62000${i}`);
+    }
+    // Nothing evicted — all 10 stay resident.
+    for (let i = 0; i < 10; i++) {
+      expect(store.getCached(`lid-${i}`)).toBe(`62000${i}`);
+    }
+  });
+
+  it('falls back to the default cap on a non-numeric env value', () => {
+    process.env.LID_MAPPING_CACHE_MAX = 'not-a-number';
+    const repo = makeFakeRepo();
+    const store = new LidMappingStoreService(repo as unknown as Repository<LidMapping>);
+    // The constructor must not throw, and must apply the default (5000) rather than NaN/0.
+    expect((store as unknown as { maxCachedLids: number }).maxCachedLids).toBe(5000);
+  });
+});
