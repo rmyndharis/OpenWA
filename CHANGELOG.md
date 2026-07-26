@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Secret comparisons on the `/api/metrics` Bearer and ingress `shared-secret` auth surfaces no
+  longer leak the expected token's byte-length.** Both `safeEqualStr` (ingress `shared-secret` verify)
+  and `MetricsService.safeEqual` (`/api/metrics` Bearer) used the common `timingSafeEqual` idiom of
+  early-returning on a buffer length mismatch — but that early return is itself a timing channel: a
+  caller who can time the response learns whether their candidate matches the expected secret's
+  length. Both now delegate to a shared `constantTimeEqual` helper that hashes both inputs with a
+  per-process random key (fixed-length SHA-256 digests) and `timingSafeEqual`s those, so the value
+  comparison stays constant-time and neither input's length affects control flow. The `hmac-sha256`
+  and `standard-webhooks` schemes compare fixed-length digests and were not affected.
+
 - **npm dependency vulnerabilities pinned via `overrides` (root + dashboard).**
   `brace-expansion` bumped to `^5.0.8` (CVE-2026-14257, ReDoS; was present at
   both 2.1.2 and 5.0.7 in the root tree, and 5.0.6 in the dashboard tree) and
@@ -25,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate cannot see. Runs at release time only, so it never touches fork-PR token permissions.
 
 ### Changed
+
+- **Ten operator-tunable environment variables are now documented in `.env.example`.**
+  `INGRESS_MAX_ATTEMPTS`, `INGRESS_RETRY_DELAY_MS`, `INGRESS_RETENTION_DAYS`, `SSRF_DNS_TIMEOUT_MS`,
+  `INGRESS_WORKER_CONCURRENCY`, `WEBHOOK_WORKER_CONCURRENCY`, `INBOUND_MEDIA_CONCURRENCY`,
+  `STATUS_MEDIA_MAX_BYTES`, `PLUGIN_DOWNLOAD_MAX_BYTES`, and `BULK_MAX_CONCURRENT_BATCHES` are read
+  from the environment with sensible defaults but were absent from the configuration reference. Each
+  is now documented next to its related block, with the exact default and the parse semantics
+  (`INGRESS_RETENTION_DAYS <= 0` disables pruning, `BULK_MAX_CONCURRENT_BATCHES = 0` is unlimited, the
+  DoS trade-off on `SSRF_DNS_TIMEOUT_MS`).
 
 - **Dockerfile `apt-get install` invocations now use `--no-install-recommends`**
   (build-stage build deps and production-stage Chromium/Puppeteer deps).

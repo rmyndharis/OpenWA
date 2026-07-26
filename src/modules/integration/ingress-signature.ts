@@ -1,5 +1,6 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { IngressSignatureSpec } from '../../core/plugins/plugin.interfaces';
+import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 
 export interface VerifyInput {
   rawBody: string;
@@ -123,9 +124,11 @@ export function verifyIngressSignature(
   return safeEqualStr(provided, expected) ? { ok: true } : { ok: false, reason: 'hmac mismatch' };
 }
 
+/**
+ * Constant-time string equality that does not leak the expected value's length.
+ * Kept as a named export for the ingress call sites; delegates to the shared helper so the metrics
+ * token compare and the ingress signature compares stay in lockstep.
+ */
 export function safeEqualStr(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
+  return constantTimeEqual(a, b);
 }

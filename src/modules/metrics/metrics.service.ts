@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { timingSafeEqual } from 'crypto';
+import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { StatsService } from '../stats/stats.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import {
@@ -54,12 +54,10 @@ export class MetricsService {
   }
 
   private safeEqual(a: string, b: string): boolean {
-    const ab = Buffer.from(a);
-    const bb = Buffer.from(b);
-    // timingSafeEqual requires equal lengths; compare to a fixed digest of `b` to avoid
-    // leaking the expected length through an early return.
-    if (ab.length !== bb.length) return false;
-    return timingSafeEqual(ab, bb);
+    // Length-hiding constant-time compare: hash both inputs with a per-process key (fixed-length
+    // digests) then timingSafeEqual, so the expected token's byte-length is not leaked through a
+    // fast length-mismatch return. This `/api/metrics` endpoint is @Public and timed by callers.
+    return constantTimeEqual(a, b);
   }
 
   /** Render the current metrics in Prometheus text exposition format (memoized for a short TTL). */
