@@ -56,6 +56,40 @@ describe('validateIngressManifest', () => {
   });
 });
 
+describe('validateIngressManifest: signature.scheme "none" opt-in gate', () => {
+  // A none-scheme route is an unauthenticated @Public endpoint that can trigger WhatsApp sends.
+  // It must be rejected at load unless the operator explicitly opted in via ALLOW_UNSIGNED_INGRESS.
+  const noneManifest = () =>
+    ({
+      id: 'p',
+      name: 'p',
+      version: '1.0.0',
+      type: 'extension',
+      main: 'index.js',
+      sdkVersion: '1',
+      permissions: ['webhook:ingress'],
+      ingress: [{ route: 'r', mode: 'async', verify: 'core', maxBodyBytes: 1024, signature: { scheme: 'none' } }],
+    }) as never;
+
+  it('rejects a none-scheme route by default (no opt-in)', () => {
+    expect(() => validateIngressManifest(noneManifest())).toThrow(/ALLOW_UNSIGNED_INGRESS/i);
+    expect(() => validateIngressManifest(noneManifest())).toThrow(/unauthenticated/i);
+  });
+
+  it('rejects a none-scheme route when explicitly passed allowUnsignedIngress=false', () => {
+    expect(() => validateIngressManifest(noneManifest(), false)).toThrow(/ALLOW_UNSIGNED_INGRESS/i);
+  });
+
+  it('accepts a none-scheme route when the operator opted in (allowUnsignedIngress=true)', () => {
+    expect(() => validateIngressManifest(noneManifest(), true)).not.toThrow();
+  });
+
+  it('still accepts signed routes regardless of the opt-in flag', () => {
+    expect(() => validateIngressManifest(baseManifest() as never, false)).not.toThrow();
+    expect(() => validateIngressManifest(baseManifest() as never, true)).not.toThrow();
+  });
+});
+
 describe('warnUnauthenticatedIngressRoutes', () => {
   it('warns once per scheme:none route, naming the plugin and route', () => {
     const logger = { warn: jest.fn() };
@@ -92,7 +126,16 @@ function manifestWithRoute(overrides: Record<string, unknown> = {}) {
     sdkVersion: '1',
     permissions: ['webhook:ingress'],
     ingress: [
-      { route: 'r', mode: 'async', verify: 'core', maxBodyBytes: 1024, signature: { scheme: 'none' }, ...overrides },
+      // Default to a signed scheme so the response-contract / standard-webhooks suites below
+      // exercise fields other than the scheme. The scheme:'none' opt-in gate has its own block.
+      {
+        route: 'r',
+        mode: 'async',
+        verify: 'core',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: '{rawBody}', encoding: 'hex' },
+        ...overrides,
+      },
     ],
   } as never;
 }

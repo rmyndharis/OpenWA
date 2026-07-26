@@ -278,11 +278,16 @@ const HTTP_HEADER_VALUE_NO_CRLF = /^[^\r\n]*$/;
 
 /**
  * Validates a manifest's `ingress` declarations: SDK major compatibility, the `webhook:ingress`
- * permission, route uniqueness, and that a declared `toleranceSec` is usable (> 0 — a replay window
- * of zero or less would make the tolerance check a no-op). A manifest with no `ingress` entries is a
- * no-op. Called from PluginLoaderService.loadPlugin, so a malformed declaration is rejected at load time.
+ * permission, route uniqueness, that a declared `toleranceSec` is usable (> 0 — a replay window
+ * of zero or less would make the tolerance check a no-op), and that no route declares
+ * `signature.scheme: 'none'` unless the operator has explicitly opted in via
+ * `ALLOW_UNSIGNED_INGRESS=true`. A `none`-scheme route is a fully-unauthenticated `@Public()`
+ * endpoint — once an instance is provisioned, anyone who can reach the host can POST a forged
+ * payload that triggers outbound WhatsApp sends. Rejecting it at load (rather than only warning)
+ * keeps that surface from lighting up silently. A manifest with no `ingress` entries is a no-op.
+ * Called from PluginLoaderService.loadPlugin, so a malformed declaration is rejected at load time.
  */
-export function validateIngressManifest(manifest: PluginManifest): void {
+export function validateIngressManifest(manifest: PluginManifest, allowUnsignedIngress = false): void {
   if (!manifest.ingress?.length) return; // no ingress declared → nothing to validate
   const declaredMajor = Number.parseInt((manifest.sdkVersion ?? '1').split('.')[0], 10);
   if (!Number.isFinite(declaredMajor) || declaredMajor !== SUPPORTED_SDK_MAJOR) {
@@ -300,6 +305,13 @@ export function validateIngressManifest(manifest: PluginManifest): void {
       throw new Error(`Plugin ${manifest.id}: duplicate or empty ingress route '${r.route}'`);
     }
     seen.add(r.route);
+    if (r.signature.scheme === 'none' && !allowUnsignedIngress) {
+      throw new Error(
+        `Plugin ${manifest.id}: ingress route '${r.route}' declares signature.scheme 'none', which is an ` +
+          `unauthenticated public endpoint that can trigger WhatsApp sends. Set ALLOW_UNSIGNED_INGRESS=true to ` +
+          `opt in (and front the route with a network/reverse-proxy ACL).`,
+      );
+    }
     if (r.signature.toleranceSec !== undefined && r.signature.toleranceSec <= 0) {
       throw new Error(
         `Plugin ${manifest.id}: route '${r.route}' toleranceSec must be > 0 (a replay guard would be a no-op)`,
@@ -332,10 +344,11 @@ export function validateIngressManifest(manifest: PluginManifest): void {
 
 /**
  * Warns about each ingress route declared with `scheme: 'none'` — a fully-unauthenticated public endpoint
- * that anyone who can reach the host can use to trigger WhatsApp sends. Purely additive (a warning): a
- * deployment that legitimately relies on scheme:'none' (a provider that offers no HMAC) still boots; the
- * loud log surfaces the exposure so an operator can front the URL with a network/reverse-proxy guard.
- * Called from PluginLoaderService.loadPlugin at boot and on dynamic install.
+ * that anyone who can reach the host can use to trigger WhatsApp sends. Such a route only loads when the
+ * operator has opted in via `ALLOW_UNSIGNED_INGRESS=true` (otherwise `validateIngressManifest` rejects it);
+ * this warning keeps the exposure loud at boot and on dynamic install so an operator who enabled the flag
+ * for one provider is reminded to front the URL with a network/reverse-proxy ACL.
+ * Called from PluginLoaderService.loadPlugin.
  */
 export function warnUnauthenticatedIngressRoutes(
   manifest: PluginManifest,

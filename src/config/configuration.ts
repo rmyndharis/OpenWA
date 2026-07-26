@@ -184,6 +184,16 @@ export default () => ({
     })(),
   },
 
+  // Integration Fabric ingress configuration
+  ingress: {
+    // Opt-in to load plugins whose ingress routes declare signature.scheme: 'none'. Such a route is a
+    // fully-unauthenticated @Public() endpoint: once an instance is provisioned against it, anyone who can
+    // reach the host can POST a forged payload that triggers outbound WhatsApp sends. Default off — only
+    // set ALLOW_UNSIGNED_INGRESS=true for a provider that genuinely offers no HMAC, and front the route
+    // with a network/reverse-proxy ACL. Refused in production by the boot guard unless explicitly set.
+    allowUnsigned: process.env.ALLOW_UNSIGNED_INGRESS === 'true',
+  },
+
   // Status/Stories store configuration
   status: {
     // Per-file cap on status media persisted to disk/S3 (default 10 MiB). A status whose media exceeds

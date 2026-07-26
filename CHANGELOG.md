@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Plugin ingress routes with `signature.scheme: 'none'` now require an explicit opt-in.** A `none`-scheme
+  route is an unauthenticated `@Public()` endpoint that, once an integration instance is provisioned
+  against it, lets anyone who can reach the host POST a forged payload that triggers outbound WhatsApp
+  sends on the bound session. The loader previously only logged a warning for such routes, so the
+  surface lit up silently as soon as an operator installed a plugin declaring one. `validateIngressManifest`
+  now rejects any `none`-scheme route unless `ALLOW_UNSIGNED_INGRESS=true` is set; signed schemes
+  (`hmac-sha256`, `standard-webhooks`, `shared-secret`) are unaffected, and both official ingress
+  plugins (`chatwoot-adapter`, `supabase-otp-hook`) declare signed schemes. When the opt-in is set, the
+  existing boot warning still fires so the operator is reminded to front the route with a network ACL.
+
 - **Secret comparisons on the `/api/metrics` Bearer and ingress `shared-secret` auth surfaces no
   longer leak the expected token's byte-length.** Both `safeEqualStr` (ingress `shared-secret` verify)
   and `MetricsService.safeEqual` (`/api/metrics` Bearer) used the common `timingSafeEqual` idiom of

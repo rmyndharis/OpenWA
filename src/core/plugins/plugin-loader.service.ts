@@ -318,12 +318,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     }
     // Reject a malformed ingress declaration (SDK-major mismatch, missing webhook:ingress permission,
     // duplicate/empty routes, non-positive toleranceSec) at load time instead of letting it silently
-    // load and become provisionable. No-op for plugins that declare no ingress.
-    validateIngressManifest(manifest);
+    // load and become provisionable. No-op for plugins that declare no ingress. A route declaring
+    // signature.scheme 'none' is rejected unless the operator opted in via ALLOW_UNSIGNED_INGRESS=true.
+    validateIngressManifest(manifest, this.configService.get<boolean>('ingress.allowUnsigned', false));
 
     // Surface a loud warning for any ingress route that skips signature verification — a scheme:'none'
-    // route is a fully-unauthenticated public endpoint that can trigger WhatsApp sends. Additive (a
-    // warning, not a refusal) so a legit scheme:'none' deployment still boots.
+    // route is a fully-unauthenticated public endpoint that can trigger WhatsApp sends. Only reachable
+    // when the operator opted in (otherwise validateIngressManifest above rejected it); the warning
+    // reminds them to front the URL with a network/reverse-proxy ACL.
     warnUnauthenticatedIngressRoutes(manifest, this.logger);
 
     // Check if plugin already loaded
