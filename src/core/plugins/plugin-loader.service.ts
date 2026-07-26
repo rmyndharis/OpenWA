@@ -1263,6 +1263,16 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
               `Plugin ${plugin.manifest.id}: no conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId}`,
             );
           }
+          // Fail closed on a cross-session mapping: getByProvider keys on (pluginId, instanceId,
+          // providerConversationId) only, so a stale row can resolve to a chat owned by a DIFFERENT
+          // session than the envelope's. Parity with the assertSessionActive(m.sessionId) check on
+          // mappings.getByProvider below — never send through a session the mapping does not belong to.
+          // (mapping.sessionId is NOT NULL in the entity, so a plain inequality check suffices.)
+          if (mapping.sessionId !== env.sessionId) {
+            throw new PluginCapabilityError(
+              `Plugin ${plugin.manifest.id}: conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId} belongs to session ${mapping.sessionId}, not ${env.sessionId}`,
+            );
+          }
           return mapping.chatId;
         },
         // Re-establish the in-flight hook context around the downstream send so an adapter that calls

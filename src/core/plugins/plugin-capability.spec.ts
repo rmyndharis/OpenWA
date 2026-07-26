@@ -13,6 +13,7 @@ import {
 } from './plugin.interfaces';
 import { MessageService } from '../../modules/message/message.service';
 import { SessionService } from '../../modules/session/session.service';
+import { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
 
 function makePlugin(
   sessions?: string[],
@@ -280,5 +281,85 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
   it('denies net.fetch when the host is not in the manifest net.allow list', async () => {
     const ctx = contextFor(loaderWith(), netPlugin(['net:fetch'], ['only.example.com:443']));
     await expect(ctx.net.fetch('https://api.example.com/x')).rejects.toBeInstanceOf(PluginCapabilityError);
+  });
+});
+
+describe('PluginLoaderService capability facade — ctx.conversations', () => {
+  let loader: PluginLoaderService;
+  let mappingService: { getByProvider: jest.Mock };
+  let messageService: { sendText: jest.Mock; reply: jest.Mock };
+
+  beforeEach(() => {
+    mappingService = { getByProvider: jest.fn() };
+    messageService = {
+      sendText: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
+      reply: jest.fn().mockResolvedValue({ messageId: 'wamid', timestamp: 1 }),
+    };
+    const moduleRef = {
+      get: jest
+        .fn()
+        .mockImplementation((token: unknown) =>
+          token === ConversationMappingService ? mappingService : messageService,
+        ),
+    };
+    const configService = { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService;
+    const pluginStorage = {
+      createPluginStorage: jest.fn().mockReturnValue({}),
+    } as unknown as PluginStorageService;
+    loader = new PluginLoaderService(
+      configService,
+      new HookManager(),
+      pluginStorage,
+      moduleRef as unknown as ModuleRef,
+    );
+  });
+
+  function contextFor(plugin: PluginInstance): PluginContext {
+    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
+      plugin,
+    );
+  }
+
+  const sendEnv = {
+    type: 'text' as const,
+    text: 'hi',
+    instanceId: 'inst-1',
+    source: { provider: 'chatwoot', externalConversationId: 'conv-42' },
+  };
+  const mapping = (sessionId: string) => ({
+    id: 'm-1',
+    sessionId,
+    chatId: '628@c.us',
+    pluginId: 'test-ext',
+    instanceId: 'inst-1',
+    providerConversationId: 'conv-42',
+  });
+
+  it('resolves chatId from a mapping on the SAME session as the envelope, then sends', async () => {
+    mappingService.getByProvider.mockResolvedValue(mapping('sess-1'));
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send']));
+    await ctx.conversations.send({ ...sendEnv, sessionId: 'sess-1' });
+    expect(mappingService.getByProvider).toHaveBeenCalledWith('test-ext', 'inst-1', 'conv-42');
+    expect(messageService.sendText).toHaveBeenCalledWith('sess-1', { chatId: '628@c.us', text: 'hi' });
+  });
+
+  it('rejects a mapping owned by ANOTHER session and never sends (wrong-session send)', async () => {
+    // The plugin is activated for BOTH sessions, so the per-session activation gate passes — only the
+    // mapping's own sessionId stops a stale mapping (e.g. left over after a scope move) from routing
+    // sess-1's envelope out through sess-2's chat.
+    mappingService.getByProvider.mockResolvedValue(mapping('sess-2'));
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send'], ['sess-1', 'sess-2']));
+    await expect(ctx.conversations.send({ ...sendEnv, sessionId: 'sess-1' })).rejects.toThrow(
+      /belongs to session sess-2, not sess-1/,
+    );
+    expect(messageService.sendText).not.toHaveBeenCalled();
+    expect(messageService.reply).not.toHaveBeenCalled();
+  });
+
+  it('sends with an explicit chatId without consulting the mapping service', async () => {
+    const ctx = contextFor(makePlugin(['*'], ['conversation:send']));
+    await ctx.conversations.send({ type: 'text', text: 'hi', sessionId: 'sess-1', chatId: '628@c.us' });
+    expect(mappingService.getByProvider).not.toHaveBeenCalled();
+    expect(messageService.sendText).toHaveBeenCalledWith('sess-1', { chatId: '628@c.us', text: 'hi' });
   });
 });
