@@ -163,9 +163,10 @@ provider when you need capabilities the SQL engines do not give you:
 
 The upgrade path is the **Meilisearch provider plugin** (the reference plugin backend, Spec 2). It
 registers as a `SearchProvider`, indexes via the `message:persisted` plugin hook (so it stays current
-without coupling to the message/session services), and is selected by setting `SEARCH_PROVIDER` to its
-id. Because the route and the response shape are identical across providers, dashboard panels and SDKs
-keep working unchanged when you switch backends.
+without coupling to the message/session services — outbound rows are re-emitted as upserts on every
+state transition, and `message:deleted` fires when a redundant pending row is dropped), and is
+selected by setting `SEARCH_PROVIDER` to its id. Because the route and the response shape are
+identical across providers, dashboard panels and SDKs keep working unchanged when you switch backends.
 
 > **Backfill is the plugin's responsibility.** The `message:persisted` hook fires only for **live**
 > traffic — outbound on send, inbound on receive — never for history-backfill persistence. So a plugin

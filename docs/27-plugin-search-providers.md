@@ -79,6 +79,22 @@ ctx.registerHook('message:persisted', async (hookCtx) => {
 });
 ```
 
+**Outbound rows are re-emitted on every state transition.** An API-originated send first emits the row
+as `PENDING` (usually with `waMessageId` still null), then emits it **again** with the same `id` once it
+reaches its terminal state (`SENT` with the engine id, or `FAILED`). Key your documents by the row `id`
+and treat every emission as an upsert, and your index always converges to the finalized state.
+
+One race remains visible by design: when the engine's own-send echo wins, the redundant PENDING row is
+merged into the echo's row and then dropped. The core emits `message:persisted` for the surviving row
+(upsert it) followed by `message:deleted` for the dropped one — delete that document by its `id`:
+
+```ts
+ctx.registerHook('message:deleted', async (hookCtx) => {
+  const { message } = hookCtx.data;
+  await myBackend.delete(message.id);
+});
+```
+
 **Backfill is the plugin's responsibility.** The hook fires only for live traffic. A plugin installed on
 a deployment with existing message history must perform its own one-time backfill (read the `messages`
 table via `ctx.engine.getChatHistory` or a direct query, and index) at `onEnable`. The built-in DB-FTS

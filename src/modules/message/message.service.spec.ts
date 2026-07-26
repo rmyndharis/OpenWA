@@ -192,15 +192,71 @@ describe('MessageService', () => {
       expect(hookManager.execute).not.toHaveBeenCalledWith('message:sent', expect.anything(), expect.anything());
     });
 
-    it('emits message:persisted after saving an outbound message', async () => {
+    it('emits message:persisted on BOTH the pending save and the finalized sent save (#906)', async () => {
       await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hello' });
 
       const calls = (hookManager.execute as jest.Mock).mock.calls.filter(
         ([ev]: unknown[]) => ev === 'message:persisted',
       ) as unknown[][];
-      expect(calls).toHaveLength(1);
-      expect(calls[0][1]).toMatchObject({ sessionId: 'sess-1', message: { chatId: '628123456789@c.us' } });
+      expect(calls).toHaveLength(2);
+      expect(calls[0][1]).toMatchObject({
+        sessionId: 'sess-1',
+        message: { chatId: '628123456789@c.us', status: MessageStatus.PENDING },
+      });
+      expect(calls[1][1]).toMatchObject({
+        sessionId: 'sess-1',
+        message: { status: MessageStatus.SENT, waMessageId: 'wa-msg-1' },
+      });
       expect(calls[0][2]).toMatchObject({ sessionId: 'sess-1', source: 'MessageService' });
+    });
+
+    it('re-emits message:persisted with FAILED when the send itself fails (#906)', async () => {
+      mockEngine.sendTextMessage.mockRejectedValueOnce(new Error('engine down'));
+
+      await expect(service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' })).rejects.toThrow();
+
+      const calls = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      ) as unknown[][];
+      expect(calls).toHaveLength(2);
+      expect(calls[0][1]).toMatchObject({ message: { status: MessageStatus.PENDING } });
+      expect(calls[1][1]).toMatchObject({ message: { status: MessageStatus.FAILED } });
+    });
+
+    it('reconciles provider indexes when the send echo won the race: upsert the surviving row + drop the ghost (#906)', async () => {
+      const echoRow = {
+        id: 'echo-uuid-9',
+        sessionId: 'sess-1',
+        waMessageId: 'wa-msg-1',
+        status: MessageStatus.SENT,
+      } as Message;
+      (repository.save as jest.Mock)
+        .mockImplementationOnce((msg: unknown) => Promise.resolve(msg)) // PENDING save
+        .mockRejectedValueOnce(
+          Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }),
+        ); // SENT save collides with the echo row
+      (repository.findOne as jest.Mock).mockResolvedValueOnce(echoRow);
+
+      await service.sendText('sess-1', { chatId: '628123456789@c.us', text: 'hi' });
+
+      // SENT state merged onto the echo row; the redundant PENDING row dropped.
+      expect(repository.update).toHaveBeenCalledWith(
+        { sessionId: 'sess-1', waMessageId: 'wa-msg-1' },
+        expect.objectContaining({ status: MessageStatus.SENT }),
+      );
+      expect(repository.delete).toHaveBeenCalledWith({ id: 'msg-uuid-1' });
+      const persisted = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:persisted',
+      ) as unknown[][];
+      // PENDING + the surviving echo row (the failed SENT save itself emits nothing).
+      expect(persisted).toHaveLength(2);
+      expect(persisted[1][1]).toMatchObject({ message: { id: 'echo-uuid-9' } });
+      const deleted = (hookManager.execute as jest.Mock).mock.calls.filter(
+        ([ev]: unknown[]) => ev === 'message:deleted',
+      ) as unknown[][];
+      expect(deleted).toHaveLength(1);
+      expect(deleted[0][1]).toMatchObject({ sessionId: 'sess-1', message: { id: 'msg-uuid-1' } });
+      expect(deleted[0][2]).toMatchObject({ sessionId: 'sess-1', source: 'MessageService' });
     });
 
     it('should throw BadRequestException when plugin blocks sending', async () => {

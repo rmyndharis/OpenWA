@@ -400,12 +400,16 @@ export type HookEvent =
   | 'message:sent'
   | 'message:failed'
   | 'message:ack'
+  | 'message:persisted'
+  | 'message:deleted'
   // Webhook lifecycle
   | 'webhook:before'
   | 'webhook:queued'
   | 'webhook:delivered'
   | 'webhook:after'
-  | 'webhook:error';
+  | 'webhook:error'
+  // Ingress (inbound provider webhook -> plugin) lifecycle
+  | 'ingress:error';
 ```
 
 ### Hook context and result

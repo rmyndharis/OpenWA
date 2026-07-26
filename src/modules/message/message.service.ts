@@ -536,12 +536,20 @@ export class MessageService {
       metadata: data.metadata,
     });
     const saved = await this.messageRepository.save(message);
-    // Fire-and-forget: a plugin handler must never break the send path. The built-in FTS search provider
-    // is DB-synced and does NOT consume this; it exists for plugin providers (Spec 2) + general use.
-    void this.hookManager
-      .execute('message:persisted', { sessionId, message: saved }, { sessionId, source: 'MessageService' })
-      .catch(() => undefined);
+    this.emitPersisted(sessionId, saved);
     return saved;
+  }
+
+  // Fire-and-forget: a plugin handler must never break the send path. The built-in FTS search provider
+  // is DB-synced and does NOT consume this; it exists for plugin providers (Spec 2) + general use.
+  // Emitted for EVERY persisted state of an outbound row — the initial PENDING write AND each later
+  // transition (SENT / FAILED / merge) — so a provider's copy never stays stuck at PENDING (#906).
+  // The payload is a shallow snapshot: the same entity instance is mutated as the send progresses
+  // (PENDING → SENT/FAILED), and fire-and-forget execution must still see the state at emission time.
+  private emitPersisted(sessionId: string, message: Message): void {
+    void this.hookManager
+      .execute('message:persisted', { sessionId, message: { ...message } }, { sessionId, source: 'MessageService' })
+      .catch(() => undefined);
   }
 
   /**
@@ -556,6 +564,8 @@ export class MessageService {
     }
     message.status = MessageStatus.FAILED;
     await this.messageRepository.save(message);
+    // Reconcile the earlier PENDING emission (#906): a provider must see the terminal FAILED state.
+    this.emitPersisted(message.sessionId, message);
   }
 
   /**
@@ -573,6 +583,8 @@ export class MessageService {
     message.timestamp = result.timestamp;
     try {
       await this.messageRepository.save(message);
+      // Reconcile the earlier PENDING emission with the finalized row (#906).
+      this.emitPersisted(message.sessionId, message);
     } catch (persistError) {
       if (result.id && isUniqueConstraintError(persistError)) {
         // The engine's own-send echo (onMessageCreate) won the race and already persisted a row with
@@ -598,6 +610,19 @@ export class MessageService {
             }),
           );
         await this.messageRepository.delete({ id: message.id }).catch(() => undefined);
+        // Reconcile provider indexes (#906): upsert the surviving echo row (now carrying our SENT
+        // state + media) and drop the ghost PENDING document this redundant row produced earlier.
+        const surviving = await this.messageRepository
+          .findOne({ where: { sessionId: message.sessionId, waMessageId: result.id } })
+          .catch(() => null);
+        if (surviving) this.emitPersisted(message.sessionId, surviving);
+        void this.hookManager
+          .execute(
+            'message:deleted',
+            { sessionId: message.sessionId, message: { ...message } },
+            { sessionId: message.sessionId, source: 'MessageService' },
+          )
+          .catch(() => undefined);
       } else {
         this.logger.warn(`Persisting SENT state failed after a successful send (id=${result.id})`, {
           error: persistError instanceof Error ? persistError.message : String(persistError),
