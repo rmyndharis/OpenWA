@@ -202,3 +202,57 @@ describe('PluginStorageService.deletePluginData (uninstall storage cleanup)', ()
     expect(fs.existsSync(path.join(outside, 'keep.txt'))).toBe(true);
   });
 });
+
+describe('PluginStorageService per-plugin storage quota', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-pluginquota-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const makeStorage = (maxBytes: number, pluginId = 'quota-plugin') => {
+    const configService = {
+      get: (k: string) => (k === 'dataDir' ? dataDir : k === 'plugins.storageMaxBytes' ? maxBytes : undefined),
+    } as unknown as ConfigService;
+    return new PluginStorageService(configService).createPluginStorage(pluginId);
+  };
+
+  it('rejects a single write larger than the quota and writes nothing', async () => {
+    const storage = makeStorage(1024);
+    await expect(storage.set('big', 'x'.repeat(2000))).rejects.toThrow(/storage quota exceeded/);
+    expect(await storage.list()).toEqual([]);
+  });
+
+  it('bounds the SUM of a plugin’s keys, not just each write', async () => {
+    const storage = makeStorage(1024);
+    await storage.set('a', 'x'.repeat(500)); // 502 bytes on disk (quoted JSON string)
+    await expect(storage.set('b', 'y'.repeat(800))).rejects.toThrow(/storage quota exceeded/);
+    // A smaller second key that still fits under the quota is fine.
+    await expect(storage.set('b', 'y'.repeat(300))).resolves.toBeUndefined();
+  });
+
+  it('does not double-count the key being overwritten', async () => {
+    const storage = makeStorage(1024);
+    await storage.set('a', 'x'.repeat(900)); // 902 bytes
+    // Replacing 'a' must not count its old bytes against the new write.
+    await expect(storage.set('a', 'z'.repeat(800))).resolves.toBeUndefined();
+    expect(await storage.get('a')).toBe('z'.repeat(800));
+  });
+
+  it('counts only the plugin’s own keys — a second plugin has its own quota', async () => {
+    const a = makeStorage(1024, 'plugin-a');
+    const b = makeStorage(1024, 'plugin-b');
+    await a.set('state', 'x'.repeat(900));
+    await expect(b.set('state', 'y'.repeat(900))).resolves.toBeUndefined();
+  });
+
+  it('applies the 50 MiB default when no quota is configured', async () => {
+    const configService = { get: (k: string) => (k === 'dataDir' ? dataDir : undefined) } as unknown as ConfigService;
+    const storage = new PluginStorageService(configService).createPluginStorage('default-quota');
+    await expect(storage.set('state', 'x'.repeat(1000))).resolves.toBeUndefined();
+  });
+});

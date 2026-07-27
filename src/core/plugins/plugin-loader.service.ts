@@ -73,6 +73,31 @@ const SANDBOX_LIFECYCLE_TIMEOUT_MS = 30000;
 const SANDBOX_MAX_INFLIGHT_CAPS = 32;
 
 /**
+ * Host-side budget for ONE worker-initiated capability call. A plugin whose calls hang would otherwise
+ * hold all SANDBOX_MAX_INFLIGHT_CAPS slots forever (self-DoS). On timeout the worker gets an error and
+ * the slot frees; the late-settling host work is only WARN-logged (see PluginWorkerHost.withCapTimeout —
+ * a bound, not an atomicity guarantee). Default; plugins.capTimeoutMs (PLUGIN_CAP_TIMEOUT_MS) overrides.
+ */
+const SANDBOX_CAP_TIMEOUT_MS = 30000;
+
+/**
+ * Rate limit for the structured sandboxed-hook error log: at most one line per event per window so a
+ * hook that throws on every message can't flood the host log. Suppressed occurrences are counted and
+ * ride the next emitted line.
+ */
+const SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS = 60000;
+
+/**
+ * Worker log-relay bounds (per sandboxed plugin): at most this many lines per window are relayed;
+ * excess is dropped, counted, and surfaced as one warn per window. Longer lines are truncated. The
+ * worker is not a security boundary — these are robustness bounds against a chatty/buggy plugin
+ * flooding the host log, not isolation.
+ */
+const SANDBOX_LOG_MAX_PER_WINDOW = 200;
+const SANDBOX_LOG_WINDOW_MS = 10000;
+const SANDBOX_LOG_MAX_MESSAGE_LENGTH = 8192;
+
+/**
  * Host process.env keys an untrusted plugin worker is allowed to see. Everything else — secrets like
  * API_MASTER_KEY, API_KEY_PEPPER, the DATABASE_/REDIS_ vars, DOCKER_HOST — is withheld. The worker is
  * a thread, so it needs no PATH to start and require() resolves via module paths, not env.
@@ -189,6 +214,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   private readonly enabling = new Set<string>();
   // Live worker host per enabled sandboxed (untrusted) plugin. Built-ins are not in here.
   private readonly sandboxHosts = new Map<string, PluginWorkerHost>();
+  // Last hook-handler error each sandboxed plugin's worker reported, surfaced via checkPluginHealth so a
+  // hook that keeps throwing is visible to the operator. Cleared on disable (fresh enable = fresh slate).
+  private readonly lastSandboxHookError = new Map<string, { event: string; error: string; at: Date }>();
   // Carries the firing event's sessionId across an in-process hook handler so ctx.config (a getter)
   // resolves the per-session slice. Per async call tree, so concurrent sessions don't cross over.
   private readonly hookSession = new AsyncLocalStorage<{ sessionId?: string }>();
@@ -641,6 +669,8 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       plugin.status = PluginStatus.DISABLED;
 
       this.pluginStorage.setPluginStatus(pluginId, PluginStatus.DISABLED);
+      // A fresh enable starts with a clean hook-error slate (the state is per runtime, not persisted).
+      this.lastSandboxHookError.delete(pluginId);
 
       this.logger.log(`Plugin disabled: ${plugin.manifest.name}`, {
         pluginId,
@@ -811,6 +841,35 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   }
 
   /**
+   * Surface a sandboxed plugin's hook-handler failure host-side: record it for the plugin's health
+   * surface and emit one structured warn per event per SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS — a hook
+   * that throws on every message must be visible, but must not become a log-flood vector. Suppressed
+   * occurrences are counted and ride the next emitted line.
+   */
+  private recordSandboxHookError(
+    pluginId: string,
+    event: string,
+    error: string,
+    rateLimit: Map<string, { lastAt: number; suppressed: number }>,
+  ): void {
+    this.lastSandboxHookError.set(pluginId, { event, error, at: new Date() });
+    const now = Date.now();
+    const state = rateLimit.get(event);
+    if (state && now - state.lastAt < SANDBOX_HOOK_ERROR_LOG_INTERVAL_MS) {
+      state.suppressed++;
+      return;
+    }
+    const suppressed = state?.suppressed ?? 0;
+    rateLimit.set(event, { lastAt: now, suppressed: 0 });
+    this.logger.warn(`Sandboxed plugin ${pluginId} hook '${event}' handler failed: ${error}`, {
+      pluginId,
+      event,
+      action: 'sandbox_hook_error',
+      ...(suppressed > 0 ? { suppressed } : {}),
+    });
+  }
+
+  /**
    * Run a plugin's healthCheck across both tiers. A sandboxed plugin's healthCheck lives in the worker
    * (plugin.instance is null), so route to the live worker host (time-bounded); built-ins use the
    * in-process instance. Returns the default "healthy" when the plugin implements no health check.
@@ -818,7 +877,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   async checkPluginHealth(pluginId: string): Promise<{ healthy: boolean; message?: string }> {
     const sandboxHost = this.sandboxHosts.get(pluginId);
     if (sandboxHost) {
-      return sandboxHost.healthCheck(SANDBOX_HEALTH_TIMEOUT_MS);
+      const result = await sandboxHost.healthCheck(SANDBOX_HEALTH_TIMEOUT_MS);
+      // Attach the last hook-handler error the worker reported: a plugin whose hook throws on every
+      // event can still answer healthCheck "healthy" while doing nothing useful. This is operator
+      // context, not a verdict override — the worker's own healthCheck stays authoritative.
+      const lastError = this.lastSandboxHookError.get(pluginId);
+      if (!lastError) return result;
+      const note = `last hook error in '${lastError.event}' at ${lastError.at.toISOString()}: ${lastError.error}`;
+      return { healthy: result.healthy, message: result.message ? `${result.message}; ${note}` : note };
     }
     const plugin = this.plugins.get(pluginId);
     if (plugin?.instance?.healthCheck) {
@@ -1024,6 +1090,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       SANDBOX_MAX_INFLIGHT_CAPS,
       onSearchProviderRegister,
       onWorkerExit,
+      this.configService.get<number>('plugins.capTimeoutMs') ?? SANDBOX_CAP_TIMEOUT_MS,
     );
   }
 
@@ -1091,6 +1158,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       if (subscribedEvents.has(event)) return;
       if (subscribedEvents.size >= KNOWN_HOOK_EVENTS.size) return; // can't exceed the known set
       subscribedEvents.add(event);
+      // Per-event rate-limit state for the hook-error log; local to this enable call so it is dropped
+      // on disable exactly like subscribedEvents.
+      const hookErrorLogState = new Map<string, { lastAt: number; suppressed: number }>();
       this.hookManager.register(
         pluginId,
         event,
@@ -1145,7 +1215,12 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
                   action: 'sandbox_hook_timeout',
                 }),
             })
-            .then(result => ({ continue: result.continue, data: result.data }));
+            .then(result => {
+              // The worker reports (not throws) a hook-handler failure: surface it host-side instead
+              // of failing open in silence. The chain itself still proceeds fail-open.
+              if (result.error) this.recordSandboxHookError(pluginId, event, result.error, hookErrorLogState);
+              return { continue: result.continue, data: result.data };
+            });
         },
         priority,
       );
@@ -1168,10 +1243,38 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     });
 
     // Route the worker plugin's ctx.logger.* calls to the same per-plugin logger an in-process plugin
-    // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout.
+    // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout. The
+    // relay is bounded: oversized lines are truncated and throughput is capped per window — a chatty
+    // or buggy plugin must not flood the host log. Dropped lines are counted and surfaced as one warn
+    // per window (never one line per drop, or the bound itself would be a flood vector). State is local
+    // to this enable call, so it resets on disable.
+    let logWindowStart = Date.now();
+    let logCount = 0;
+    let logDropped = 0;
     const onLog = (level: PluginLogLevel, message: string, meta?: Record<string, unknown>): void => {
-      if (level === 'error') context.logger.error(message, undefined, meta);
-      else context.logger[level](message, meta);
+      const now = Date.now();
+      if (now - logWindowStart >= SANDBOX_LOG_WINDOW_MS) {
+        if (logDropped > 0) {
+          this.logger.warn(
+            `Dropped ${logDropped} log messages from sandboxed plugin ${pluginId} (log relay rate limit)`,
+            { pluginId, action: 'sandbox_log_relay_dropped', dropped: logDropped },
+          );
+        }
+        logWindowStart = now;
+        logCount = 0;
+        logDropped = 0;
+      }
+      logCount++;
+      if (logCount > SANDBOX_LOG_MAX_PER_WINDOW) {
+        logDropped++;
+        return;
+      }
+      const bounded =
+        typeof message === 'string' && message.length > SANDBOX_LOG_MAX_MESSAGE_LENGTH
+          ? `${message.slice(0, SANDBOX_LOG_MAX_MESSAGE_LENGTH)}…[truncated]`
+          : message;
+      if (level === 'error') context.logger.error(bounded, undefined, meta);
+      else context.logger[level](bounded, meta);
     };
 
     // When the worker declares itself a search provider (ctx.registerSearchProvider →
@@ -1412,6 +1515,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
         reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
         sendMedia: (sessionId, opts) => dispatchConversationMedia(this.getMessageService(), sessionId, opts),
+        sendLocation: (sessionId, opts) => this.getMessageService().sendLocation(sessionId, opts),
       } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,
       handover: {
         set: async (key, state) => {

@@ -26,6 +26,11 @@ export interface ConversationSendDeps {
     sessionId: string,
     opts: { chatId: string; url: string; type: ConversationMediaType; caption?: string },
   ) => Promise<unknown>;
+  // Location send. The loader binds this to MessageService.sendLocation; `text` maps to the description.
+  sendLocation: (
+    sessionId: string,
+    opts: { chatId: string; latitude: number; longitude: number; description?: string },
+  ) => Promise<unknown>;
 }
 
 /**
@@ -39,6 +44,10 @@ const MEDIA_TYPES: readonly ConversationMediaType[] = ['image', 'file', 'audio',
 const isMediaType = (type: ConversationSendEnvelope['type']): type is ConversationMediaType =>
   (MEDIA_TYPES as readonly string[]).includes(type);
 
+const isValidLatitude = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -90 && v <= 90;
+const isValidLongitude = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= -180 && v <= 180;
+
 const MESSAGE_HOOK_EVENTS = ['message:sending'];
 
 export function buildConversationSendFacade(deps: ConversationSendDeps) {
@@ -50,6 +59,26 @@ export function buildConversationSendFacade(deps: ConversationSendDeps) {
       deps.assertSessionActive(sessionId);
       const chatId = env.chatId ?? (await deps.resolveChatId(env));
       return deps.runGuarded(MESSAGE_HOOK_EVENTS, async () => {
+        // A location envelope is delivered as a native location pin. Without valid coordinates there
+        // is NOTHING to send — reject loudly instead of degrading to an empty text message.
+        if (env.type === 'location') {
+          // The engine location path cannot quote a message, so a location reply is not expressible.
+          // Reject rather than silently drop the quote (same rule as media).
+          if (env.replyTo) {
+            throw new PluginCapabilityError('conversation.send: replyTo is not supported for location messages');
+          }
+          if (!isValidLatitude(env.latitude) || !isValidLongitude(env.longitude)) {
+            throw new PluginCapabilityError(
+              'conversation.send: type location requires latitude (-90..90) and longitude (-180..180)',
+            );
+          }
+          return deps.sendLocation(sessionId, {
+            chatId,
+            latitude: env.latitude,
+            longitude: env.longitude,
+            description: env.text,
+          });
+        }
         // A media type carrying a mediaUrl is sent as native media. A media type WITHOUT a mediaUrl has
         // nothing to send as media, so it falls through to the text/reply path — a plugin that puts the
         // URL in `text` as a fallback still delivers a (text) message rather than erroring.

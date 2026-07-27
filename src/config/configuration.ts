@@ -212,6 +212,17 @@ export default () => ({
       const n = parseInt(process.env.PLUGIN_DOWNLOAD_MAX_BYTES ?? '', 10);
       return Number.isFinite(n) && n > 0 ? n : 5 * 1024 * 1024;
     })(),
+    // Host-side budget for ONE worker-initiated capability call (see PluginWorkerHost.withCapTimeout).
+    // Same fail-safe parsing as downloadMaxBytes.
+    capTimeoutMs: (() => {
+      const n = parseInt(process.env.PLUGIN_CAP_TIMEOUT_MS ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 30000;
+    })(),
+    // Per-plugin bound on ctx.storage writes. Same fail-safe parsing as downloadMaxBytes.
+    storageMaxBytes: (() => {
+      const n = parseInt(process.env.PLUGIN_STORAGE_MAX_BYTES ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 50 * 1024 * 1024;
+    })(),
   },
 
   // Integration Fabric ingress configuration

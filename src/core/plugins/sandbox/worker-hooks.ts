@@ -27,7 +27,9 @@ export type WorkerHookHandler = (ctx: WorkerHookContext) => Promise<WorkerHookRe
  * Worker-side hook handling. A sandboxed plugin registers handlers here (via ctx.registerHook). The
  * registry subscribes the host to each event the first time it sees a handler for it, and on a `hook`
  * message runs the plugin's handlers in priority order — threading data, stopping on continue:false,
- * and swallowing a handler error so one bad handler can't break the chain.
+ * and swallowing a handler error so one bad handler can't break the chain. A swallowed error is NOT
+ * silent: the first failure rides the hook-result back to the host, which logs it and records it for
+ * the plugin's health surface.
  */
 export class WorkerHookRegistry {
   private readonly handlers = new Map<string, { handler: WorkerHookHandler; priority: number }[]>();
@@ -61,6 +63,7 @@ export class WorkerHookRegistry {
     const list = this.handlers.get(message.event) ?? [];
     let data = message.data;
     let shouldContinue = true;
+    let firstError: string | undefined;
     for (const { handler } of list) {
       try {
         const result = await handler({
@@ -75,10 +78,20 @@ export class WorkerHookRegistry {
           shouldContinue = false;
           break;
         }
-      } catch {
-        // A handler error must not break the chain (mirrors the host hook manager).
+      } catch (error) {
+        // A handler error must not break the chain (mirrors the host hook manager). Report the FIRST
+        // failure to the host so a throwing hook is visible to the operator instead of failing open
+        // in silence; later handlers still run.
+        firstError ??= error instanceof Error ? error.message : String(error);
       }
     }
-    this.post({ kind: 'hook-result', id: message.id, continue: shouldContinue, data });
+    const result: Extract<WorkerToHostMessage, { kind: 'hook-result' }> = {
+      kind: 'hook-result',
+      id: message.id,
+      continue: shouldContinue,
+      data,
+    };
+    if (firstError !== undefined) result.error = firstError;
+    this.post(result);
   }
 }

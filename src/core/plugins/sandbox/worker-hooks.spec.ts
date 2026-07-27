@@ -60,4 +60,28 @@ describe('WorkerHookRegistry', () => {
 
     expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({ continue: true });
   });
+
+  it('reports a throwing handler to the host on the hook-result (later handlers still run)', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    reg.register('e', () => Promise.reject(new Error('boom')), 10);
+    reg.register('e', () => Promise.resolve({ continue: true, data: { n: 2 } }), 20);
+
+    await reg.handleHook({ kind: 'hook', id: 1, event: 'e', data: { x: 1 }, source: 's' });
+
+    // The error rides the result so the host can surface it; the chain's fail-open shape is unchanged.
+    expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({ continue: true, data: { n: 2 }, error: 'boom' });
+  });
+
+  it('reports only the FIRST handler error and stringifies non-Error throws', async () => {
+    const { sent, post } = collect();
+    const reg = new WorkerHookRegistry(post);
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error rejection is exactly the case under test (it must be stringified, not crash the wire)
+    reg.register('e', () => Promise.reject('string failure'), 10);
+    reg.register('e', () => Promise.reject(new Error('second')), 20);
+
+    await reg.handleHook({ kind: 'hook', id: 1, event: 'e', data: {}, source: 's' });
+
+    expect(sent.find(m => m.kind === 'hook-result')).toMatchObject({ continue: true, error: 'string failure' });
+  });
 });

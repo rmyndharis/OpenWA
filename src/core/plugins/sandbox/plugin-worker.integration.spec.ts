@@ -12,6 +12,7 @@ const HOOK_HANG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-hang-pl
 const RUNAWAY_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/runaway-plugin.cjs');
 const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.cjs');
 const HOOK_CONFIG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-config-plugin.cjs');
+const HOOK_ERROR_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-error-plugin.cjs');
 const CTX_LIFECYCLE_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-lifecycle-plugin.cjs');
 const SEARCH_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/search-plugin.cjs');
 const UNLOAD_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/unload-plugin.cjs');
@@ -133,6 +134,24 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     await new Promise(resolve => setTimeout(resolve, 150));
 
     await expect(host.terminate()).resolves.toBeUndefined();
+  });
+
+  it('a throwing worker hook handler is reported back on the hook-result (not silently swallowed)', async () => {
+    const host = new PluginWorkerHost(makeChannel(), undefined, () => undefined);
+    await host.load(HOOK_ERROR_FIXTURE);
+    await host.runLifecycle('onEnable');
+    await flushAsync();
+
+    // The chain still fails open (continue:true) — but the worker's error crosses the wire so the
+    // host can log it and record it for the plugin's health surface. `data` round-trips untouched.
+    const result = await host.dispatchHook({
+      event: 'message:received',
+      data: {},
+      source: 'Engine',
+      timeoutMs: 5000,
+    });
+    expect(result).toEqual({ continue: true, data: {}, error: 'intentional hook failure' });
+    await host.terminate();
   });
 
   it('preserves a structured-clone-safe hook payload across the worker boundary', async () => {

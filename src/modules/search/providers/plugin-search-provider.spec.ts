@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
 import { MessageDirection } from '../../message/entities/message.entity';
 import { PluginSearchProvider } from './plugin-search-provider';
 import type { PluginSearchTransport } from './plugin-search-provider';
@@ -125,5 +125,61 @@ describe('PluginSearchProvider', () => {
     const res = await p.search({ q: 'hi', sessionIds: [] });
     expect(res.hits.map(h => h.sessionId)).toEqual(['s1', 'sX']);
     expect(res.total).toBe(2);
+  });
+
+  describe('result shape validation (untrusted wire payload)', () => {
+    const providerReturning = (results: unknown): PluginSearchProvider =>
+      new PluginSearchProvider(
+        'p',
+        'P',
+        fakeTransport({ dispatchSearch: jest.fn().mockResolvedValue({ ok: true, results }) }),
+        1000,
+      );
+
+    it('rejects a fabricated negative total with a 502 — never a fabricated 200', async () => {
+      await expect(
+        providerReturning({ hits: [], total: -5, tookMs: 1, provider: 'plugin:p' }).search({ q: 'x' }),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+    });
+
+    it('rejects a non-numeric total (a string like "500" would silently break pagination)', async () => {
+      await expect(
+        providerReturning({ hits: [], total: '500', tookMs: 1, provider: 'plugin:p' }).search({ q: 'x' }),
+      ).rejects.toMatchObject({ status: 502 });
+    });
+
+    it('rejects non-array hits with a 502 instead of crashing the re-filter into a 500', async () => {
+      await expect(
+        providerReturning({ hits: 'nope', total: 0, tookMs: 1, provider: 'plugin:p' }).search({
+          q: 'x',
+          sessionIds: ['s1'],
+        }),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+    });
+
+    it('rejects a hit missing required SearchHit fields', async () => {
+      await expect(
+        providerReturning({ hits: [{ messageId: 'm1' }], total: 1, tookMs: 1, provider: 'plugin:p' }).search({
+          q: 'x',
+        }),
+      ).rejects.toMatchObject({ status: 502 });
+    });
+
+    it('rejects a non-object results payload', async () => {
+      await expect(providerReturning(null).search({ q: 'x' })).rejects.toBeInstanceOf(BadGatewayException);
+      await expect(providerReturning('garbage').search({ q: 'x' })).rejects.toBeInstanceOf(BadGatewayException);
+      await expect(providerReturning([1, 2]).search({ q: 'x' })).rejects.toBeInstanceOf(BadGatewayException);
+    });
+
+    it('passes a valid payload with extra fields through untouched (a legit provider never breaks)', async () => {
+      const results = {
+        hits: [{ ...mkHit({}), extraField: { nested: true } }],
+        total: 1,
+        tookMs: 2,
+        provider: 'plugin:p',
+        cursor: 'next-page',
+      };
+      await expect(providerReturning(results).search({ q: 'x' })).resolves.toBe(results);
+    });
   });
 });

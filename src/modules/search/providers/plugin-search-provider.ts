@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHealth } from '../search.types';
 
 /**
@@ -12,6 +12,54 @@ export interface PluginSearchTransport {
     timeoutMs: number;
   }): Promise<{ ok: true; results: SearchResults } | { ok: false; error: string }>;
   healthCheck(timeoutMs: number): Promise<{ healthy: boolean; message?: string }>;
+}
+
+/** Required string fields of a SearchHit (score stays optional), mirrored for runtime checks. */
+const SEARCH_HIT_STRING_FIELDS = [
+  'messageId',
+  'waMessageId',
+  'sessionId',
+  'chatId',
+  'body',
+  'snippet',
+  'type',
+  'direction',
+  'from',
+] as const;
+
+/**
+ * Validate a SearchResults payload that crossed the worker IPC boundary, returning a description of the
+ * first violation or null when the shape is sound. The worker is not a security boundary and the wire
+ * payload is untrusted: a plugin bug (or hostile worker) can post anything as `results` — a fabricated
+ * `total`, a non-array `hits` (which would 500 the re-filter below), or hits missing the fields the
+ * dashboard renders. Rules mirror the declared SearchResults contract; extra fields are tolerated so an
+ * additive legit provider is never broken.
+ */
+export function validatePluginSearchResults(results: unknown): string | null {
+  if (!results || typeof results !== 'object' || Array.isArray(results)) return 'results must be an object';
+  const r = results as Record<string, unknown>;
+  if (!Array.isArray(r.hits)) return 'results.hits must be an array';
+  if (typeof r.total !== 'number' || !Number.isFinite(r.total) || r.total < 0) {
+    return 'results.total must be a finite number >= 0';
+  }
+  if (typeof r.tookMs !== 'number' || !Number.isFinite(r.tookMs) || r.tookMs < 0) {
+    return 'results.tookMs must be a finite number >= 0';
+  }
+  if (typeof r.provider !== 'string' || r.provider.length === 0) return 'results.provider must be a non-empty string';
+  for (const [index, hit] of (r.hits as unknown[]).entries()) {
+    if (!hit || typeof hit !== 'object' || Array.isArray(hit)) return `results.hits[${index}] must be an object`;
+    const h = hit as Record<string, unknown>;
+    for (const field of SEARCH_HIT_STRING_FIELDS) {
+      if (typeof h[field] !== 'string') return `results.hits[${index}].${field} must be a string`;
+    }
+    if (typeof h.timestamp !== 'number' || !Number.isFinite(h.timestamp)) {
+      return `results.hits[${index}].timestamp must be a finite number`;
+    }
+    if (h.score !== undefined && (typeof h.score !== 'number' || !Number.isFinite(h.score))) {
+      return `results.hits[${index}].score must be a finite number when present`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -35,6 +83,10 @@ export class PluginSearchProvider implements SearchProvider {
   async search(query: SearchQuery): Promise<SearchResults> {
     const reply = await this.transport.dispatchSearch({ query, timeoutMs: this.timeoutMs });
     if (!reply.ok) throw new ServiceUnavailableException(reply.error);
+    // The result shape is untrusted wire data: reject an invalid payload with an honest 502 (bad
+    // upstream) instead of fabricating a 200 — or crashing the re-filter below into a 500.
+    const invalid = validatePluginSearchResults(reply.results);
+    if (invalid) throw new BadGatewayException(`Search provider ${this.id} returned invalid results: ${invalid}`);
     // Defense-in-depth: the plugin is expected to honor sessionIds, but re-filter host-side so a plugin
     // bug or leak can never surface a hit outside the caller's allowed session scope — mirroring the
     // SQL-enforced scoping the built-in provider gets for free. The guard mirrors the built-in

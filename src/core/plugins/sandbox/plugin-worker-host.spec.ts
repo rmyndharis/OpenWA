@@ -194,6 +194,133 @@ describe('PluginWorkerHost', () => {
     });
   });
 
+  describe('capability call host timeout', () => {
+    // Microtask-only flush: these tests run under fake timers, where setImmediate is faked too.
+    const microFlush = async (): Promise<void> => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+
+    it('times out a hung call: errors the worker, frees the slot, and warns (once) on late settle', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        let settleHung: (v: unknown) => void = () => undefined;
+        const dispatcher = jest
+          .fn()
+          .mockImplementationOnce(() => new Promise(r => (settleHung = r))) // hangs past the timeout
+          .mockResolvedValue({ ok: true });
+        const onLog = jest.fn();
+        // maxInFlightCaps = 1 (7th arg) so the freed slot is observable; capTimeoutMs = 100 (10th arg).
+        new PluginWorkerHost(ch, dispatcher, undefined, undefined, onLog, undefined, 1, undefined, undefined, 100);
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] });
+        await microFlush();
+        expect(dispatcher).toHaveBeenCalledTimes(1);
+
+        jest.advanceTimersByTime(100);
+        await microFlush();
+
+        // The worker sees a timeout error for the hung call.
+        const timedOut = ch.sent.find(m => m.kind === 'cap-result' && m.id === 1) as
+          { ok: boolean; error?: string } | undefined;
+        expect(timedOut?.ok).toBe(false);
+        expect(timedOut?.error).toMatch(/timed out after 100ms/);
+
+        // The slot is freed: a fresh call dispatches immediately and resolves normally.
+        ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [] });
+        await microFlush();
+        expect(dispatcher).toHaveBeenCalledTimes(2);
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 2)).toMatchObject({ ok: true });
+
+        // The hung work eventually settles: no second cap-result for id 1, only a WARN via onLog.
+        settleHung({ late: true });
+        await microFlush();
+        expect(ch.sent.filter(m => m.kind === 'cap-result' && m.id === 1)).toHaveLength(1);
+        expect(onLog).toHaveBeenCalledTimes(1);
+        expect(onLog).toHaveBeenCalledWith(
+          'warn',
+          expect.stringMatching(/late result was discarded/),
+          expect.objectContaining({ action: 'sandbox_cap_late_settle', verb: 'messages.sendText' }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('warns (not crashes) when the hung work fails after the timeout', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        let failHung: (e: unknown) => void = () => undefined;
+        const dispatcher = jest.fn().mockImplementationOnce(() => new Promise((_, rej) => (failHung = rej)));
+        const onLog = jest.fn();
+        new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          onLog,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          100,
+        );
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'engine.getContacts', args: [] });
+        await microFlush();
+        jest.advanceTimersByTime(100);
+        await microFlush();
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({ ok: false });
+
+        failHung(new Error('engine blew up'));
+        await microFlush();
+        expect(onLog).toHaveBeenCalledWith(
+          'warn',
+          expect.stringMatching(/failed after the 100ms host timeout: engine blew up/),
+          expect.objectContaining({ action: 'sandbox_cap_late_settle' }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('leaves a call that settles within the budget untouched (no timeout, no warn)', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        const dispatcher = jest.fn().mockResolvedValue({ messageId: 'wamid' });
+        const onLog = jest.fn();
+        new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          onLog,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          1000,
+        );
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] });
+        await microFlush();
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+          ok: true,
+          result: { messageId: 'wamid' },
+        });
+
+        jest.advanceTimersByTime(5000); // budget long past — the timer must have been cleared
+        await microFlush();
+        expect(ch.sent.filter(m => m.kind === 'cap-result' && m.id === 1)).toHaveLength(1);
+        expect(onLog).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('hook bridge', () => {
     const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
@@ -243,6 +370,17 @@ describe('PluginWorkerHost', () => {
       await expect(pending).resolves.toEqual({ continue: true });
       expect(onTimeout).toHaveBeenCalled();
       jest.useRealTimers();
+    });
+
+    it('dispatchHook surfaces a worker-reported handler error on the resolved result', async () => {
+      const ch = new FakeChannel();
+      const host = new PluginWorkerHost(ch);
+
+      const pending = host.dispatchHook({ event: 'message:received', data: {}, source: 'Engine', timeoutMs: 1000 });
+      const sent = ch.sent.find(m => m.kind === 'hook') as Extract<HostToWorkerMessage, { kind: 'hook' }>;
+
+      ch.reply({ kind: 'hook-result', id: sent.id, continue: true, error: 'handler blew up' });
+      await expect(pending).resolves.toEqual({ continue: true, error: 'handler blew up' });
     });
 
     it('drains an in-flight hook immediately on worker exit (no stall for the full hook timeout)', async () => {

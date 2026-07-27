@@ -5,22 +5,35 @@ import { PluginStorageService } from './plugin-storage.service';
 import { HookManager } from '../hooks';
 import { IPlugin, PluginInstance, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
+import { PluginLogLevel } from './sandbox/protocol';
 
-type FakeHost = { load: jest.Mock; runLifecycle: jest.Mock; terminate: jest.Mock };
+type FakeHost = {
+  load: jest.Mock;
+  runLifecycle: jest.Mock;
+  terminate: jest.Mock;
+  dispatchHook: jest.Mock;
+  healthCheck: jest.Mock;
+};
 
 /** Loader that returns fake worker hosts so routing is testable without spawning a real OS thread. */
 class TestableLoader extends PluginLoaderService {
   readonly hosts: FakeHost[] = [];
   capturedOnHookSubscribe?: (event: string, priority?: number) => void;
+  capturedOnLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void;
   protected createSandboxHost(
     _capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
+    _onWebhookSubscribe?: (route: string) => void,
+    onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
   ): PluginWorkerHost {
     this.capturedOnHookSubscribe = onHookSubscribe;
+    this.capturedOnLog = onLog;
     const host: FakeHost = {
       load: jest.fn().mockResolvedValue(undefined),
       runLifecycle: jest.fn().mockResolvedValue(undefined),
       terminate: jest.fn().mockResolvedValue(undefined),
+      dispatchHook: jest.fn().mockResolvedValue({ continue: true }),
+      healthCheck: jest.fn().mockResolvedValue({ healthy: true }),
     };
     this.hosts.push(host);
     return host as unknown as PluginWorkerHost;
@@ -155,5 +168,116 @@ describe('PluginLoaderService — sandbox tier routing', () => {
     expect(loader.hosts).toHaveLength(0);
     expect(onEnable).toHaveBeenCalled();
     expect(pluginOf(loader).status).toBe(PluginStatus.ENABLED);
+  });
+});
+
+describe('PluginLoaderService — sandbox hook error surfacing', () => {
+  type Handler = (hookCtx: { data: unknown; sessionId?: string; source: string }) => Promise<unknown>;
+
+  const loggerOf = (loader: TestableLoader): { warn: jest.Mock; log: jest.Mock } =>
+    (loader as unknown as { logger: { warn: jest.Mock; log: jest.Mock } }).logger;
+
+  /** Enable p1, subscribe it to `event`, and return the shim the loader registered for it. */
+  const setupShim = async (loader: TestableLoader, event: string): Promise<Handler> => {
+    seed(loader, { builtIn: false, instance: null });
+    const hookManager = (loader as unknown as { hookManager: HookManager }).hookManager;
+    const registerSpy = jest.spyOn(hookManager, 'register');
+    await loader.enablePlugin('p1');
+    loader.capturedOnHookSubscribe!(event);
+    const call = registerSpy.mock.calls.find(c => c[1] === event);
+    expect(call).toBeDefined();
+    return call![2];
+  };
+
+  it('logs a worker-reported hook error (rate-limited per event) and surfaces it in plugin health', async () => {
+    const loader = makeLoader();
+    const handler = await setupShim(loader, 'message:sent');
+    // The worker reports (not throws) the handler failure on its hook-result.
+    loader.hosts[0].dispatchHook.mockResolvedValue({ continue: true, error: 'boom' });
+    const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+
+    await handler({ data: {}, sessionId: 's1', source: 'Engine' });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Sandboxed plugin p1 hook 'message:sent' handler failed: boom"),
+      expect.objectContaining({ action: 'sandbox_hook_error', pluginId: 'p1', event: 'message:sent' }),
+    );
+
+    // A second failure inside the rate-limit window is counted, not logged again.
+    await handler({ data: {}, sessionId: 's1', source: 'Engine' });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // The chain still fails open: the shim resolves continue:true for the hook manager.
+    await expect(handler({ data: {}, sessionId: 's1', source: 'Engine' })).resolves.toEqual({ continue: true });
+
+    // The health surface carries the last hook error without overriding the worker's own verdict.
+    const health = await loader.checkPluginHealth('p1');
+    expect(health.healthy).toBe(true);
+    expect(health.message).toContain("last hook error in 'message:sent'");
+    expect(health.message).toContain('boom');
+
+    // Disable clears the record: a fresh enable starts with a clean slate.
+    await loader.disablePlugin('p1');
+    const after = await loader.checkPluginHealth('p1');
+    expect(after.message ?? '').not.toContain('last hook error');
+  });
+
+  it('does not log or record anything when the worker reports no error', async () => {
+    const loader = makeLoader();
+    const handler = await setupShim(loader, 'message:sent');
+    loader.hosts[0].dispatchHook.mockResolvedValue({ continue: false, data: { n: 1 } });
+    const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+
+    await expect(handler({ data: {}, sessionId: 's1', source: 'Engine' })).resolves.toEqual({
+      continue: false,
+      data: { n: 1 },
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    const health = await loader.checkPluginHealth('p1');
+    expect(health.message ?? '').not.toContain('last hook error');
+  });
+});
+
+describe('PluginLoaderService — sandbox log relay bounds', () => {
+  const loggerOf = (loader: TestableLoader): { warn: jest.Mock; log: jest.Mock } =>
+    (loader as unknown as { logger: { warn: jest.Mock; log: jest.Mock } }).logger;
+
+  it('relays up to the per-window cap, then drops the excess and reports the count at rollover', async () => {
+    jest.useFakeTimers();
+    try {
+      const loader = makeLoader();
+      seed(loader, { builtIn: false, instance: null });
+      await loader.enablePlugin('p1');
+      const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+      const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+
+      const onLog = loader.capturedOnLog!;
+      for (let i = 0; i < 250; i++) onLog('log', `line ${i}`);
+      expect(logSpy).toHaveBeenCalledTimes(200); // the excess 50 are dropped, not relayed
+      expect(warnSpy).not.toHaveBeenCalled(); // the drop warn fires at the NEXT window rollover
+
+      jest.setSystemTime(Date.now() + 10000);
+      onLog('log', 'next window');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Dropped 50 log messages from sandboxed plugin p1'),
+        expect.objectContaining({ action: 'sandbox_log_relay_dropped', pluginId: 'p1', dropped: 50 }),
+      );
+      expect(logSpy).toHaveBeenCalledTimes(201); // the rollover line relays normally
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('truncates an oversized worker log line before relaying it', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+
+    loader.capturedOnLog!('log', 'x'.repeat(10000));
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const relayed = logSpy.mock.calls[0][0] as string;
+    expect(relayed).toContain('…[truncated]');
+    expect(relayed.length).toBe('[p1] '.length + 8192 + '…[truncated]'.length);
   });
 });

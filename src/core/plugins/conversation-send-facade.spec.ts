@@ -147,4 +147,80 @@ describe('conversation.send facade', () => {
     expect(sendText).toHaveBeenCalledWith('s', { chatId: 'c', text: 'https://cdn.example/v.mp4' });
     expect(res).toEqual({ id: 't1' });
   });
+
+  it('routes a location envelope to sendLocation, mapping text to the description', async () => {
+    const sendLocation = jest.fn().mockResolvedValue({ id: 'l1' });
+    const sendText = jest.fn();
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText,
+      reply: jest.fn(),
+      sendLocation,
+    } as never);
+    const res = await facade.send({
+      type: 'location',
+      latitude: -6.2,
+      longitude: 106.816666,
+      text: 'Jakarta HQ',
+      sessionId: 's',
+      chatId: 'chat@c.us',
+    });
+    expect(sendLocation).toHaveBeenCalledWith('s', {
+      chatId: 'chat@c.us',
+      latitude: -6.2,
+      longitude: 106.816666,
+      description: 'Jakarta HQ',
+    });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(res).toEqual({ id: 'l1' });
+  });
+
+  it('rejects a location envelope without valid coordinates — never degrades to an empty text', async () => {
+    const sendText = jest.fn();
+    const sendLocation = jest.fn();
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText,
+      reply: jest.fn(),
+      sendLocation,
+    } as never);
+    // No coordinates at all.
+    await expect(facade.send({ type: 'location', sessionId: 's', chatId: 'c' })).rejects.toThrow(PluginCapabilityError);
+    // Out-of-range / non-finite coordinates.
+    await expect(
+      facade.send({ type: 'location', latitude: 91, longitude: 0, sessionId: 's', chatId: 'c' }),
+    ).rejects.toThrow(/latitude/);
+    await expect(
+      facade.send({ type: 'location', latitude: 0, longitude: NaN, sessionId: 's', chatId: 'c' }),
+    ).rejects.toThrow(PluginCapabilityError);
+    // The failure is loud; nothing is sent, least of all an empty text.
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendLocation).not.toHaveBeenCalled();
+  });
+
+  it('rejects replyTo on a location envelope — the engine location path cannot quote', async () => {
+    const sendLocation = jest.fn();
+    const facade = buildConversationSendFacade({
+      manifest: manifest(['conversation:send']) as never,
+      assertPermission: () => undefined,
+      assertSessionActive: jest.fn(),
+      resolveChatId: () => Promise.resolve('chat@c.us'),
+      runGuarded: (_events: string[], run: () => Promise<unknown>) => run(),
+      sendText: jest.fn(),
+      reply: jest.fn(),
+      sendLocation,
+    } as never);
+    await expect(
+      facade.send({ type: 'location', latitude: 1, longitude: 1, replyTo: 'Q1', sessionId: 's', chatId: 'c' }),
+    ).rejects.toThrow(PluginCapabilityError);
+    expect(sendLocation).not.toHaveBeenCalled();
+  });
 });

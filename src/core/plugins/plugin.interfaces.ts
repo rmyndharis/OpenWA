@@ -268,6 +268,10 @@ export interface ConversationSendEnvelope {
   text?: string;
   mediaUrl?: string;
   replyTo?: string;
+  /** WGS84 coordinates; required for type 'location', ignored otherwise. `text` doubles as the
+   *  location description. */
+  latitude?: number;
+  longitude?: number;
   source?: { provider: string; externalConversationId: string };
 }
 
