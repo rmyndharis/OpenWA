@@ -1596,6 +1596,74 @@ describe('InfraController.importData status_updates + runtime reconciliation', (
     expect(res.restartRequired).toBe(false);
     expect(res.orphanedEngines).toEqual([]);
   });
+
+  it('stopOrphans=true stops the orphan engines inside the request and keeps restartRequired:false', async () => {
+    await seedSession('s1');
+    const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: ['ghost'], notRunning: [], failed: [] });
+    const controller = build({
+      sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
+    });
+    const dump = await controller.exportData(); // backup contains only s1, not 'ghost'
+
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+
+    // The orphan engines were stopped (called once with exactly the orphan ids) and the import
+    // proceeded without requiring a restart — the whole point of stopOrphans vs force.
+    expect(stopOrphanEngines).toHaveBeenCalledWith(['ghost']);
+    expect(stopOrphanEngines).toHaveBeenCalledTimes(1);
+    expect(res.imported).toBe(true);
+    expect(res.restartRequired).toBe(false);
+    expect(res.stoppedOrphanEngines).toEqual(['ghost']);
+    expect(res.failedOrphanEngines).toEqual([]);
+    expect(res.orphanedEngines).toEqual(['ghost']);
+  });
+
+  it('stopOrphans=true surfaces a teardown failure as restartRequired:true + a warning (Map reconciled regardless)', async () => {
+    await seedSession('s1');
+    const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: ['g1'], notRunning: [], failed: ['g2'] });
+    const controller = build({
+      sessionService: { getActiveSessionIds: () => ['g1', 'g2'], stopOrphanEngines },
+    });
+    const dump = await controller.exportData();
+
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+
+    expect(res.imported).toBe(true);
+    expect(res.restartRequired).toBe(true);
+    expect(res.failedOrphanEngines).toEqual(['g2']);
+    expect(res.stoppedOrphanEngines).toEqual(['g1']);
+    expect(res.notices.some(w => w.includes('g2') && w.includes('restart'))).toBe(true);
+  });
+
+  it('stopOrphans=true reports notRunning orphans (still initializing) as a warning', async () => {
+    await seedSession('s1');
+    const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: ['g1'], notRunning: ['g-init'], failed: [] });
+    const controller = build({
+      sessionService: { getActiveSessionIds: () => ['g1', 'g-init'], stopOrphanEngines },
+    });
+    const dump = await controller.exportData();
+
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+
+    expect(res.imported).toBe(true);
+    expect(res.restartRequired).toBe(false);
+    expect(res.notices.some(w => w.includes('g-init') && w.includes('initializing'))).toBe(true);
+  });
+
+  it('stopOrphans=true is a no-op when there is no sessionService wired', async () => {
+    // Some stripped-down module shapes may not import SessionModule; the controller must not throw
+    // when stopOrphans is requested but the service is unavailable — it falls back to refuse/force.
+    await seedSession('s1');
+    const controller = build({}); // no sessionService
+    const dump = await controller.exportData();
+
+    // Without sessionService there are no active ids to detect, so no orphan, no 409 — the import
+    // proceeds normally. (This matches the @Optional() wiring; the gate only engages when the
+    // service is present.)
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+    expect(res.imported).toBe(true);
+    expect(res.stoppedOrphanEngines).toEqual([]);
+  });
 });
 
 describe('InfraController storage stream failures surface as request errors, not process crashes', () => {

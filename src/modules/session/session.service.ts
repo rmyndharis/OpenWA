@@ -2365,6 +2365,64 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return [...new Set([...this.engines.keys(), ...this.initializingSessions])];
   }
 
+  /**
+   * Stop the engines for the given session ids WITHOUT touching the sessions DB row (the caller,
+   * the infra import path, is about to DELETE that row as part of a full replace). This is the one
+   * stop path that bypasses findOne()/stop()/delete() — every other path keys through the row, so an
+   * engine orphaned by a restore was previously unstoppable until process restart.
+   *
+   * Each id is handled in isolation and time-bounded: a stuck Chromium/socket on one orphan can
+   * neither stall nor abort the others, and the whole call is bounded by teardownEngineSafely's
+   * per-engine 10s deadline. The mark + reconnect-cancel happen first so an in-flight reconnect
+   * cannot resurrect the id while teardown runs. Engines that are mid-initialization (no entry in
+   * `engines` yet) are marked but cannot be torn down here — their start() will see the stop mark
+   * via its existing guard and self-abort; the caller learns about them in `notRunning`.
+   *
+   * Always resolves. Best-effort: a `failed` entry means teardown threw or timed out, and the engine
+   * is removed from the Map regardless so it stops holding a concurrency slot.
+   */
+  async stopOrphanEngines(
+    sessionIds: string[],
+  ): Promise<{ stopped: string[]; notRunning: string[]; failed: string[] }> {
+    const stopped: string[] = [];
+    const notRunning: string[] = [];
+    const failed: string[] = [];
+
+    if (sessionIds.length === 0) return { stopped, notRunning, failed };
+
+    await Promise.allSettled(
+      sessionIds.map(async id => {
+        // Mark + cancel BEFORE teardown so a late reconnect cannot resurrect the id mid-teardown.
+        this.stoppingSessions.add(id);
+        this.cancelReconnect(id);
+
+        const engine = this.engines.get(id);
+        if (!engine) {
+          // Either never started, or still inside initializeEngine (no Map entry yet). The stop mark
+          // above is what aborts the initializing case via start()'s existing guard.
+          notRunning.push(id);
+          return;
+        }
+        try {
+          await this.destroyEngineSafely(id, engine);
+          if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+          stopped.push(id);
+        } catch (err) {
+          // destroyEngineSafely never throws today (it isolates via teardownEngineSafely), but defend
+          // against a future change so a single orphan cannot abort the batch.
+          this.logger.error(`Failed to stop orphan engine for session ${id}`, String(err), {
+            sessionId: id,
+            action: 'stop_orphan_failed',
+          });
+          if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+          failed.push(id);
+        }
+      }),
+    );
+
+    return { stopped, notRunning, failed };
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }

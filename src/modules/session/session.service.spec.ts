@@ -312,6 +312,85 @@ describe('SessionService', () => {
     });
   });
 
+  // ── stopOrphanEngines (infra import path) ─────────────────────────
+  describe('stopOrphanEngines', () => {
+    const enginesOf = () => (service as unknown as { engines: Map<string, unknown> }).engines;
+    const stoppingOf = () => (service as unknown as { stoppingSessions: Set<string> }).stoppingSessions;
+
+    it('stops each running orphan engine, reconciles the map, and reports stopped', async () => {
+      const g1 = { destroy: jest.fn().mockResolvedValue(undefined) };
+      const g2 = { destroy: jest.fn().mockResolvedValue(undefined) };
+      enginesOf().set('g1', g1);
+      enginesOf().set('g2', g2);
+
+      const result = await service.stopOrphanEngines(['g1', 'g2']);
+
+      expect(g1.destroy).toHaveBeenCalledTimes(1);
+      expect(g2.destroy).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('g1')).toBe(false);
+      expect(enginesOf().has('g2')).toBe(false);
+      expect(result.stopped.sort()).toEqual(['g1', 'g2']);
+      expect(result.notRunning).toEqual([]);
+      expect(result.failed).toEqual([]);
+      // The stop mark blocks a late reconnect from resurrecting either id mid-teardown.
+      expect(stoppingOf().has('g1')).toBe(true);
+      expect(stoppingOf().has('g2')).toBe(true);
+    });
+
+    it('reports an id without a live engine as notRunning (still initializing — start() self-aborts via the mark)', async () => {
+      const g1 = { destroy: jest.fn().mockResolvedValue(undefined) };
+      enginesOf().set('g1', g1);
+      // 'g-init' is in the requested list but has no Map entry.
+
+      const result = await service.stopOrphanEngines(['g1', 'g-init']);
+
+      expect(result.stopped).toEqual(['g1']);
+      expect(result.notRunning).toEqual(['g-init']);
+      expect(result.failed).toEqual([]);
+      expect(stoppingOf().has('g-init')).toBe(true); // still marked so start() aborts
+    });
+
+    it('isolates a failing destroy(): teardown is best-effort so both engines are reconciled from the map', async () => {
+      // destroyEngineSafely delegates to teardownEngineSafely, which isolates + time-bounds failures and
+      // never throws — a stuck destroy() therefore cannot stall the batch or poison other orphans. The
+      // engine is removed from the Map regardless of teardown outcome (it stops holding a slot).
+      const good = { destroy: jest.fn().mockResolvedValue(undefined) };
+      const bad = { destroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
+      enginesOf().set('good', good);
+      enginesOf().set('bad', bad);
+
+      const result = await service.stopOrphanEngines(['good', 'bad']);
+
+      expect(good.destroy).toHaveBeenCalledTimes(1);
+      expect(bad.destroy).toHaveBeenCalledTimes(1);
+      // Map reconciled for both regardless of teardown outcome — neither holds a concurrency slot.
+      expect(enginesOf().has('good')).toBe(false);
+      expect(enginesOf().has('bad')).toBe(false);
+      expect(result.failed).toEqual([]); // teardown failures are isolated, not surfaced as failed
+      expect(result.stopped.sort()).toEqual(['bad', 'good']);
+    });
+
+    it('is a bounded no-op for an empty id list', async () => {
+      const result = await service.stopOrphanEngines([]);
+      expect(result).toEqual({ stopped: [], notRunning: [], failed: [] });
+    });
+
+    it('cancels an in-flight reconnect for each orphan before teardown', async () => {
+      const engine = { destroy: jest.fn().mockResolvedValue(undefined) };
+      enginesOf().set('g1', engine);
+      const reconnectStates = (
+        service as unknown as {
+          reconnectStates: Map<string, unknown>;
+        }
+      ).reconnectStates;
+      reconnectStates.set('g1', { timer: null }); // exercise the cancelReconnect path
+
+      await service.stopOrphanEngines(['g1']);
+
+      expect(reconnectStates.has('g1')).toBe(false);
+    });
+  });
+
   // ── create ────────────────────────────────────────────────────────
 
   describe('create', () => {

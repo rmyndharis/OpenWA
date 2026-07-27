@@ -2644,7 +2644,11 @@
                 "properties": {
                   "force": {
                     "type": "boolean",
-                    "description": "Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired)."
+                    "description": "Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired). Prefer stopOrphans, which closes that window inside this request instead."
+                  },
+                  "stopOrphans": {
+                    "type": "boolean",
+                    "description": "Stop the running engines for sessions the backup does not contain, inside this request and before the replace runs. Supersedes force for the orphan case: with stopOrphans the engines no longer need a process restart to reconcile, so restartRequired stays false on the success path."
                   },
                   "tables": {
                     "type": "object",
@@ -2676,7 +2680,7 @@
             "description": "Data imported successfully"
           },
           "409": {
-            "description": "Refused: live engines exist for sessions the backup would remove (retry with force=true)"
+            "description": "Refused: live engines exist for sessions the backup would remove (retry with stopOrphans=true to stop them in-request, or force=true to proceed and restart after)"
           }
         },
         "summary": "Import data to Data DB (replaces existing data)",

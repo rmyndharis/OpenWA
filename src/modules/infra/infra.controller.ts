@@ -1240,7 +1240,12 @@ export class InfraController {
         force: {
           type: 'boolean',
           description:
-            'Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired).',
+            'Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired). Prefer stopOrphans, which closes that window inside this request instead.',
+        },
+        stopOrphans: {
+          type: 'boolean',
+          description:
+            'Stop the running engines for sessions the backup does not contain, inside this request and before the replace runs. Supersedes force for the orphan case: with stopOrphans the engines no longer need a process restart to reconcile, so restartRequired stays false on the success path.',
         },
         tables: {
           type: 'object',
@@ -1258,13 +1263,22 @@ export class InfraController {
   @ApiResponse({ status: 200, description: 'Data imported successfully' })
   @ApiResponse({
     status: 409,
-    description: 'Refused: live engines exist for sessions the backup would remove (retry with force=true)',
+    description:
+      'Refused: live engines exist for sessions the backup would remove (retry with stopOrphans=true to stop them in-request, or force=true to proceed and restart after)',
   })
   async importData(
     @Body()
     data: {
       tables: Partial<MigrationTables>;
       force?: boolean;
+      /**
+       * Stop the running engines for sessions the backup does not contain, inside this request and
+       * before the replace runs (best-effort, time-bounded per engine). Supersedes force=true for the
+       * orphan case: with stopOrphans the engines no longer need a process restart to reconcile, so
+       * restartRequired stays false on the success path. Without it the pre-existing behavior holds —
+       * refuse with 409, or proceed with force=true and leave the engines running until restart.
+       */
+      stopOrphans?: boolean;
     },
   ): Promise<{
     imported: boolean;
@@ -1284,31 +1298,84 @@ export class InfraController {
       statusUpdates: number;
     };
     warnings: string[];
+    /**
+     * Non-fatal operator-facing messages (e.g. orphan-engine reconciliation details). Distinct from
+     * warnings: notices never cause a rollback, while warnings make the replace-rollback gate fire.
+     */
+    notices: string[];
     /** True when live engines were left pointing at sessions this restore removed — restart to stop them. */
     restartRequired: boolean;
     /** Session ids with a running engine that the restored data no longer contains. */
     orphanedEngines: string[];
+    /** Orphan engines stopped inside this request (only populated when stopOrphans=true was passed). */
+    stoppedOrphanEngines: string[];
+    /** Orphan engines whose teardown threw or timed out (Map reconciled regardless; investigate). */
+    failedOrphanEngines: string[];
   }> {
     const warnings: string[] = [];
 
     // Runtime reconciliation, part 1 (pre-flight): the replace below DELETES every session not in the
     // backup, but an engine started for such a session keeps running as an unstoppable zombie (the
     // session service keys engines by session id, and every stop path goes through the now-missing DB
-    // row) whose inbound messages land in tables that were just replaced. Refuse the import while any
-    // live engine would be orphaned — unless the operator explicitly passes force=true, in which case
-    // the response's restartRequired/orphanedEngines tell them a restart is needed to reconcile. The
-    // engines are deliberately NOT killed inside this request: an in-request destroy races in-flight
-    // message writes and can leave the engine's own session files half-flushed.
+    // row) whose inbound messages land in tables that were just replaced. Three operator-chosen paths:
+    //   - default: refuse with 409 listing the orphan ids;
+    //   - force=true: proceed and leave the engines running until process restart (restartRequired=true);
+    //   - stopOrphans=true: stop each orphan engine inside this request (best-effort, time-bounded,
+    //     isolated per engine) and then proceed — restartRequired stays false on the success path.
+    // stopOrphans is preferred over force for the orphan case: a force restore that silently leaves
+    // engines writing into the freshly replaced tables for an unbounded time is the corruption this
+    // gate exists to prevent, so the explicit-stop path closes that window instead of relying on the
+    // operator to restart promptly.
     const importedSessionIds = new Set((data.tables.sessions ?? []).map(s => s.id));
     const orphanedEngines = (this.sessionService?.getActiveSessionIds() ?? []).filter(
       id => !importedSessionIds.has(id),
     );
-    if (orphanedEngines.length > 0 && !data.force) {
+
+    let stoppedOrphanEngines: string[] = [];
+    let failedOrphanEngines: string[] = [];
+    let restartRequired = false;
+
+    // notices collect non-fatal operator-facing messages (orphan-engine reconciliation details) that
+    // must NOT trip the warnings→rollback gate further down. warnings is reserved for per-row import
+    // failures that make the replace partial and therefore require a rollback.
+    const notices: string[] = [];
+
+    if (orphanedEngines.length > 0 && data.stopOrphans && this.sessionService) {
+      // Stop the orphans inside this request, BEFORE the transaction opens. destroyEngineSafely's
+      // per-engine 10s deadline bounds the worst case (a stuck Chromium cannot wedge the import); the
+      // engines are reconciled from the Map regardless of teardown outcome.
+      const result = await this.sessionService.stopOrphanEngines(orphanedEngines);
+      stoppedOrphanEngines = result.stopped;
+      failedOrphanEngines = result.failed;
+      if (failedOrphanEngines.length > 0) {
+        // Teardown failed for at least one orphan. The Map entry is removed regardless (see
+        // stopOrphanEngines), so the engine no longer holds a concurrency slot — but its underlying
+        // Chromium/socket may still be alive and writing into restored tables. Surface the ids and
+        // flag restartRequired so the operator does not read a clean response as "engines stopped".
+        restartRequired = true;
+        notices.push(
+          `Teardown failed for ${failedOrphanEngines.length} orphan engine(s): ${failedOrphanEngines.join(', ')} ` +
+            `(removed from the engine registry; a process restart guarantees cleanup).`,
+        );
+      }
+      // Engines still mid-initialization (no Map entry yet) are reported in notRunning: their start()
+      // self-aborts via the stop mark, but they are not counted as stopped here.
+      if (result.notRunning.length > 0) {
+        notices.push(
+          `${result.notRunning.length} orphan session(s) had no live engine yet (still initializing): ` +
+            `${result.notRunning.join(', ')} — their start() will self-abort.`,
+        );
+      }
+    } else if (orphanedEngines.length > 0 && !data.force) {
       throw new ConflictException(
         `Import would orphan ${orphanedEngines.length} running engine(s) for session(s) ` +
-          `${orphanedEngines.join(', ')} that the backup does not contain. Stop them first, or retry with force=true ` +
+          `${orphanedEngines.join(', ')} that the backup does not contain. Stop them first, retry with ` +
+          `stopOrphans=true (stops them inside this request), or retry with force=true ` +
           `(a server restart is then required to stop the orphaned engines).`,
       );
+    } else if (orphanedEngines.length > 0 && data.force) {
+      // Legacy escape hatch: proceed and leave the engines running until restart.
+      restartRequired = true;
     }
 
     const queryRunner = this.dataDataSource.createQueryRunner();
@@ -1775,7 +1842,16 @@ export class InfraController {
       // message history could silently vanish on a SQLite->Postgres migration.
       if (warnings.length > 0) {
         await queryRunner.rollbackTransaction();
-        return { imported: false, counts, warnings, restartRequired: false, orphanedEngines: [] };
+        return {
+          imported: false,
+          counts,
+          warnings,
+          notices,
+          restartRequired: false,
+          orphanedEngines: [],
+          stoppedOrphanEngines: [],
+          failedOrphanEngines: [],
+        };
       }
 
       // A wrong/empty/garbage backup file restores zero rows but the DELETE already ran — committing
@@ -1787,8 +1863,11 @@ export class InfraController {
           imported: false,
           counts,
           warnings: ['Backup contained no rows to restore; refused to replace existing data. Check the file.'],
+          notices,
           restartRequired: false,
           orphanedEngines: [],
+          stoppedOrphanEngines: [],
+          failedOrphanEngines: [],
         };
       }
 
@@ -1807,9 +1886,18 @@ export class InfraController {
       // only the per-table counts.
       await this.auditService?.logInfo(AuditAction.INFRA_DATA_IMPORTED, { metadata: { counts } });
 
-      // restartRequired surfaces the force-approved orphan situation from the pre-flight check: those
-      // engines are still running against sessions that no longer exist, and only a restart stops them.
-      return { imported: true, counts, warnings, restartRequired: orphanedEngines.length > 0, orphanedEngines };
+      // restartRequired was computed in the pre-flight: true only when orphans were left running
+      // (force=true legacy path) or when stopOrphans teardown failed for at least one engine.
+      return {
+        imported: true,
+        counts,
+        warnings,
+        notices,
+        restartRequired,
+        orphanedEngines,
+        stoppedOrphanEngines,
+        failedOrphanEngines,
+      };
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
