@@ -85,6 +85,7 @@
     "empty": "채팅 없음",
     "noMessageYet": "아직 메시지 없음",
     "unreadBadge": "읽지 않은 메시지 {{count}}개",
+    "unreadBadge_other": "읽지 않은 메시지 {{count}}개",
     "loadingMessages": "메시지 불러오는 중...",
     "noMessagesInChat": "아직 메시지가 없습니다. 첫 메시지를 보내 대화를 시작하세요!",
     "downloadDocument": "문서 다운로드",
@@ -147,7 +148,8 @@
       "notSupported": "Baileys 엔진에서는 채널을 지원하지 않습니다.",
       "empty": "아직 구독 중인 채널이 없습니다.",
       "notReady": "세션이 아직 준비되지 않았습니다.",
-      "subscribers": "구독자 {{count}}명"
+      "subscribers": "구독자 {{count}}명",
+      "subscribers_other": "구독자 {{count}}명"
     },
     "errors": {
       "loadSessions": "세션을 불러오지 못했습니다",
@@ -225,7 +227,9 @@
     "connecting": "연결하는 중...",
     "qr_ready": "QR 스캔",
     "ready": "연결됨",
-    "disconnected": "연결 끊김"
+    "disconnected": "연결 끊김",
+    "failed": "실패",
+    "authenticating": "인증하는 중..."
   },
   "sessions": {
     "title": "세션",
@@ -355,6 +359,7 @@
       "title": "필터 (선택 사항)",
       "hint": "모든 조건이 일치할 때만 실행됩니다. 메시지 이벤트에 적용됩니다.",
       "badge": "필터 {{count}}개",
+      "badge_other": "필터 {{count}}개",
       "addCondition": "조건 추가",
       "removeCondition": "조건 제거",
       "caseSensitive": "대소문자 구분",
@@ -790,7 +795,12 @@
       "title": "플러그인 설치",
       "hint": "manifest.json이 포함된 .zip으로 패키징된 플러그인을 업로드하세요. 활성화되면 샌드박스에서 실행됩니다.",
       "choose": ".zip 파일 선택…",
-      "tooLarge": "파일이 5MB 제한을 초과합니다."
+      "tooLarge": "파일이 5MB 제한을 초과합니다.",
+      "catalogHint": "OpenWA 플러그인 카탈로그에서 직접 설치하세요. .zip 파일은 SSRF 가드를 통해 서버에서 가져온 후 검증되고 샌드박스에서 실행됩니다.",
+      "catalogTeaser": "플러그인을 찾고 계신가요?",
+      "catalogTeaserSuffix": "공식 마켓플레이스를 둘러봅니다.",
+      "tabCatalog": "카탈로그",
+      "tabUpload": ".zip 업로드"
     },
     "toasts": {
       "errorTitle": "플러그인 오류",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "활성화 실패",
       "disableFailedTitle": "비활성화 실패",
       "configRequiredTitle": "설정 필요",
-      "configRequiredDesc": "활성화하기 전에 필수 항목을 입력하세요: {{fields}}"
+      "configRequiredDesc": "활성화하기 전에 필수 항목을 입력하세요: {{fields}}",
+      "updateFailed": "업데이트 실패"
     },
     "sessions": {
       "activationTitle": "실행 대상",
@@ -887,6 +898,17 @@
         "secretRegenerated": "시크릿이 재생성되었습니다",
         "actionFailed": "작업 실패"
       }
+    },
+    "catalog": {
+      "empty": "카탈로그에 플러그인이 없습니다.",
+      "install": "설치",
+      "installed": "설치됨",
+      "noDownload": "이 카탈로그 항목에는 다운로드 URL이 없습니다.",
+      "noMatch": "검색과 일치하는 플러그인이 없습니다.",
+      "searchPlaceholder": "플러그인 검색…",
+      "update": "업데이트",
+      "updateAvailable": "업데이트 사용 가능",
+      "updated": "플러그인이 업데이트되었습니다"
     }
   },
   "search": {

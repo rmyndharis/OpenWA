@@ -12,6 +12,7 @@ import {
   useUpdateTemplateMutation,
 } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { Modal } from '../components/Modal';
 import { copyToClipboard } from '../utils/clipboard';
 import './Templates.css';
 
@@ -407,18 +408,14 @@ export function Templates() {
       )}
 
       {deleteTarget && (
-        <div className="modal-overlay" onClick={() => setDeleteTarget(null)}>
-          <div className="modal modal-sm" onClick={event => event.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('templates.deleteTitle')}</h2>
-              <button className="btn-icon" onClick={() => setDeleteTarget(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>{t('templates.deleteConfirm', { name: deleteTarget.name })}</p>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setDeleteTarget(null)}
+          title={t('templates.deleteTitle')}
+          className="modal-sm"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>
                 {t('common.cancel')}
               </button>
@@ -426,9 +423,11 @@ export function Templates() {
                 {deleteMutation.isPending ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
                 {t('common.delete')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p>{t('templates.deleteConfirm', { name: deleteTarget.name })}</p>
+        </Modal>
       )}
     </div>
   );

@@ -84,7 +84,8 @@
     "loadingChats": "చాట్‌లను లోడ్ చేస్తోంది...",
     "empty": "చాట్‌లు లేవు",
     "noMessageYet": "ఇంకా సందేశాలు లేవు",
-    "unreadBadge": "{{count}} చదవని సందేశాలు",
+    "unreadBadge": "{{count}} చదవని సందేశం",
+    "unreadBadge_other": "{{count}} చదవని సందేశాలు",
     "loadingMessages": "సందేశాలను లోడ్ చేస్తోంది...",
     "noMessagesInChat": "ఇంకా సందేశాలు లేవు. ప్రారంభించడానికి మొదటి సందేశాన్ని పంపండి!",
     "downloadDocument": "డాక్యుమెంట్‌ను డౌన్‌లోడ్ చేయి",
@@ -147,7 +148,8 @@
       "notSupported": "Channels are not supported on the Baileys engine.",
       "empty": "You are not subscribed to any channels yet.",
       "notReady": "సెషన్ ఇంకా సిద్ధంగా లేదు.",
-      "subscribers": "{{count}} సబ్‌స్క్రైబర్‌లు"
+      "subscribers": "{{count}} సబ్‌స్క్రైబర్",
+      "subscribers_other": "{{count}} సబ్‌స్క్రైబర్‌లు"
     },
     "errors": {
       "loadSessions": "సెషన్లను లోడ్ చేయడం విఫలమైంది",
@@ -225,7 +227,9 @@
     "connecting": "కనెక్ట్ అవుతోంది...",
     "qr_ready": "QR స్కాన్ చేయండి",
     "ready": "కనెక్ట్ అయింది",
-    "disconnected": "డిస్‌కనెక్ట్ అయింది"
+    "disconnected": "డిస్‌కనెక్ట్ అయింది",
+    "failed": "విఫలమైంది",
+    "authenticating": "ప్రామాణీకరిస్తోంది..."
   },
   "sessions": {
     "title": "సెషన్స్",
@@ -355,6 +359,7 @@
       "title": "ఫిల్టర్‌లు (ఐచ్ఛికం)",
       "hint": "అన్ని షరతులు సరిపోలినప్పుడు మాత్రమే ట్రిగ్గర్ అవుతుంది. సందేశ ఈవెంట్‌లకు వర్తిస్తుంది.",
       "badge": "{{count}} ఫిల్టర్",
+      "badge_other": "{{count}} ఫిల్టర్‌లు",
       "addCondition": "షరతును జోడించు",
       "removeCondition": "షరతును తొలగించు",
       "caseSensitive": "కేస్ సెన్సిటివ్",
@@ -790,7 +795,12 @@
       "title": "ఒక ప్లగిన్‌ను ఇన్‌స్టాల్ చేయి",
       "hint": "ఒక .zip గా ప్యాక్ చేయబడిన ప్లగిన్‌ను అప్‌లోడ్ చేయండి (manifest.json తో). ప్రారంభించిన తర్వాత ఇది శాండ్‌బాక్స్‌లో రన్ అవుతుంది.",
       "choose": "ఒక .zip ఫైల్‌ను ఎంచుకోండి…",
-      "tooLarge": "ఫైల్ 5 MB పరిమితిని మించిపోయింది."
+      "tooLarge": "ఫైల్ 5 MB పరిమితిని మించిపోయింది.",
+      "catalogHint": "OpenWA ప్లగిన్ కేటలాగ్ నుండి నేరుగా ఇన్‌స్టాల్ చేయండి. .zip సర్వర్‌లో SSRF గార్డ్ ద్వారా పొందబడి, ఆపై ధృవీకరించబడి శాండ్‌బాక్స్‌లో అమలవుతుంది.",
+      "catalogTeaser": "ప్లగిన్‌ల కోసం చూస్తున్నారా?",
+      "catalogTeaserSuffix": "అధికారిక మార్కెట్‌ప్లేస్‌ను బ్రౌజ్ చేస్తుంది.",
+      "tabCatalog": "కేటలాగ్",
+      "tabUpload": ".zip అప్‌లోడ్ చేయండి"
     },
     "toasts": {
       "errorTitle": "ప్లగిన్ లోపం",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "ప్రారంభించడం విఫలమైంది",
       "disableFailedTitle": "నిలిపివేయడం విఫలమైంది",
       "configRequiredTitle": "కాన్ఫిగరేషన్ అవసరం",
-      "configRequiredDesc": "ప్రారంభించే ముందు అవసరమైన ఫీల్డ్‌లను పూరించండి: {{fields}}"
+      "configRequiredDesc": "ప్రారంభించే ముందు అవసరమైన ఫీల్డ్‌లను పూరించండి: {{fields}}",
+      "updateFailed": "అప్‌డేట్ విఫలమైంది"
     },
     "sessions": {
       "activationTitle": "దీని కోసం రన్ చేయండి",
@@ -887,6 +898,17 @@
         "secretRegenerated": "సీక్రెట్ రీజెనరేట్ చేయబడింది",
         "actionFailed": "చర్య విఫలమైంది"
       }
+    },
+    "catalog": {
+      "empty": "కేటలాగ్‌లో ప్లగిన్‌లు లేవు.",
+      "install": "ఇన్‌స్టాల్ చేయండి",
+      "installed": "ఇన్‌స్టాల్ చేయబడింది",
+      "noDownload": "ఈ కేటలాగ్ ఎంట్రీకి డౌన్‌లోడ్ URL లేదు.",
+      "noMatch": "మీ శోధనకు సరిపోలే ప్లగిన్‌లు లేవు.",
+      "searchPlaceholder": "ప్లగిన్‌లను శోధించండి…",
+      "update": "అప్‌డేట్ చేయండి",
+      "updateAvailable": "అప్‌డేట్ అందుబాటులో ఉంది",
+      "updated": "ప్లగిన్ అప్‌డేట్ చేయబడింది"
     }
   },
   "search": {

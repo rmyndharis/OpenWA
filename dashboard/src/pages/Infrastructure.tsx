@@ -18,6 +18,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import './Infrastructure.css';
 
@@ -1069,88 +1070,94 @@ export function Infrastructure() {
       </div>
 
       {showRestartModal && (
-        <div className="modal-overlay">
-          <div className="modal restart-modal">
-            <div className="modal-header restart-modal-header">
-              <h2>
-                {restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
-                {restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
-                {restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
-                {restartStatus === 'success' && t('infrastructure.restart.successTitle')}
-                {restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
-              </h2>
-            </div>
-            <div className="modal-body restart-modal-body">
-              {restartStatus === 'idle' && (
-                <>
-                  <p className="restart-idle-desc">
-                    <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
-                  </p>
-                  {(dbSwitch || storageSwitch) && (
-                    <div className="migration-warning">
-                      <AlertTriangle size={18} />
-                      <div>
-                        <strong>{t('infrastructure.migration.title')}</strong>
-                        {dbSwitch && <p>{t('infrastructure.migration.dbWarning')}</p>}
-                        {storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
-                        {dbSwitch && (
-                          <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
-                            {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                            {t('infrastructure.migration.downloadBackup')}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  <div className="restart-actions">
-                    <button className="btn-secondary" onClick={() => setShowRestartModal(false)}>
-                      {t('infrastructure.restart.later')}
-                    </button>
-                    <button className="btn-primary" onClick={handleRestart}>
-                      {t('infrastructure.restart.now')}
-                    </button>
+        <Modal
+          open
+          onClose={() => {
+            // Dismissal is only offered in the idle state (the "Later" path) — while a restart is
+            // running there is deliberately no way to close the progress view.
+            if (restartStatus === 'idle') setShowRestartModal(false);
+          }}
+          title={
+            <>
+              {restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
+              {restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
+              {restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
+              {restartStatus === 'success' && t('infrastructure.restart.successTitle')}
+              {restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
+            </>
+          }
+          className="restart-modal"
+          closeLabel={t('common.close')}
+          hideCloseButton
+        >
+          {restartStatus === 'idle' && (
+            <>
+              <p className="restart-idle-desc">
+                <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
+              </p>
+              {(dbSwitch || storageSwitch) && (
+                <div className="migration-warning">
+                  <AlertTriangle size={18} />
+                  <div>
+                    <strong>{t('infrastructure.migration.title')}</strong>
+                    {dbSwitch && <p>{t('infrastructure.migration.dbWarning')}</p>}
+                    {storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
+                    {dbSwitch && (
+                      <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
+                        {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                        {t('infrastructure.migration.downloadBackup')}
+                      </button>
+                    )}
                   </div>
-                </>
+                </div>
               )}
+              <div className="restart-actions">
+                <button className="btn-secondary" onClick={() => setShowRestartModal(false)}>
+                  {t('infrastructure.restart.later')}
+                </button>
+                <button className="btn-primary" onClick={handleRestart}>
+                  {t('infrastructure.restart.now')}
+                </button>
+              </div>
+            </>
+          )}
 
-              {(restartStatus === 'restarting' || restartStatus === 'waiting') && (
-                <>
-                  <div className="restart-countdown">
-                    <Loader2 className="animate-spin restart-status-icon" size={48} />
-                    <p className="restart-countdown-msg">
-                      {restartCountdown > 0
-                        ? t('infrastructure.restart.restartingMsg', { count: restartCountdown })
-                        : t('infrastructure.restart.checking')}
-                    </p>
-                  </div>
-                  <div className="restart-progress-track">
-                    <div
-                      className="restart-progress-fill"
-                      style={{ width: restartCountdown > 0 ? `${((30 - restartCountdown) / 30) * 100}%` : '100%' }}
-                    />
-                  </div>
-                  <p className="restart-dont-close">{t('infrastructure.restart.dontClose')}</p>
-                </>
-              )}
+          {(restartStatus === 'restarting' || restartStatus === 'waiting') && (
+            <>
+              <div className="restart-countdown">
+                <Loader2 className="animate-spin restart-status-icon" size={48} />
+                <p className="restart-countdown-msg">
+                  {restartCountdown > 0
+                    ? t('infrastructure.restart.restartingMsg', { count: restartCountdown })
+                    : t('infrastructure.restart.checking')}
+                </p>
+              </div>
+              <div className="restart-progress-track">
+                <div
+                  className="restart-progress-fill"
+                  style={{ width: restartCountdown > 0 ? `${((30 - restartCountdown) / 30) * 100}%` : '100%' }}
+                />
+              </div>
+              <p className="restart-dont-close">{t('infrastructure.restart.dontClose')}</p>
+            </>
+          )}
 
-              {restartStatus === 'success' && (
-                <>
-                  <CheckCircle size={48} className="restart-status-icon" />
-                  <p className="restart-success-msg">{t('infrastructure.restart.successMsg')}</p>
-                </>
-              )}
+          {restartStatus === 'success' && (
+            <>
+              <CheckCircle size={48} className="restart-status-icon" />
+              <p className="restart-success-msg">{t('infrastructure.restart.successMsg')}</p>
+            </>
+          )}
 
-              {restartStatus === 'error' && (
-                <>
-                  <p className="restart-error-msg">{t('infrastructure.restart.errorMsg')}</p>
-                  <button className="btn-primary" onClick={() => window.location.reload()}>
-                    {t('infrastructure.restart.reload')}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+          {restartStatus === 'error' && (
+            <>
+              <p className="restart-error-msg">{t('infrastructure.restart.errorMsg')}</p>
+              <button className="btn-primary" onClick={() => window.location.reload()}>
+                {t('infrastructure.restart.reload')}
+              </button>
+            </>
+          )}
+        </Modal>
       )}
 
       <footer className="page-footer">

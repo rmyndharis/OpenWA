@@ -786,7 +786,7 @@
    horizontal center of the header with absolute positioning — justify-content:space-between only
    centers them approximately because the title (left) and close button (right) have different widths,
    leaving the pill visibly off-center. The header carries position:relative so this is self-contained. */
-.plugins-page .install-modal-header .install-tabs {
+.plugins-page .install-modal .modal-header .install-tabs {
   margin: 0;
   position: absolute;
   left: 50%;
@@ -797,13 +797,13 @@
 /* Three-item header (title + tabs + close). Position:relative anchors the absolutely-centered pill;
    flex-wrap keeps it from overflowing horizontally on a narrow viewport (mobile bottom-sheet width),
    wrapping to a second row instead. */
-.plugins-page .install-modal-header {
+.plugins-page .install-modal .modal-header {
   position: relative;
   flex-wrap: wrap;
   row-gap: 0.75rem;
 }
 
-.plugins-page .install-modal-header h2 {
+.plugins-page .install-modal .modal-header h2 {
   min-width: 0;
   /* Truncate an over-long title rather than collide with the tabs; the modal title is short by
      design ("Install a plugin"), so this only ever bites an unusually long translation. */

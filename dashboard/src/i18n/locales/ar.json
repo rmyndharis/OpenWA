@@ -84,7 +84,11 @@
     "loadingChats": "جارٍ تحميل المحادثات...",
     "empty": "لا توجد محادثات",
     "noMessageYet": "لا توجد رسائل بعد",
-    "unreadBadge": "{{count}} رسائل غير مقروءة",
+    "unreadBadge": "{{count}} رسالة غير مقروءة",
+    "unreadBadge_other": "{{count}} رسالة غير مقروءة",
+    "unreadBadge_two": "{{count}} رسالتان غير مقروءتان",
+    "unreadBadge_few": "{{count}} رسائل غير مقروءة",
+    "unreadBadge_many": "{{count}} رسالة غير مقروءة",
     "loadingMessages": "جارٍ تحميل الرسائل...",
     "noMessagesInChat": "لا توجد رسائل بعد. أرسل الرسالة الأولى للبدء!",
     "downloadDocument": "تنزيل المستند",
@@ -152,7 +156,11 @@
       "notSupported": "القنوات غير مدعومة على محرك Baileys.",
       "empty": "أنت غير مشترك في أي قناة حتى الآن.",
       "notReady": "الجلسة ليست جاهزة بعد.",
-      "subscribers": "{{count}} مشترك"
+      "subscribers": "{{count}} مشترك",
+      "subscribers_other": "{{count}} مشترك",
+      "subscribers_two": "{{count}} مشتركان",
+      "subscribers_few": "{{count}} مشتركين",
+      "subscribers_many": "{{count}} مشترك"
     },
     "errors": {
       "loadSessions": "فشل تحميل الجلسات",
@@ -230,7 +238,9 @@
     "connecting": "جارٍ الاتصال...",
     "qr_ready": "امسح رمز QR",
     "ready": "متصل",
-    "disconnected": "غير متصل"
+    "disconnected": "غير متصل",
+    "failed": "فشل",
+    "authenticating": "جارٍ المصادقة..."
   },
   "sessions": {
     "title": "الجلسات",
@@ -358,10 +368,11 @@
     "saveChanges": "حفظ التغييرات",
     "filters": {
       "badge": "{{count}} عامل تصفية",
-      "badge_zero": "بدون عوامل تصفية",
+      "badge_other": "{{count}} عامل تصفية",
       "badge_two": "عاملا تصفية",
       "badge_few": "{{count}} عوامل تصفية",
       "badge_many": "{{count}} عامل تصفية",
+      "badge_zero": "بدون عوامل تصفية",
       "title": "عوامل التصفية (اختياري)",
       "hint": "يتم التفعيل فقط عند تطابق جميع الشروط. ينطبق على أحداث الرسائل.",
       "addCondition": "إضافة شرط",
@@ -799,7 +810,12 @@
       "title": "تثبيت إضافة",
       "hint": "ارفع إضافة معبّأة بصيغة .zip (تحتوي على manifest.json). تعمل في بيئة معزولة بعد تمكينها.",
       "choose": "اختر ملف .zip…",
-      "tooLarge": "يتجاوز الملف الحد الأقصى البالغ 5 MB."
+      "tooLarge": "يتجاوز الملف الحد الأقصى البالغ 5 MB.",
+      "catalogHint": "ثبّت مباشرة من كتالوج إضافات OpenWA. يتم جلب ملف .zip من جانب الخادم عبر حماية SSRF، ثم يُتحقق منه ويُشغَّل في وضع الحماية.",
+      "catalogTeaser": "تبحث عن إضافات؟",
+      "catalogTeaserSuffix": "يتصفح المتجر الرسمي.",
+      "tabCatalog": "الكتالوج",
+      "tabUpload": "رفع .zip"
     },
     "toasts": {
       "errorTitle": "خطأ في الإضافة",
@@ -817,7 +833,8 @@
       "enableFailedTitle": "فشل التفعيل",
       "disableFailedTitle": "فشل التعطيل",
       "configRequiredTitle": "الإعداد مطلوب",
-      "configRequiredDesc": "املأ الحقول المطلوبة قبل التفعيل: {{fields}}"
+      "configRequiredDesc": "املأ الحقول المطلوبة قبل التفعيل: {{fields}}",
+      "updateFailed": "فشل التحديث"
     },
     "sessions": {
       "activationTitle": "التشغيل لـ",
@@ -896,6 +913,17 @@
         "secretRegenerated": "تم إعادة إنشاء المفتاح السري",
         "actionFailed": "فشل الإجراء"
       }
+    },
+    "catalog": {
+      "empty": "لا توجد إضافات في الكتالوج.",
+      "install": "تثبيت",
+      "installed": "مُثبَّت",
+      "noDownload": "لا يحتوي إدخال الكتالوج هذا على عنوان URL للتنزيل.",
+      "noMatch": "لا توجد إضافات تطابق بحثك.",
+      "searchPlaceholder": "ابحث في الإضافات…",
+      "update": "تحديث",
+      "updateAvailable": "يتوفر تحديث",
+      "updated": "تم تحديث الإضافة"
     }
   },
   "search": {

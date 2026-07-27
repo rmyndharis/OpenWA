@@ -84,7 +84,8 @@
     "loadingChats": "Caricamento chat...",
     "empty": "Nessuna chat",
     "noMessageYet": "Ancora nessun messaggio",
-    "unreadBadge": "{{count}} messaggi non letti",
+    "unreadBadge": "{{count}} messaggio non letto",
+    "unreadBadge_other": "{{count}} messaggi non letti",
     "loadingMessages": "Caricamento messaggi...",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",
@@ -147,7 +148,8 @@
       "notSupported": "I canali non sono supportati sul motore Baileys.",
       "empty": "Non sei ancora iscritto a nessun canale.",
       "notReady": "La sessione non è ancora pronta.",
-      "subscribers": "{{count}} iscritti"
+      "subscribers": "{{count}} iscritto",
+      "subscribers_other": "{{count}} iscritti"
     },
     "errors": {
       "loadSessions": "Impossibile caricare le sessioni",
@@ -225,7 +227,9 @@
     "connecting": "Connessione in corso...",
     "qr_ready": "Scansiona QR",
     "ready": "Connesso",
-    "disconnected": "Disconnesso"
+    "disconnected": "Disconnesso",
+    "failed": "Non riuscita",
+    "authenticating": "Autenticazione in corso..."
   },
   "sessions": {
     "title": "Sessioni",
@@ -355,6 +359,7 @@
       "title": "Filtri (opzionale)",
       "hint": "Attiva solo quando tutte le condizioni corrispondono. Si applica agli eventi dei messaggi.",
       "badge": "{{count}} filtro",
+      "badge_other": "{{count}} filtri",
       "addCondition": "Aggiungi condizione",
       "removeCondition": "Rimuovi condizione",
       "caseSensitive": "Distingui maiuscole",
@@ -790,7 +795,12 @@
       "title": "Installa un plugin",
       "hint": "Carica un plugin pacchettizzato come file .zip (con un manifest.json). Viene eseguito in sandbox una volta abilitato.",
       "choose": "Scegli un file .zip…",
-      "tooLarge": "Il file supera il limite di 5 MB."
+      "tooLarge": "Il file supera il limite di 5 MB.",
+      "catalogHint": "Installa direttamente dal catalogo dei plugin di OpenWA. Lo .zip viene recuperato lato server tramite la protezione SSRF, quindi validato ed eseguito in sandbox.",
+      "catalogTeaser": "Cerchi plugin?",
+      "catalogTeaserSuffix": "sfoglia il marketplace ufficiale.",
+      "tabCatalog": "Catalogo",
+      "tabUpload": "Carica .zip"
     },
     "toasts": {
       "errorTitle": "Errore Plugin",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "Attivazione non riuscita",
       "disableFailedTitle": "Disattivazione non riuscita",
       "configRequiredTitle": "Configurazione richiesta",
-      "configRequiredDesc": "Compila i campi obbligatori prima di attivare: {{fields}}"
+      "configRequiredDesc": "Compila i campi obbligatori prima di attivare: {{fields}}",
+      "updateFailed": "Aggiornamento non riuscito"
     },
     "sessions": {
       "activationTitle": "Esegui per",
@@ -887,6 +898,17 @@
         "secretRegenerated": "Segreto rigenerato",
         "actionFailed": "Azione non riuscita"
       }
+    },
+    "catalog": {
+      "empty": "Nessun plugin nel catalogo.",
+      "install": "Installa",
+      "installed": "Installato",
+      "noDownload": "Questa voce del catalogo non ha un URL di download.",
+      "noMatch": "Nessun plugin corrisponde alla ricerca.",
+      "searchPlaceholder": "Cerca plugin…",
+      "update": "Aggiorna",
+      "updateAvailable": "Aggiornamento disponibile",
+      "updated": "Plugin aggiornato"
     }
   },
   "search": {

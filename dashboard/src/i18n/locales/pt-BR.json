@@ -84,7 +84,8 @@
     "loadingChats": "Carregando chats...",
     "empty": "Sem chats",
     "noMessageYet": "Ainda sem mensagens",
-    "unreadBadge": "{{count}} mensagens não lidas",
+    "unreadBadge": "{{count}} mensagem não lida",
+    "unreadBadge_other": "{{count}} mensagens não lidas",
     "loadingMessages": "Carregando mensagens...",
     "noMessagesInChat": "Ainda não há mensagens. Envie a primeira para começar!",
     "downloadDocument": "Baixar documento",
@@ -147,7 +148,8 @@
       "notSupported": "Os canais não são compatíveis com o mecanismo Baileys.",
       "empty": "Você ainda não está inscrito em nenhum canal.",
       "notReady": "A sessão ainda não está pronta.",
-      "subscribers": "{{count}} inscritos"
+      "subscribers": "{{count}} inscrito",
+      "subscribers_other": "{{count}} inscritos"
     },
     "errors": {
       "loadSessions": "Erro ao carregar as sessões",
@@ -225,7 +227,9 @@
     "connecting": "Conectando...",
     "qr_ready": "Escanear QR",
     "ready": "Conectada",
-    "disconnected": "Desconectada"
+    "disconnected": "Desconectada",
+    "failed": "Falha",
+    "authenticating": "Autenticando..."
   },
   "sessions": {
     "title": "Sessões",
@@ -355,6 +359,7 @@
       "title": "Filtros (opcional)",
       "hint": "Disparar somente quando todas as condições forem atendidas. Aplica-se a eventos de mensagens.",
       "badge": "{{count}} filtro",
+      "badge_other": "{{count}} filtros",
       "addCondition": "Adicionar condição",
       "removeCondition": "Remover condição",
       "caseSensitive": "Diferenciar maiúsculas",
@@ -790,7 +795,12 @@
       "title": "Instalar um plugin",
       "hint": "Envie um plugin empacotado como .zip (com um manifest.json). É executado em modo isolado quando habilitado.",
       "choose": "Escolha um arquivo .zip…",
-      "tooLarge": "O arquivo excede o limite de 5 MB."
+      "tooLarge": "O arquivo excede o limite de 5 MB.",
+      "catalogHint": "Instale diretamente do catálogo de plugins do OpenWA. O .zip é baixado no servidor através da proteção SSRF, depois validado e executado em sandbox.",
+      "catalogTeaser": "Procurando plugins?",
+      "catalogTeaserSuffix": "navega no marketplace oficial.",
+      "tabCatalog": "Catálogo",
+      "tabUpload": "Enviar .zip"
     },
     "toasts": {
       "errorTitle": "Erro de plugin",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "Falha ao ativar",
       "disableFailedTitle": "Falha ao desativar",
       "configRequiredTitle": "Configuração necessária",
-      "configRequiredDesc": "Preencha os campos obrigatórios antes de ativar: {{fields}}"
+      "configRequiredDesc": "Preencha os campos obrigatórios antes de ativar: {{fields}}",
+      "updateFailed": "Falha ao atualizar"
     },
     "sessions": {
       "activationTitle": "Executar para",
@@ -887,6 +898,17 @@
         "secretRegenerated": "Segredo regenerado",
         "actionFailed": "Falha na ação"
       }
+    },
+    "catalog": {
+      "empty": "Não há plugins no catálogo.",
+      "install": "Instalar",
+      "installed": "Instalado",
+      "noDownload": "Esta entrada do catálogo não tem URL de download.",
+      "noMatch": "Nenhum plugin corresponde à sua pesquisa.",
+      "searchPlaceholder": "Pesquisar plugins…",
+      "update": "Atualizar",
+      "updateAvailable": "Atualização disponível",
+      "updated": "Plugin atualizado"
     }
   },
   "search": {

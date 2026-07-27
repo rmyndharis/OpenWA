@@ -84,7 +84,8 @@
     "loadingChats": "Chargement des discussions...",
     "empty": "Aucune discussion",
     "noMessageYet": "Aucun message pour le moment",
-    "unreadBadge": "{{count}} messages non lus",
+    "unreadBadge": "{{count}} message non lu",
+    "unreadBadge_other": "{{count}} messages non lus",
     "loadingMessages": "Chargement des messages...",
     "noMessagesInChat": "Aucun message pour le moment. Envoyez le premier message pour commencer !",
     "downloadDocument": "Télécharger le document",
@@ -147,7 +148,8 @@
       "notSupported": "Les chaînes ne sont pas prises en charge par le moteur Baileys.",
       "empty": "Vous n'êtes abonné à aucune chaîne pour le moment.",
       "notReady": "La session n'est pas encore prête.",
-      "subscribers": "{{count}} abonnés"
+      "subscribers": "{{count}} abonné",
+      "subscribers_other": "{{count}} abonnés"
     },
     "errors": {
       "loadSessions": "Échec du chargement des sessions",
@@ -225,7 +227,9 @@
     "connecting": "Connexion...",
     "qr_ready": "Scanner le QR",
     "ready": "Connecté",
-    "disconnected": "Déconnecté"
+    "disconnected": "Déconnecté",
+    "failed": "Échec",
+    "authenticating": "Authentification..."
   },
   "sessions": {
     "title": "Sessions",
@@ -355,6 +359,7 @@
       "title": "Filtres (facultatif)",
       "hint": "Déclencher uniquement lorsque toutes les conditions sont remplies. S'applique aux événements de message.",
       "badge": "{{count}} filtre",
+      "badge_other": "{{count}} filtres",
       "addCondition": "Ajouter une condition",
       "removeCondition": "Supprimer la condition",
       "caseSensitive": "Sensible à la casse",
@@ -790,7 +795,12 @@
       "title": "Installer un plugin",
       "hint": "Téléversez un plugin empaqueté au format .zip (avec un manifest.json). Il s'exécute en bac à sable une fois activé.",
       "choose": "Choisir un fichier .zip…",
-      "tooLarge": "Le fichier dépasse la limite de 5 MB."
+      "tooLarge": "Le fichier dépasse la limite de 5 MB.",
+      "catalogHint": "Installez directement depuis le catalogue de plugins OpenWA. Le .zip est récupéré côté serveur via la protection SSRF, puis validé et exécuté en sandbox.",
+      "catalogTeaser": "Vous cherchez des plugins ?",
+      "catalogTeaserSuffix": "parcourt la place de marché officielle.",
+      "tabCatalog": "Catalogue",
+      "tabUpload": "Téléverser .zip"
     },
     "toasts": {
       "errorTitle": "Erreur de plugin",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "Échec de l'activation",
       "disableFailedTitle": "Échec de la désactivation",
       "configRequiredTitle": "Configuration requise",
-      "configRequiredDesc": "Renseignez les champs obligatoires avant l'activation : {{fields}}"
+      "configRequiredDesc": "Renseignez les champs obligatoires avant l'activation : {{fields}}",
+      "updateFailed": "Échec de la mise à jour"
     },
     "sessions": {
       "activationTitle": "Exécuter pour",
@@ -887,6 +898,17 @@
         "secretRegenerated": "Secret régénéré",
         "actionFailed": "L'action a échoué"
       }
+    },
+    "catalog": {
+      "empty": "Aucun plugin dans le catalogue.",
+      "install": "Installer",
+      "installed": "Installé",
+      "noDownload": "Cette entrée du catalogue n'a pas d'URL de téléchargement.",
+      "noMatch": "Aucun plugin ne correspond à votre recherche.",
+      "searchPlaceholder": "Rechercher des plugins…",
+      "update": "Mettre à jour",
+      "updateAvailable": "Mise à jour disponible",
+      "updated": "Plugin mis à jour"
     }
   },
   "search": {

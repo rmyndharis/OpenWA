@@ -84,7 +84,8 @@
     "loadingChats": "Chats werden geladen...",
     "empty": "Keine Chats",
     "noMessageYet": "Noch keine Nachrichten",
-    "unreadBadge": "{{count}} ungelesene Nachrichten",
+    "unreadBadge": "{{count}} ungelesene Nachricht",
+    "unreadBadge_other": "{{count}} ungelesene Nachrichten",
     "loadingMessages": "Nachrichten werden geladen...",
     "noMessagesInChat": "Noch keine Nachrichten. Sende die erste Nachricht, um zu beginnen!",
     "downloadDocument": "Dokument herunterladen",
@@ -147,7 +148,8 @@
       "notSupported": "Kanäle werden von der Baileys-Engine nicht unterstützt.",
       "empty": "Du hast noch keine Kanäle abonniert.",
       "notReady": "Die Sitzung ist noch nicht bereit.",
-      "subscribers": "{{count}} Abonnenten"
+      "subscribers": "{{count}} Abonnent",
+      "subscribers_other": "{{count}} Abonnenten"
     },
     "errors": {
       "loadSessions": "Sitzungen konnten nicht geladen werden",
@@ -225,7 +227,9 @@
     "connecting": "Verbindung wird hergestellt...",
     "qr_ready": "QR-Code scannen",
     "ready": "Verbunden",
-    "disconnected": "Getrennt"
+    "disconnected": "Getrennt",
+    "failed": "Fehlgeschlagen",
+    "authenticating": "Wird authentifiziert..."
   },
   "sessions": {
     "title": "Sitzungen",
@@ -355,6 +359,7 @@
       "title": "Filter (optional)",
       "hint": "Wird nur ausgelöst, wenn alle Bedingungen erfüllt sind. Gilt für Nachrichtenereignisse.",
       "badge": "{{count}} Filter",
+      "badge_other": "{{count}} Filter",
       "addCondition": "Bedingung hinzufügen",
       "removeCondition": "Bedingung entfernen",
       "caseSensitive": "Groß-/Kleinschreibung beachten",
@@ -790,7 +795,12 @@
       "title": "Plugin installieren",
       "hint": "Lade ein als ZIP-Datei verpacktes Plugin mit einer manifest.json hoch. Nach der Aktivierung wird es in einer Sandbox ausgeführt.",
       "choose": "ZIP-Datei auswählen…",
-      "tooLarge": "Die Datei überschreitet das Limit von 5 MB."
+      "tooLarge": "Die Datei überschreitet das Limit von 5 MB.",
+      "catalogHint": "Installieren Sie direkt aus dem OpenWA-Plugin-Katalog. Die .zip-Datei wird serverseitig durch den SSRF-Schutz abgerufen, dann validiert und in einer Sandbox ausgeführt.",
+      "catalogTeaser": "Sie suchen Plugins?",
+      "catalogTeaserSuffix": "durchstöbert den offiziellen Marktplatz.",
+      "tabCatalog": "Katalog",
+      "tabUpload": ".zip hochladen"
     },
     "toasts": {
       "errorTitle": "Plugin-Fehler",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "Aktivierung fehlgeschlagen",
       "disableFailedTitle": "Deaktivierung fehlgeschlagen",
       "configRequiredTitle": "Konfiguration erforderlich",
-      "configRequiredDesc": "Fülle vor der Aktivierung die erforderlichen Felder aus: {{fields}}"
+      "configRequiredDesc": "Fülle vor der Aktivierung die erforderlichen Felder aus: {{fields}}",
+      "updateFailed": "Aktualisierung fehlgeschlagen"
     },
     "sessions": {
       "activationTitle": "Ausführen für",
@@ -887,6 +898,17 @@
         "secretRegenerated": "Geheimnis neu erstellt",
         "actionFailed": "Aktion fehlgeschlagen"
       }
+    },
+    "catalog": {
+      "empty": "Keine Plugins im Katalog.",
+      "install": "Installieren",
+      "installed": "Installiert",
+      "noDownload": "Dieser Katalogeintrag hat keine Download-URL.",
+      "noMatch": "Keine Plugins entsprechen Ihrer Suche.",
+      "searchPlaceholder": "Plugins suchen…",
+      "update": "Aktualisieren",
+      "updateAvailable": "Update verfügbar",
+      "updated": "Plugin aktualisiert"
     }
   },
   "search": {

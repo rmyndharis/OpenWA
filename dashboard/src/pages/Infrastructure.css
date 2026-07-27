@@ -677,12 +677,12 @@
   text-align: center;
 }
 
-.infrastructure-page .restart-modal-header {
+.infrastructure-page .restart-modal .modal-header {
   justify-content: center;
   border-bottom: none;
 }
 
-.infrastructure-page .restart-modal-body {
+.infrastructure-page .restart-modal .modal-body {
   padding: 2rem;
 }
 

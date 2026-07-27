@@ -85,6 +85,7 @@
     "empty": "沒有聊天",
     "noMessageYet": "尚無訊息",
     "unreadBadge": "{{count}} 條未讀訊息",
+    "unreadBadge_other": "{{count}} 條未讀訊息",
     "loadingMessages": "正在載入訊息...",
     "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
     "downloadDocument": "下載文件",
@@ -147,7 +148,8 @@
       "notSupported": "Baileys 引擎不支援頻道。",
       "empty": "你尚未訂閱任何頻道。",
       "notReady": "工作階段尚未就緒。",
-      "subscribers": "{{count}} 位訂閱者"
+      "subscribers": "{{count}} 位訂閱者",
+      "subscribers_other": "{{count}} 位訂閱者"
     },
     "errors": {
       "loadSessions": "載入工作階段失敗",
@@ -225,7 +227,9 @@
     "connecting": "正在連線...",
     "qr_ready": "掃描 QR",
     "ready": "已連線",
-    "disconnected": "已中斷連線"
+    "disconnected": "已中斷連線",
+    "failed": "失敗",
+    "authenticating": "正在驗證..."
   },
   "sessions": {
     "title": "工作階段",
@@ -355,6 +359,7 @@
       "title": "篩選條件（選填）",
       "hint": "僅當所有條件都符合時才觸發。適用於訊息事件。",
       "badge": "{{count}} 個篩選條件",
+      "badge_other": "{{count}} 個篩選條件",
       "addCondition": "新增條件",
       "removeCondition": "移除條件",
       "caseSensitive": "區分大小寫",
@@ -790,7 +795,12 @@
       "title": "安裝外掛",
       "hint": "上載打包成 .zip 的外掛（內含 manifest.json）。啟用後會以沙盒方式執行。",
       "choose": "選擇 .zip 檔案…",
-      "tooLarge": "檔案超出 5 MB 上限。"
+      "tooLarge": "檔案超出 5 MB 上限。",
+      "catalogHint": "直接從 OpenWA 外掛目錄安裝。.zip 檔案由伺服器透過 SSRF 防護取得，然後經過驗證並在沙箱中執行。",
+      "catalogTeaser": "在找外掛嗎？",
+      "catalogTeaserSuffix": "瀏覽官方市場。",
+      "tabCatalog": "目錄",
+      "tabUpload": "上傳 .zip"
     },
     "toasts": {
       "errorTitle": "外掛錯誤",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "啟用失敗",
       "disableFailedTitle": "停用失敗",
       "configRequiredTitle": "需要設定",
-      "configRequiredDesc": "啟用前請填寫必填項：{{fields}}"
+      "configRequiredDesc": "啟用前請填寫必填項：{{fields}}",
+      "updateFailed": "更新失敗"
     },
     "sessions": {
       "activationTitle": "執行對象",
@@ -887,6 +898,17 @@
         "secretRegenerated": "密鑰已重新產生",
         "actionFailed": "操作失敗"
       }
+    },
+    "catalog": {
+      "empty": "目錄中暫無外掛。",
+      "install": "安裝",
+      "installed": "已安裝",
+      "noDownload": "此目錄項目沒有下載地址。",
+      "noMatch": "沒有符合搜尋條件的外掛。",
+      "searchPlaceholder": "搜尋外掛…",
+      "update": "更新",
+      "updateAvailable": "有可用更新",
+      "updated": "外掛已更新"
     }
   },
   "search": {

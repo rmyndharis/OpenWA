@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "preview": "vite preview",
     "i18n:check": "node scripts/check-i18n-parity.mjs",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {

@@ -15,7 +15,6 @@ import {
   Eye,
   EyeOff,
   Loader2,
-  X,
   Check,
   KeyRound,
   AlertTriangle,
@@ -30,6 +29,7 @@ import {
   useRevokeApiKeyMutation,
 } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { copyToClipboard } from '../utils/clipboard';
 import './ApiKeys.css';
@@ -246,69 +246,17 @@ export function ApiKeys() {
       )}
 
       {showModal && (
-        <div
-          className="modal-overlay"
-          onClick={() => {
+        <Modal
+          open
+          onClose={() => {
             setShowModal(false);
             setCreatedKey(null);
           }}
-        >
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{createdKey ? t('apiKeys.createdTitle') : t('apiKeys.modalTitle')}</h2>
-              <button
-                className="btn-icon"
-                onClick={() => {
-                  setShowModal(false);
-                  setCreatedKey(null);
-                }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              {createdKey ? (
-                <div>
-                  <p style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>{t('apiKeys.createdHint')}</p>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <code
-                      style={{
-                        flex: 1,
-                        padding: '0.75rem',
-                        background: 'var(--bg-secondary)',
-                        borderRadius: '6px',
-                        wordBreak: 'break-all',
-                      }}
-                    >
-                      {createdKey}
-                    </code>
-                    <button className="btn-primary" onClick={() => void handleCopy(createdKey, 'modal')}>
-                      {copied === 'modal' ? <Check size={16} /> : <Copy size={16} />}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <label>{t('common.name')}</label>
-                  <input
-                    type="text"
-                    placeholder={t('apiKeys.namePlaceholder')}
-                    value={newKey.name}
-                    onChange={e => setNewKey({ ...newKey, name: e.target.value })}
-                  />
-                  <label>{t('common.role')}</label>
-                  <select value={newKey.role} onChange={e => setNewKey({ ...newKey, role: e.target.value })}>
-                    {roleNames.map(r => (
-                      <option key={r} value={r}>
-                        {t(`apiKeys.roles.${r}`)}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              )}
-            </div>
-            {!createdKey && (
-              <div className="modal-footer">
+          title={createdKey ? t('apiKeys.createdTitle') : t('apiKeys.modalTitle')}
+          closeLabel={t('common.close')}
+          footer={
+            !createdKey ? (
+              <>
                 <button className="btn-secondary" onClick={() => setShowModal(false)}>
                   {t('common.cancel')}
                 </button>
@@ -319,10 +267,50 @@ export function ApiKeys() {
                 >
                   {createMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
                 </button>
+              </>
+            ) : undefined
+          }
+        >
+          {createdKey ? (
+            <div>
+              <p style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>{t('apiKeys.createdHint')}</p>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <code
+                  style={{
+                    flex: 1,
+                    padding: '0.75rem',
+                    background: 'var(--bg-secondary)',
+                    borderRadius: '6px',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {createdKey}
+                </code>
+                <button className="btn-primary" onClick={() => void handleCopy(createdKey, 'modal')}>
+                  {copied === 'modal' ? <Check size={16} /> : <Copy size={16} />}
+                </button>
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          ) : (
+            <>
+              <label>{t('common.name')}</label>
+              <input
+                type="text"
+                placeholder={t('apiKeys.namePlaceholder')}
+                value={newKey.name}
+                onChange={e => setNewKey({ ...newKey, name: e.target.value })}
+              />
+              <label>{t('common.role')}</label>
+              <select value={newKey.role} onChange={e => setNewKey({ ...newKey, role: e.target.value })}>
+                {roleNames.map(r => (
+                  <option key={r} value={r}>
+                    {t(`apiKeys.roles.${r}`)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+        </Modal>
       )}
 
       <div className="api-keys-content">
@@ -373,40 +361,34 @@ export function ApiKeys() {
       </div>
 
       {confirmAction && (
-        <div className="modal-overlay" onClick={() => setConfirmAction(null)}>
-          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>
-                {confirmAction.type === 'delete' ? t('apiKeys.confirm.deleteTitle') : t('apiKeys.confirm.revokeTitle')}
-              </h2>
-              <button className="btn-icon" onClick={() => setConfirmAction(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="confirm-icon-wrapper">
-                <AlertTriangle size={48} className="confirm-warning-icon" />
-              </div>
-              <p className="confirm-message">
-                <Trans
-                  i18nKey={
-                    confirmAction.type === 'delete' ? 'apiKeys.confirm.deleteMessage' : 'apiKeys.confirm.revokeMessage'
-                  }
-                  values={{ name: confirmAction.name }}
-                  components={{ strong: <strong /> }}
-                />
-              </p>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setConfirmAction(null)}
+          title={confirmAction.type === 'delete' ? t('apiKeys.confirm.deleteTitle') : t('apiKeys.confirm.revokeTitle')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setConfirmAction(null)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={confirmAndExecute}>
                 {confirmAction.type === 'delete' ? t('apiKeys.confirm.delete') : t('apiKeys.confirm.revoke')}
               </button>
-            </div>
+            </>
+          }
+        >
+          <div className="confirm-icon-wrapper">
+            <AlertTriangle size={48} className="confirm-warning-icon" />
           </div>
-        </div>
+          <p className="confirm-message">
+            <Trans
+              i18nKey={confirmAction.type === 'delete' ? 'apiKeys.confirm.deleteMessage' : 'apiKeys.confirm.revokeMessage'}
+              values={{ name: confirmAction.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+        </Modal>
       )}
     </div>
   );

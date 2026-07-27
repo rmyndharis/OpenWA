@@ -85,6 +85,7 @@
     "empty": "没有聊天",
     "noMessageYet": "暂无消息",
     "unreadBadge": "{{count}} 条未读消息",
+    "unreadBadge_other": "{{count}} 条未读消息",
     "loadingMessages": "正在加载消息...",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",
@@ -147,7 +148,8 @@
       "notSupported": "Baileys 引擎不支持频道。",
       "empty": "你尚未订阅任何频道。",
       "notReady": "会话尚未就绪。",
-      "subscribers": "{{count}} 位订阅者"
+      "subscribers": "{{count}} 位订阅者",
+      "subscribers_other": "{{count}} 位订阅者"
     },
     "errors": {
       "loadSessions": "加载会话失败",
@@ -225,7 +227,9 @@
     "connecting": "正在连接...",
     "qr_ready": "扫描 QR",
     "ready": "已连接",
-    "disconnected": "已断开"
+    "disconnected": "已断开",
+    "failed": "失败",
+    "authenticating": "正在验证..."
   },
   "sessions": {
     "title": "会话",
@@ -355,6 +359,7 @@
       "title": "筛选条件（可选）",
       "hint": "仅当所有条件都匹配时才触发。适用于消息事件。",
       "badge": "{{count}} 个筛选条件",
+      "badge_other": "{{count}} 个筛选条件",
       "addCondition": "添加条件",
       "removeCondition": "移除条件",
       "caseSensitive": "区分大小写",
@@ -790,7 +795,12 @@
       "title": "安装插件",
       "hint": "上传打包为 .zip 的插件（包含 manifest.json）。启用后将在沙箱中运行。",
       "choose": "选择 .zip 文件…",
-      "tooLarge": "文件超过 5 MB 限制。"
+      "tooLarge": "文件超过 5 MB 限制。",
+      "catalogHint": "直接从 OpenWA 插件目录安装。.zip 文件由服务器通过 SSRF 防护获取，然后经过验证并在沙箱中运行。",
+      "catalogTeaser": "在找插件吗？",
+      "catalogTeaserSuffix": "浏览官方市场。",
+      "tabCatalog": "目录",
+      "tabUpload": "上传 .zip"
     },
     "toasts": {
       "errorTitle": "插件错误",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "启用失败",
       "disableFailedTitle": "停用失败",
       "configRequiredTitle": "需要配置",
-      "configRequiredDesc": "启用前请填写必填项：{{fields}}"
+      "configRequiredDesc": "启用前请填写必填项：{{fields}}",
+      "updateFailed": "更新失败"
     },
     "sessions": {
       "activationTitle": "运行范围",
@@ -887,6 +898,17 @@
         "secretRegenerated": "密钥已重新生成",
         "actionFailed": "操作失败"
       }
+    },
+    "catalog": {
+      "empty": "目录中暂无插件。",
+      "install": "安装",
+      "installed": "已安装",
+      "noDownload": "该目录条目没有下载地址。",
+      "noMatch": "没有符合搜索条件的插件。",
+      "searchPlaceholder": "搜索插件…",
+      "update": "更新",
+      "updateAvailable": "有可用更新",
+      "updated": "插件已更新"
     }
   },
   "search": {

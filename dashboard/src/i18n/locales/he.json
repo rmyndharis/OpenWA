@@ -84,7 +84,10 @@
     "loadingChats": "טוען שיחות...",
     "empty": "אין שיחות",
     "noMessageYet": "אין הודעות עדיין",
-    "unreadBadge": "{{count}} הודעות שלא נקראו",
+    "unreadBadge": "{{count}} הודעה שלא נקראה",
+    "unreadBadge_other": "{{count}} הודעות שלא נקראו",
+    "unreadBadge_two": "שתי הודעות שלא נקראו",
+    "unreadBadge_many": "{{count}} הודעות שלא נקראו",
     "loadingMessages": "טוען הודעות...",
     "noMessagesInChat": "אין הודעות עדיין. שלח את ההודעה הראשונה כדי להתחיל!",
     "downloadDocument": "הורדת מסמך",
@@ -150,7 +153,10 @@
       "notSupported": "ערוצים אינם נתמכים במנוע Baileys.",
       "empty": "עדיין אינך רשום/ה לאף ערוץ.",
       "notReady": "הסשן עדיין אינו מוכן.",
-      "subscribers": "{{count}} מנויים"
+      "subscribers": "{{count}} מנוי",
+      "subscribers_other": "{{count}} מנויים",
+      "subscribers_two": "שני מנויים",
+      "subscribers_many": "{{count}} מנויים"
     },
     "errors": {
       "loadSessions": "טעינת הסשנים נכשלה",
@@ -228,7 +234,9 @@
     "connecting": "מתחבר...",
     "qr_ready": "סריקת QR",
     "ready": "מחובר",
-    "disconnected": "מנותק"
+    "disconnected": "מנותק",
+    "failed": "נכשל",
+    "authenticating": "מאמת..."
   },
   "sessions": {
     "title": "Sessions",
@@ -356,6 +364,8 @@
     "saveChanges": "שמירת שינויים",
     "filters": {
       "badge": "{{count}} מסנן",
+      "badge_other": "{{count}} מסננים",
+      "badge_many": "{{count}} מסננים",
       "badge_two": "שני מסננים",
       "title": "מסננים (אופציונלי)",
       "hint": "הפעלה רק כאשר כל התנאים מתקיימים. חל על אירועי הודעות.",
@@ -794,7 +804,12 @@
       "title": "התקנת תוסף",
       "hint": "ניתן להעלות תוסף ארוז כקובץ .zip (הכולל manifest.json). הוא פועל בארגז חול לאחר ההפעלה.",
       "choose": "בחירת קובץ ‎.zip‎…",
-      "tooLarge": "הקובץ חורג מהמגבלה של ‎5 MB‎."
+      "tooLarge": "הקובץ חורג מהמגבלה של ‎5 MB‎.",
+      "catalogHint": "התקינו ישירות מקטלוג התוספים של OpenWA. קובץ ה-.zip נשלף מהשרת דרך מגן ה-SSRF, מאומת ומורץ בארגז חול.",
+      "catalogTeaser": "מחפשים תוספים?",
+      "catalogTeaserSuffix": "סוקר את החנות הרשמית.",
+      "tabCatalog": "קטלוג",
+      "tabUpload": "העלאת .zip"
     },
     "toasts": {
       "errorTitle": "שגיאת תוסף",
@@ -812,7 +827,8 @@
       "enableFailedTitle": "ההפעלה נכשלה",
       "disableFailedTitle": "ההשבתה נכשלה",
       "configRequiredTitle": "נדרשת הגדרה",
-      "configRequiredDesc": "מלא את שדות החובה לפני ההפעלה: {{fields}}"
+      "configRequiredDesc": "מלא את שדות החובה לפני ההפעלה: {{fields}}",
+      "updateFailed": "העדכון נכשל"
     },
     "sessions": {
       "activationTitle": "הפעלה עבור",
@@ -891,6 +907,17 @@
         "secretRegenerated": "הסוד נוצר מחדש",
         "actionFailed": "הפעולה נכשלה"
       }
+    },
+    "catalog": {
+      "empty": "אין תוספים בקטלוג.",
+      "install": "התקנה",
+      "installed": "מותקן",
+      "noDownload": "לערך קטלוג זה אין כתובת הורדה.",
+      "noMatch": "אין תוספים התואמים את החיפוש.",
+      "searchPlaceholder": "חיפוש תוספים…",
+      "update": "עדכון",
+      "updateAvailable": "עדכון זמין",
+      "updated": "התוסף עודכן"
     }
   },
   "search": {

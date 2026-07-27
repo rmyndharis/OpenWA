@@ -84,7 +84,8 @@
     "loadingChats": "Loading chats...",
     "empty": "No chats",
     "noMessageYet": "No messages yet",
-    "unreadBadge": "{{count}} unread messages",
+    "unreadBadge": "{{count}} unread message",
+    "unreadBadge_other": "{{count}} unread messages",
     "loadingMessages": "Loading messages...",
     "noMessagesInChat": "No messages yet. Send the first message to get started!",
     "downloadDocument": "Download document",
@@ -147,7 +148,8 @@
       "notSupported": "Channels are not supported on the Baileys engine.",
       "empty": "You are not subscribed to any channels yet.",
       "notReady": "Session is not ready yet.",
-      "subscribers": "{{count}} subscribers"
+      "subscribers": "{{count}} subscriber",
+      "subscribers_other": "{{count}} subscribers"
     },
     "errors": {
       "loadSessions": "Failed to load sessions",
@@ -225,7 +227,9 @@
     "connecting": "Connecting...",
     "qr_ready": "Scan QR",
     "ready": "Connected",
-    "disconnected": "Disconnected"
+    "disconnected": "Disconnected",
+    "failed": "Failed",
+    "authenticating": "Authenticating..."
   },
   "sessions": {
     "title": "Sessions",
@@ -355,6 +359,7 @@
       "title": "Filters (optional)",
       "hint": "Only fire when all conditions match. Applies to message events.",
       "badge": "{{count}} filter",
+      "badge_other": "{{count}} filters",
       "addCondition": "Add condition",
       "removeCondition": "Remove condition",
       "caseSensitive": "Case sensitive",
@@ -790,7 +795,12 @@
       "title": "Install a plugin",
       "hint": "Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.",
       "choose": "Choose a .zip file…",
-      "tooLarge": "The file exceeds the 5 MB limit."
+      "tooLarge": "The file exceeds the 5 MB limit.",
+      "catalogHint": "Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.",
+      "catalogTeaser": "Looking for plugins?",
+      "catalogTeaserSuffix": "browses the official marketplace.",
+      "tabCatalog": "Catalog",
+      "tabUpload": "Upload .zip"
     },
     "toasts": {
       "errorTitle": "Plugin Error",
@@ -808,7 +818,8 @@
       "enableFailedTitle": "Enable failed",
       "disableFailedTitle": "Disable failed",
       "configRequiredTitle": "Configuration required",
-      "configRequiredDesc": "Fill in the required field(s) before enabling: {{fields}}"
+      "configRequiredDesc": "Fill in the required field(s) before enabling: {{fields}}",
+      "updateFailed": "Update failed"
     },
     "sessions": {
       "activationTitle": "Run for",
@@ -887,6 +898,17 @@
         "secretRegenerated": "Secret regenerated",
         "actionFailed": "Action failed"
       }
+    },
+    "catalog": {
+      "empty": "No plugins in the catalog.",
+      "install": "Install",
+      "installed": "Installed",
+      "noDownload": "This catalog entry has no download URL.",
+      "noMatch": "No plugins match your search.",
+      "searchPlaceholder": "Search plugins…",
+      "update": "Update",
+      "updateAvailable": "Update available",
+      "updated": "Plugin updated"
     }
   },
   "search": {

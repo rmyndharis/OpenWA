@@ -27,6 +27,7 @@ import {
 } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { FilterBuilder } from '../components/FilterBuilder';
+import { Modal } from '../components/Modal';
 import './Webhooks.css';
 
 // Filters only apply to message.* events (the wildcard subscribes to them too).
@@ -311,173 +312,165 @@ export function Webhooks() {
       )}
 
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('webhooks.createTitle')}</h2>
-              <button className="btn-icon" onClick={() => setShowCreateModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label>{t('webhooks.session')}</label>
-              <select
-                value={newWebhook.sessionId}
-                onChange={e => setNewWebhook({ ...newWebhook, sessionId: e.target.value })}
-              >
-                <option value="">{t('webhooks.selectSession')}</option>
-                {sessions.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <label>{t('common.url')}</label>
-              <input
-                type="url"
-                placeholder="https://..."
-                value={newWebhook.url}
-                onChange={e => setNewWebhook({ ...newWebhook, url: e.target.value })}
-              />
-              <label>{t('webhooks.events')}</label>
-              <div className="event-tags">
-                {availableEventNames.map(name => {
-                  const isSelected = newWebhook.events.includes(name);
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      className={`event-tag ${isSelected ? 'selected' : ''}`}
-                      onClick={() => toggleNewEvent(name)}
-                    >
-                      {isSelected && <Check size={12} className="tag-check-icon" />}
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-              {supportsFilters(newWebhook.events) && (
-                <FilterBuilder
-                  filters={newWebhook.filters}
-                  onChange={filters => setNewWebhook(prev => ({ ...prev, filters }))}
-                  chats={chats}
-                />
-              )}
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setShowCreateModal(false)}
+          title={t('webhooks.createTitle')}
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-primary" onClick={handleCreate}>
                 {t('common.create')}
               </button>
-            </div>
+            </>
+          }
+        >
+          <label>{t('webhooks.session')}</label>
+          <select
+            value={newWebhook.sessionId}
+            onChange={e => setNewWebhook({ ...newWebhook, sessionId: e.target.value })}
+          >
+            <option value="">{t('webhooks.selectSession')}</option>
+            {sessions.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <label>{t('common.url')}</label>
+          <input
+            type="url"
+            placeholder="https://..."
+            value={newWebhook.url}
+            onChange={e => setNewWebhook({ ...newWebhook, url: e.target.value })}
+          />
+          <label>{t('webhooks.events')}</label>
+          <div className="event-tags">
+            {availableEventNames.map(name => {
+              const isSelected = newWebhook.events.includes(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`event-tag ${isSelected ? 'selected' : ''}`}
+                  onClick={() => toggleNewEvent(name)}
+                >
+                  {isSelected && <Check size={12} className="tag-check-icon" />}
+                  {name}
+                </button>
+              );
+            })}
           </div>
-        </div>
+          {supportsFilters(newWebhook.events) && (
+            <FilterBuilder
+              filters={newWebhook.filters}
+              onChange={filters => setNewWebhook(prev => ({ ...prev, filters }))}
+              chats={chats}
+            />
+          )}
+        </Modal>
       )}
 
       {showEditModal && editWebhook && (
-        <div className="modal-overlay" onClick={() => setShowEditModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('webhooks.editTitle')}</h2>
-              <button className="btn-icon" onClick={() => setShowEditModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label>{t('common.url')}</label>
-              <input
-                type="url"
-                value={editWebhook.url}
-                onChange={e => setEditWebhook({ ...editWebhook, url: e.target.value })}
-              />
-              <label>{t('webhooks.events')}</label>
-              <div className="event-tags">
-                {availableEventNames.map(name => {
-                  const isSelected = editWebhook.events.includes(name);
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      className={`event-tag ${isSelected ? 'selected' : ''}`}
-                      onClick={() => toggleEditEvent(name)}
-                    >
-                      {isSelected && <Check size={12} className="tag-check-icon" />}
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-              {supportsFilters(editWebhook.events) && (
-                <FilterBuilder
-                  filters={editWebhook.filters}
-                  onChange={filters => setEditWebhook(prev => (prev ? { ...prev, filters } : prev))}
-                  chats={chats}
-                />
-              )}
-              <div className="toggle-group">
-                <span className="toggle-label">{t('common.status')}</span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={editWebhook.active}
-                    onChange={e => setEditWebhook({ ...editWebhook, active: e.target.checked })}
-                  />
-                  <span className="toggle-slider"></span>
-                </label>
-                <span className={`toggle-status ${editWebhook.active ? 'active' : 'inactive'}`}>
-                  {editWebhook.active ? t('common.active') : t('common.inactive')}
-                </span>
-              </div>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setShowEditModal(false)}
+          title={t('webhooks.editTitle')}
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setShowEditModal(false)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-primary" onClick={handleEdit}>
                 {t('webhooks.saveChanges')}
               </button>
-            </div>
+            </>
+          }
+        >
+          <label>{t('common.url')}</label>
+          <input
+            type="url"
+            value={editWebhook.url}
+            onChange={e => setEditWebhook({ ...editWebhook, url: e.target.value })}
+          />
+          <label>{t('webhooks.events')}</label>
+          <div className="event-tags">
+            {availableEventNames.map(name => {
+              const isSelected = editWebhook.events.includes(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`event-tag ${isSelected ? 'selected' : ''}`}
+                  onClick={() => toggleEditEvent(name)}
+                >
+                  {isSelected && <Check size={12} className="tag-check-icon" />}
+                  {name}
+                </button>
+              );
+            })}
           </div>
-        </div>
+          {supportsFilters(editWebhook.events) && (
+            <FilterBuilder
+              filters={editWebhook.filters}
+              onChange={filters => setEditWebhook(prev => (prev ? { ...prev, filters } : prev))}
+              chats={chats}
+            />
+          )}
+          <div className="toggle-group">
+            <span className="toggle-label">{t('common.status')}</span>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={editWebhook.active}
+                onChange={e => setEditWebhook({ ...editWebhook, active: e.target.checked })}
+              />
+              <span className="toggle-slider"></span>
+            </label>
+            <span className={`toggle-status ${editWebhook.active ? 'active' : 'inactive'}`}>
+              {editWebhook.active ? t('common.active') : t('common.inactive')}
+            </span>
+          </div>
+        </Modal>
       )}
 
       {showDeleteModal && deleteTarget && (
-        <div className="modal-overlay" onClick={() => setShowDeleteModal(false)}>
-          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('webhooks.deleteTitle')}</h2>
-              <button className="btn-icon" onClick={() => setShowDeleteModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>{t('webhooks.deleteConfirm')}</p>
-              <code
-                style={{
-                  display: 'block',
-                  marginTop: '0.5rem',
-                  padding: '0.5rem',
-                  background: 'var(--color-bg-secondary)',
-                  borderRadius: '4px',
-                  fontSize: '0.85rem',
-                  wordBreak: 'break-all',
-                }}
-              >
-                {deleteTarget.url}
-              </code>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setShowDeleteModal(false)}
+          title={t('webhooks.deleteTitle')}
+          className="modal-sm"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setShowDeleteModal(false)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={handleDelete}>
                 {t('common.delete')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p>{t('webhooks.deleteConfirm')}</p>
+          <code
+            style={{
+              display: 'block',
+              marginTop: '0.5rem',
+              padding: '0.5rem',
+              background: 'var(--color-bg-secondary)',
+              borderRadius: '4px',
+              fontSize: '0.85rem',
+              wordBreak: 'break-all',
+            }}
+          >
+            {deleteTarget.url}
+          </code>
+        </Modal>
       )}
 
       <div className="webhooks-content">

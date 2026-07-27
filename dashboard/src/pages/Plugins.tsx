@@ -17,7 +17,6 @@ import {
   Server,
   Shield,
   Zap,
-  X,
   Upload,
   Trash2,
   Globe,
@@ -31,6 +30,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useTheme } from '../hooks/useTheme';
 import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { PluginInstances } from '../components/PluginInstances';
 import './Plugins.css';
@@ -983,194 +983,192 @@ export default function Plugins() {
       )}
 
       {showInstallModal && (
-        <div className="modal-overlay" onClick={() => setShowInstallModal(false)}>
-          <div className="modal install-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header install-modal-header">
-              <h2>{t('plugins.installModal.title', 'Install a plugin')}</h2>
-              <div className="install-tabs">
-                <button
-                  className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
-                  onClick={() => setInstallMode('upload')}
-                >
-                  <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
-                </button>
-                <button
-                  className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
-                  onClick={() => setInstallMode('catalog')}
-                >
-                  <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
-                </button>
-              </div>
-              <button className="btn-icon" onClick={() => setShowInstallModal(false)}>
-                <X size={20} />
+        <Modal
+          open
+          onClose={() => setShowInstallModal(false)}
+          title={t('plugins.installModal.title', 'Install a plugin')}
+          className="install-modal"
+          closeLabel={t('common.close')}
+          headerExtra={
+            <div className="install-tabs">
+              <button
+                className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
+                onClick={() => setInstallMode('upload')}
+              >
+                <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
+              </button>
+              <button
+                className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
+                onClick={() => setInstallMode('catalog')}
+              >
+                <Globe size={15} /> {t('plugins.installModal.tabCatalog', 'Catalog')}
               </button>
             </div>
-
-            {installMode === 'upload' ? (
+          }
+          footer={
+            installMode === 'upload' ? (
               <>
-                <div className="modal-body">
-                  <p className="install-hint">
-                    {t(
-                      'plugins.installModal.hint',
-                      'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.',
-                    )}
-                  </p>
-                  <label className={`install-drop${installFile ? ' has-file' : ''}`}>
-                    <input
-                      type="file"
-                      accept=".zip,application/zip"
-                      hidden
-                      onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
-                    />
-                    <Upload size={28} />
-                    <span className="install-drop-name">
-                      {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
-                    </span>
-                  </label>
-                  {/* Point first-time users at the Catalog tab — otherwise the marketplace is invisible
-                      and an operator only ever discovers plugins by hearing about one out-of-band. */}
-                  <p className="install-hint install-hint-sub">
-                    {t('plugins.installModal.catalogTeaser', 'Looking for plugins?')}{' '}
-                    <button type="button" className="install-inline-link" onClick={() => setInstallMode('catalog')}>
-                      {t('plugins.installModal.tabCatalog', 'Catalog')}
-                    </button>{' '}
-                    {t('plugins.installModal.catalogTeaserSuffix', 'browses the official marketplace.')}
-                  </p>
-                </div>
-                <div className="modal-footer">
-                  <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
-                    {t('common.cancel', 'Cancel')}
-                  </button>
-                  <button
-                    className="btn-primary"
-                    onClick={() => void handleInstall()}
-                    disabled={!installFile || installing}
-                  >
-                    {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                    {t('plugins.install', 'Install plugin')}
-                  </button>
-                </div>
+                <button className="btn-secondary" onClick={() => setShowInstallModal(false)} disabled={installing}>
+                  {t('common.cancel', 'Cancel')}
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleInstall()}
+                  disabled={!installFile || installing}
+                >
+                  {installing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                  {t('plugins.install', 'Install plugin')}
+                </button>
               </>
             ) : (
-              <>
-                <div className="modal-body">
-                  <p className="install-hint">
-                    {t(
-                      'plugins.installModal.catalogHint',
-                      'Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.',
-                    )}
-                  </p>
-                  {catalogLoading ? (
-                    <div className="catalog-empty">
-                      <Loader2 size={20} className="animate-spin" />
-                    </div>
-                  ) : catalogError ? (
-                    <div className="catalog-empty catalog-error">
-                      <AlertCircle size={16} /> {catalogError}
-                      <button className="btn-secondary" onClick={() => void loadCatalog()}>
-                        {t('plugins.refresh', 'Refresh')}
-                      </button>
-                    </div>
-                  ) : catalog.length === 0 ? (
-                    <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
-                  ) : (
-                    (() => {
-                      const q = catalogSearch.trim().toLowerCase();
-                      const filtered = q
-                        ? catalog.filter(e =>
-                            [e.name, e.description, e.author, e.id].some(f => f?.toLowerCase().includes(q)),
-                          )
-                        : catalog;
-                      return (
-                        <>
-                          <div className="catalog-search">
-                            <Search size={15} />
-                            <input
-                              type="text"
-                              value={catalogSearch}
-                              onChange={e => setCatalogSearch(e.target.value)}
-                              placeholder={t('plugins.catalog.searchPlaceholder', 'Search plugins…')}
-                            />
-                          </div>
-                          {filtered.length === 0 ? (
-                            <div className="catalog-empty">
-                              {t('plugins.catalog.noMatch', 'No plugins match your search.')}
-                            </div>
-                          ) : (
-                            <div className="catalog-list">
-                              {filtered.map(entry => {
-                                const lz = localizePlugin(entry, i18n.language);
-                                return (
-                                  <div className="catalog-row" key={entry.id}>
-                                    <div className="catalog-row-info">
-                                      <div className="catalog-row-name">
-                                        {lz.name} <span className="catalog-row-version">v{entry.version}</span>
-                                      </div>
-                                      {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
-                                      <div className="catalog-row-meta">
-                                        {entry.author && <span className="catalog-row-author">{entry.author}</span>}
-                                        {entry.updateAvailable && (
-                                          <span className="catalog-badge update">
-                                            {t('plugins.catalog.updateAvailable', 'Update available')} (v
-                                            {entry.installedVersion} → v{entry.version})
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="catalog-row-action">
-                                      {entry.installed ? (
-                                        entry.updateAvailable ? (
-                                          <button
-                                            className="btn-update"
-                                            disabled={installingId !== null || !entry.download}
-                                            onClick={() => void handleUpdateFromCatalog(entry)}
-                                          >
-                                            {installingId === entry.id ? (
-                                              <Loader2 size={15} className="animate-spin" />
-                                            ) : (
-                                              <Download size={15} />
-                                            )}
-                                            {t('plugins.catalog.update', 'Update')}
-                                          </button>
-                                        ) : (
-                                          <span className="catalog-installed">
-                                            <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
-                                          </span>
-                                        )
-                                      ) : (
-                                        <button
-                                          className="btn-primary"
-                                          disabled={installingId !== null || !entry.download}
-                                          onClick={() => void handleInstallFromCatalog(entry)}
-                                        >
-                                          {installingId === entry.id ? (
-                                            <Loader2 size={15} className="animate-spin" />
-                                          ) : (
-                                            <Download size={15} />
-                                          )}
-                                          {t('plugins.catalog.install', 'Install')}
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()
-                  )}
+              <button className="btn-secondary" onClick={() => setShowInstallModal(false)}>
+                {t('common.close', 'Close')}
+              </button>
+            )
+          }
+        >
+          {installMode === 'upload' ? (
+            <>
+              <p className="install-hint">
+                {t(
+                  'plugins.installModal.hint',
+                  'Upload a plugin packaged as a .zip (with a manifest.json). It runs sandboxed once enabled.',
+                )}
+              </p>
+              <label className={`install-drop${installFile ? ' has-file' : ''}`}>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  hidden
+                  onChange={e => setInstallFile(e.target.files?.[0] ?? null)}
+                />
+                <Upload size={28} />
+                <span className="install-drop-name">
+                  {installFile ? installFile.name : t('plugins.installModal.choose', 'Choose a .zip file…')}
+                </span>
+              </label>
+              {/* Point first-time users at the Catalog tab — otherwise the marketplace is invisible
+                  and an operator only ever discovers plugins by hearing about one out-of-band. */}
+              <p className="install-hint install-hint-sub">
+                {t('plugins.installModal.catalogTeaser', 'Looking for plugins?')}{' '}
+                <button type="button" className="install-inline-link" onClick={() => setInstallMode('catalog')}>
+                  {t('plugins.installModal.tabCatalog', 'Catalog')}
+                </button>{' '}
+                {t('plugins.installModal.catalogTeaserSuffix', 'browses the official marketplace.')}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="install-hint">
+                {t(
+                  'plugins.installModal.catalogHint',
+                  'Install directly from the OpenWA plugin catalog. The .zip is fetched server-side through the SSRF guard, then validated and sandboxed.',
+                )}
+              </p>
+              {catalogLoading ? (
+                <div className="catalog-empty">
+                  <Loader2 size={20} className="animate-spin" />
                 </div>
-                <div className="modal-footer">
-                  <button className="btn-secondary" onClick={() => setShowInstallModal(false)}>
-                    {t('common.close', 'Close')}
+              ) : catalogError ? (
+                <div className="catalog-empty catalog-error">
+                  <AlertCircle size={16} /> {catalogError}
+                  <button className="btn-secondary" onClick={() => void loadCatalog()}>
+                    {t('plugins.refresh', 'Refresh')}
                   </button>
                 </div>
-              </>
-            )}
-          </div>
-        </div>
+              ) : catalog.length === 0 ? (
+                <div className="catalog-empty">{t('plugins.catalog.empty', 'No plugins in the catalog.')}</div>
+              ) : (
+                (() => {
+                  const q = catalogSearch.trim().toLowerCase();
+                  const filtered = q
+                    ? catalog.filter(e =>
+                        [e.name, e.description, e.author, e.id].some(f => f?.toLowerCase().includes(q)),
+                      )
+                    : catalog;
+                  return (
+                    <>
+                      <div className="catalog-search">
+                        <Search size={15} />
+                        <input
+                          type="text"
+                          value={catalogSearch}
+                          onChange={e => setCatalogSearch(e.target.value)}
+                          placeholder={t('plugins.catalog.searchPlaceholder', 'Search plugins…')}
+                        />
+                      </div>
+                      {filtered.length === 0 ? (
+                        <div className="catalog-empty">
+                          {t('plugins.catalog.noMatch', 'No plugins match your search.')}
+                        </div>
+                      ) : (
+                        <div className="catalog-list">
+                          {filtered.map(entry => {
+                            const lz = localizePlugin(entry, i18n.language);
+                            return (
+                              <div className="catalog-row" key={entry.id}>
+                                <div className="catalog-row-info">
+                                  <div className="catalog-row-name">
+                                    {lz.name} <span className="catalog-row-version">v{entry.version}</span>
+                                  </div>
+                                  {lz.description && <div className="catalog-row-desc">{lz.description}</div>}
+                                  <div className="catalog-row-meta">
+                                    {entry.author && <span className="catalog-row-author">{entry.author}</span>}
+                                    {entry.updateAvailable && (
+                                      <span className="catalog-badge update">
+                                        {t('plugins.catalog.updateAvailable', 'Update available')} (v
+                                        {entry.installedVersion} → v{entry.version})
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="catalog-row-action">
+                                  {entry.installed ? (
+                                    entry.updateAvailable ? (
+                                      <button
+                                        className="btn-update"
+                                        disabled={installingId !== null || !entry.download}
+                                        onClick={() => void handleUpdateFromCatalog(entry)}
+                                      >
+                                        {installingId === entry.id ? (
+                                          <Loader2 size={15} className="animate-spin" />
+                                        ) : (
+                                          <Download size={15} />
+                                        )}
+                                        {t('plugins.catalog.update', 'Update')}
+                                      </button>
+                                    ) : (
+                                      <span className="catalog-installed">
+                                        <CheckCircle size={15} /> {t('plugins.catalog.installed', 'Installed')}
+                                      </span>
+                                    )
+                                  ) : (
+                                    <button
+                                      className="btn-primary"
+                                      disabled={installingId !== null || !entry.download}
+                                      onClick={() => void handleInstallFromCatalog(entry)}
+                                    >
+                                      {installingId === entry.id ? (
+                                        <Loader2 size={15} className="animate-spin" />
+                                      ) : (
+                                        <Download size={15} />
+                                      )}
+                                      {t('plugins.catalog.install', 'Install')}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()
+              )}
+            </>
+          )}
+        </Modal>
       )}
 
       {showConfigModal &&
@@ -1181,16 +1179,14 @@ export default function Plugins() {
           // Instances tab. Either (or both) turns the modal into a tabbed view.
           const showTabs = configPlugin.sessionScoped !== false || configPlugin.ingressCapable;
           return (
-            <div className="modal-overlay" onClick={() => setShowConfigModal(false)}>
-              <div className="modal config-modal" onClick={e => e.stopPropagation()}>
-                <div className="modal-header">
-                  <h2>{t('plugins.config.title', { name: lz.name })}</h2>
-                  <button className="btn-icon" onClick={() => setShowConfigModal(false)}>
-                    <X size={20} />
-                  </button>
-                </div>
-
-                {showTabs && (
+            <Modal
+              open
+              onClose={() => setShowConfigModal(false)}
+              title={t('plugins.config.title', { name: lz.name })}
+              className="config-modal"
+              closeLabel={t('common.close')}
+              subheader={
+                showTabs ? (
                   <div className="modal-tabs">
                     <button
                       className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
@@ -1215,39 +1211,10 @@ export default function Plugins() {
                       </button>
                     )}
                   </div>
-                )}
-
-                <div className="modal-body">
-                  {showTabs && configTab === 'instances' && configPlugin.ingressCapable ? (
-                    <PluginInstances pluginId={configPlugin.id} />
-                  ) : showTabs && configTab === 'sessions' && configPlugin.sessionScoped !== false ? (
-                    <SessionsTab plugin={configPlugin} />
-                  ) : /* A plugin that ships its own editor owns the whole config: rendering the generic
-                         form underneath it too produced a second copy of every field and a second Save
-                         button with different semantics, which is what the Chat Flow modal looked like. */
-                  configPlugin.configUi ? (
-                    <PluginConfigUi plugin={configPlugin} />
-                  ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
-                    <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
-                      {Object.entries(lz.configSchema.properties).map(([key, field]) => (
-                        <ConfigField
-                          key={key}
-                          field={field}
-                          label={field.title || key}
-                          value={schemaConfig[key]}
-                          onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
-                        />
-                      ))}
-                    </form>
-                  ) : (
-                    <div className="no-config">
-                      <Settings size={48} style={{ opacity: 0.3 }} />
-                      <p>{t('plugins.config.noOptions')}</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="modal-footer">
+                ) : undefined
+              }
+              footer={
+                <>
                   <button className="btn-secondary" onClick={() => setShowConfigModal(false)}>
                     {t('common.close')}
                   </button>
@@ -1261,9 +1228,37 @@ export default function Plugins() {
                       {savingConfig ? <Loader2 size={16} className="animate-spin" /> : t('plugins.config.save')}
                     </button>
                   ) : null}
+                </>
+              }
+            >
+              {showTabs && configTab === 'instances' && configPlugin.ingressCapable ? (
+                <PluginInstances pluginId={configPlugin.id} />
+              ) : showTabs && configTab === 'sessions' && configPlugin.sessionScoped !== false ? (
+                <SessionsTab plugin={configPlugin} />
+              ) : /* A plugin that ships its own editor owns the whole config: rendering the generic
+                     form underneath it too produced a second copy of every field and a second Save
+                     button with different semantics, which is what the Chat Flow modal looked like. */
+              configPlugin.configUi ? (
+                <PluginConfigUi plugin={configPlugin} />
+              ) : lz.configSchema && Object.keys(lz.configSchema.properties).length > 0 ? (
+                <form ref={schemaFormRef} className="config-form" onSubmit={e => e.preventDefault()}>
+                  {Object.entries(lz.configSchema.properties).map(([key, field]) => (
+                    <ConfigField
+                      key={key}
+                      field={field}
+                      label={field.title || key}
+                      value={schemaConfig[key]}
+                      onChange={v => setSchemaConfig({ ...schemaConfig, [key]: v })}
+                    />
+                  ))}
+                </form>
+              ) : (
+                <div className="no-config">
+                  <Settings size={48} style={{ opacity: 0.3 }} />
+                  <p>{t('plugins.config.noOptions')}</p>
                 </div>
-              </div>
-            </div>
+              )}
+            </Modal>
           );
         })()}
     </div>
