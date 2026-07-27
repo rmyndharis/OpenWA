@@ -4,6 +4,16 @@ on:
   push:
     tags: ['v*']
 
+# Serialize ALL release runs on one global queue — deliberately not a per-tag group
+# (`release-${{ github.ref_name }}`). The mutable channels (the X.Y minor tag and `latest`)
+# are shared state across releases: a per-tag group would let two overlapping releases complete
+# out of order, with the older build re-pointing those channels last. cancel-in-progress: false
+# so a newer tag can never abort a promotion already in flight — a half-promoted registry state
+# is worse than a queued release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   NODE_VERSION: '22'
   DOCKER_PLATFORMS: linux/amd64,linux/arm64
@@ -21,10 +31,10 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -74,10 +84,10 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -109,10 +119,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -152,10 +162,10 @@ jobs:
     name: Dashboard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -184,10 +194,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test, dashboard]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -211,7 +221,7 @@ jobs:
     # safety.
     needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, promote, verify-published]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -236,7 +246,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           # Author the release as a real user (the PAT owner) instead of github-actions[bot].
           # Add a repo secret RELEASE_PAT — a fine-grained PAT scoped to this repo with
@@ -257,17 +267,23 @@ jobs:
       contents: read
       packages: write
     needs: [lint, test, test-postgres, dashboard, build]
+    # The promote and verify-published jobs consume exactly what this build produced — the pushed
+    # manifest digest and the tag set computed once here — instead of re-deriving tags from the
+    # tag pattern downstream. What is promoted and verified is by construction what was built.
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -285,16 +301,24 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          # Both registries the promote job tags. Computed once here and handed to promote /
+          # verify-published via job outputs, so the promoted set cannot drift from the build.
+          images: |
+            ghcr.io/${{ github.repository }}
+            docker.io/rmyndharis/openwa
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # The mutable channels (X.Y, latest) are disabled for prereleases: an rc/beta/alpha
+            # build must never become what `docker pull openwa:0.11` or `:latest` resolves to.
+            # The exact prerelease tag ({{version}}) is still published.
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push (staging tag only)
-        uses: docker/build-push-action@v7
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           push: true
@@ -324,10 +348,10 @@ jobs:
     needs: [docker]
     steps:
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -400,7 +424,7 @@ jobs:
         platform: [linux/amd64, linux/arm64]
     steps:
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -413,7 +437,7 @@ jobs:
         run: echo "ref=ghcr.io/${REPO,,}:smoke-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           # trivy reads TRIVY_PLATFORM for its --platform flag. Scanning is static (it reads the
           # image layers, it does not run the image), so no QEMU is needed to inspect the arm64
@@ -428,24 +452,26 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
 
-  # Applies the release tags (X.Y.Z, X.Y, latest) to the image boot-smoke just proved can start, on
-  # BOTH registries (GHCR + Docker Hub — the metadata-action `images` list emits both, and the loop
-  # below promotes each). `imagetools create` re-points tags at the existing manifest list without
-  # rebuilding, so the promoted image is bit-identical to the one tested on both registries, and its
-  # provenance and SBOM attestations travel with it. If boot-smoke fails, this job never runs and the
-  # release tags never appear anywhere.
+  # Applies the release tags (X.Y.Z — plus X.Y and latest for non-prereleases) to the image
+  # boot-smoke just proved can start, on BOTH registries (GHCR + Docker Hub — the tag set computed
+  # once by the docker job's metadata-action covers both, and arrives here via job outputs, so the
+  # promoted set is by construction the build's own tag set, never a re-derived pattern).
+  # `imagetools create` re-points tags at the existing manifest list without rebuilding, so the
+  # promoted image is bit-identical to the one tested on both registries, and its provenance and
+  # SBOM attestations travel with it. If boot-smoke fails, this job never runs and the release
+  # tags never appear anywhere.
   promote:
     name: Promote image to release tags
     runs-on: ubuntu-latest
     permissions:
       packages: write
-    needs: [boot-smoke, image-scan]
+    needs: [docker, boot-smoke, image-scan]
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -455,45 +481,56 @@ jobs:
       # pull count lives (GHCR exposes no download metrics). Requires the DOCKERHUB_USERNAME /
       # DOCKERHUB_TOKEN repo secrets; without them this step fails before any tag is applied.
       - name: Login to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: |
-            ghcr.io/${{ github.repository }}
-            docker.io/rmyndharis/openwa
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
-
       - name: Tag the smoke-tested image with the release tags
         env:
           REPO: ${{ github.repository }}
-          TAGS: ${{ steps.meta.outputs.tags }}
+          REF_NAME: ${{ github.ref_name }}
+          TAGS: ${{ needs.docker.outputs.tags }}
+          EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           set -euo pipefail
           staging="ghcr.io/${REPO,,}:smoke-${{ github.run_id }}"
-          # metadata-action emits one tag per line. A here-string rather than a pipe, so the loop
-          # runs in this shell and `set -e` actually aborts the step on a failed promotion instead
-          # of the pipeline swallowing it.
+          # Identity gate before anything is re-pointed: the staging manifest must be exactly the
+          # manifest the docker job built (and boot-smoke/image-scan tested). A mismatch means the
+          # tag under promotion is not the tested content, so stop.
+          actual="$(docker buildx imagetools inspect "$staging" --format '{{.Manifest.Digest}}')"
+          if [ "$actual" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::staging digest $actual != build digest $EXPECTED_DIGEST — refusing to promote untested content"
+            exit 1
+          fi
+          # One tag per line. A here-string rather than a pipe, so the loop runs in this shell and
+          # `set -e` actually aborts the step on a failed promotion instead of the pipeline
+          # swallowing it.
           promoted=0
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
+            # Defense in depth on top of the metadata `enable=` guards: a minor tag (X.Y) must
+            # never be promoted from prerelease content, even if the tag set upstream changes.
+            if [[ "$REF_NAME" == *-* ]] && [[ "$tag" =~ :[0-9]+\.[0-9]+$ ]]; then
+              echo "skipping $tag — minor tags are not promoted from a prerelease"
+              continue
+            fi
             echo "promoting -> $tag"
             docker buildx imagetools create --tag "$tag" "$staging"
+            # Each promoted tag must resolve to the build digest — the promotion is a re-point,
+            # never new content.
+            promoted_digest="$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')"
+            if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then
+              echo "::error::$tag resolved to $promoted_digest after promotion, expected $EXPECTED_DIGEST"
+              exit 1
+            fi
             promoted=$((promoted + 1))
           done <<< "$TAGS"
           if [ "$promoted" -eq 0 ]; then
             echo "::error::no release tags were produced by metadata-action — nothing was promoted"
             exit 1
           fi
-          echo "promoted $promoted tag(s)"
+          echo "promoted $promoted tag(s), all digest-identical to the tested build"
 
       - name: Verify the release tag resolves and is multi-arch
         env:
@@ -505,20 +542,32 @@ jobs:
             grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }
           done
 
-      # Best-effort tidy-up of the staging tag, and it MUST refuse to act unless that tag is the only
-      # one on its version.
-      #
-      # GHCR deletes by *version*, not by tag, and a version carries every tag pointing at it. The
-      # promote step above re-points the release tags at content identical to the staging image, so
-      # they resolve to the same digest and therefore the same version — whose tag list is
-      # ["smoke-<run>", "X.Y.Z", "X.Y", "latest"]. Deleting that version by id took the release tags
-      # with it: v0.10.5 published a GitHub Release while `latest`, `0.10` and `0.10.5` all vanished
-      # from the registry, so `docker pull` failed for everyone until they were restored.
-      #
-      # On the happy path this is now a no-op, which is correct — a stray staging tag is harmless, and
-      # far cheaper than un-publishing a release. It still cleans up the case it was written for: a run
-      # where promotion never happened, leaving the staging tag alone on its version.
+  # ──── Staging tag cleanup (happy path AND failure path) ───────────
+  # Best-effort tidy-up of the staging tag, and it MUST refuse to act unless that tag is the only
+  # one on its version.
+  #
+  # GHCR deletes by *version*, not by tag, and a version carries every tag pointing at it. The
+  # promote job re-points the release tags at content identical to the staging image, so they
+  # resolve to the same digest and therefore the same version — whose tag list is
+  # ["smoke-<run>", "X.Y.Z", "X.Y", "latest"]. Deleting that version by id took the release tags
+  # with it: v0.10.5 published a GitHub Release while `latest`, `0.10` and `0.10.5` all vanished
+  # from the registry, so `docker pull` failed for everyone until they were restored.
+  #
+  # This lives in its own `if: always()` job — not inside promote — because the failure path is
+  # exactly when cleanup matters most: when boot-smoke or image-scan fails, promote is skipped and
+  # the staging tag would otherwise leak. On the happy path the release tags share the staging
+  # version, so the step below keeps it (the deliberate retention documented above); on a failed
+  # run the staging tag is alone and gets removed.
+  cleanup-staging:
+    name: Clean up the staging tag
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      packages: write
+    needs: [docker, boot-smoke, image-scan, promote]
+    steps:
       - name: Remove the staging tag (only when it is alone on its version)
+        # Best-effort: a failed tidy-up must not turn an otherwise successful release red.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -527,7 +576,7 @@ jobs:
           version_json=$(gh api "/users/${{ github.repository_owner }}/packages/container/openwa/versions" \
             --jq ".[] | select(.metadata.container.tags[]? == \"$staging\") | {id, tags: .metadata.container.tags}" | head -1)
           if [ -z "$version_json" ]; then
-            echo "staging tag not found (already cleaned up)"
+            echo "staging tag not found (docker job failed before pushing, or already cleaned up)"
             exit 0
           fi
           version_id=$(printf '%s' "$version_json" | jq -r .id)
@@ -551,57 +600,63 @@ jobs:
   #
   # This job fixes both blind spots. It runs after promote (so it sees the final state, cleanup
   # included) and it never logs in, so it fails on a tag that exists but is not publicly readable —
-  # which is indistinguishable from a missing tag to everyone downstream. It checks every tag a user
-  # might pull, not just the exact version.
+  # which is indistinguishable from a missing tag to everyone downstream. The checked set is the
+  # docker job's own tag output (both registries), so it matches whatever was actually promoted —
+  # for a prerelease that is only the exact X.Y.Z-pre tag, with no stale expectation that `latest`
+  # or X.Y moved. Every tag must also resolve to the build's digest, so a re-pointed channel can
+  # never silently serve content other than the tested image.
   verify-published:
     name: Verify published tags (anonymous)
     runs-on: ubuntu-latest
-    needs: [promote]
+    needs: [docker, promote]
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       # Deliberately NO docker/login-action here. Authenticating would defeat the purpose.
-      - name: Resolve every release tag without credentials
+      - name: Resolve every promoted tag without credentials
         env:
-          REPO: ${{ github.repository }}
+          TAGS: ${{ needs.docker.outputs.tags }}
+          EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           # Fail closed. A verification step that reports success because something upstream of the
           # assertion broke is worse than no verification at all — `set -e` plus the checked-count
-          # assertion below mean this job cannot pass without having actually resolved all three tags.
+          # assertion below mean this job cannot pass without having actually resolved every
+          # promoted tag.
           set -euo pipefail
-          version="${GITHUB_REF#refs/tags/v}"
-          minor="${version%.*}"
-          expected=6
           checked=0
           failed=0
-          for tag in "$version" "$minor" latest; do
-            for ref in "ghcr.io/${REPO,,}:${tag}" "docker.io/rmyndharis/openwa:${tag}"; do
-              echo "::group::$ref"
-              if ! docker buildx imagetools inspect "$ref" > "/tmp/pub-${tag}.txt" 2>&1; then
-                echo "::error::$ref is not publicly pullable after promotion."
-                cat "/tmp/pub-${tag}.txt"
-                failed=1
-                echo "::endgroup::"
-                continue
-              fi
-              for want in linux/amd64 linux/arm64; do
-                if ! grep -q "$want" "/tmp/pub-${tag}.txt"; then
-                  echo "::error::$ref resolves but is missing $want"
-                  failed=1
-                fi
-              done
-              echo "$ref OK"
-              checked=$((checked + 1))
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            echo "::group::$ref"
+            if ! docker buildx imagetools inspect "$ref" > /tmp/pub.txt 2>&1; then
+              echo "::error::$ref is not publicly pullable after promotion."
+              cat /tmp/pub.txt
+              failed=1
               echo "::endgroup::"
+              continue
+            fi
+            for want in linux/amd64 linux/arm64; do
+              if ! grep -q "$want" /tmp/pub.txt; then
+                echo "::error::$ref resolves but is missing $want"
+                failed=1
+              fi
             done
-          done
-          if [ "$checked" -ne "$expected" ]; then
-            echo "::error::only verified $checked of $expected tags — treating that as a failed release."
+            digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+            if [ "$digest" != "$EXPECTED_DIGEST" ]; then
+              echo "::error::$ref resolves to $digest, not the tested build digest $EXPECTED_DIGEST"
+              failed=1
+            fi
+            echo "$ref OK ($digest)"
+            checked=$((checked + 1))
+            echo "::endgroup::"
+          done <<< "$TAGS"
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no promoted tags were verified — treating that as a failed release."
             failed=1
           fi
           if [ "$failed" -ne 0 ]; then
             echo "::error::The release is not usable. Re-point the missing tags before announcing it."
             exit 1
           fi
-          echo "all $checked release tags are publicly pullable and multi-arch"
+          echo "all $checked release tags are publicly pullable, multi-arch, and digest-identical to the tested build"

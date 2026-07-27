@@ -71,6 +71,9 @@ updates:
       - dependency-name: "typescript"
         versions: [">=7.0.0"]
 
+  # All workflow action refs are pinned to commit SHAs (with a `# vX.Y.Z` comment). Dependabot
+  # understands that form: it proposes the new SHA and rewrites the version comment, so the pins
+  # stay current without ever floating on a mutable major tag.
   - package-ecosystem: github-actions
     directory: /
     schedule:
