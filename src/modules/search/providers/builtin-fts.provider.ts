@@ -78,16 +78,37 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
 
   /**
    * Probes the FTS schema once per instance and caches the result. SQLite: look for the `messages_fts`
-   * virtual table in sqlite_master. Postgres: look for the generated `body_ts` column in
-   * information_schema. Safe to call repeatedly; only the first call hits the DB.
+   * virtual table in sqlite_master. Postgres: look for the generated `body_ts` column on the SAME
+   * `messages` table the search queries resolve — see the to_regclass note below. Safe to call
+   * repeatedly; only the first successful probe hits the DB and caches.
    */
   private async probeFts(): Promise<boolean> {
     if (this.ftsAvailable !== null) return this.ftsAvailable;
     if (this.dataSource.options.type === 'postgres') {
-      const rows: unknown[] = await this.dataSource.query(
-        `SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='body_ts'`,
-      );
-      this.ftsAvailable = Array.isArray(rows) && rows.length === 1;
+      // to_regclass('messages') resolves the name through the session search_path — the identical
+      // resolution the runtime queries (`FROM messages m`) use, and the data connection pins
+      // search_path to `<schema>,public` when POSTGRES_SCHEMA is non-public (app.module.ts). So the
+      // probe inspects the table search will actually hit, in the active schema. An unqualified
+      // information_schema scan would instead peek across EVERY visible schema and can lie both ways
+      // on a custom-schema deployment: a namesake public.messages.body_ts reports FTS present when
+      // the active schema lacks it, and a >1-row match (both schemas carry the column) reports it
+      // absent. to_regclass returns NULL when `messages` is unresolvable on the path → zero rows →
+      // unavailable, so an undeterminable schema fails closed by construction.
+      // Fail-closed on probe error (degraded state, e.g. boot ensure left the pool mid-recovery):
+      // report unavailable WITHOUT caching, so search() 501s via ensureFts — the same clean posture
+      // as a genuinely absent index, never a raw 500 — and a later call re-probes after recovery.
+      let rows: unknown[];
+      try {
+        rows = await this.dataSource.query(
+          `SELECT a.attname FROM pg_attribute a WHERE a.attrelid = to_regclass('messages') AND a.attname = 'body_ts' AND NOT a.attisdropped`,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `FTS probe failed; treating the index as unavailable: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return false;
+      }
+      this.ftsAvailable = Array.isArray(rows) && rows.length >= 1;
     } else {
       const rows: unknown[] = await this.dataSource.query(
         `SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'`,
