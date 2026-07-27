@@ -7,11 +7,13 @@ jest.mock('../metrics/request-metrics', () => ({
 import { Observable } from 'rxjs';
 import { RequestMetricsInterceptor } from './request-metrics.interceptor';
 import { recordHttpRequest } from '../metrics/request-metrics';
+import { HTTP_REQUEST_METRICS_CLAIMED } from '../middleware/request-metrics.middleware';
 
 const mockedRecord = recordHttpRequest as jest.MockedFunction<typeof recordHttpRequest>;
 
 interface Ctx {
   ctx: Record<string, unknown>;
+  req: Record<string, unknown>;
   listeners: { finish?: () => void; close?: () => void };
 }
 
@@ -35,7 +37,7 @@ function makeContext(opts: {
     getClass: () => ({ name: opts.className ?? 'SessionController' }),
     getHandler: () => ({ name: opts.handlerName ?? 'list' }),
   };
-  return { ctx, listeners };
+  return { ctx, req, listeners };
 }
 
 const noopHandler = { handle: (): Observable<unknown> => new Observable<unknown>() };
@@ -89,5 +91,17 @@ describe('RequestMetricsInterceptor', () => {
     listeners.finish?.();
     listeners.close?.();
     expect(mockedRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims the request so the boundary middleware does not record it a second time', () => {
+    const { ctx, req } = makeContext({ routePath: '/api/sessions' });
+    new RequestMetricsInterceptor().intercept(ctx as never, noopHandler as never);
+    expect((req as Record<string | symbol, unknown>)[HTTP_REQUEST_METRICS_CLAIMED]).toBe(true);
+  });
+
+  it('does NOT claim skipped prefixes — nothing records those at all', () => {
+    const { ctx, req } = makeContext({ routePath: '/api/health' });
+    new RequestMetricsInterceptor().intercept(ctx as never, noopHandler as never);
+    expect((req as Record<string | symbol, unknown>)[HTTP_REQUEST_METRICS_CLAIMED]).toBeUndefined();
   });
 });

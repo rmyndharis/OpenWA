@@ -53,14 +53,24 @@ export class ShutdownService {
     setTimeout(() => {
       this.logger.log('Initiating shutdown...');
       const doShutdown = async () => {
+        // The exit status mirrors the teardown outcome: 0 when teardown completed, 1 when it
+        // failed — an orchestrator (k8s, systemd, docker restart policies) must not read a
+        // resource-leaking shutdown as a clean one. (A teardown that HANGS never reaches this
+        // exit at all; that case is bounded externally by the second-signal force-exit in
+        // main.ts or the orchestrator's SIGKILL deadline.)
+        let exitCode = 0;
         try {
           if (this.destroyCallback) {
             await this.destroyCallback();
           }
         } catch (error) {
-          this.logger.error('Error during shutdown', error instanceof Error ? error.message : String(error));
+          exitCode = 1;
+          this.logger.error(
+            'Shutdown teardown failed — exiting non-zero',
+            error instanceof Error ? error.message : String(error),
+          );
         } finally {
-          process.exit(0);
+          process.exit(exitCode);
         }
       };
       void doShutdown();

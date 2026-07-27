@@ -2,6 +2,7 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { Observable } from 'rxjs';
 import type { Request, Response } from 'express';
 import { recordHttpRequest } from '../metrics/request-metrics';
+import { claimHttpRequestMetrics } from '../middleware/request-metrics.middleware';
 
 /**
  * Records one HTTP RED observation per request into the in-process request-metrics store.
@@ -10,6 +11,11 @@ import { recordHttpRequest } from '../metrics/request-metrics';
  * the handler observable, because exception filters set the final `res.statusCode` AFTER the
  * interceptor's observable chain — `finish`/`close` see the real status (2xx/4xx/5xx). The `recorded`
  * guard keeps it to one observation per request even when both events fire.
+ *
+ * Only requests that PASS the guards reach this interceptor; requests rejected earlier (throttler
+ * 429, API-key guard 401/403) are recorded by requestMetricsBoundaryMiddleware instead. The request
+ * is claimed here synchronously so the middleware (which runs first) skips it — exactly one
+ * observation per response across the pair.
  *
  * Route label: the Express route pattern when available (bounded — `/api/sessions/:id`, not the raw
  * URL), falling back to `Controller#handler` (always available, strictly bounded).
@@ -25,6 +31,7 @@ export class RequestMetricsInterceptor implements NestInterceptor {
     if (route === null || SKIPPED_PREFIXES.some(prefix => route.startsWith(prefix))) {
       return next.handle();
     }
+    claimHttpRequestMetrics(req);
     const method = (req.method ?? 'UNKNOWN').toUpperCase();
     const start = process.hrtime.bigint();
     let recorded = false;
