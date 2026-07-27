@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { MessageService } from '../../../modules/message/message.service';
+import { MESSAGE_TEXT_MAX_LENGTH } from '../../../modules/message/dto/send-message.dto';
+import {
+  CONTACT_NAME_MAX_LENGTH,
+  CONTACT_NUMBER_MAX_LENGTH,
+  LOCATION_TEXT_MAX_LENGTH,
+  REACTION_EMOJI_MAX_LENGTH,
+} from '../../../modules/message/dto/message-actions.dto';
 import type { ToolDescriptor } from '../tool-descriptor';
 
 const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
@@ -223,8 +230,8 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
         chatId: z.string().describe('Chat JID'),
         latitude: z.number().min(-90).max(90).describe('Latitude coordinate'),
         longitude: z.number().min(-180).max(180).describe('Longitude coordinate'),
-        description: z.string().optional().describe('Location label/description'),
-        address: z.string().optional().describe('Street address'),
+        description: z.string().max(LOCATION_TEXT_MAX_LENGTH).optional().describe('Location label/description'),
+        address: z.string().max(LOCATION_TEXT_MAX_LENGTH).optional().describe('Street address'),
       }),
       handler: (input: {
         sessionId: string;
@@ -251,8 +258,12 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
       inputSchema: z.object({
         sessionId,
         chatId: z.string().describe('Chat JID'),
-        contactName: z.string().min(1).describe('Display name of the contact to share'),
-        contactNumber: z.string().min(1).describe('Phone number of the contact to share'),
+        contactName: z.string().min(1).max(CONTACT_NAME_MAX_LENGTH).describe('Display name of the contact to share'),
+        contactNumber: z
+          .string()
+          .min(1)
+          .max(CONTACT_NUMBER_MAX_LENGTH)
+          .describe('Phone number of the contact to share'),
       }),
       handler: (input: { sessionId: string; chatId: string; contactName: string; contactNumber: string }) =>
         message.sendContact(input.sessionId, {
@@ -335,7 +346,7 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
         sessionId,
         chatId: z.string().describe('Chat JID'),
         quotedMessageId: z.string().describe('ID of the message to quote/reply to'),
-        text: z.string().min(1).describe('Reply text content'),
+        text: z.string().min(1).max(MESSAGE_TEXT_MAX_LENGTH).describe('Reply text content'),
       }),
       handler: (input: { sessionId: string; chatId: string; quotedMessageId: string; text: string }) =>
         message.reply(input.sessionId, {
@@ -374,7 +385,10 @@ export function messageTools(message: MessageService): ToolDescriptor[] {
         sessionId,
         chatId: z.string().describe('Chat JID containing the message'),
         messageId: z.string().describe('ID of the message to react to'),
-        emoji: z.string().describe('Emoji to react with. Empty string removes the reaction.'),
+        emoji: z
+          .string()
+          .max(REACTION_EMOJI_MAX_LENGTH)
+          .describe('Emoji to react with. Empty string removes the reaction.'),
       }),
       handler: (input: { sessionId: string; chatId: string; messageId: string; emoji: string }) =>
         message

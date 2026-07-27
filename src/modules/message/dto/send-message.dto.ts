@@ -15,6 +15,10 @@ import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
 const MENTIONS_DESCRIPTION =
   'WIDs to @mention (e.g. ["62811@c.us"]). The text/caption must also contain the @<number> token.';
 
+// Single source of truth for the text-body cap, shared with the agent-tool input schemas
+// (src/core/agent-tools/tools/message.tools.ts) so MCP and REST enforce the same limit.
+export const MESSAGE_TEXT_MAX_LENGTH = 4096;
+
 export class SendTextMessageDto {
   @ApiProperty({
     description: 'WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)',
@@ -27,11 +31,11 @@ export class SendTextMessageDto {
   @ApiProperty({
     description: 'Text message content',
     example: 'Hello from OpenWA!',
-    maxLength: 4096,
+    maxLength: MESSAGE_TEXT_MAX_LENGTH,
   })
   @IsString()
   @IsNotEmpty()
-  @MaxLength(4096)
+  @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
   text: string;
 
   @ApiPropertyOptional({ description: MENTIONS_DESCRIPTION, example: ['628123456789@c.us'], type: [String] })

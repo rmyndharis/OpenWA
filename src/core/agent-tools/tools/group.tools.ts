@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { GroupService } from '../../../modules/group/group.service';
+import { GROUP_DESCRIPTION_MAX_LENGTH, GROUP_NAME_MAX_LENGTH } from '../../../modules/group/dto/group.dto';
 import type { ToolDescriptor } from '../tool-descriptor';
 
 const sessionId = z.string().min(1).describe('Session UUID (the session id, not the name)');
@@ -53,7 +54,7 @@ export function groupTools(group: GroupService): ToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        name: z.string().min(1).describe('Group subject/name'),
+        name: z.string().min(1).max(GROUP_NAME_MAX_LENGTH).describe('Group subject/name'),
         participants: z.array(z.string()).min(1).describe('Participant WhatsApp JIDs (e.g. 628123456789@c.us)'),
       }),
       handler: (input: { sessionId: string; name: string; participants: string[] }) =>
@@ -85,7 +86,7 @@ export function groupTools(group: GroupService): ToolDescriptor[] {
       inputSchema: z.object({
         sessionId,
         groupId: z.string().describe('Group JID (e.g. 120363xxx@g.us)'),
-        subject: z.string().min(1).describe('New group subject/name'),
+        subject: z.string().min(1).max(GROUP_NAME_MAX_LENGTH).describe('New group subject/name'),
       }),
       handler: async (input: { sessionId: string; groupId: string; subject: string }) => {
         await group.setGroupSubject(input.sessionId, input.groupId, input.subject);
@@ -102,7 +103,10 @@ export function groupTools(group: GroupService): ToolDescriptor[] {
       inputSchema: z.object({
         sessionId,
         groupId: z.string().describe('Group JID (e.g. 120363xxx@g.us)'),
-        description: z.string().describe('New group description (may be empty to clear)'),
+        description: z
+          .string()
+          .max(GROUP_DESCRIPTION_MAX_LENGTH)
+          .describe('New group description (may be empty to clear)'),
       }),
       handler: async (input: { sessionId: string; groupId: string; description: string }) => {
         await group.setGroupDescription(input.sessionId, input.groupId, input.description);
