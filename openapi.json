@@ -7489,6 +7489,7 @@
           },
           "participants": {
             "description": "Participant WhatsApp IDs (e.g. 628123456789@c.us)",
+            "maxItems": 256,
             "type": "array",
             "items": {
               "type": "string"
@@ -7505,6 +7506,7 @@
         "properties": {
           "participants": {
             "description": "Participant WhatsApp IDs (e.g. 628123456789@c.us)",
+            "maxItems": 256,
             "type": "array",
             "items": {
               "type": "string"

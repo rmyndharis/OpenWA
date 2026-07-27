@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { SessionService } from '../session/session.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { paginate, ListOptions } from '../../common/utils/paginate';
@@ -98,6 +98,11 @@ export class GroupService {
    * Ordering matters: ephemeralSeconds is applied FIRST because it is the only field with a
    * deterministic per-engine refusal (wwjs always 501s it). Applying announce/locked first would
    * leave a silently half-applied patch behind when the ephemeral call then throws.
+   *
+   * A failure on the FIRST applied field propagates unchanged (nothing was applied, so the patch
+   * simply failed). A failure on a LATER field means the group is now in a mixed state, so the
+   * error names the failed field and the ones already applied — the caller can reconcile instead
+   * of guessing which subset took effect. The wrapped error keeps the underlying HTTP status.
    */
   async updateGroupSettings(
     sessionId: string,
@@ -109,14 +114,33 @@ export class GroupService {
       throw new BadRequestException('At least one of announce, locked, ephemeralSeconds must be provided');
     }
     const engine = this.getEngine(sessionId);
+    const steps: Array<[field: string, apply: () => Promise<unknown>]> = [];
     if (ephemeralSeconds !== undefined) {
-      await engine.setGroupEphemeral(groupId, ephemeralSeconds);
+      steps.push(['ephemeralSeconds', () => engine.setGroupEphemeral(groupId, ephemeralSeconds)]);
     }
     if (announce !== undefined) {
-      await engine.setGroupMessagesAdminsOnly(groupId, announce);
+      steps.push(['announce', () => engine.setGroupMessagesAdminsOnly(groupId, announce)]);
     }
     if (locked !== undefined) {
-      await engine.setGroupInfoAdminsOnly(groupId, locked);
+      steps.push(['locked', () => engine.setGroupInfoAdminsOnly(groupId, locked)]);
+    }
+
+    const applied: string[] = [];
+    for (const [field, apply] of steps) {
+      try {
+        await apply();
+        applied.push(field);
+      } catch (error) {
+        if (applied.length === 0) throw error;
+        const status = error instanceof HttpException ? error.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new HttpException(
+          `Group settings only partially applied: '${field}' failed (${detail}); already applied: ${applied.join(
+            ', ',
+          )}`,
+          status,
+        );
+      }
     }
   }
 }

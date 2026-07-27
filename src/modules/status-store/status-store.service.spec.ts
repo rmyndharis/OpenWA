@@ -258,10 +258,14 @@ describe('StatusStoreService ingest race (unique-constraint loser)', () => {
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
 
-  const mediaDir = (): string[] => fs.readdirSync(path.join(baseDir, 'media', 'statuses', 'sess'));
+  const mediaDir = (): string[] => {
+    const dir = path.join(baseDir, 'media', 'statuses', 'sess');
+    return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  };
 
-  it('reaps the media file it wrote when a concurrent ingest wins the unique constraint', async () => {
-    // The winner committed its own media file; the loser must not leave a second, orphaned one.
+  it('never writes a media file when a concurrent ingest wins the unique constraint (row-first)', async () => {
+    // The winner committed its own media file; with row-first ordering the loser has not written
+    // anything at the point its save fails, so there is nothing to reap and no second file.
     fs.mkdirSync(path.join(baseDir, 'media', 'statuses', 'sess'), { recursive: true });
     fs.writeFileSync(path.join(baseDir, 'media', 'statuses', 'sess', 'winner.jpg'), 'winner');
     const winner = new StatusUpdate();
@@ -286,7 +290,7 @@ describe('StatusStoreService ingest race (unique-constraint loser)', () => {
     expect(mediaDir()).toEqual(['winner.jpg']);
   });
 
-  it('reaps the file it wrote when the save fails with no winner row, then rethrows', async () => {
+  it('writes no file when the row save fails with no winner row, then rethrows', async () => {
     const repo = {
       findOne: jest.fn().mockResolvedValue(null),
       save: jest.fn().mockRejectedValue(new Error('database is locked')),
@@ -303,26 +307,21 @@ describe('StatusStoreService ingest race (unique-constraint loser)', () => {
       }),
     ).rejects.toThrow('database is locked');
 
+    // Row-first: the save precedes any file write, so a failed save can never leak an orphan.
     expect(mediaDir()).toHaveLength(0);
   });
 
-  it('keeps the file but still rethrows when the re-read row is this very insert (driver errored on a commit that landed)', async () => {
+  it('rethrows a non-unique save error even when the commit landed, leaving no orphan file behind', async () => {
+    // The pathological "driver errored on a commit that landed" case: the re-read finds a row, but
+    // the failure is genuine (not a unique violation) and must surface. The landed row carries no
+    // media reference (the file write comes after the save), so the state stays consistent.
+    const landed = new StatusUpdate();
     const repo = {
-      findOne: jest
-        .fn()
-        .mockResolvedValueOnce(null)
-        // The row that "landed" references exactly the file this ingest just wrote.
-        .mockImplementation(() => {
-          const selfRow = new StatusUpdate();
-          selfRow.mediaPath = `statuses/sess/${mediaDir()[0]}`;
-          return Promise.resolve(selfRow);
-        }),
+      findOne: jest.fn().mockResolvedValueOnce(null).mockResolvedValue(landed),
       save: jest.fn().mockRejectedValue(new Error('driver reported failure after commit')),
     } as unknown as Repository<StatusUpdate>;
     const service = new StatusStoreService(repo, storageService, fakeConfigService());
 
-    // Not a unique-constraint error, so the failure surfaces even though a row exists — but the
-    // file is kept: the re-read row IS this insert, so its media is still referenced.
     await expect(
       service.ingest('sess', {
         waStatusId: 'raced',
@@ -333,7 +332,7 @@ describe('StatusStoreService ingest race (unique-constraint loser)', () => {
       }),
     ).rejects.toThrow('driver reported failure after commit');
 
-    expect(mediaDir()).toHaveLength(1);
+    expect(mediaDir()).toHaveLength(0);
   });
 
   it('rethrows a non-unique save error even when a coincidental winner row exists', async () => {
@@ -348,7 +347,7 @@ describe('StatusStoreService ingest race (unique-constraint loser)', () => {
     const service = new StatusStoreService(repo, storageService, fakeConfigService());
 
     // A genuine persistence failure must not be swallowed into an idempotent return just because
-    // a matching row happens to exist — and this call's own file is still reaped.
+    // a matching row happens to exist — and this call never wrote a file to begin with.
     await expect(
       service.ingest('sess', {
         waStatusId: 'raced',
@@ -506,13 +505,143 @@ describe('StatusStoreService.purgeExpired', () => {
     expect(removed).toBe(0);
     expect(await repository.count()).toBe(1);
   });
+
+  it('keeps a row whose media delete failed (retried next sweep), still purging the rest', async () => {
+    const expiredWithMedia = await ingestWithMedia('expired-media', 1000);
+    await service.ingest('sess', {
+      waStatusId: 'expired-text',
+      contactJid: '628111@c.us',
+      type: 'text',
+      postedAt: 2000,
+    });
+    const mediaFile = path.join(baseDir, 'media', expiredWithMedia.mediaPath!);
+
+    // A backend outage fails the file delete: the row must survive (deleting it would orphan the
+    // file permanently), while the file-less text row is still purged.
+    const failingStorage = {
+      deleteFile: jest.fn().mockRejectedValue(new Error('backend down')),
+    } as unknown as StorageService;
+    const failingService = new StatusStoreService(repository, failingStorage, fakeConfigService());
+
+    const now = 2000 + 24 * 60 * 60 * 1000 + 1;
+    const removed = await failingService.purgeExpired(now);
+
+    expect(removed).toBe(1); // only the text row (no file to delete)
+    const remaining = await repository.find();
+    expect(remaining.map(r => r.waStatusId)).toEqual(['expired-media']);
+    expect(fs.existsSync(mediaFile)).toBe(true);
+
+    // The next sweep, with a healthy backend, finishes the job.
+    const retried = await service.purgeExpired(now);
+    expect(retried).toBe(1);
+    expect(await repository.count()).toBe(0);
+    expect(fs.existsSync(mediaFile)).toBe(false);
+  });
 });
 
-describe('StatusStoreService onModuleInit/onModuleDestroy (purge scheduling)', () => {
+describe('StatusStoreService.sweepOrphanedMedia', () => {
+  let baseDir: string;
+  let ds: DataSource;
+  let repository: Repository<StatusUpdate>;
+  let storageService: StorageService;
+  let service: StatusStoreService;
+
+  beforeEach(async () => {
+    baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-status-sweep-'));
+    ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [StatusUpdate], synchronize: true });
+    await ds.initialize();
+    repository = ds.getRepository(StatusUpdate);
+    storageService = makeStorageService(path.join(baseDir, 'media'));
+    service = new StatusStoreService(repository, storageService, fakeConfigService());
+  });
+
+  afterEach(async () => {
+    if (ds.isInitialized) await ds.destroy();
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  const ingestWithMedia = async (waStatusId: string, postedAt: number): Promise<StatusUpdate> =>
+    (
+      await service.ingest('sess', {
+        waStatusId,
+        contactJid: '628111@c.us',
+        type: 'image',
+        media: { mimetype: 'image/jpeg', data: Buffer.from(waStatusId).toString('base64') },
+        postedAt,
+      })
+    ).row;
+
+  const writeFile = (key: string, contents: string): void => {
+    const full = path.join(baseDir, 'media', key);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, contents);
+  };
+
+  it('reaps an orphan only after the grace window; never touches referenced or non-status files', async () => {
+    const live = await ingestWithMedia('live', Date.now());
+    const liveFile = path.join(baseDir, 'media', live.mediaPath!);
+    // A file with no referencing row — the crash-between-write-and-row-update leftover.
+    writeFile('statuses/sess/orphan.jpg', 'orphan');
+    // Chat media shares the store; the sweep is scoped to the statuses/ prefix.
+    writeFile('chat/sess/keep.jpg', 'keep');
+
+    const t0 = Date.now();
+    // First sighting only records the orphan; inside the grace window nothing is deleted.
+    expect(await service.sweepOrphanedMedia(t0)).toBe(0);
+    expect(await service.sweepOrphanedMedia(t0 + 30 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'orphan.jpg'))).toBe(true);
+
+    // Past the grace window (default 1h) the orphan is reaped; referenced and non-status files stay.
+    expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(1);
+    expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'orphan.jpg'))).toBe(false);
+    expect(fs.existsSync(liveFile)).toBe(true);
+    expect(fs.existsSync(path.join(baseDir, 'media', 'chat', 'sess', 'keep.jpg'))).toBe(true);
+  });
+
+  it('never reaps a file that becomes referenced between sightings', async () => {
+    // First pass sees the file while its row update has not landed yet (the ingest crash window).
+    writeFile('statuses/sess/pending.jpg', 'pending');
+    const t0 = Date.now();
+    expect(await service.sweepOrphanedMedia(t0)).toBe(0);
+
+    // The row update lands, now referencing the file.
+    const row = new StatusUpdate();
+    row.sessionId = 'sess';
+    row.contactJid = '628111@c.us';
+    row.waStatusId = 'late-reference';
+    row.type = 'image';
+    row.postedAt = t0;
+    row.expiresAt = t0 + 24 * 60 * 60 * 1000;
+    row.mediaPath = 'statuses/sess/pending.jpg';
+    row.mediaMimetype = 'image/jpeg';
+    row.mediaOmitted = false;
+    await repository.save(row);
+
+    // Even past the grace window the file is safe — the referenced check re-reads the rows.
+    expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'pending.jpg'))).toBe(true);
+  });
+
+  it('honors a configured status.orphanGraceMs override', async () => {
+    const shortGrace = new StatusStoreService(
+      repository,
+      storageService,
+      fakeConfigService({ 'status.orphanGraceMs': 1000 }),
+    );
+    writeFile('statuses/sess/orphan.jpg', 'orphan');
+
+    const t0 = Date.now();
+    expect(await shortGrace.sweepOrphanedMedia(t0)).toBe(0);
+    expect(await shortGrace.sweepOrphanedMedia(t0 + 1001)).toBe(1);
+    expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'orphan.jpg'))).toBe(false);
+  });
+});
+
+describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', () => {
   const mockDeps = (): { repo: Repository<StatusUpdate>; storage: StorageService; find: jest.Mock } => {
     const find = jest.fn().mockResolvedValue([]);
     const repo = { find } as unknown as Repository<StatusUpdate>;
-    const storage = {} as StorageService;
+    const storage = { listFiles: jest.fn().mockResolvedValue([]) } as unknown as StorageService;
     return { repo, storage, find };
   };
 
@@ -534,6 +663,53 @@ describe('StatusStoreService onModuleInit/onModuleDestroy (purge scheduling)', (
       purgeSpy.mockClear();
       jest.advanceTimersByTime(15 * 60 * 1000);
       expect(purgeSpy).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('runs the orphan sweep once at startup and on its own (slower) cadence, cleared on destroy', () => {
+    const { repo, storage } = mockDeps();
+    const service = new StatusStoreService(repo, storage, fakeConfigService());
+
+    jest.useFakeTimers();
+    try {
+      const sweepSpy = jest.spyOn(service, 'sweepOrphanedMedia').mockResolvedValue(0);
+      service.onModuleInit();
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+      // The TTL purge fires every 15 min; the orphan sweep only on its own 1h interval.
+      sweepSpy.mockClear();
+      jest.advanceTimersByTime(15 * 60 * 1000);
+      expect(sweepSpy).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(45 * 60 * 1000);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+      service.onModuleDestroy();
+      sweepSpy.mockClear();
+      jest.advanceTimersByTime(60 * 60 * 1000);
+      expect(sweepSpy).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('honors a configured status.orphanSweepIntervalMs override', () => {
+    const { repo, storage } = mockDeps();
+    const service = new StatusStoreService(
+      repo,
+      storage,
+      fakeConfigService({ 'status.orphanSweepIntervalMs': 5 * 60 * 1000 }),
+    );
+
+    jest.useFakeTimers();
+    try {
+      const sweepSpy = jest.spyOn(service, 'sweepOrphanedMedia').mockResolvedValue(0);
+      service.onModuleInit();
+      sweepSpy.mockClear();
+      jest.advanceTimersByTime(5 * 60 * 1000);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+      service.onModuleDestroy();
     } finally {
       jest.useRealTimers();
     }

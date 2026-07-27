@@ -27,6 +27,9 @@ export interface GetMessagesOptions {
   offset?: number;
 }
 
+/** Default cap on a rendered template's final text; overridable via TEMPLATE_RENDER_MAX_CHARS. */
+export const DEFAULT_TEMPLATE_RENDER_MAX_CHARS = 64 * 1024;
+
 /**
  * Outbound sends are executed directly against the WhatsApp engine, not via a BullMQ queue.
  *
@@ -141,6 +144,10 @@ export class MessageService {
    * existing {@link sendText} path so plugin hooks, persistence, and status
    * tracking are reused. Throws NotFoundException when the template cannot be
    * resolved by id or name.
+   *
+   * The FINAL rendered text is capped at template.renderMaxChars (default 64 KiB): caller-supplied
+   * variables can inflate a small template unboundedly, so an over-cap render is rejected with a
+   * 400 naming the limit rather than truncated silently or pushed to the engine/DB as-is.
    */
   async sendTemplate(sessionId: string, dto: SendTemplateMessageDto): Promise<MessageResponseDto> {
     const template = await this.templateService.resolve(sessionId, {
@@ -153,6 +160,15 @@ export class MessageService {
       .filter((segment): segment is string => segment != null && segment.length > 0)
       .map(segment => renderTemplate(segment, vars));
     const text = segments.join('\n\n');
+
+    const maxChars =
+      this.configService?.get<number>('template.renderMaxChars', DEFAULT_TEMPLATE_RENDER_MAX_CHARS) ??
+      DEFAULT_TEMPLATE_RENDER_MAX_CHARS;
+    if (text.length > maxChars) {
+      throw new BadRequestException(
+        `Rendered template is ${text.length} characters, over the ${maxChars}-character limit`,
+      );
+    }
 
     return this.sendText(sessionId, { chatId: dto.chatId, text });
   }

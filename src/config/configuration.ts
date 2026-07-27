@@ -260,6 +260,30 @@ export default () => ({
       const n = parseInt(process.env.STATUS_MEDIA_MAX_BYTES ?? '', 10);
       return Number.isFinite(n) && n > 0 ? n : 10 * 1024 * 1024;
     })(),
+    // How often the reconciliation sweep re-lists status media files to find ones no row references
+    // (default 1h). Orphans only arise from a crash between the media write and its row update.
+    orphanSweepIntervalMs: (() => {
+      const n = parseInt(process.env.STATUS_ORPHAN_SWEEP_INTERVAL_MS ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 60 * 60 * 1000;
+    })(),
+    // How long an unreferenced status media file must be observed by the sweep before it is deleted
+    // (default 1h), so a file mid-ingest is never reaped. A non-positive/garbage value falls back.
+    orphanGraceMs: (() => {
+      const n = parseInt(process.env.STATUS_ORPHAN_GRACE_MS ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 60 * 60 * 1000;
+    })(),
+  },
+
+  // Message-template rendering
+  template: {
+    // Cap on the FINAL rendered text of a send-template request (header+body+footer joined, after
+    // caller-supplied variable substitution; default 64 KiB — also WhatsApp's own text-message
+    // ceiling). Without it a small template plus a huge variable inflates the payload to the
+    // engine/DB unboundedly. Over-cap renders are rejected (400), never silently truncated.
+    renderMaxChars: (() => {
+      const n = parseInt(process.env.TEMPLATE_RENDER_MAX_CHARS ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 64 * 1024;
+    })(),
   },
 
   // Storage configuration

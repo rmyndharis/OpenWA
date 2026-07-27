@@ -359,6 +359,52 @@ describe('MessageService', () => {
       );
       expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
     });
+
+    it('rejects an over-cap render with a 400 naming the limit (never truncated silently)', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
+
+      const error = await service
+        .sendTemplate('sess-1', {
+          chatId: 'test@c.us',
+          templateId: 'tpl-1',
+          vars: { customer: 'x'.repeat(70_000) },
+        })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as Error).message).toContain('over the 65536-character limit');
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('renders at-or-under the cap unchanged', async () => {
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hi {{customer}}' }));
+      // 'Hi ' + name lands exactly on the 64 KiB default cap — at the cap is NOT over it.
+      const name = 'y'.repeat(64 * 1024 - 3);
+
+      await service.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { customer: name } });
+
+      expect(mockEngine.sendTextMessage).toHaveBeenCalledWith('test@c.us', `Hi ${name}`);
+    });
+
+    it('honors a configured template.renderMaxChars override', async () => {
+      const configService = {
+        get: (key: string, fallback: unknown) => (key === 'template.renderMaxChars' ? 10 : fallback),
+      } as unknown as ConstructorParameters<typeof MessageService>[5];
+      const capped = new MessageService(
+        repository as Repository<Message>,
+        sessionService as unknown as SessionService,
+        hookManager as HookManager,
+        templateService as unknown as TemplateService,
+        lidMappingStore as unknown as LidMappingStoreService,
+        configService,
+      );
+      (templateService.resolve as jest.Mock).mockResolvedValue(mockTemplate({ body: 'Hello {{customer}}' }));
+
+      await expect(
+        capped.sendTemplate('sess-1', { chatId: 'test@c.us', templateId: 'tpl-1', vars: { customer: 'Alice' } }),
+      ).rejects.toThrow(/over the 10-character limit/);
+      expect(mockEngine.sendTextMessage).not.toHaveBeenCalled();
+    });
   });
 
   // ── send-hook chokepoint ──────────────────────────────────────────

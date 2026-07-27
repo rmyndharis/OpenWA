@@ -41,6 +41,20 @@ describe('group DTO validation', () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  it('accepts a participants array at the batch cap (256)', async () => {
+    const participants = Array.from({ length: 256 }, (_, i) => `628100000${String(i).padStart(3, '0')}@c.us`);
+    expect(await errorsFor(ParticipantsDto, { participants })).toHaveLength(0);
+    expect(await errorsFor(CreateGroupDto, { name: 'G', participants })).toHaveLength(0);
+  });
+
+  it('rejects a participants array beyond the batch cap (the engine works the list sequentially)', async () => {
+    const participants = Array.from({ length: 257 }, (_, i) => `628100000${String(i).padStart(3, '0')}@c.us`);
+    const batchErrors = await errorsFor(ParticipantsDto, { participants });
+    expect(batchErrors.some(e => e.property === 'participants')).toBe(true);
+    const createErrors = await errorsFor(CreateGroupDto, { name: 'G', participants });
+    expect(createErrors.some(e => e.property === 'participants')).toBe(true);
+  });
+
   it('still rejects unknown properties (forbidNonWhitelisted intact)', async () => {
     const errors = await errorsFor(ParticipantsDto, { participants: ['x@c.us'], hacker: true });
     expect(errors.some(e => e.property === 'hacker')).toBe(true);
