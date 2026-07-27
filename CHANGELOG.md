@@ -108,6 +108,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pending`, and masked the real delivery failures and the `message:failed` events that had already
   fired. FAILED is now in the terminal-status guard, so each terminal status stays exclusive.
 
+- **The ingress queue now actually queues when `QUEUE_ENABLED=true`, persisted ingress events are
+  reconciled after silent-loss windows, and disabling one instance no longer tears down an enabled
+  sibling sharing its session scope.** The IntegrationModule never imported the QueueModule, so the
+  `@Optional()` ingress queue injection was always `undefined` and every delivery dispatched inline
+  despite the operator-facing queued contract (fast-ack, retries, ordering, DLQ) — the module now
+  imports it conditionally (mirroring the webhook module) and the boot fail-fast tripwire crashes
+  startup loudly if the wiring ever regresses. `ingress_events` was a dedup log but never a
+  durability handle: a crash between persist and dispatch, a failed fire-and-forget response route,
+  or a swallowed inline failure lost the event while the provider's honest retry deduped to a no-op.
+  Rows now carry `dispatchState`/`dispatchAttempts`/`lastDispatchAt` (legacy rows excluded), the
+  enqueue path records outcomes, and a 60s reconciler (`INGRESS_RECONCILE_*`) replays stuck
+  deliveries with their original delivery id, retiring them terminally (plus a DLQ row) after five
+  attempts instead of looping forever. Separately, disabling, deleting, or re-scoping an instance
+  unconditionally stripped its session from the plugin's `activeSessions` and wiped the per-session
+  config even when another ENABLED instance shared that scope; the teardown now checks for an
+  enabled sibling first, and concrete activation preserves `'*'` while a wildcard sibling is still
+  enabled. (#921, #924, #922)
+
+- **Search-provider plugins now receive the finalized state of every outbound message, and two
+  runnable cURL examples in the API collection no longer 404.** The `message:persisted` hook fired
+  only for the initial PENDING row: the finalized SENT/FAILED save emitted nothing, and the
+  echo-merge that drops the redundant pending row left a ghost document no provider could correlate
+  (the pending row has no `waMessageId`). The hook now re-fires on every persisted transition as an
+  upsert keyed by the row id — SENT with the engine id, FAILED on send failure, the surviving row
+  after an echo-won merge — and a new `message:deleted` event fires for the dropped row, with
+  shallow-snapshot payloads so fire-and-forget delivery sees the state at emission time. Separately,
+  the history and reactions cURLs in `docs/07-api-collection.md` missed the `/messages` segment and
+  returned 404 when copied verbatim. (#919, #910)
+
+- **Restarting a session no longer SIGKILLs the live browser of a prefix-named sibling.** The
+  orphan-Chromium sweep matched the `--openwa-session=<id>` marker as a plain substring of the `ps`
+  command line, so restarting session `sales` killed the running browser of sibling `sales2`. The
+  marker is now matched token-exactly (whitespace/string-boundary delimited, session id
+  regex-escaped). (#923)
+
 ### Security
 
 - **The HTTP body parser, the WebSocket gateway, and the plugin install path are now bounded against
@@ -224,6 +259,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into `node:22-slim` — and the arm64-only `chromium` packages — that the source-tree `npm audit`
   gate cannot see. Runs at release time only, so it never touches fork-PR token permissions.
 
+- **Session-scoped API keys can no longer escape their fence through key management or integration
+  instance management, and plugin `conversation.send` now verifies the mapping belongs to the
+  envelope's session.** The guard enforces `allowedSessions` only against the `:sessionId` route
+  param, so surfaces without one slipped through: every `/api/auth/api-keys` route (a scoped ADMIN
+  could mint an unrestricted ADMIN key, clear another key's scope, or enumerate all credentials —
+  a total, persistent escape) and the integration instance routes (whose `sessionScope` travels in
+  the request body and persisted rows the guard never sees). A new `@RequireUnscopedKey()` marker
+  rejects any allowlisted key on the key-lifecycle controller (403, audited via the existing
+  failed-auth trail), and instance create/patch/redrive now intersect the requested and persisted
+  scopes with the caller's allowlist — out-of-scope instances answer 404 (indistinguishable from
+  missing, so they cannot be probed), and an all-sessions scope is uncreatable by scoped keys.
+  Separately, `conversation.send` resolved a provider-conversation mapping without comparing its
+  `sessionId` to the envelope session, so a stale mapping after a scope move could send on the
+  wrong WhatsApp session; the lookup now fails closed on any mismatch (an explicit `chatId` in the
+  envelope is unaffected). **Breaking (behavior):** session-scoped ADMIN keys now get 403 on all
+  key-management routes and can only manage instances bound inside their own sessions; unrestricted
+  keys (including the bootstrap key) are unchanged. (#916, #920)
+
 ### Changed
 
 - **Dashboard stats aggregates now use a standalone `messages(createdAt)` index and a short TTL
@@ -308,6 +361,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trust-tiers table still named them as built-in examples — misleading an operator about what counts
   as a trusted in-process plugin. The table now names only the two engine adapters, matching
   `docs/19-plugin-architecture.md` and the code.
+
+- **The default WhatsApp Web version pin now discloses its trust posture instead of being
+  misdocumented as a library auto-select.** With `WWEBJS_WEB_VERSION` unset, `auto`, or `latest`,
+  OpenWA resolves a settled build from the third-party `wppconnect-team/wa-version` registry and
+  pins its HTML — content executed inside the authenticated `web.whatsapp.com` origin without an
+  integrity check (the pin exists to avoid the scan→stuck→disconnect-loop class, #488/#684) — but
+  `.env.example`, both compose files, the adapter comment, and the troubleshooting FAQ all claimed
+  unset/`off` alike "let whatsapp-web.js auto-select". The docs now describe the real default and
+  its trust implication, only `WWEBJS_WEB_VERSION=off` selects the first-party build served by
+  WhatsApp, and a once-per-process WARN at pin time names the resolved version, the source URL, and
+  the opt-outs (an operator-controlled copy via `WWEBJS_WEB_VERSION_REMOTE_PATH`). The active build
+  and its source (`pinned`/`auto`/`native`) remain visible on the dashboard's Infrastructure page.
+  (#917)
 
 ## [0.10.10] - 2026-07-25
 
