@@ -87,6 +87,19 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # Real Redis for the queue-on e2e suite (test/queue-on.e2e-spec.ts); the rest of the e2e family
+    # boots QUEUE_ENABLED=false and never connects. Mirrors the test-postgres job's service pattern;
+    # the image pin matches docker-compose.yml.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -109,6 +122,11 @@ jobs:
 
       - name: Run e2e smoke tests
         run: npm run test:e2e
+        # Point the queue-on suite at the service container (it self-skips without one). Every other
+        # suite keeps QUEUE_ENABLED=false via setup-e2e.ts and never touches Redis.
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: '6379'
 
       - name: Upload coverage
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
