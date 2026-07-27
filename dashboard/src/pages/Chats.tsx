@@ -424,6 +424,19 @@ export function Chats() {
   } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
+  // removing the attachment) before `onload` fires must win over the late-arriving bytes —
+  // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
+  const attachmentReadSeq = useRef(0);
+
+  // Unmounting the page with a read still in flight: invalidate both readers so their late
+  // onload handlers drop the bytes instead of setting state on a dead component.
+  useEffect(() => {
+    return () => {
+      attachmentReadSeq.current += 1;
+      composeImageReadSeq.current += 1;
+    };
+  }, []);
 
   // References
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -998,8 +1011,11 @@ export function Chats() {
       setPreviewUrl(null);
     }
 
+    const myRead = ++attachmentReadSeq.current;
     const reader = new FileReader();
     reader.onload = event => {
+      // A newer pick, a removal, or an unmount since the read started supersedes these bytes.
+      if (attachmentReadSeq.current !== myRead) return;
       const dataUrl = event.target?.result as string;
       const base64Data = dataUrl.split(',')[1];
       setAttachment({ file, base64: base64Data, mimetype: file.type, filename: file.name });
@@ -1008,6 +1024,7 @@ export function Chats() {
   };
 
   const handleRemoveAttachment = () => {
+    attachmentReadSeq.current += 1; // an in-flight read must not resurrect the removed attachment
     setAttachment(null);
     setPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = '';

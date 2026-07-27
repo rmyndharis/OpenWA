@@ -103,6 +103,19 @@ export function MessageTester() {
   // exclusive with mediaUrl: picking a file clears the URL field; typing a URL drops the file.
   const [mediaFile, setMediaFile] = useState<{ base64: string; mimetype: string; filename: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Monotonic token invalidating an in-flight FileReader: a second pick, a URL edit, a removal,
+  // or an unmount before `onload` fires must win over the late-arriving bytes — otherwise the
+  // slower read overwrites the newer state (and re-clears a URL the user just typed).
+  const mediaReadSeq = useRef(0);
+  const clearMediaFile = () => {
+    mediaReadSeq.current += 1;
+    setMediaFile(null);
+  };
+  useEffect(() => {
+    return () => {
+      mediaReadSeq.current += 1;
+    };
+  }, []);
   // Per-type fields for the non-media types; text/media keep using `content`/`mediaUrl` above.
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
@@ -201,8 +214,12 @@ export function MessageTester() {
       setResponse({ success: false, timestamp: new Date().toISOString(), error: t('messageTester.fileTooLarge') });
       return;
     }
+    const myRead = ++mediaReadSeq.current;
     const reader = new FileReader();
     reader.onload = () => {
+      // A newer pick, a URL edit, a removal, or an unmount since the read started supersedes
+      // these bytes — drop them.
+      if (mediaReadSeq.current !== myRead) return;
       const dataUrl = reader.result;
       if (typeof dataUrl !== 'string') return;
       // readAsDataURL yields "data:<mime>;base64,<payload>"; the engine expects raw base64, so strip the prefix.
@@ -213,6 +230,7 @@ export function MessageTester() {
       if (messageType === 'document') setContent(file.name);
     };
     reader.onerror = () => {
+      if (mediaReadSeq.current !== myRead) return;
       setResponse({ success: false, timestamp: new Date().toISOString(), error: t('messageTester.fileReadError') });
     };
     reader.readAsDataURL(file);
@@ -506,7 +524,7 @@ export function MessageTester() {
                   onClick={() => {
                     // A picked file's mimetype is bound to the category active at pick time, so dropping the
                     // category would route stale bytes to the wrong send-${type} endpoint — clear it.
-                    if (type !== messageType) setMediaFile(null);
+                    if (type !== messageType) clearMediaFile();
                     setMessageType(type);
                   }}
                 >
@@ -537,6 +555,9 @@ export function MessageTester() {
                   value={mediaUrl}
                   onChange={e => {
                     setMediaUrl(e.target.value);
+                    // Typing a URL supersedes the file: drop the picked file AND any read still
+                    // in flight (its late onload would otherwise re-clear this URL).
+                    mediaReadSeq.current += 1;
                     if (mediaFile) setMediaFile(null);
                   }}
                   placeholder="https://example.com/file.jpg"
@@ -550,7 +571,7 @@ export function MessageTester() {
                     <span className="file-name" title={mediaFile.filename}>
                       {mediaFile.filename}
                     </span>
-                    <button type="button" className="remove-file-btn" onClick={() => setMediaFile(null)}>
+                    <button type="button" className="remove-file-btn" onClick={clearMediaFile}>
                       <X size={14} /> {t('messageTester.removeFile')}
                     </button>
                   </div>

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { pluginsApi } from '../services/api';
 import type { Plugin, CatalogPlugin, PluginConfigField } from '../services/api';
+import { injectConfigUiCsp } from '../utils/pluginFrameSecurity';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useTheme } from '../hooks/useTheme';
 import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
@@ -247,8 +248,10 @@ function ConfigField({
 
 /**
  * Renders a plugin's sandboxed-iframe config editor. The entry HTML is fetched WITH the API key
- * (which never enters the iframe) and injected as `srcdoc` into a `sandbox="allow-scripts"` iframe
- * (opaque origin — no access to the parent). The editor talks to the host over a postMessage bridge:
+ * (which never enters the iframe), hardened (script nonces + a per-document CSP that pins media
+ * to 'self'/data: and forbids connections/forms — see utils/pluginFrameSecurity), and injected
+ * as `srcdoc` into a `sandbox="allow-scripts"` iframe (opaque origin — no access to the parent).
+ * The editor talks to the host over a postMessage bridge:
  *   iframe → host  { type: 'config:get' }          → host → iframe { type: 'config:value', config, schema, theme }
  *   iframe → host  { type: 'config:save', config }  → host → iframe { type: 'config:saved' } | { type: 'config:error', message }
  * The host makes the authenticated PUT (secret redact/restore applies); the iframe only ever sees the
@@ -273,13 +276,18 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
   const [handshakeReceived, setHandshakeReceived] = useState(false);
   const [handshakeError, setHandshakeError] = useState<string | null>(null);
 
-  const nonceConfigUiScripts = (source: string): string => {
+  const hardenConfigUiHtml = (source: string): string => {
     const nonce = document.querySelector<HTMLMetaElement>('meta[name="openwa-csp-nonce"]')?.content ?? '';
-    if (!nonce || nonce === '__OPENWA_CSP_NONCE__') return source; // Vite development has no production CSP.
     const doc = new DOMParser().parseFromString(source, 'text/html');
-    // Config UIs are required to be self-contained. Nonce only inline scripts; a plugin-supplied
-    // external `src` must still satisfy the parent's host allow-list rather than bypassing it via nonce.
-    for (const script of doc.querySelectorAll('script:not([src])')) script.setAttribute('nonce', nonce);
+    if (nonce && nonce !== '__OPENWA_CSP_NONCE__') {
+      // Vite development has no production CSP, so there is nothing to stamp. Config UIs are
+      // required to be self-contained. Nonce only inline scripts; a plugin-supplied external
+      // `src` must still satisfy the parent's host allow-list rather than bypassing it via nonce.
+      for (const script of doc.querySelectorAll('script:not([src])')) script.setAttribute('nonce', nonce);
+    }
+    // Lock down media/connection egress for the frame's document — independent of the parent
+    // CSP, so it protects Vite dev sessions too. See utils/pluginFrameSecurity.
+    injectConfigUiCsp(doc);
     return `<!doctype html>\n${doc.documentElement.outerHTML}`;
   };
 
@@ -376,7 +384,7 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
         ref={iframeRef}
         className="plugin-config-ui-frame"
         sandbox="allow-scripts"
-        srcDoc={nonceConfigUiScripts(html)}
+        srcDoc={hardenConfigUiHtml(html)}
         title={plugin.name}
         style={{ height: plugin.configUi?.height ?? 600 }}
       />

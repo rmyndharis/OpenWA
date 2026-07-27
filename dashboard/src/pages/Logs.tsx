@@ -9,6 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
 import { pageWindow } from '../utils/pageWindow';
 import { fetchAllPages } from '../utils/fetchAllPages';
+import { escapeCsvCell } from '../utils/csv';
 import './Logs.css';
 
 export function Logs() {
@@ -49,10 +50,6 @@ export function Logs() {
       'statusCode',
       'errorMessage',
     ];
-    const escape = (value: unknown): string => {
-      const s = value === undefined || value === null ? '' : String(value);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
     const lines = rows.map(log =>
       [
         log.createdAt,
@@ -66,7 +63,7 @@ export function Logs() {
         log.statusCode,
         log.errorMessage,
       ]
-        .map(escape)
+        .map(escapeCsvCell)
         .join(','),
     );
     return [headers.join(','), ...lines].join('\n');

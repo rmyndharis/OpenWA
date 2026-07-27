@@ -28,10 +28,11 @@ const BOUNDARY_CHAR = /^[\s.,;:!?()[\]{}'"<>]$/;
  * 1. Extract code segments (triple-backtick blocks first, then single-backtick inline)
  *    by walking the string and emitting `codeblock` / `code` nodes for them; the
  *    remaining text segments are passed to the format parser.
- * 2. The format parser does a recursive descent: it scans for the next opening
- *    marker (`*`, `_`, `~`) that has a valid boundary on the outside and a
- *    non-whitespace char immediately inside, finds the matching closing marker
- *    with the same boundary rules, and recurses on the inner content.
+ * 2. The format parser scans for the next opening marker (`*`, `_`, `~`) that has a valid
+ *    boundary on the outside and a non-whitespace char immediately inside, finds the matching
+ *    closing marker with the same boundary rules, and re-parses the inner content. Sibling
+ *    segments are emitted iteratively and nesting is depth-capped (MAX_FORMAT_DEPTH), so a
+ *    pathological message can't exhaust the call stack; beyond the cap the rest stays literal.
  * 3. Unbalanced or boundary-violating markers fall through as literal text.
  */
 export function parseMessageBody(input: string): MessageNode[] {
@@ -44,7 +45,9 @@ export function parseMessageBody(input: string): MessageNode[] {
   const flushText = (end: number) => {
     if (end <= cursor) return;
     const slice = input.slice(cursor, end);
-    nodes.push(...parseFormatting(slice));
+    // Loop instead of nodes.push(...parsed): spreading a huge segment list into push() hits the
+    // engine's argument-count limit and throws the same RangeError as a stack overflow.
+    for (const node of parseFormatting(slice)) nodes.push(node);
     cursor = end;
   };
 
@@ -123,12 +126,49 @@ function findSingleBacktick(s: string, from: number): number {
 }
 
 /**
- * Parse a text segment (no code in it) for *bold*, _italic_, ~strike~.
- * Recursive: inner content is parsed again so *_a_* nests.
+ * Deepest nesting of format markers the parser will honour. A hostile message can alternate
+ * openers (`*_*_*_…`) to nest thousands of levels, or repeat segments (`*a* *a* …`) to queue
+ * thousands of sibling splits; an unbounded recursive descent overflows the call stack and
+ * freezes the tab. Segments at one level are emitted iteratively (no stack growth), and past
+ * this depth the remaining content falls back to a literal text node — markers and all — so
+ * the message still renders, just without the deeper formatting.
  */
-function parseFormatting(input: string): MessageNode[] {
-  if (input.length === 0) return [];
+const MAX_FORMAT_DEPTH = 20;
 
+/**
+ * Parse a text segment (no code in it) for *bold*, _italic_, ~strike~.
+ * Inner content is parsed again (depth-bounded) so *_a_* nests; sibling segments after a
+ * formatted span are handled by the loop, not by recursion.
+ */
+function parseFormatting(input: string, depth = 0): MessageNode[] {
+  if (input.length === 0) return [];
+  if (depth >= MAX_FORMAT_DEPTH) return [{ type: 'text', value: input }];
+
+  const nodes: MessageNode[] = [];
+  let rest = input;
+  while (rest.length > 0) {
+    const split = splitFirstFormat(rest);
+    if (!split) {
+      nodes.push({ type: 'text', value: rest });
+      break;
+    }
+    if (split.before) nodes.push({ type: 'text', value: split.before });
+    nodes.push({ type: split.fmt, children: parseFormatting(split.inner, depth + 1) });
+    rest = split.after;
+  }
+  return nodes;
+}
+
+/**
+ * Locate the first usable format span: an opening marker (`*`, `_`, `~`) with a valid boundary
+ * on the outside and a non-whitespace char immediately inside, paired with the first closing
+ * marker satisfying the same boundary rules. Returns the text before the span, the format, the
+ * inner content, and the unconsumed remainder — or null when the segment holds no valid span
+ * (unbalanced or boundary-violating markers stay literal).
+ */
+function splitFirstFormat(
+  input: string,
+): { before: string; fmt: 'bold' | 'italic' | 'strike'; inner: string; after: string } | null {
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
     const fmt = FORMATS[ch];
@@ -152,17 +192,15 @@ function parseFormatting(input: string): MessageNode[] {
       const after = j === input.length - 1 ? '' : input[j + 1];
       if (after !== '' && !BOUNDARY_CHAR.test(after)) continue;
 
-      const before = input.slice(0, i);
-      const inner = input.slice(i + 1, j);
-      const rest = input.slice(j + 1);
-      return [
-        ...(before ? [{ type: 'text', value: before } as MessageNode] : []),
-        { type: fmt, children: parseFormatting(inner) },
-        ...parseFormatting(rest),
-      ];
+      return {
+        before: input.slice(0, i),
+        fmt,
+        inner: input.slice(i + 1, j),
+        after: input.slice(j + 1),
+      };
     }
     // No matching closer for this opener — fall through to next character.
   }
 
-  return [{ type: 'text', value: input }];
+  return null;
 }

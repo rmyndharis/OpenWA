@@ -20,8 +20,11 @@ export function messagesQueryKey(sessionId: string, chatId: string): MessagesQue
  * updates flow through useChatMessagesActions, not refetches. Engine history is fetched WITHOUT media
  * to keep the cache small — a single 50 MiB message would otherwise sit in heap as base64 (held twice
  * as a `data:` URI). Recent media still renders from the DB copy (which wins in mergeChatMessages);
- * older history media shows the omitted placeholder. Cache eviction happens 5 min after the chat stops
- * being observed (gcTime), so browsing several media-rich chats doesn't accumulate large slices.
+ * older history media shows the omitted placeholder. Live/DB payloads that do arrive are additionally
+ * bounded per slice: mergeChatMessages/mergeOrAppend run the result through capMediaPayloads, which
+ * strips the oldest base64 beyond MEDIA_PAYLOAD_CACHE_LIMIT so a long media-heavy session can't grow
+ * the tab's heap without bound. Cache eviction happens 5 min after the chat stops being observed
+ * (gcTime), so browsing several media-rich chats doesn't accumulate large slices.
  */
 export function useChatMessages(sessionId: string, chatId: string | null): UseQueryResult<ChatMessageView[], Error> {
   return useQuery<ChatMessageView[], Error>({

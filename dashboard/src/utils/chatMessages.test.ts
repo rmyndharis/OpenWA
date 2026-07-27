@@ -319,3 +319,67 @@ test('senderKey prefers the participant JID and falls back to the display name',
   assert.equal(senderKey({ chatName: 'Alice' }), 'Alice');
   assert.equal(senderKey({}), undefined);
 });
+
+import { capMediaPayloads, MEDIA_PAYLOAD_CACHE_LIMIT } from './chatMessages.ts';
+
+const mediaMsg = (id: string, data?: string): ChatMessageView =>
+  msg({ id, type: 'image', metadata: { media: { mimetype: 'image/jpeg', filename: `${id}.jpg`, data } } });
+
+test('capMediaPayloads: under the limit the list is returned untouched (stable reference)', () => {
+  const list = [mediaMsg('m-1', 'AAA'), mediaMsg('m-2', 'BBB'), msg({ id: 'm-3' })];
+  assert.equal(capMediaPayloads(list), list);
+});
+
+test('capMediaPayloads: past the limit the OLDEST payloads strip to the omitted marker, newest stay', () => {
+  // One over the cap, so exactly the oldest payload must go.
+  const list = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT + 1 }, (_, i) => mediaMsg(`m-${i}`, `PAYLOAD_${i}`));
+  const capped = capMediaPayloads(list);
+  const stripped = capped[0].metadata?.media;
+  assert.equal(stripped?.data, undefined);
+  assert.equal(stripped?.omitted, true); // renders the 📎 placeholder, not an empty bubble
+  assert.equal(stripped?.mimetype, 'image/jpeg'); // type/filename survive the strip
+  assert.equal(capped[1].metadata?.media?.data, 'PAYLOAD_1');
+  assert.equal(capped[MEDIA_PAYLOAD_CACHE_LIMIT].metadata?.media?.data, `PAYLOAD_${MEDIA_PAYLOAD_CACHE_LIMIT}`);
+  // The retained payload count is exactly the cap.
+  assert.equal(
+    capped.filter(m => m.metadata?.media?.data).length,
+    MEDIA_PAYLOAD_CACHE_LIMIT,
+  );
+  // Input is not mutated.
+  assert.equal(list[0].metadata?.media?.data, 'PAYLOAD_0');
+});
+
+test('capMediaPayloads: rows already carrying only the omitted marker are not counted as payloads', () => {
+  const omitted = mediaMsg('m-0', undefined);
+  omitted.metadata = { media: { mimetype: '', omitted: true } };
+  const list = [omitted, ...Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT }, (_, i) => mediaMsg(`m-${i}`, 'X'))];
+  const capped = capMediaPayloads(list);
+  assert.equal(capped.filter(m => m.metadata?.media?.data).length, MEDIA_PAYLOAD_CACHE_LIMIT);
+  assert.equal(capped[0].metadata?.media?.omitted, true);
+});
+
+test('mergeOrAppend enforces the payload cap on a live media append', () => {
+  const list = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT }, (_, i) => mediaMsg(`m-${i}`, `PAYLOAD_${i}`));
+  const after = mergeOrAppend(list, mediaMsg('m-new', 'NEW'));
+  assert.equal(after.filter(m => m.metadata?.media?.data).length, MEDIA_PAYLOAD_CACHE_LIMIT);
+  assert.equal(after[0].metadata?.media?.data, undefined); // oldest stripped
+  assert.equal(after[0].metadata?.media?.omitted, true);
+  assert.equal(after[after.length - 1].metadata?.media?.data, 'NEW'); // fresh append keeps its payload
+});
+
+test('mergeChatMessages enforces the payload cap on the initial load', () => {
+  const rows = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT + 2 }, (_, i) =>
+    db({
+      id: `row-${i}`,
+      waMessageId: `WA_${i}`,
+      type: 'image',
+      timestamp: 1782053999 + i,
+      metadata: { media: { mimetype: 'image/jpeg', data: `DB_${i}` } },
+    }),
+  );
+  const merged = mergeChatMessages(rows, []);
+  assert.equal(merged.filter(m => m.metadata?.media?.data).length, MEDIA_PAYLOAD_CACHE_LIMIT);
+  assert.equal(merged[0].metadata?.media?.omitted, true);
+  assert.equal(merged[1].metadata?.media?.omitted, true);
+  assert.equal(merged[2].metadata?.media?.data, 'DB_2'); // newest MEDIA_PAYLOAD_CACHE_LIMIT survive
+});

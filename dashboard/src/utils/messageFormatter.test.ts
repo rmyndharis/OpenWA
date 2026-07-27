@@ -92,3 +92,29 @@ test('marker without outside boundary stays literal (no over-formatting)', () =>
     { type: 'text', value: 'word*bold*end' },
   ]);
 });
+
+// Deepest bold/italic/strike nesting in a parsed tree; text/code leaves count as 0.
+const treeDepth = (nodes: MessageNode[]): number =>
+  nodes.reduce((max, n) => ('children' in n ? Math.max(max, 1 + treeDepth(n.children)) : max), 0);
+
+test('hostile input: deep marker nesting is capped instead of overflowing the stack', () => {
+  // 100k alternating openers nest ~100k levels. Unbounded recursion dies with
+  // "Maximum call stack size exceeded" here; the cap must produce a shallow tree.
+  const evil = '*_'.repeat(100_000) + 'a' + '_*'.repeat(100_000);
+  const nodes = parseMessageBody(evil);
+  assert.ok(treeDepth(nodes) <= 20, `nesting depth ${treeDepth(nodes)} exceeds the cap`);
+  // Beyond the cap the leftover markers degrade to literal text — nothing is dropped.
+  const flat = (ns: MessageNode[]): string =>
+    ns.map(n => ('children' in n ? flat(n.children) : n.value)).join('');
+  const rendered = flat(nodes);
+  assert.ok(rendered.includes('a'));
+  assert.ok(rendered.includes('*_'), 'unparsed markers must survive as literal text');
+});
+
+test('hostile input: a flood of formatted segments parses iteratively', () => {
+  // 100k sibling spans used to recurse once per segment (`*a* *a* …`) and overflow the stack.
+  const nodes = parseMessageBody('*a* '.repeat(100_000));
+  assert.equal(nodes.length, 200_000); // bold + ' ' text per repetition
+  assert.deepEqual(nodes[0], { type: 'bold', children: [text('a')] });
+  assert.deepEqual(nodes[1], text(' '));
+});
