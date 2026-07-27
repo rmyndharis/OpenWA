@@ -127,6 +127,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'MAX_CONCURRENT_SESSIONS', // 0 = unlimited
     'INGRESS_INSTANCE_TTL',
     'WEBHOOK_DISPATCH_MAX_QUEUED',
+    'STATS_CACHE_TTL_MS', // 0 = memo disabled
   ]) {
     checkNonNegativeInt(key);
   }

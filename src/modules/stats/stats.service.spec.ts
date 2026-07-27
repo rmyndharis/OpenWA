@@ -42,7 +42,8 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     });
     await ds.initialize();
     const cache = { setSessionsStats: jest.fn() };
-    service = new StatsService(ds.getRepository(Session), ds.getRepository(Message), cache as never);
+    const config = { get: () => 30000 };
+    service = new StatsService(ds.getRepository(Session), ds.getRepository(Message), cache as never, config as never);
   });
 
   afterEach(async () => {
@@ -239,5 +240,128 @@ describe('StatsService time-series + hourly activity on SQLite (end-to-end regre
     );
     expect(totals.sent).toBe(2);
     expect(totals.received).toBe(1);
+  });
+});
+
+describe('StatsService aggregate memo (in-process TTL)', () => {
+  let ds: DataSource;
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [Session, Message],
+      synchronize: true,
+    });
+    await ds.initialize();
+    const sessions = ds.getRepository(Session);
+    await sessions.save(sessions.create({ id: 's1', name: 'n1', status: SessionStatus.READY, config: {} }));
+    await sessions.save(sessions.create({ id: 's2', name: 'n2', status: SessionStatus.READY, config: {} }));
+    const messages = ds.getRepository(Message);
+    const base = {
+      chatId: 'c1',
+      from: 'a',
+      to: 'b',
+      type: 'text',
+      direction: MessageDirection.OUTGOING,
+      status: MessageStatus.SENT,
+    };
+    await messages.save(messages.create({ ...base, sessionId: 's1' }));
+    await messages.save(messages.create({ ...base, sessionId: 's2' }));
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  const makeService = (ttlMs: number) =>
+    new StatsService(
+      ds.getRepository(Session),
+      ds.getRepository(Message),
+      { setSessionsStats: jest.fn() } as never,
+      { get: () => ttlMs } as never,
+    );
+
+  it('serves a repeated identical call from the memo within the TTL (no second DB hit)', async () => {
+    const service = makeService(30000);
+    const spy = jest.spyOn(ds.getRepository(Message), 'createQueryBuilder');
+
+    await service.getMessageStats('24h');
+    const afterFirst = spy.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    await service.getMessageStats('24h');
+    expect(spy.mock.calls.length).toBe(afterFirst);
+  });
+
+  it('re-runs the aggregate once the TTL has expired', async () => {
+    const service = makeService(30000);
+    const spy = jest.spyOn(ds.getRepository(Message), 'createQueryBuilder');
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await service.getMessageStats('24h');
+      const afterFirst = spy.mock.calls.length;
+
+      nowSpy.mockReturnValue(1_000_000 + 30_001);
+      await service.getMessageStats('24h');
+      expect(spy.mock.calls.length).toBeGreaterThan(afterFirst);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keys the memo by query shape and by session id', async () => {
+    const service = makeService(30000);
+    const spy = jest.spyOn(ds.getRepository(Message), 'createQueryBuilder');
+
+    await service.getMessageStats('24h');
+    let n = spy.mock.calls.length;
+    await service.getMessageStats('7d'); // different period → different key → DB hit
+    expect(spy.mock.calls.length).toBeGreaterThan(n);
+
+    n = spy.mock.calls.length;
+    await service.getSessionStats('s1');
+    await service.getSessionStats('s1'); // memo hit — no new queries
+    const afterS1 = spy.mock.calls.length;
+    expect(afterS1).toBeGreaterThan(n);
+
+    await service.getSessionStats('s2'); // different session → different key → DB hit
+    expect(spy.mock.calls.length).toBeGreaterThan(afterS1);
+  });
+
+  it('a 0 TTL disables the memo (every call hits the DB)', async () => {
+    const service = makeService(0);
+    const spy = jest.spyOn(ds.getRepository(Message), 'createQueryBuilder');
+
+    await service.getMessageStats('24h');
+    const n = spy.mock.calls.length;
+    await service.getMessageStats('24h');
+    expect(spy.mock.calls.length).toBeGreaterThan(n);
+  });
+
+  it('bounds every cross-session aggregate with a createdAt range predicate the standalone index serves', async () => {
+    const service = makeService(30000);
+    // Capture the generated SQL the same way the reserved-word regression tests above do.
+    const captured: string[] = [];
+    const repo = ds.getRepository(Message);
+    const origCreate = repo.createQueryBuilder.bind(repo);
+    jest.spyOn(repo, 'createQueryBuilder').mockImplementation((alias?: string) => {
+      const qb = origCreate(alias);
+      const origGetRawMany = qb.getRawMany.bind(qb);
+      jest.spyOn(qb, 'getRawMany').mockImplementation((async () => {
+        captured.push(qb.getQuery());
+        return origGetRawMany();
+      }) as never);
+      return qb;
+    });
+
+    await service.getMessageStats('24h'); // time-series + byType + bySession + topChats
+
+    expect(captured.length).toBeGreaterThan(0);
+    // IDX_messages_createdAt serves `createdAt >= ?`; an unbounded GROUP BY here would be the
+    // full-history scan this service must no longer run.
+    for (const sql of captured) {
+      expect(sql).toMatch(/WHERE\s+.*"createdAt"\s*>=/i);
+    }
   });
 });

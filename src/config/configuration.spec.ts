@@ -159,3 +159,20 @@ describe('configuration search namespace', () => {
     expect(cfg.search).toEqual({ enabled: true, provider: 'auto', limitMax: 100 });
   });
 });
+
+describe('configuration stats namespace', () => {
+  const orig = process.env.STATS_CACHE_TTL_MS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.STATS_CACHE_TTL_MS;
+    else process.env.STATS_CACHE_TTL_MS = orig;
+  });
+
+  it('exposes stats memo defaults and parses STATS_CACHE_TTL_MS (0 disables the memo)', () => {
+    delete process.env.STATS_CACHE_TTL_MS;
+    expect(configuration().stats.cacheTtlMs).toBe(30000);
+    process.env.STATS_CACHE_TTL_MS = '0';
+    expect(configuration().stats.cacheTtlMs).toBe(0);
+    process.env.STATS_CACHE_TTL_MS = '60000';
+    expect(configuration().stats.cacheTtlMs).toBe(60000);
+  });
+});

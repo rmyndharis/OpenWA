@@ -23,6 +23,14 @@ export default () => ({
     limitMax: Number(process.env.SEARCH_LIMIT_MAX) || 100,
   },
 
+  // Dashboard statistics. The /stats aggregates run GROUP BY scans over the whole messages
+  // table (synchronously on the event loop with the default SQLite backend), so responses are
+  // memoized in-process for this TTL to keep dashboard polling from re-running the scans on
+  // every request. 0 disables the memo.
+  stats: {
+    cacheTtlMs: parseInt(process.env.STATS_CACHE_TTL_MS || '30000', 10),
+  },
+
   // Runtime feature flags. Single source of truth: src/config/feature-flags.ts. Exposed here so the
   // full set is discoverable via ConfigService (`features.*`) instead of scattered process.env reads.
   features: computeFeatureFlags(),

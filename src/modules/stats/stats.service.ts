@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Message, MessageStatus } from '../message/entities/message.entity';
@@ -77,12 +78,23 @@ export interface SessionStats {
 
 @Injectable()
 export class StatsService {
+  /**
+   * In-process TTL memo for the aggregate responses, keyed by query shape ('overview',
+   * 'messages:<period>', 'session:<id>'). The aggregates run GROUP BY scans over the whole
+   * messages table — on the default SQLite backend synchronously on the event loop — so
+   * dashboard polling would otherwise re-run them on every request. TTL-only invalidation:
+   * entries expire after stats.cacheTtlMs; there is no write-path hook. Key cardinality is
+   * bounded (4 global shapes + one per session), so no size eviction is needed.
+   */
+  private readonly memo = new Map<string, { expiresAt: number; value: unknown }>();
+
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepo: Repository<Session>,
     @InjectRepository(Message, 'data')
     private readonly messageRepo: Repository<Message>,
     private readonly cacheService: CacheService,
+    private readonly configService: ConfigService,
   ) {}
 
   /** The data-connection dialect ('sqlite' | 'postgres'), used to pick portable date SQL. */
@@ -90,7 +102,28 @@ export class StatsService {
     return this.messageRepo.manager.dataSource.options.type;
   }
 
+  /** Memo TTL in ms; 0 disables memoization (every request hits the DB). Read per call. */
+  private get memoTtlMs(): number {
+    return this.configService.get<number>('stats.cacheTtlMs', 30000);
+  }
+
+  /** Returns the memoized value for `key` while fresh; otherwise computes, stores, returns it. */
+  private async memoized<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    const ttl = this.memoTtlMs;
+    if (ttl <= 0) return compute();
+    const now = Date.now();
+    const hit = this.memo.get(key);
+    if (hit && hit.expiresAt > now) return hit.value as T;
+    const value = await compute();
+    this.memo.set(key, { expiresAt: now + ttl, value });
+    return value;
+  }
+
   async getOverview(): Promise<OverviewStats> {
+    return this.memoized('overview', () => this.loadOverview());
+  }
+
+  private async loadOverview(): Promise<OverviewStats> {
     // Get session stats
     const sessions = await this.sessionRepo.find();
     const byStatus: Record<string, number> = {};
@@ -153,6 +186,10 @@ export class StatsService {
   }
 
   async getMessageStats(period: '24h' | '7d' | '30d'): Promise<MessageStats> {
+    return this.memoized(`messages:${period}`, () => this.loadMessageStats(period));
+  }
+
+  private async loadMessageStats(period: '24h' | '7d' | '30d'): Promise<MessageStats> {
     const since = this.getPeriodStart(period);
     const interval = period === '24h' ? 'hour' : 'day';
 
@@ -233,6 +270,10 @@ export class StatsService {
   }
 
   async getSessionStats(sessionId: string): Promise<SessionStats> {
+    return this.memoized(`session:${sessionId}`, () => this.loadSessionStats(sessionId));
+  }
+
+  private async loadSessionStats(sessionId: string): Promise<SessionStats> {
     const session = await this.sessionRepo.findOne({ where: { id: sessionId } });
     if (!session) {
       throw new NotFoundException('Session not found');
