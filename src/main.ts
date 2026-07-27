@@ -13,6 +13,7 @@ import { LoggerService, LogLevel, createLogger } from './common/services/logger.
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
+import { createInflightBodyBudget, resolveInflightBodyBudgetBytes } from './config/inflight-body-budget';
 import { applyGlobalValidation } from './config/app-validation';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
 import { injectDashboardCspNonce } from './config/dashboard-csp';
@@ -83,9 +84,22 @@ async function bootstrap() {
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
+  // Aggregate in-flight body budget (DoS hardening): once too many body bytes are being buffered
+  // across ALL connections, new requests get 503 + Retry-After without their body being read.
+  // This is a deliberate PRE-GUARD: the throttler/auth guards run at the Nest routing layer —
+  // AFTER middleware and body buffering — so they can never stop slow-body memory pinning, and
+  // this must run BEFORE the body parser so a rejected connection never buffers a byte. The
+  // per-request BODY_SIZE_LIMIT below is a separate, unchanged cap on each admitted request.
+  const inflightBudgetBytes = resolveInflightBodyBudgetBytes(
+    process.env.INFLIGHT_BODY_BUDGET_BYTES,
+    process.env.BODY_SIZE_LIMIT,
+  );
+  app.use(createInflightBodyBudget(inflightBudgetBytes).middleware);
+
   // Cap request body size (DoS hardening). Media sends carry base64 in the JSON body,
   // so the default is generous; tune with BODY_SIZE_LIMIT.
   const bodyLimit = resolveBodyLimit(process.env.BODY_SIZE_LIMIT);
+  bootstrapLogger.log(`Request body caps: ${bodyLimit} per request, ${inflightBudgetBytes} bytes aggregate in flight`);
   // The `verify` callback stashes the EXACT bytes json() received on req.rawBody, byte-identical to
   // what a provider signed, so the @Public ingress controller can HMAC-verify over the raw body
   // (JSON.stringify(req.body) is NOT byte-identical). Cheap for every route; non-ingress routes ignore it.

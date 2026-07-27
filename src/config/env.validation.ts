@@ -152,6 +152,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'HEADERS_TIMEOUT_MS',
     'KEEPALIVE_TIMEOUT_MS',
     'WEBHOOK_DISPATCH_CONCURRENCY',
+    // 0 would refuse every request carrying a body (a self-DoS), so the budget is positive-only.
+    'INFLIGHT_BODY_BUDGET_BYTES',
   ]) {
     checkPositiveInt(key);
   }

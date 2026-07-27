@@ -140,6 +140,30 @@ describe('configuration — status media cap is fail-safe', () => {
   });
 });
 
+describe('configuration — in-flight body budget', () => {
+  const keys = ['INFLIGHT_BODY_BUDGET_BYTES', 'BODY_SIZE_LIMIT'];
+  const orig: Record<string, string | undefined> = {};
+  beforeEach(() => keys.forEach(k => (orig[k] = process.env[k])));
+  afterEach(() =>
+    keys.forEach(k => {
+      if (orig[k] === undefined) delete process.env[k];
+      else process.env[k] = orig[k];
+    }),
+  );
+
+  it('defaults to 4 × the per-request body cap and scales with BODY_SIZE_LIMIT', () => {
+    keys.forEach(k => delete process.env[k]);
+    expect(configuration().http.inflightBodyBudgetBytes).toBe(100 * 1024 * 1024);
+    process.env.BODY_SIZE_LIMIT = '5mb';
+    expect(configuration().http.inflightBodyBudgetBytes).toBe(20 * 1024 * 1024);
+  });
+
+  it('honors an explicit INFLIGHT_BODY_BUDGET_BYTES override', () => {
+    process.env.INFLIGHT_BODY_BUDGET_BYTES = '52428800';
+    expect(configuration().http.inflightBodyBudgetBytes).toBe(52428800);
+  });
+});
+
 describe('configuration search namespace', () => {
   // Save/restore the SEARCH_* env vars so a CI .env that sets them cannot flake the default-value
   // assertions below (mirrors the mutate-and-restore pattern used for PLUGIN_DOWNLOAD_MAX_BYTES etc.).

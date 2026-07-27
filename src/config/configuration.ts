@@ -1,4 +1,5 @@
 import { computeFeatureFlags } from './feature-flags';
+import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
 
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
@@ -12,6 +13,13 @@ export default () => ({
     requestTimeoutMs: parseInt(process.env.REQUEST_TIMEOUT_MS || '300000', 10),
     headersTimeoutMs: parseInt(process.env.HEADERS_TIMEOUT_MS || '65000', 10),
     keepAliveTimeoutMs: parseInt(process.env.KEEPALIVE_TIMEOUT_MS || '5000', 10),
+    // Aggregate cap on request-body bytes buffered across ALL connections (the pre-body-parser
+    // budget middleware in main.ts). Defaults to 4 × the per-request BODY_SIZE_LIMIT so the two
+    // scale together; explicit bytes override via INFLIGHT_BODY_BUDGET_BYTES.
+    inflightBodyBudgetBytes: resolveInflightBodyBudgetBytes(
+      process.env.INFLIGHT_BODY_BUDGET_BYTES,
+      process.env.BODY_SIZE_LIMIT,
+    ),
   },
 
   // Global message search. Opt-out via SEARCH_ENABLED=false. Provider defaults to 'auto' (the

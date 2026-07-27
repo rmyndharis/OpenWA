@@ -92,6 +92,13 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ RATE_LIMIT_SHORT_LIMIT: '10', WEBHOOK_TIMEOUT: '10000' })).not.toThrow();
   });
 
+  it('rejects a non-positive / non-integer in-flight body budget (0 would refuse every body)', () => {
+    expect(() => validateEnv({ INFLIGHT_BODY_BUDGET_BYTES: '0' })).toThrow(/INFLIGHT_BODY_BUDGET_BYTES/);
+    expect(() => validateEnv({ INFLIGHT_BODY_BUDGET_BYTES: '100mb' })).toThrow(/INFLIGHT_BODY_BUDGET_BYTES/);
+    expect(() => validateEnv({ INFLIGHT_BODY_BUDGET_BYTES: '-5' })).toThrow(/INFLIGHT_BODY_BUDGET_BYTES/);
+    expect(() => validateEnv({ INFLIGHT_BODY_BUDGET_BYTES: '104857600' })).not.toThrow();
+  });
+
   it('rejects a non-canonical boolean feature flag instead of silently disabling the feature', () => {
     // QUEUE_ENABLED / MCP_ENABLED / SERVE_DASHBOARD are read at module-eval with `=== 'true'` /
     // `!== 'false'`, so a typo silently (dis)ables the feature with zero diagnostics. Boot must reject it.
