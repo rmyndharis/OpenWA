@@ -16,6 +16,7 @@ import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
 import { PluginLoaderService } from './../src/core/plugins/plugin-loader.service';
 import { PluginInstance } from './../src/modules/integration/entities/plugin-instance.entity';
+import { IngressEvent } from './../src/modules/integration/entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './../src/modules/integration/entities/integration-delivery-failure.entity';
 
 /**
@@ -172,10 +173,28 @@ describe('Integration Fabric ingress (e2e)', () => {
     expect(dispatchWebhookForInstance).not.toHaveBeenCalled();
   });
 
+  it('marks the persisted event dispatched once a successful inline dispatch is recorded', async () => {
+    const eventRepo = app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data'));
+    const res = await request(app.getHttpServer())
+      .post(INGRESS_PATH)
+      .set('X-Chatwoot-Signature', sig)
+      .set('X-Chatwoot-Delivery', 'delivery-marked-1')
+      .set('Content-Type', 'application/json')
+      .send(raw);
+
+    expect(res.status).toBe(202);
+    // The no-`response` route awaits enqueue before the ack, so the outcome is already recorded:
+    // a crash between persist and dispatch is the only way a fresh row stays 'pending'.
+    const row = await eventRepo.findOneByOrFail({ providerDeliveryId: 'delivery-marked-1' });
+    expect(row.dispatchState).toBe('dispatched');
+    expect(row.lastDispatchAt).not.toBeNull();
+  });
+
   it('persists a redrivable dead-letter row (still 202) when inline dispatch fails', async () => {
     const failureRepo = app.get<Repository<IntegrationDeliveryFailure>>(
       getRepositoryToken(IntegrationDeliveryFailure, 'data'),
     );
+    const eventRepo = app.get<Repository<IngressEvent>>(getRepositoryToken(IngressEvent, 'data'));
     // The plugin handler throws — the inline-dispatch fallback fails and is swallowed. Without a
     // dead-letter row the event would be stranded: handle() still 202s, and RedriveService only scans
     // this table (never ingress_events). The live-ingress wiring must therefore persist the failure here.
@@ -198,5 +217,11 @@ describe('Integration Fabric ingress (e2e)', () => {
       redriven: false,
       lastError: 'sandbox handler 5xx',
     });
+
+    // The event row itself stays 'pending' with the failure counted, so the reconciler retries the
+    // dispatch on its next sweep instead of waiting for a manual redrive alone.
+    const event = await eventRepo.findOneByOrFail({ providerDeliveryId: 'delivery-dlq-1' });
+    expect(event.dispatchState).toBe('pending');
+    expect(event.dispatchAttempts).toBe(1);
   });
 });

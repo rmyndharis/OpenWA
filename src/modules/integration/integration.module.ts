@@ -9,6 +9,7 @@ import { IngressEventService } from './ingress-event.service';
 import { IngressService, IngressRouteDescriptor } from './ingress.service';
 import { IngressController } from './ingress.controller';
 import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
+import { IngressReconcilerService } from './ingress-reconciler.service';
 import { RedriveService } from './redrive.service';
 import { RedriveController } from './redrive.controller';
 import { IntegrationRetentionService } from './integration-retention.service';
@@ -36,6 +37,7 @@ import { createLogger } from '../../common/services/logger.service';
     PluginInstanceService,
     IngressEventService,
     IngressEnqueueService,
+    IngressReconcilerService,
     RedriveService,
     ScopeBindingService,
     IntegrationRetentionService,
@@ -71,13 +73,28 @@ import { createLogger } from '../../common/services/logger.service';
           // Audit sink for preflight rejections (they leave no dedup/DLQ row). The Prometheus counter is
           // a separate follow-up (see plan notes); the structured log is the MVP audit surface.
           log: (event, meta) => ingressLogger.warn(event, meta),
-          // Live ingress delivery: on a swallowed inline-dispatch failure, persist a dead-letter row so
-          // RedriveService can replay it — IngressService.handle() ignores the outcome and always 202s, so
-          // nothing else would. RedriveService calls enqueue() directly (it is already replaying a DLQ
-          // row) so it never double-writes here. The DLQ save is itself best-effort: a failure must not
-          // 500 the ingress request (the delivery is already dedup-persisted, so the provider won't re-send).
+          // Live ingress delivery: record the dispatch outcome on the event row (so the reconciler
+          // can tell a stranded 'pending' row from one that reached the dispatch tier) and, on a
+          // swallowed inline-dispatch failure, persist a dead-letter row so RedriveService can replay
+          // it — IngressService.handle() always 202s, so nothing else would. RedriveService calls
+          // enqueue() directly (it is already replaying a DLQ row) so it never double-writes here.
+          // Both writes are best-effort: a failure must not 500 the ingress request (the delivery is
+          // already dedup-persisted, so the provider won't re-send; an unmarked row stays 'pending'
+          // and the reconciler replays it — at-least-once, plugin handlers are idempotent by contract).
           enqueue: async (data, jobId) => {
             const result = await ingressEnqueue.enqueue(data, jobId);
+            try {
+              await events.markDispatchOutcome(
+                { pluginId: data.pluginId, instanceId: data.instanceId, providerDeliveryId: data.deliveryId },
+                result.outcome,
+              );
+            } catch (err) {
+              dlqLogger.error(
+                'Failed to mark ingress dispatch outcome',
+                err instanceof Error ? err.message : String(err),
+                { pluginId: data.pluginId, instanceId: data.instanceId, deliveryId: data.deliveryId },
+              );
+            }
             if (result.outcome === 'failed') {
               try {
                 await failures.save(buildIngressDeadLetterRow(data, result.error));

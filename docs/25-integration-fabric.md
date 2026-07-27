@@ -130,7 +130,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   a human-handled conversation deterministically stops the bot. `sessionId` is non-foreign-key provenance
   because a mapping outlives a session.
 - **`ingress_events`** — the persist-before-acknowledge row and the inbound deduplication oracle
-  (`UNIQUE(instanceId, providerDeliveryId)`, insert-or-skip).
+  (`UNIQUE(instanceId, providerDeliveryId)`, insert-or-skip). It also carries the dispatch-lifecycle
+  markers the reconciler sweeps on: `dispatchState` (`pending | dispatched | failed`, `NULL` on rows
+  that predate the columns on a synchronize-bootstrapped DB — "not watched"), `dispatchAttempts`, and
+  `lastDispatchAt`. New rows are `pending`; a recorded enqueue outcome flips them to `dispatched`;
+  `failed` is terminal (recovery continues via the DLQ row + redrive).
 - **`integration_delivery_failures`** — a dead-letter record of last resort for both directions, with a
   redrive path (added in P1).
 
@@ -171,6 +175,20 @@ strict FIFO is not preserved across retry/redrive, and the lock is single-node s
 PostgreSQL state. When the queue is disabled, ingress dispatches inline after persisting and does not
 serialize concurrent same-conversation deliveries. Providers already deliver over unordered,
 at-least-once HTTP, so plugin handlers must be idempotent and treat ingress as a reconciliation trigger.
+
+Persist-before-acknowledge alone is not delivery: a crash between the persist and the enqueue, or a
+fire-and-forget enqueue on a `response` route whose outcome is never recorded, would strand the row
+with the provider already acknowledged. The **ingress reconciler** closes that window: every
+`INGRESS_RECONCILE_INTERVAL_MS` (default 60s, `<= 0` disables) it re-dispatches a bounded batch
+(`INGRESS_RECONCILE_BATCH_SIZE`, default 50) of `pending` rows whose last activity is older than a
+grace period (`INGRESS_RECONCILE_GRACE_MS`, default 60s), through the same queue-or-inline enqueue the
+live path uses and with the original delivery id as job id, so a replay is idempotent against a job
+the crashed live path may have enqueued. The stored row is sufficient for re-dispatch — it is the full
+verified request (headers/query/body/rawBody) plus the route and session provenance; the conversation
+lane is re-derived from the current manifest. After `INGRESS_RECONCILE_MAX_ATTEMPTS` (default 5) the
+row goes `failed` (terminal) and a dead-letter row is guaranteed to exist, so recovery continues
+through the bounded redrive path instead of an infinite replay loop; a successful replay retires any
+live-path dead-letter row for the same delivery so a later redrive never double-delivers.
 
 ## 25.8 The Integration SDK (v1)
 
