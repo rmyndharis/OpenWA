@@ -11,9 +11,8 @@ import {
   HttpStatus,
   Optional,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../queue/queue-names';
@@ -37,6 +36,8 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SessionService } from '../session/session.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ImportStorageDto } from './dto/import-storage.dto';
+import { SaveConfigDto } from './dto/save-config.dto';
+import { assertNoDefaultSecretsInProduction } from '../../config/bootstrap-security';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -65,190 +66,10 @@ interface InfraStatus {
   };
 }
 
-class DatabaseConfigDto {
-  @ApiProperty({ enum: ['sqlite', 'postgres'] })
-  @IsIn(['sqlite', 'postgres'])
-  type!: 'sqlite' | 'postgres';
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  builtIn?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  host?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  port?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  username?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  password?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  database?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  schema?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumber()
-  poolSize?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  sslEnabled?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  sslRejectUnauthorized?: boolean;
-}
-
-class RedisConfigDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  enabled?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  builtIn?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  host?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  port?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  password?: string;
-}
-
-class QueueConfigDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  enabled?: boolean;
-}
-
-class StorageConfigDto {
-  @ApiProperty({ enum: ['local', 's3'] })
-  @IsIn(['local', 's3'])
-  type!: 'local' | 's3';
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  builtIn?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  localPath?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  s3Bucket?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  s3Region?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  s3AccessKey?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  s3SecretKey?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  s3Endpoint?: string;
-}
-
-class EngineConfigDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  type?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  headless?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  sessionDataPath?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  browserArgs?: string;
-}
-
-class SaveConfigDto {
-  @ApiPropertyOptional({ type: () => DatabaseConfigDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => DatabaseConfigDto)
-  database?: DatabaseConfigDto;
-
-  @ApiPropertyOptional({ type: () => RedisConfigDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => RedisConfigDto)
-  redis?: RedisConfigDto;
-
-  @ApiPropertyOptional({ type: () => QueueConfigDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => QueueConfigDto)
-  queue?: QueueConfigDto;
-
-  @ApiPropertyOptional({ type: () => StorageConfigDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => StorageConfigDto)
-  storage?: StorageConfigDto;
-
-  @ApiPropertyOptional({ type: () => EngineConfigDto })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => EngineConfigDto)
-  engine?: EngineConfigDto;
-}
+// The PUT /infra/config body DTOs live in ./dto/save-config.dto.ts: as *.dto.ts classes they are
+// covered by the input-coercion drift gate (src/common/utils/dto-strict-coercion.spec.ts), which
+// controller-local classes escape, and their boolean/numeric fields carry the @ToStrictBoolean /
+// @ToStrictNumber transforms that keep a form-encoded 'false' from being coerced to `true`.
 
 class RestartDto {
   @ApiPropertyOptional({ type: [String] })
@@ -776,15 +597,19 @@ export class InfraController {
 
       // Merge into the existing saved config rather than rebuilding from scratch, so a
       // partial payload (the dashboard only sends the sections it renders) cannot wipe
-      // keys it didn't include (#226).
+      // keys it didn't include (#226). The merge is per-section AND per-key: an absent
+      // section leaves that section's keys alone, and within a present section an absent
+      // field (`undefined`) leaves its stored key alone — only values actually submitted
+      // are written. `existing` below is therefore the base for every key the payload
+      // does not mention.
       const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
       const existing: Record<string, string> = fs.existsSync(envPath)
         ? dotenv.parse(fs.readFileSync(envPath, 'utf8'))
         : {};
       const updates: Record<string, string> = {};
       // Keys to remove from the merged result — used to drop stale settings when the
-      // user switches mode (postgres->sqlite, s3->local) so a reload never sees the new
-      // mode alongside leftover keys from the old one.
+      // user switches mode (postgres->sqlite, s3->local, built-in->external) so a reload
+      // never sees the new mode alongside leftover keys from the old one.
       const staleKeys = new Set<string>();
 
       // Secret values are never echoed back to the form, so an empty submission means
@@ -796,9 +621,15 @@ export class InfraController {
       // Database. NOTE: these keys must match what src/config/configuration.ts reads.
       if (config.database) {
         updates.DATABASE_TYPE = config.database.type || 'sqlite';
-        updates.POSTGRES_BUILTIN = config.database.builtIn ? 'true' : 'false';
+        if (config.database.builtIn !== undefined) {
+          updates.POSTGRES_BUILTIN = config.database.builtIn ? 'true' : 'false';
+        }
+        // The effective mode: an explicit builtIn wins; when it is absent the saved mode
+        // is inherited so a partial payload stays in the current mode instead of silently
+        // flipping to external.
+        const dbBuiltIn = config.database.builtIn ?? existing.POSTGRES_BUILTIN === 'true';
         if (config.database.type === 'postgres') {
-          if (config.database.builtIn) {
+          if (dbBuiltIn) {
             // Built-in PostgreSQL - use container name as host
             updates.DATABASE_HOST = 'postgres';
             updates.DATABASE_PORT = '5432';
@@ -811,24 +642,40 @@ export class InfraController {
             updates.POSTGRES_SCHEMA = 'public';
             profiles.push('postgres');
           } else {
-            // External PostgreSQL
-            updates.DATABASE_HOST = config.database.host || 'localhost';
-            updates.DATABASE_PORT = config.database.port || '5432';
-            updates.DATABASE_USERNAME = config.database.username || 'postgres';
+            // External PostgreSQL. Flipping built-in -> external must not carry the bundled
+            // 'openwa' password into the external config: the production boot guard rejects
+            // it, so the next boot would crash-loop. A password in the same payload wins.
+            if (
+              config.database.builtIn === false &&
+              existing.POSTGRES_BUILTIN === 'true' &&
+              !config.database.password
+            ) {
+              staleKeys.add('DATABASE_PASSWORD');
+            }
+            if (config.database.host !== undefined) updates.DATABASE_HOST = config.database.host || 'localhost';
+            if (config.database.port !== undefined) updates.DATABASE_PORT = config.database.port || '5432';
+            if (config.database.username !== undefined)
+              updates.DATABASE_USERNAME = config.database.username || 'postgres';
             setSecret('DATABASE_PASSWORD', config.database.password);
-            updates.DATABASE_NAME = config.database.database || 'openwa';
-            updates.POSTGRES_SCHEMA = config.database.schema || 'public';
+            if (config.database.database !== undefined) updates.DATABASE_NAME = config.database.database || 'openwa';
+            if (config.database.schema !== undefined) updates.POSTGRES_SCHEMA = config.database.schema || 'public';
           }
-          updates.DATABASE_POOL_SIZE = String(config.database.poolSize || 10);
-          updates.DATABASE_SSL = config.database.sslEnabled ? 'true' : 'false';
-          if (config.database.sslEnabled) {
-            // Default to certificate verification; only relax it when the operator opts out
-            // (managed Postgres with self-signed certs: Supabase, Heroku, Render, Railway).
-            updates.DATABASE_SSL_REJECT_UNAUTHORIZED =
-              config.database.sslRejectUnauthorized === false ? 'false' : 'true';
+          if (config.database.poolSize !== undefined) {
+            updates.DATABASE_POOL_SIZE = String(config.database.poolSize || 10);
+          }
+          if (config.database.sslEnabled !== undefined) {
+            updates.DATABASE_SSL = config.database.sslEnabled ? 'true' : 'false';
+            if (config.database.sslEnabled) {
+              // Default to certificate verification; only relax it when the operator opts out
+              // (managed Postgres with self-signed certs: Supabase, Heroku, Render, Railway).
+              updates.DATABASE_SSL_REJECT_UNAUTHORIZED =
+                config.database.sslRejectUnauthorized === false ? 'false' : 'true';
+            }
           }
         } else {
-          // Switching to sqlite: drop stale postgres connection keys.
+          // Switching to sqlite: drop stale postgres connection keys, and reset the built-in
+          // flag with them — there is no bundled Postgres backing a SQLite database.
+          updates.POSTGRES_BUILTIN = 'false';
           for (const k of [
             'DATABASE_HOST',
             'DATABASE_PORT',
@@ -845,24 +692,32 @@ export class InfraController {
         }
       }
 
-      // Redis / Queue
-      if (config.redis || config.queue) {
-        updates.REDIS_ENABLED = config.redis?.enabled ? 'true' : 'false';
-        updates.REDIS_BUILTIN = config.redis?.builtIn ? 'true' : 'false';
-        updates.QUEUE_ENABLED = config.queue?.enabled ? 'true' : 'false';
-        if (config.redis?.enabled) {
-          if (config.redis.builtIn) {
-            // Built-in Redis - use container name as host
-            updates.REDIS_HOST = 'redis';
-            updates.REDIS_PORT = '6379';
-            profiles.push('redis');
-          } else {
-            // External Redis
-            updates.REDIS_HOST = config.redis.host || 'localhost';
-            updates.REDIS_PORT = config.redis.port || '6379';
-            setSecret('REDIS_PASSWORD', config.redis.password);
-          }
+      // Redis and queue are independent sections: a payload carrying only one of them must
+      // not rewrite (or disable) the other's saved keys.
+      if (config.redis) {
+        if (config.redis.enabled !== undefined) updates.REDIS_ENABLED = config.redis.enabled ? 'true' : 'false';
+        if (config.redis.builtIn !== undefined) updates.REDIS_BUILTIN = config.redis.builtIn ? 'true' : 'false';
+        if (config.redis.builtIn === true) {
+          // Built-in Redis - use container name as host. The bundled container runs without
+          // auth, so a password saved by an earlier external setup is stale: leaving it
+          // would make the client AUTH against a passwordless server on the next boot.
+          updates.REDIS_HOST = 'redis';
+          updates.REDIS_PORT = '6379';
+          if (!config.redis.password) staleKeys.add('REDIS_PASSWORD');
+        } else {
+          // External Redis (explicit, or inherited when builtIn is absent)
+          if (config.redis.host !== undefined) updates.REDIS_HOST = config.redis.host || 'localhost';
+          if (config.redis.port !== undefined) updates.REDIS_PORT = config.redis.port || '6379';
         }
+        setSecret('REDIS_PASSWORD', config.redis.password);
+        const redisEnabled = config.redis.enabled ?? existing.REDIS_ENABLED === 'true';
+        const redisBuiltIn = config.redis.builtIn ?? existing.REDIS_BUILTIN === 'true';
+        if (redisEnabled && redisBuiltIn) {
+          profiles.push('redis');
+        }
+      }
+      if (config.queue) {
+        if (config.queue.enabled !== undefined) updates.QUEUE_ENABLED = config.queue.enabled ? 'true' : 'false';
       }
 
       // Storage. NOTE: STORAGE_LOCAL_PATH / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY are
@@ -870,16 +725,23 @@ export class InfraController {
       // silently ignored — #226).
       if (config.storage) {
         updates.STORAGE_TYPE = config.storage.type || 'local';
-        updates.MINIO_BUILTIN = config.storage.builtIn ? 'true' : 'false';
+        if (config.storage.builtIn !== undefined) {
+          updates.MINIO_BUILTIN = config.storage.builtIn ? 'true' : 'false';
+        }
         if (config.storage.type === 'local') {
-          updates.STORAGE_LOCAL_PATH = config.storage.localPath || './data/media';
+          // Switching to local: drop stale S3 keys, and reset the built-in flag with them —
+          // there is no bundled MinIO backing a local storage path.
+          updates.MINIO_BUILTIN = 'false';
+          if (config.storage.localPath !== undefined) {
+            updates.STORAGE_LOCAL_PATH = config.storage.localPath || './data/media';
+          }
           // Switching to local: drop stale S3 keys.
           for (const k of ['S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION']) {
             staleKeys.add(k);
           }
         } else if (config.storage.type === 's3') {
           staleKeys.add('STORAGE_LOCAL_PATH');
-          if (config.storage.builtIn) {
+          if (config.storage.builtIn === true) {
             // Built-in MinIO - use container name as endpoint
             updates.S3_ENDPOINT = 'http://minio:9000';
             updates.S3_ACCESS_KEY_ID = 'minioadmin';
@@ -888,13 +750,30 @@ export class InfraController {
             updates.S3_REGION = 'us-east-1';
             profiles.push('minio');
           } else {
-            // External S3/MinIO
-            updates.S3_BUCKET = config.storage.s3Bucket || '';
-            updates.S3_REGION = config.storage.s3Region || 'ap-southeast-1';
+            // External S3/MinIO. Flipping built-in -> external must not carry the bundled
+            // 'minioadmin' credentials or the internal endpoint into the external config:
+            // the production boot guard rejects those credentials (crash-loop), and a stale
+            // MinIO endpoint would send AWS-bound traffic to the wrong host. Values in the
+            // same payload win.
+            if (config.storage.builtIn === false && existing.MINIO_BUILTIN === 'true') {
+              if (!config.storage.s3AccessKey) staleKeys.add('S3_ACCESS_KEY_ID');
+              if (!config.storage.s3SecretKey) staleKeys.add('S3_SECRET_ACCESS_KEY');
+              if (!config.storage.s3Endpoint) staleKeys.add('S3_ENDPOINT');
+            }
+            if (config.storage.s3Bucket !== undefined) updates.S3_BUCKET = config.storage.s3Bucket;
+            if (config.storage.s3Region !== undefined) updates.S3_REGION = config.storage.s3Region || 'ap-southeast-1';
             setSecret('S3_ACCESS_KEY_ID', config.storage.s3AccessKey);
             setSecret('S3_SECRET_ACCESS_KEY', config.storage.s3SecretKey);
-            if (config.storage.s3Endpoint) {
-              updates.S3_ENDPOINT = config.storage.s3Endpoint;
+            if (config.storage.s3Endpoint !== undefined) {
+              // Unlike the credentials, the endpoint IS echoed back to the form, so an empty
+              // submission is a real "clear it" (moving to the default AWS endpoint), not
+              // "unchanged" — leaving a stale MinIO endpoint behind would silently keep
+              // pointing S3 traffic at the old host.
+              if (config.storage.s3Endpoint) {
+                updates.S3_ENDPOINT = config.storage.s3Endpoint;
+              } else {
+                staleKeys.add('S3_ENDPOINT');
+              }
             }
           }
         }
@@ -912,13 +791,19 @@ export class InfraController {
           }
           updates.ENGINE_TYPE = config.engine.type;
         }
-        updates.PUPPETEER_HEADLESS = config.engine.headless !== false ? 'true' : 'false';
-        updates.SESSION_DATA_PATH = config.engine.sessionDataPath || './data/sessions';
-        // Must match configuration.ts's PUPPETEER_ARGS default (4 flags). Once compose blank-forwards
-        // PUPPETEER_ARGS, this saved value wins at runtime — a 2-flag default here would silently drop
-        // --disable-dev-shm-usage (the Docker /dev/shm tab-crash guard) after any Infrastructure save.
-        updates.PUPPETEER_ARGS =
-          config.engine.browserArgs || '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu';
+        if (config.engine.headless !== undefined) {
+          updates.PUPPETEER_HEADLESS = config.engine.headless ? 'true' : 'false';
+        }
+        if (config.engine.sessionDataPath !== undefined) {
+          updates.SESSION_DATA_PATH = config.engine.sessionDataPath || './data/sessions';
+        }
+        if (config.engine.browserArgs !== undefined) {
+          // Must match configuration.ts's PUPPETEER_ARGS default (4 flags). Once compose blank-forwards
+          // PUPPETEER_ARGS, this saved value wins at runtime — a 2-flag default here would silently drop
+          // --disable-dev-shm-usage (the Docker /dev/shm tab-crash guard) after any Infrastructure save.
+          updates.PUPPETEER_ARGS =
+            config.engine.browserArgs || '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu';
+        }
       }
 
       // .env.generated is one KEY=value per line, loaded on the next boot. A value carrying a
@@ -932,9 +817,35 @@ export class InfraController {
 
       // Existing values are the base; this payload's values win (secrets handled above).
       const merged: Record<string, string> = { ...existing, ...updates };
-      // Drop keys made obsolete by a mode switch (postgres->sqlite, s3->local).
+      // Drop keys made obsolete by a mode switch (postgres->sqlite, s3->local, built-in->external).
       for (const k of staleKeys) {
         delete merged[k];
+      }
+
+      // Save-time production guard. The file is loaded on the NEXT boot, which may run with
+      // NODE_ENV=production regardless of this process's environment — so evaluate the merged
+      // result with the very same boot guard (as production) and refuse the save when that boot
+      // would refuse to start. This is what stops a built-in->external flip with no fresh
+      // credentials from persisting a config that crash-loops the next production boot.
+      try {
+        assertNoDefaultSecretsInProduction({
+          nodeEnv: 'production',
+          databaseType: merged.DATABASE_TYPE,
+          databasePassword: merged.DATABASE_PASSWORD,
+          postgresBuiltIn: merged.POSTGRES_BUILTIN,
+          databaseHost: merged.DATABASE_HOST,
+          storageType: merged.STORAGE_TYPE,
+          s3AccessKey: merged.S3_ACCESS_KEY_ID,
+          s3SecretKey: merged.S3_SECRET_ACCESS_KEY,
+          s3Endpoint: merged.S3_ENDPOINT,
+          minioBuiltIn: merged.MINIO_BUILTIN,
+          redisPassword: merged.REDIS_PASSWORD,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new BadRequestException(
+          `Refusing to save a configuration that would be rejected at production boot. ${detail}`,
+        );
       }
       const body = Object.keys(merged)
         .sort()
