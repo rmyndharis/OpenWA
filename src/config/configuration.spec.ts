@@ -164,6 +164,44 @@ describe('configuration — in-flight body budget', () => {
   });
 });
 
+describe('configuration — webhook fan-out knobs are fail-safe', () => {
+  const keys = ['WEBHOOK_MAX_PER_SESSION', 'WEBHOOK_MEDIA_INLINE_MAX_BYTES'];
+  const orig: Record<string, string | undefined> = {};
+  beforeEach(() => keys.forEach(k => (orig[k] = process.env[k])));
+  afterEach(() =>
+    keys.forEach(k => {
+      if (orig[k] === undefined) delete process.env[k];
+      else process.env[k] = orig[k];
+    }),
+  );
+
+  it('defaults: 16 webhooks per session, 1 MiB inline media', () => {
+    keys.forEach(k => delete process.env[k]);
+    expect(configuration().webhook.maxPerSession).toBe(16);
+    expect(configuration().webhook.mediaInlineMaxBytes).toBe(1024 * 1024);
+  });
+
+  it('honors valid non-negative overrides (0 = cap disabled / never inline)', () => {
+    process.env.WEBHOOK_MAX_PER_SESSION = '0';
+    process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES = '0';
+    expect(configuration().webhook.maxPerSession).toBe(0);
+    expect(configuration().webhook.mediaInlineMaxBytes).toBe(0);
+    process.env.WEBHOOK_MAX_PER_SESSION = '32';
+    process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES = '262144';
+    expect(configuration().webhook.maxPerSession).toBe(32);
+    expect(configuration().webhook.mediaInlineMaxBytes).toBe(262144);
+  });
+
+  it('falls back to the defaults on garbage or negative values (never silently unlimited)', () => {
+    for (const bad of ['', 'abc', '-1']) {
+      process.env.WEBHOOK_MAX_PER_SESSION = bad;
+      process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES = bad;
+      expect(configuration().webhook.maxPerSession).toBe(16);
+      expect(configuration().webhook.mediaInlineMaxBytes).toBe(1024 * 1024);
+    }
+  });
+});
+
 describe('configuration search namespace', () => {
   // Save/restore the SEARCH_* env vars so a CI .env that sets them cannot flake the default-value
   // assertions below (mirrors the mutate-and-restore pattern used for PLUGIN_DOWNLOAD_MAX_BYTES etc.).

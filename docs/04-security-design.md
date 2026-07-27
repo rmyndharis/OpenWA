@@ -417,6 +417,22 @@ function verifySignature(
 }
 ```
 
+### Fan-out and Payload Bounds
+
+A single inbound event is delivered to **every** matching webhook of the session, and media arrives
+from unauthenticated WhatsApp senders — so the copy amplification is bounded at four points:
+
+| Bound | Knob | Default | Behavior |
+| --- | --- | --- | --- |
+| Webhooks per session | `WEBHOOK_MAX_PER_SESSION` | 16 (`0` = unlimited) | Creating a NEW webhook at/over the cap is rejected with `400`; existing webhooks are grandfathered |
+| Inline media in payloads | `WEBHOOK_MEDIA_INLINE_MAX_BYTES` | 1 MiB (`0` = never inline) | Larger media is replaced once, before per-webhook cloning, with `media: { mimetype, filename?, omitted: true, sizeBytes }` |
+| Serialized body size | `WEBHOOK_MAX_PAYLOAD_BYTES` | 1 MiB | Over-budget bodies shed any remaining inline media (marker form) and are re-checked; still over budget → recorded as undelivered, never sent/queued |
+| Failed-job retention in Redis | queue `removeOnComplete` / `removeOnFail` | 1h/1000 completed, 24h/5000 failed | Finished jobs auto-evict; payloads were already media-shed before enqueue, so retained jobs stay small. The durable record of a lost delivery is the `webhook_delivery_failures` row |
+
+Each webhook still receives its own copy of the event data — a `webhook:before` hook may mutate
+`payload.data` in place and must not bleed into sibling deliveries — but the copy is taken after
+media shedding, so it is small. The HMAC signature is computed over the exact shed bytes sent.
+
 ## 4.9 Security Headers
 
 ### Recommended Headers

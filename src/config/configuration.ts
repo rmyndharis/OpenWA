@@ -158,6 +158,23 @@ export default () => ({
     // Upper bound on the serialized webhook body after webhook:before hooks ran; oversize payloads
     // are recorded as undelivered instead of being sent/persisted. Default 1 MiB.
     maxPayloadBytes: parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES || '1048576', 10),
+    // Max webhooks registered per session. One inbound event fans out to every registered webhook
+    // of the session, so an unbounded count multiplies per-event copies of the payload. Creating a
+    // NEW webhook above the cap is rejected with 400; existing ones are grandfathered (never
+    // deleted). Default 16; 0 disables the cap. Garbage falls back to the default.
+    maxPerSession: (() => {
+      const n = parseInt(process.env.WEBHOOK_MAX_PER_SESSION ?? '', 10);
+      return Number.isFinite(n) && n >= 0 ? n : 16;
+    })(),
+    // Inline base64 media cap for webhook payloads (decoded bytes). A media blob larger than this
+    // is replaced with the { omitted: true, sizeBytes } marker BEFORE the payload is cloned per
+    // webhook / queued into Redis, so fan-out and failed-job retention never copy the blob. Media
+    // at or under the cap stays inline (unchanged). Default 1 MiB; 0 = never inline media. Garbage
+    // falls back to the default.
+    mediaInlineMaxBytes: (() => {
+      const n = parseInt(process.env.WEBHOOK_MEDIA_INLINE_MAX_BYTES ?? '', 10);
+      return Number.isFinite(n) && n >= 0 ? n : 1024 * 1024;
+    })(),
     // How long shutdown waits for in-flight direct deliveries to finish before abandoning them.
     shutdownDrainMs: parseInt(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS || '5000', 10),
   },

@@ -3243,7 +3243,7 @@ Create a webhook for the session.
 
 `secret` and `headers` are deliberately excluded from the response. `active` defaults to `true`, `lastTriggeredAt` is `null` on create.
 
-**Errors:** `400` validation failure, unknown body field (whitelist), or SSRF URL rejection · `401` missing/invalid API key · `403` insufficient role
+**Errors:** `400` validation failure, unknown body field (whitelist), SSRF URL rejection, or the per-session webhook limit (`WEBHOOK_MAX_PER_SESSION`, default 16 — delete an existing webhook before registering another; webhooks already above the cap are grandfathered and keep working) · `401` missing/invalid API key · `403` insufficient role
 
 #### PUT /api/sessions/:sessionId/webhooks/:id
 
@@ -4913,6 +4913,8 @@ These are the events OpenWA actually emits. A webhook is registered with an `eve
 > **`status.received` is opt-in and carries no media blob.** Unlike every other event above, `status.received` is only delivered to a webhook whose `events` list explicitly includes `"status.received"` (or `"*"`) — registering for other events does not implicitly subscribe you to it. The payload never embeds media bytes: when `hasMedia` is `true`, fetch the file separately via `GET /api/sessions/:sessionId/status/:statusId/media`. Your own posted statuses never trigger this event — only inbound stories from contacts (an own-send echo is dropped before ingest).
 
 > **`STORE_EPHEMERAL_MESSAGES=false` affects `message.received`.** When `STORE_EPHEMERAL_MESSAGES` is set to `false`, incoming disappearing messages (those with `ephemeralDuration > 0`) are **not** persisted nor dispatched — no DB insert, no webhook delivery, and no websocket event. Downstream consumers and the dashboard both stop seeing them. Default is `true` (backward compatible — store and dispatch everything).
+
+> **Large media is not inlined into webhook payloads.** A `media` blob whose decoded size exceeds `WEBHOOK_MEDIA_INLINE_MAX_BYTES` (default **1 MiB**; `0` = never inline) is replaced — before the payload is fanned out to your webhook — with the marker form `media: { mimetype, filename?, omitted: true, sizeBytes }`, the same shape the engine emits for capped inbound media. Media at or under the cap stays inline unchanged. Additionally, if the serialized body still exceeds `WEBHOOK_MAX_PAYLOAD_BYTES` (default **1 MiB**) after `webhook:before` hooks ran, any remaining inline media is shed the same way so the event is still delivered; only a payload that is over budget *without* inline media is dropped (recorded in `GET /api/webhooks/delivery-failures`). Because shedding happens before enqueue, queued and failed BullMQ jobs in Redis never carry the blob either — failed-job retention is bounded by the queue's `removeOnComplete`/`removeOnFail` windows (1h/1000 completed, 24h/5000 failed). Fetch the media itself afterwards via `GET /api/sessions/:sessionId/messages/:chatId/history?includeMedia=true` when you need it.
 
 > There is **no** `contact.update` or `presence.update` event, and no `call.accepted` / `call.terminated` lifecycle event yet — only `call.received` is emitted.
 

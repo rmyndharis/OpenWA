@@ -128,6 +128,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'INGRESS_INSTANCE_TTL',
     'WEBHOOK_DISPATCH_MAX_QUEUED',
     'STATS_CACHE_TTL_MS', // 0 = memo disabled
+    'WEBHOOK_MAX_PER_SESSION', // 0 = unlimited
+    'WEBHOOK_MEDIA_INLINE_MAX_BYTES', // 0 = never inline media
   ]) {
     checkNonNegativeInt(key);
   }

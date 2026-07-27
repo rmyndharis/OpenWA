@@ -64,6 +64,22 @@ export interface WebhookJobData {
 const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 /**
+ * Upper bound on how many webhooks one session can register. One inbound event fans out to EVERY
+ * registered webhook of the session, so an unbounded count multiplies per-event payload copies
+ * (clones, outbound sockets, queued jobs). Default 16; override with WEBHOOK_MAX_PER_SESSION
+ * (0 disables). Only NEW registrations above the cap are refused — existing ones are grandfathered.
+ */
+const DEFAULT_WEBHOOK_MAX_PER_SESSION = 16;
+
+/**
+ * Decoded-byte cap for inline base64 media in webhook payloads. A larger blob is replaced with the
+ * engine's omitted-marker shape ({ mimetype, filename?, omitted: true, sizeBytes }) before the
+ * payload is cloned per webhook or queued, so fan-out and Redis retention never copy it. Default
+ * 1 MiB; override with WEBHOOK_MEDIA_INLINE_MAX_BYTES (0 = never inline media).
+ */
+const DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES = 1024 * 1024;
+
+/**
  * How long shutdown waits for in-flight direct deliveries (and their dead-letter bookkeeping) to
  * finish before abandoning them. Default 5s; override with WEBHOOK_SHUTDOWN_DRAIN_MS.
  */
@@ -218,6 +234,18 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
   async create(sessionId: string, dto: CreateWebhookDto): Promise<Webhook> {
     await this.validateWebhookUrl(dto.url);
+    // Per-session fan-out cap. Soft by design: a concurrent create can race the count check — the
+    // cap bounds amplification, it is not a hard invariant. Webhooks already above the cap are left
+    // alone; only NEW registrations are refused.
+    const maxPerSession = this.configService.get<number>('webhook.maxPerSession', DEFAULT_WEBHOOK_MAX_PER_SESSION);
+    if (maxPerSession > 0) {
+      const existing = await this.webhookRepository.count({ where: { sessionId } });
+      if (existing >= maxPerSession) {
+        throw new BadRequestException(
+          `Webhook limit reached for this session (${existing}/${maxPerSession}); delete one before registering another`,
+        );
+      }
+    }
     const webhook = this.webhookRepository.create({
       sessionId,
       url: dto.url,
@@ -388,6 +416,18 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     const occurredAt = new Date().toISOString();
     const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
 
+    // Fan-out amplification bound: shed an over-cap inline media blob ONCE here, before the
+    // per-webhook structuredClone below, so N matching webhooks (and the queued jobs retained in
+    // Redis) never copy the blob. The per-webhook clone stays — a webhook:before hook may mutate
+    // payload.data in place and must not bleed into siblings — but after shedding it is small.
+    const baseData =
+      matchingWebhooks.length > 0
+        ? this.shedInlineMedia(
+            data,
+            this.configService.get<number>('webhook.mediaInlineMaxBytes', DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES),
+          )
+        : data;
+
     const recordUndelivered = async (
       webhook: Webhook,
       deliveryId: string,
@@ -433,6 +473,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     // recursive retry with backoff sleeps).
     const deliverOne = async (webhook: Webhook, deliveryId: string, idempotencyKey: string): Promise<void> => {
       let finalPayload: WebhookPayload;
+      let body: string;
       let headers: Record<string, string>;
       try {
         const payload: WebhookPayload = {
@@ -443,7 +484,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           deliveryId,
           // Give each webhook its own copy of the event data: a webhook:before hook that mutates
           // payload.data in place would otherwise bleed that change into sibling webhooks.
-          data: structuredClone(data),
+          data: structuredClone(baseData),
         };
         // Captured BEFORE the hook chain: a hook may return the same payload object mutated in
         // place, so reading the canonical timestamp off the hook result afterwards is not safe.
@@ -478,11 +519,25 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
         // Bound what a hook mutation can make us send. Serializing here also catches a poisoned
         // (BigInt/circular) hook result as a preflight failure, on BOTH the queued and direct paths.
+        // The bytes are serialized ONCE and reused for the size gate, the HMAC signature, and the
+        // direct-delivery body (BullMQ re-serializes jobData itself — unavoidable).
         const maxPayloadBytes = this.configService.get<number>(
           'webhook.maxPayloadBytes',
           DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES,
         );
-        const payloadBytes = Buffer.byteLength(JSON.stringify(finalPayload), 'utf8');
+        body = JSON.stringify(finalPayload);
+        let payloadBytes = Buffer.byteLength(body, 'utf8');
+        if (payloadBytes > maxPayloadBytes) {
+          // Size-gated body shedding: over budget, strip ANY remaining inline media blob (threshold
+          // 0 — the marker form keeps the event deliverable) and re-check, instead of dropping the
+          // event or queueing a giant payload.
+          const shedData = this.shedInlineMedia(finalPayload.data, 0);
+          if (shedData !== finalPayload.data) {
+            finalPayload.data = shedData;
+            body = JSON.stringify(finalPayload);
+            payloadBytes = Buffer.byteLength(body, 'utf8');
+          }
+        }
         if (payloadBytes > maxPayloadBytes) {
           await recordUndelivered(
             webhook,
@@ -513,11 +568,10 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       // Use queue if available, otherwise fallback to direct delivery
       if (this.queueEnabled && this.webhookQueue) {
         try {
-          // finalPayload comes from the (untrusted) webhook:before hook result, so JSON.stringify can
-          // throw (BigInt / circular). Keep serialization + signing INSIDE the try so a poisoned payload
-          // is caught here (one webhook dropped + logged) instead of aborting the whole dispatch loop
-          // and rejecting the fire-and-forget dispatch() promise.
-          const signature = webhook.secret ? this.generateSignature(JSON.stringify(finalPayload), webhook.secret) : '';
+          // Sign the exact pre-serialized body from preflight. The processor re-serializes the same
+          // payload object at delivery time (JSON key order survives the Redis round-trip), so the
+          // signature stays valid over the bytes the receiver sees.
+          const signature = webhook.secret ? this.generateSignature(body, webhook.secret) : '';
 
           if (webhook.secret) {
             headers['X-OpenWA-Signature'] = signature;
@@ -573,7 +627,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
           // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
           try {
-            await this.deliverWebhook(webhook, finalPayload, headers);
+            await this.deliverWebhook(webhook, finalPayload, headers, body);
 
             await this.hookManager.execute(
               'webhook:delivered',
@@ -607,7 +661,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       } else {
         // Direct delivery when queue is disabled
         try {
-          await this.deliverWebhook(webhook, finalPayload, headers);
+          await this.deliverWebhook(webhook, finalPayload, headers, body);
 
           // Execute hook after successful delivery
           await this.hookManager.execute(
@@ -685,15 +739,16 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @deprecated Use job queue dispatch instead. This is kept for fallback.
+   * `body` is the pre-serialized payload from preflight — the exact bytes the size gate checked and
+   * (when a secret is set) the signature covers — so it is never re-serialized here.
    */
   private async deliverWebhook(
     webhook: Webhook,
     payload: WebhookPayload,
     headers: Record<string, string>,
+    body: string,
     attempt = 1,
   ): Promise<void> {
-    const body = JSON.stringify(payload);
-
     // Update retry count header
     headers['X-OpenWA-Retry-Count'] = String(attempt - 1);
 
@@ -751,7 +806,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       if (attempt < webhook.retryCount) {
         const delay = this.configService.get<number>('webhook.retryDelay', 5000);
         await this.delay(delay * attempt);
-        return this.deliverWebhook(webhook, payload, headers, attempt + 1);
+        return this.deliverWebhook(webhook, payload, headers, body, attempt + 1);
       }
       // All direct-path retries exhausted — persist a durable failure record before giving up, mirroring
       // the queued processor's final-attempt path so the queue-disabled path isn't a blind spot.
@@ -770,6 +825,34 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       incrementWebhookDeliveryFailures();
       throw error;
     }
+  }
+
+  /**
+   * Replace an over-size inline base64 blob on `data.media` with the engine's omitted-marker shape
+   * ({ mimetype, filename?, omitted: true, sizeBytes }) — the same contract the inbound media cap
+   * and the status store already emit — so the multi-MB blob is never cloned per webhook, queued
+   * into Redis, or POSTed. Returns the ORIGINAL object when nothing was shed (zero-copy fast path);
+   * otherwise a shallow copy with only `media` replaced, so the caller's event data is never
+   * mutated. `maxBytes` compares against the DECODED size; 0 sheds any inline blob.
+   */
+  private shedInlineMedia(data: Record<string, unknown>, maxBytes: number): Record<string, unknown> {
+    if (!data || typeof data !== 'object') return data;
+    const media = data.media as
+      { mimetype?: unknown; filename?: unknown; data?: unknown; omitted?: unknown } | undefined;
+    if (!media || typeof media !== 'object' || typeof media.data !== 'string' || media.data.length === 0) {
+      return data;
+    }
+    const sizeBytes = Buffer.byteLength(media.data, 'base64');
+    if (sizeBytes <= maxBytes) return data;
+    return {
+      ...data,
+      media: {
+        mimetype: media.mimetype,
+        ...(typeof media.filename === 'string' ? { filename: media.filename } : {}),
+        omitted: true,
+        sizeBytes,
+      },
+    };
   }
 
   /**

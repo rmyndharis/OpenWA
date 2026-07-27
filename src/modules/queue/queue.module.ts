@@ -17,6 +17,17 @@ import { PluginsModule } from '../../core/plugins/plugins.module';
 // Re-export for backward compatibility
 export { QUEUE_NAMES } from './queue-names';
 
+/**
+ * Bounded retention for finished webhook-queue jobs. Failed webhook jobs carry their full payload in
+ * Redis until eviction, so the window must stay small — the durable record of a lost delivery is the
+ * webhook_delivery_failures row written on the final attempt, not the Redis job. The payload itself
+ * is additionally size-gated (media shed) before enqueue, so count × bytes both stay bounded.
+ */
+export const WEBHOOK_QUEUE_JOB_OPTIONS = {
+  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnFail: { age: 86400, count: 5000 },
+} as const;
+
 @Module({
   imports: [
     // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>;
@@ -45,10 +56,7 @@ export { QUEUE_NAMES } from './queue-names';
       name: QUEUE_NAMES.WEBHOOK,
       // Auto-evict finished jobs so completed/failed webhook payloads don't accumulate in Redis
       // unbounded. Keep a small recent window for debugging; cap age too.
-      defaultJobOptions: {
-        removeOnComplete: { age: 3600, count: 1000 },
-        removeOnFail: { age: 86400, count: 5000 },
-      },
+      defaultJobOptions: WEBHOOK_QUEUE_JOB_OPTIONS,
     }),
     BullModule.registerQueue({
       name: QUEUE_NAMES.INGRESS,

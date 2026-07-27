@@ -99,6 +99,14 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ INFLIGHT_BODY_BUDGET_BYTES: '104857600' })).not.toThrow();
   });
 
+  it('rejects a negative/non-integer webhook fan-out knob (0 is a documented escape hatch)', () => {
+    expect(() => validateEnv({ WEBHOOK_MAX_PER_SESSION: '-1' })).toThrow(/WEBHOOK_MAX_PER_SESSION/);
+    expect(() => validateEnv({ WEBHOOK_MAX_PER_SESSION: '1.5' })).toThrow(/WEBHOOK_MAX_PER_SESSION/);
+    expect(() => validateEnv({ WEBHOOK_MEDIA_INLINE_MAX_BYTES: 'abc' })).toThrow(/WEBHOOK_MEDIA_INLINE_MAX_BYTES/);
+    // 0 is meaningful for both: unlimited registrations / never inline media.
+    expect(() => validateEnv({ WEBHOOK_MAX_PER_SESSION: '0', WEBHOOK_MEDIA_INLINE_MAX_BYTES: '0' })).not.toThrow();
+  });
+
   it('rejects a non-canonical boolean feature flag instead of silently disabling the feature', () => {
     // QUEUE_ENABLED / MCP_ENABLED / SERVE_DASHBOARD are read at module-eval with `=== 'true'` /
     // `!== 'false'`, so a typo silently (dis)ables the feature with zero diagnostics. Boot must reject it.

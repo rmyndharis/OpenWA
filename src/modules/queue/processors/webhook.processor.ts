@@ -197,7 +197,9 @@ export class WebhookProcessor extends WorkerHost {
    * failure channel — no dead-letter row, no metric, no webhook:error hook. Normal delivery failures
    * are already recorded by process() on the final attempt (and non-final ones are retried), so this
    * handler MUST ignore anything but the stall-exhaustion sentinel, or every failure is recorded
-   * twice. `job` can be undefined if removeOnFail deleted it first (we never set removeOnFail).
+   * twice. `job` can be undefined when the queue's bounded `removeOnFail` window (see QueueModule's
+   * WEBHOOK_QUEUE_JOB_OPTIONS) pruned it before this event fired — that window keeps failed-job
+   * retention bounded, and each retained payload was size-gated before enqueue.
    */
   @OnWorkerEvent('failed')
   async onWorkerFailed(job: Job<WebhookJobData> | undefined, error: Error): Promise<void> {
