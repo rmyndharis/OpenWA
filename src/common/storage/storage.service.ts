@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,6 +34,8 @@ const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
 const DEFAULT_LIST_MAX_FILES = 100_000;
 /** Max directory depth a local traversal descends. Prevents a pathological tree from running unbounded. */
 const LOCAL_TRAVERSAL_MAX_DEPTH = 20;
+/** How often an S3-configured service re-probes a bucket that was unreachable at boot. */
+export const DEFAULT_S3_REPROBE_INTERVAL_MS = 60_000;
 
 function positiveIntFromEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? '', 10);
@@ -41,13 +43,15 @@ function positiveIntFromEnv(name: string, fallback: number): number {
 }
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleDestroy {
   private readonly logger = createLogger('StorageService');
   private readonly storageType: string;
   private readonly localPath: string;
   private s3Client: S3Client | null = null;
   private s3Bucket = 'openwa';
   private s3Available = false;
+  private s3ReprobeTimer: NodeJS.Timeout | null = null;
+  private readonly s3ReprobeIntervalMs = positiveIntFromEnv('S3_REPROBE_INTERVAL_MS', DEFAULT_S3_REPROBE_INTERVAL_MS);
 
   constructor(private readonly configService: ConfigService) {
     this.storageType = this.configService.get<string>('storage.type') || 'local';
@@ -80,6 +84,7 @@ export class StorageService {
         });
         this.s3Bucket = process.env.S3_BUCKET || s3Config.bucket || 'openwa';
         void this.initializeS3Bucket();
+        this.startS3Reprobe();
       }
     }
 
@@ -87,6 +92,10 @@ export class StorageService {
     if (!fs.existsSync(this.localPath)) {
       fs.mkdirSync(this.localPath, { recursive: true });
     }
+  }
+
+  onModuleDestroy(): void {
+    this.clearS3Reprobe();
   }
 
   private async initializeS3Bucket(): Promise<void> {
@@ -106,10 +115,46 @@ export class StorageService {
           this.logger.log(`Created S3 bucket '${this.s3Bucket}'`);
         } catch (createError) {
           this.logger.error('Failed to create S3 bucket', String(createError));
+          this.warnLocalFallback();
         }
       } else {
         this.logger.error('S3 bucket check failed', String(error));
+        this.warnLocalFallback();
       }
+    }
+  }
+
+  private warnLocalFallback(): void {
+    this.logger.warn(
+      `S3 bucket '${this.s3Bucket}' is unreachable — media storage degraded, using the local fallback dir ` +
+        `'${this.localPath}'. Re-probing every ${this.s3ReprobeIntervalMs}ms; writes return to S3 once it recovers.`,
+    );
+  }
+
+  /**
+   * Periodically re-probe S3 while the effective backend is the local fallback (S3 was unreachable at
+   * boot). Recovery is one-way: availability only ever transitions false→true here, and once S3 is
+   * back the timer stops — a session already on S3 is never dropped to local by a transient error
+   * without an explicit re-evaluation.
+   */
+  private startS3Reprobe(): void {
+    this.s3ReprobeTimer = setInterval(() => {
+      if (this.s3Available) {
+        this.clearS3Reprobe();
+        return;
+      }
+      void this.refreshS3Availability().then(available => {
+        if (!available) this.warnLocalFallback();
+      });
+    }, this.s3ReprobeIntervalMs);
+    // Don't keep the process alive for a probe; shutdown clears it via onModuleDestroy.
+    this.s3ReprobeTimer.unref();
+  }
+
+  private clearS3Reprobe(): void {
+    if (this.s3ReprobeTimer) {
+      clearInterval(this.s3ReprobeTimer);
+      this.s3ReprobeTimer = null;
     }
   }
 
@@ -131,8 +176,8 @@ export class StorageService {
   /**
    * Re-probe S3/MinIO reachability when it's currently marked unavailable — e.g. a bundled MinIO that
    * came up AFTER the app booted (the init HeadBucket raced and latched false). Throttled (10s) and
-   * in-flight-deduped so the status endpoint can call it on every poll cheaply. Once available it
-   * stays available (no need to re-probe a healthy backend here).
+   * in-flight-deduped so the status endpoint and the periodic re-probe can call it cheaply. Once
+   * available it stays available (no need to re-probe a healthy backend here).
    */
   async refreshS3Availability(): Promise<boolean> {
     if (this.storageType !== 's3' || !this.s3Client || this.s3Available) return this.s3Available;
@@ -147,7 +192,13 @@ export class StorageService {
       try {
         await this.s3Client!.send(new HeadBucketCommand({ Bucket: this.s3Bucket }));
         this.s3Available = true;
-        this.logger.log(`S3 bucket '${this.s3Bucket}' is now reachable`);
+        // WARN (not log): the degraded window matters — media written to the local fallback dir while
+        // S3 was down stays local-only; reads for those keys keep working via the NoSuchKey
+        // read-through in getS3File, but the operator should reconcile/acknowledge the gap.
+        this.logger.warn(
+          `S3 bucket '${this.s3Bucket}' recovered — media storage back on S3. Files written to the local ` +
+            `fallback dir '${this.localPath}' during the outage remain there (still readable via read-through).`,
+        );
       } catch {
         // still unreachable — leave s3Available false; a later poll retries after the throttle window
       } finally {
@@ -506,12 +557,28 @@ export class StorageService {
   private async getS3File(filePath: string): Promise<Buffer> {
     if (!this.s3Client) throw new Error('S3 client not initialized');
 
-    const response = await this.s3Client.send(
-      new GetObjectCommand({
-        Bucket: this.s3Bucket,
-        Key: `media/${filePath}`,
-      }),
-    );
+    let response;
+    try {
+      response = await this.s3Client.send(
+        new GetObjectCommand({
+          Bucket: this.s3Bucket,
+          Key: `media/${filePath}`,
+        }),
+      );
+    } catch (error: unknown) {
+      // Read-through: media written while S3 was down lives only in the local fallback dir, so after
+      // recovery a plain S3 read would split-brain (NoSuchKey even though the app served the file
+      // fine during the outage). Fall through to the local copy; if there is none, surface the
+      // original S3 error so "not found" semantics are unchanged.
+      if ((error as { name?: string }).name !== 'NoSuchKey') throw error;
+      try {
+        const local = await this.getLocalFile(filePath);
+        this.logger.debug(`Served '${filePath}' from the local fallback dir (not yet in S3)`);
+        return local;
+      } catch {
+        throw error;
+      }
+    }
 
     if (!response.Body) throw new Error('Empty response body');
 
