@@ -105,4 +105,35 @@ describe('ConcurrencyLimiter', () => {
     release(); // drain: active finishes, then the 50 parked tasks run one at a time
     await expect(Promise.all([active, ...parked])).resolves.toHaveLength(51);
   });
+
+  it('close() rejects parked waiters and future arrivals but lets in-flight tasks finish', async () => {
+    const limiter = new ConcurrencyLimiter(1);
+    let release!: () => void;
+    const active = limiter.run(
+      () =>
+        new Promise<void>(resolve => {
+          release = resolve;
+        }),
+    );
+    const parked = limiter.run(() => Promise.resolve('never runs'));
+    expect(limiter.activeCount).toBe(1);
+    expect(limiter.queuedCount).toBe(1);
+
+    limiter.close();
+
+    await expect(parked).rejects.toThrow('ConcurrencyLimiter closed');
+    await expect(limiter.run(() => Promise.resolve('late'))).rejects.toThrow('ConcurrencyLimiter closed');
+    expect(limiter.queuedCount).toBe(0);
+
+    release();
+    await expect(active).resolves.toBeUndefined(); // the in-flight task was NOT interrupted
+    expect(limiter.activeCount).toBe(0);
+  });
+
+  it('close() with no parked waiters is a no-op and exposes a zero drain state', () => {
+    const limiter = new ConcurrencyLimiter(2);
+    expect(() => limiter.close()).not.toThrow();
+    expect(limiter.activeCount).toBe(0);
+    expect(limiter.queuedCount).toBe(0);
+  });
 });

@@ -138,6 +138,11 @@ export default () => ({
     // Bound parked inline deliveries as well as active sockets. Queue-full dispatches are recorded in
     // webhook_delivery_failures instead of retaining payload closures without limit.
     dispatchMaxQueued: parseInt(process.env.WEBHOOK_DISPATCH_MAX_QUEUED || '1000', 10),
+    // Upper bound on the serialized webhook body after webhook:before hooks ran; oversize payloads
+    // are recorded as undelivered instead of being sent/persisted. Default 1 MiB.
+    maxPayloadBytes: parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES || '1048576', 10),
+    // How long shutdown waits for in-flight direct deliveries to finish before abandoning them.
+    shutdownDrainMs: parseInt(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS || '5000', 10),
   },
 
   // API configuration

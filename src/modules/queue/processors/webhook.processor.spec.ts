@@ -6,6 +6,7 @@ import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import { HookManager } from '../../../core/hooks';
 import { WebhookJobData } from '../../webhook/webhook.service';
+import { getWebhookDeliveryFailuresTotal } from '../../../common/metrics/webhook-delivery-metrics';
 import { fetch as undiciFetch } from 'undici';
 
 // Delivery goes through undici's fetch (via the SSRF-pinning helper), so mock that, not global fetch.
@@ -177,5 +178,68 @@ describe('WebhookProcessor', () => {
     const inserted = (failureRepo.insert.mock.calls[0] as unknown[])[0] as { lastError: string };
     expect(inserted.lastError).toBe('Destination address is not allowed');
     expect(inserted.lastError).not.toMatch(/169\.254\.169\.254/);
+  });
+
+  it('keeps the success outcome when post-delivery bookkeeping fails after a 2xx (no retry, no DLQ row)', async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    repo.update.mockRejectedValue(new Error('db down'));
+    const failuresBefore = getWebhookDeliveryFailuresTotal();
+
+    // Final attempt (attemptsMade=2, maxRetries=3): a bookkeeping throw reaching the catch would
+    // file a dead-letter row AND rethrow for a retry — over an already-delivered event.
+    const result = await processor.process(makeJob({ maxRetries: 3 }, 2));
+
+    expect(result.success).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(failureRepo.insert).not.toHaveBeenCalled();
+    expect(getWebhookDeliveryFailuresTotal()).toBe(failuresBefore);
+    expect(hookManager.execute).toHaveBeenCalledWith('webhook:delivered', expect.anything(), expect.anything());
+    expect(hookManager.execute).not.toHaveBeenCalledWith('webhook:error', expect.anything(), expect.anything());
+  });
+
+  // BullMQ fails a job that stalls more than maxStalledCount (default 1) WITHOUT calling process():
+  // the worker emits 'failed' with "job stalled more than allowable limit". Those failures must land
+  // in the same dead-letter/metric/hook channels as an ordinary final-attempt failure.
+  describe('stall exhaustion (worker failed event)', () => {
+    it('records a dead-letter row, metric, and webhook:error for a job failed by a double stall', async () => {
+      const failuresBefore = getWebhookDeliveryFailuresTotal();
+
+      await processor.onWorkerFailed(
+        makeJob({ webhookId: 'wh-stall', url: 'https://8.8.8.8/s' }, 1),
+        new Error('job stalled more than allowable limit'),
+      );
+
+      expect(failureRepo.insert).toHaveBeenCalledTimes(1);
+      expect(failureRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webhookId: 'wh-stall',
+          url: 'https://8.8.8.8/s',
+          sessionId: 'sess-1',
+          attempts: 1,
+          lastStatusCode: null, // no HTTP exchange completed on the stalled attempts
+          lastError: 'job stalled more than allowable limit',
+        }),
+      );
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'webhook:error',
+        expect.objectContaining({ webhookId: 'wh-stall', error: 'job stalled more than allowable limit' }),
+        expect.anything(),
+      );
+      expect(getWebhookDeliveryFailuresTotal()).toBe(failuresBefore + 1);
+    });
+
+    it('ignores ordinary delivery failures — process() already records those on the final attempt', async () => {
+      await processor.onWorkerFailed(makeJob(), new Error('HTTP 500: Server Error'));
+
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+
+    it('ignores an undefined job (BullMQ may pass none when removeOnFail deleted it first)', async () => {
+      await processor.onWorkerFailed(undefined, new Error('job stalled more than allowable limit'));
+
+      expect(failureRepo.insert).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+    });
   });
 });

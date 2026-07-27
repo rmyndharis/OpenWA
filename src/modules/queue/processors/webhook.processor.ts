@@ -1,4 +1,4 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +20,15 @@ export interface WebhookJobResult {
   error?: string;
   responseTime: number;
 }
+
+/**
+ * The exact `failedReason` BullMQ 5.80.x sets when a job stalls more than `maxStalledCount` (worker
+ * default 1, so the SECOND genuine stall): the stalled checker (moveStalledJobsToWait Lua script)
+ * stores it as the job's deferred failure, and the worker then fails the job itself — emitting
+ * 'failed' WITHOUT ever calling process(). Lock renewal means a slow-but-alive processor never
+ * stalls, so reaching this sentinel implies the job genuinely died twice mid-processing.
+ */
+const STALL_EXHAUSTION_MESSAGE = 'job stalled more than allowable limit';
 
 // Override the Worker's connection so it does NOT inherit the producer's `enableOfflineQueue: false`
 // from the shared BullModule connection — the Worker must tolerate a brief Redis reconnect. Set an
@@ -80,10 +89,21 @@ export class WebhookProcessor extends WorkerHost {
         throw new Error(`HTTP ${status}: ${statusText}`);
       }
 
-      // Update lastTriggeredAt on successful delivery
-      await this.webhookRepository.update(webhookId, {
-        lastTriggeredAt: new Date(),
-      });
+      // The receiver already answered 2xx — the delivery SUCCEEDED. Everything up to the return is
+      // bookkeeping and must never throw back into the failure path: a rethrow would make BullMQ
+      // retry (a duplicate POST for an already-delivered event) and, on the final attempt, file a
+      // false dead-letter row. Log a bookkeeping failure and keep the success outcome.
+      try {
+        await this.webhookRepository.update(webhookId, {
+          lastTriggeredAt: new Date(),
+        });
+      } catch (bookkeepingError) {
+        this.logger.error(
+          'Webhook delivered but lastTriggeredAt update failed',
+          bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
+          { webhookId, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
+        );
+      }
 
       // Execute hook after successful delivery
       await this.hookManager.execute(
@@ -169,5 +189,58 @@ export class WebhookProcessor extends WorkerHost {
       // Re-throw to trigger BullMQ retry
       throw error;
     }
+  }
+
+  /**
+   * A job failed by stall exhaustion never enters process(): the worker fails it internally after
+   * the second stall and only emits 'failed'. Without this handler such a job bypasses every product
+   * failure channel — no dead-letter row, no metric, no webhook:error hook. Normal delivery failures
+   * are already recorded by process() on the final attempt (and non-final ones are retried), so this
+   * handler MUST ignore anything but the stall-exhaustion sentinel, or every failure is recorded
+   * twice. `job` can be undefined if removeOnFail deleted it first (we never set removeOnFail).
+   */
+  @OnWorkerEvent('failed')
+  async onWorkerFailed(job: Job<WebhookJobData> | undefined, error: Error): Promise<void> {
+    if (!job || error.message !== STALL_EXHAUSTION_MESSAGE) {
+      return;
+    }
+
+    const { webhookId, url, event, payload } = job.data;
+    const sessionId = payload.sessionId;
+
+    this.logger.error('Webhook job failed after stalling beyond the recovery limit', error.message, {
+      webhookId,
+      event,
+      deliveryId: payload.deliveryId,
+      idempotencyKey: payload.idempotencyKey,
+      attemptsMade: job.attemptsMade,
+      action: 'webhook_stall_exhausted',
+    });
+
+    await this.hookManager.execute(
+      'webhook:error',
+      {
+        sessionId,
+        event,
+        webhookId,
+        deliveryId: payload.deliveryId,
+        error: error.message,
+        attempt: job.attemptsMade,
+      },
+      { sessionId, source: 'WebhookProcessor' },
+    );
+
+    await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+      webhookId,
+      sessionId,
+      event,
+      url,
+      idempotencyKey: payload.idempotencyKey,
+      deliveryId: payload.deliveryId,
+      attempts: job.attemptsMade,
+      lastStatusCode: null, // no HTTP exchange completed on the stalled attempts
+      lastError: error.message,
+    });
+    incrementWebhookDeliveryFailures();
   }
 }

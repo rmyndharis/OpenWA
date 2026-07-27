@@ -55,12 +55,37 @@ export interface WebhookJobData {
   maxRetries: number;
 }
 
+/**
+ * Upper bound on the serialized webhook body after webhook:before hooks ran. Hook results are
+ * untrusted — an unbounded mutation (or a genuinely huge media event) would POST a giant body and,
+ * on failure, bloat the durable failure path. Oversize payloads are recorded as undelivered instead.
+ * Default 1 MiB; override with WEBHOOK_MAX_PAYLOAD_BYTES.
+ */
+const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
+/**
+ * How long shutdown waits for in-flight direct deliveries (and their dead-letter bookkeeping) to
+ * finish before abandoning them. Default 5s; override with WEBHOOK_SHUTDOWN_DRAIN_MS.
+ */
+const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
+
 @Injectable()
 export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
   private readonly queueEnabled: boolean;
   private readonly dispatchLimiter: ConcurrencyLimiter;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  /**
+   * Context of every delivery currently holding a dispatch-limiter slot (queued-path enqueue or a
+   * direct delivery with its retry loop). Used at shutdown to log, per delivery, what the bounded
+   * drain had to abandon — those deliveries were neither completed nor safely recorded.
+   */
+  private readonly inFlightDeliveries = new Map<
+    string,
+    { webhookId: string; sessionId: string; event: string; idempotencyKey: string; url: string }
+  >();
+  /** Late bookkeeping (dead-letter rows) written by tasks the limiter already released — awaited on shutdown. */
+  private readonly pendingBookkeeping = new Set<Promise<void>>();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -112,10 +137,38 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
     this.cleanupTimer.unref?.();
   }
 
-  onModuleDestroy(): void {
+  /**
+   * Bounded drain of the direct-delivery path (queued BullMQ jobs are durable in Redis and need no
+   * drain). Closing the limiter rejects every PARKED delivery; the dispatch catch records each one in
+   * webhook_delivery_failures like any other undispatched delivery. In-flight deliveries (a direct
+   * delivery can outlive WEBHOOK_TIMEOUT via its backoff sleeps) get up to WEBHOOK_SHUTDOWN_DRAIN_MS
+   * to finish; anything still running after that is about to be dropped by process exit, so it is
+   * logged per delivery — a dead-letter row would be wrong there, since the receiver may already
+   * have gotten the event. Nest awaits this hook during app.close(), so the bound also keeps
+   * app.close() itself bounded.
+   */
+  async onModuleDestroy(): Promise<void> {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
+    this.dispatchLimiter.close();
+    const drainMs = Math.max(
+      0,
+      this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),
+    );
+    const deadline = Date.now() + drainMs;
+    while (this.dispatchLimiter.activeCount > 0 || this.pendingBookkeeping.size > 0) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await this.delay(Math.min(50, remaining));
+    }
+    for (const lost of this.inFlightDeliveries.values()) {
+      this.logger.error('Webhook delivery abandoned during shutdown', undefined, {
+        ...lost,
+        action: 'webhook_delivery_abandoned_shutdown',
+      });
+    }
+    this.inFlightDeliveries.clear();
   }
 
   /**
@@ -376,6 +429,9 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           // payload.data in place would otherwise bleed that change into sibling webhooks.
           data: structuredClone(data),
         };
+        // Captured BEFORE the hook chain: a hook may return the same payload object mutated in
+        // place, so reading the canonical timestamp off the hook result afterwards is not safe.
+        const payloadTimestamp = payload.timestamp;
 
         const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
           'webhook:before',
@@ -393,8 +449,36 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
         // Null/undefined hook results mean "no override", matching an object without payload.
         finalPayload = (hookResult as { payload?: WebhookPayload } | null | undefined)?.payload ?? payload;
+        // Re-assert EVERY identity field after the (untrusted) hook chain. A hook may rewrite data,
+        // but event/sessionId/timestamp and the dedupe ids must remain the server's values: the
+        // receiver verifies the signature over this body and compares it against the X-OpenWA-*
+        // headers, and failure records are filed by these fields — a rewritten sessionId/event
+        // misfiles them across sessions.
+        finalPayload.event = event;
+        finalPayload.sessionId = sessionId;
+        finalPayload.timestamp = payloadTimestamp;
         finalPayload.idempotencyKey = idempotencyKey;
         finalPayload.deliveryId = deliveryId;
+
+        // Bound what a hook mutation can make us send. Serializing here also catches a poisoned
+        // (BigInt/circular) hook result as a preflight failure, on BOTH the queued and direct paths.
+        const maxPayloadBytes = this.configService.get<number>(
+          'webhook.maxPayloadBytes',
+          DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES,
+        );
+        const payloadBytes = Buffer.byteLength(JSON.stringify(finalPayload), 'utf8');
+        if (payloadBytes > maxPayloadBytes) {
+          await recordUndelivered(
+            webhook,
+            deliveryId,
+            idempotencyKey,
+            new Error(
+              `Webhook payload is ${payloadBytes} bytes after webhook:before hooks, exceeding the ${maxPayloadBytes}-byte cap`,
+            ),
+            'webhook_payload_oversize',
+          );
+          return;
+        }
 
         headers = {
           ...this.sanitizeCustomHeaders(webhook.headers),
@@ -545,10 +629,36 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       // Salt per webhook so sibling subscriptions cannot collide at the receiver's dedup boundary.
       const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
       return this.dispatchLimiter
-        .run(() => deliverOne(webhook, deliveryId, idempotencyKey))
+        .run(async () => {
+          this.inFlightDeliveries.set(deliveryId, {
+            webhookId: webhook.id,
+            sessionId,
+            event,
+            idempotencyKey,
+            url: webhook.url,
+          });
+          try {
+            await deliverOne(webhook, deliveryId, idempotencyKey);
+          } finally {
+            this.inFlightDeliveries.delete(deliveryId);
+          }
+        })
         .catch(async error => {
           if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
             await recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_capacity_exceeded');
+            return;
+          }
+          if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
+            // Rejected by the shutdown drain before dispatching — record it like any other
+            // undelivered delivery, and track the write so onModuleDestroy can await it (the
+            // limiter slot bookkeeping no longer covers this task).
+            const record = recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_shutdown');
+            this.pendingBookkeeping.add(record);
+            try {
+              await record;
+            } finally {
+              this.pendingBookkeeping.delete(record);
+            }
             return;
           }
           throw error;
@@ -593,10 +703,21 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
         throw new Error(`HTTP ${status}: ${statusText}`);
       }
 
-      // Update last triggered timestamp
-      await this.webhookRepository.update(webhook.id, {
-        lastTriggeredAt: new Date(),
-      });
+      // The receiver already answered 2xx — the delivery SUCCEEDED. A bookkeeping failure here (e.g.
+      // the lastTriggeredAt update on a flaky DB) must not reach the catch below: it would retry an
+      // already-delivered webhook (duplicate POST) and, on the last attempt, file a false dead-letter
+      // row. Log it and keep the success outcome.
+      try {
+        await this.webhookRepository.update(webhook.id, {
+          lastTriggeredAt: new Date(),
+        });
+      } catch (bookkeepingError) {
+        this.logger.error(
+          `Webhook delivered to ${webhook.id} but lastTriggeredAt update failed`,
+          bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
+          { webhookId: webhook.id, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
+        );
+      }
 
       this.logger.debug(`Webhook delivered to ${webhook.id}`, {
         webhookId: webhook.id,

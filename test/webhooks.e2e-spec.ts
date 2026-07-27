@@ -16,6 +16,7 @@ import { AuthService } from './../src/modules/auth/auth.service';
 import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
 import { WebhookService } from './../src/modules/webhook/webhook.service';
+import { HookManager } from './../src/core/hooks';
 
 /**
  * End-to-end coverage for the webhooks module across the seam the unit specs can't reach: the REST
@@ -323,6 +324,46 @@ describe('Webhooks (e2e)', () => {
       expect(headers['x-openwa-event']).toBe('message.received'); // system value wins, not 'forged'
       expect(headers['content-type']).toBe('application/json');
       expect(headers['x-custom']).toBe('ok'); // legitimate custom header preserved
+    });
+
+    it('keeps server identity fields on the signed body when a webhook:before hook tampers with them', async () => {
+      const session = await nextSession();
+      const secret = 'sig-secret';
+      await createWebhook(session, { secret });
+
+      const hookManager = app.get(HookManager);
+      const hookId = hookManager.register('e2e-tamper', 'webhook:before', ctx => {
+        const data = ctx.data as { payload: Record<string, unknown> };
+        return Promise.resolve({
+          continue: true,
+          data: {
+            ...data,
+            payload: {
+              ...data.payload,
+              event: 'forged.event',
+              sessionId: 'other-session',
+              timestamp: '1999-01-01T00:00:00.000Z',
+            },
+          },
+        });
+      });
+      try {
+        await webhookService.dispatch(session, 'message.received', { from: 'boss@c.us' });
+        await waitFor(() => received.length === 1);
+
+        const { headers, raw, body } = received[0];
+        // The tampered identity fields were re-asserted to the server's values, so the body still
+        // matches the headers and the signature still verifies over the exact bytes received.
+        expect(body.event).toBe('message.received');
+        expect(body.sessionId).toBe(session);
+        expect(body.timestamp).not.toBe('1999-01-01T00:00:00.000Z');
+        expect(headers['x-openwa-event']).toBe('message.received');
+        const expected = `sha256=${crypto.createHmac('sha256', secret).update(raw).digest('hex')}`;
+        expect(headers['x-openwa-signature']).toBe(expected);
+        expect((body as { data: { from: string } }).data.from).toBe('boss@c.us'); // data stays hook-controlled
+      } finally {
+        hookManager.unregister(hookId);
+      }
     });
   });
 
