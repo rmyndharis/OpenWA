@@ -7,6 +7,7 @@
  */
 
 import { encodeSegment } from '../http.js';
+import type { BinaryResponse } from '../http.js';
 import type { OpenWAClient } from '../client.js';
 import type {
   SendImageStatusRequest,
@@ -32,6 +33,14 @@ export class StatusResource {
     return this.client.request<{ statuses: StatusRecord[] }>({
       method: 'GET',
       path: `/api/sessions/${encodeSegment(sessionId)}/status/${encodeSegment(contactId)}`,
+    });
+  }
+
+  /** Fetch the stored media bytes for a status update (404 when there is no stored media). */
+  media(sessionId: string, statusId: string): Promise<BinaryResponse> {
+    return this.client.requestBytes({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/status/${encodeSegment(statusId)}/media`,
     });
   }
 

@@ -16,6 +16,8 @@ export interface MockResponseSpec {
   status?: number;
   body?: unknown;
   text?: string;
+  /** Overrides the default `application/json` response content type. */
+  contentType?: string;
 }
 
 /** A scripted mock transport. Throws if a call doesn't match a route. */
@@ -97,7 +99,7 @@ export class MockTransport {
       const responseBody: BodyInit | null = noBody
         ? null
         : (spec.text ?? (spec.body === undefined ? '' : JSON.stringify(spec.body)));
-      const resHeaders: Record<string, string> = noBody ? {} : { 'content-type': 'application/json' };
+      const resHeaders: Record<string, string> = noBody ? {} : { 'content-type': spec.contentType ?? 'application/json' };
       return new Response(responseBody, { status, headers: resHeaders });
     }) as FetchLike;
   }

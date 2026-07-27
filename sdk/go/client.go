@@ -185,17 +185,49 @@ func warnIfInsecure(cfg *config) {
 // Do issues a raw request against the API and decodes the JSON response into
 // out (pass nil to ignore the body). It is the escape hatch for endpoints the
 // typed services do not cover. path must begin with "/".
+//
+// A 2xx body is assigned verbatim when out is a *[]byte, and a non-JSON 2xx
+// body falls back to the raw text when out is a *string — mirroring the
+// JS/Python/PHP transports, which return the raw text instead of failing.
+// Any other out type still requires a JSON body.
 func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body, out any) error {
 	return c.do(ctx, method, path, query, body, out)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
+	data, _, err := c.doRaw(ctx, method, path, query, body)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(data) == 0 {
+		return nil
+	}
+	// A *[]byte target always takes the body verbatim (media bytes are not JSON).
+	if raw, ok := out.(*[]byte); ok {
+		*raw = data
+		return nil
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		// A *string target accepts a non-JSON 2xx body as raw text rather than
+		// failing to decode.
+		if text, ok := out.(*string); ok {
+			*text = string(data)
+			return nil
+		}
+		return fmt.Errorf("openwa: decoding response: %w", err)
+	}
+	return nil
+}
+
+// doRaw performs the request and returns the response body and Content-Type.
+// Any non-2xx status (including an unfollowed 3xx) is an error.
+func (c *Client) doRaw(ctx context.Context, method, path string, query url.Values, body any) ([]byte, string, error) {
 	var bodyBytes []byte
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("openwa: encoding request body: %w", err)
+			return nil, "", fmt.Errorf("openwa: encoding request body: %w", err)
 		}
 		bodyBytes = b
 		reader = bytes.NewReader(b)
@@ -208,7 +240,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
-		return fmt.Errorf("openwa: building request: %w", err)
+		return nil, "", fmt.Errorf("openwa: building request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -222,28 +254,22 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		if isTimeout(err) {
-			return &TimeoutError{Timeout: c.timeout, Err: err}
+			return nil, "", &TimeoutError{Timeout: c.timeout, Err: err}
 		}
-		return fmt.Errorf("openwa: %s %s: %w", method, path, err)
+		return nil, "", fmt.Errorf("openwa: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("openwa: reading response body: %w", err)
+		return nil, "", fmt.Errorf("openwa: reading response body: %w", err)
 	}
 
 	// Any non-2xx (including an unfollowed 3xx) is an error.
 	if resp.StatusCode >= 300 {
-		return parseAPIError(resp.StatusCode, data, method+" "+path)
+		return nil, "", parseAPIError(resp.StatusCode, data, method+" "+path)
 	}
-	if out == nil || resp.StatusCode == http.StatusNoContent || len(data) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("openwa: decoding response: %w", err)
-	}
-	return nil
+	return data, resp.Header.Get("Content-Type"), nil
 }
 
 func isTimeout(err error) bool {

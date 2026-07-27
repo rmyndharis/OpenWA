@@ -25,15 +25,15 @@ All five SDKs expose the same fluent resource surface:
 | Resource   | Methods                                                                                                                                                                                |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sessions` | list, get, create, delete, start, stop, forceKill, getQrCode, requestPairingCode, stats                                                                                                |
-| `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, reply, forward, react, delete, editMessage, history, reactions, sendBulk, batchStatus, cancelBatch |
-| `contacts` | list, get, check, profilePicture, phone, block, unblock                                                                                                                                |
+| `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, forward, react, delete, editMessage, history, reactions, sendBulk, batchStatus, cancelBatch |
+| `contacts` | list, get, check, profilePicture, profilePictures, phone, block, unblock                                                                                                                                |
 | `groups`   | list, get, create, joinGroup, add/remove/promote/demoteParticipants, setSubject, setDescription, get/updateGroupSettings, leave, inviteCode, revokeInviteCode                          |
 | `webhooks` | list, get, create, update, delete, test                                                                                                                                                |
 | `chats`    | list, markRead, markUnread, delete, sendState                                                                                                                                          |
 | `labels`   | list, get, forChat, addToChat, removeFromChat _(WhatsApp Business)_                                                                                                                    |
 | `channels` | list, get, messages, subscribe, unsubscribe _(Newsletters)_                                                                                                                            |
 | `catalog`  | info, products, product, sendProduct, sendCatalog _(WhatsApp Business)_                                                                                                                |
-| `status`   | list, fromContact, sendText, sendImage, sendVideo, delete _(Stories)_                                                                                                                  |
+| `status`   | list, fromContact, media, sendText, sendImage, sendVideo, delete _(Stories)_                                                                                                            |
 | `search`   | search _(Operator)_                                                                                                                                                                  |
 | `templates`| list, get, create, update, delete                                                                                                                                                     |
 | `profile`  | setProfileName, setProfileStatus, setProfilePicture _(OPERATOR)_                                                                                                                       |

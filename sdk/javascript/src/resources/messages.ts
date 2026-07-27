@@ -27,6 +27,7 @@ import type {
   SendLocationRequest,
   SendAudioRequest,
   SendMediaRequest,
+  SendPollRequest,
   SendTemplateRequest,
   SendTextRequest,
   SuccessResult,
@@ -101,6 +102,15 @@ export class MessagesResource {
     return this.client.request<MessageResponse>({
       method: 'POST',
       path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-template`,
+      body,
+    });
+  }
+
+  /** Send a native WhatsApp poll (2–12 options). */
+  sendPoll(sessionId: string, body: SendPollRequest): Promise<MessageResponse> {
+    return this.client.request<MessageResponse>({
+      method: 'POST',
+      path: `/api/sessions/${encodeSegment(sessionId)}/messages/send-poll`,
       body,
     });
   }

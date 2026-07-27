@@ -92,6 +92,8 @@ export interface SendTextRequest {
   chatId: Jid;
   /** Max 4096 chars. */
   text: string;
+  /** WIDs to @mention (e.g. `["62811@c.us"]`). The text must also contain the `@<number>` token. */
+  mentions?: string[];
 }
 
 export interface SendMediaRequest {
@@ -177,6 +179,16 @@ export interface SendTemplateRequest {
   templateName?: string;
   /** Template variables (server DTO field is `vars`). */
   vars?: Record<string, string>;
+}
+
+export interface SendPollRequest {
+  chatId: Jid;
+  /** Poll question / title (max 255 chars). */
+  name: string;
+  /** Options to vote on (WhatsApp allows between 2 and 12). */
+  options: string[];
+  /** Allow voters to pick several options (default single choice). */
+  allowMultipleAnswers?: boolean;
 }
 
 export interface ListMessagesQuery {
@@ -364,6 +376,11 @@ export interface ProfilePictureResponse {
   url: string | null;
 }
 
+/** Batch profile-picture lookup: a map of contact id → picture URL (null when the lookup failed). */
+export interface ProfilePicturesResponse {
+  pictures: Record<string, string | null>;
+}
+
 export interface ContactPhoneResponse {
   contactId: Jid;
   phone: string | null;
@@ -502,7 +519,13 @@ export type WebhookEvent =
 export interface WebhookFilterCondition {
   field: string;
   operator: string;
-  value: string[];
+  /**
+   * Polymorphic per field kind: a single string (text fields), a string array
+   * (id/idArray/enum fields), or a boolean (boolean fields).
+   */
+  value: string | string[] | boolean;
+  /** Only meaningful for text fields (`contains`/`equals`). Defaults to false. */
+  caseSensitive?: boolean;
 }
 
 export interface WebhookFilters {

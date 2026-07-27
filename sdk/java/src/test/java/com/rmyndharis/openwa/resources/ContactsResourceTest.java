@@ -1,12 +1,16 @@
 package com.rmyndharis.openwa.resources;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.ListContactsQuery;
+import com.rmyndharis.openwa.model.ProfilePicturesResponse;
 import com.rmyndharis.openwa.support.MockTransport;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ContactsResourceTest {
@@ -52,6 +56,19 @@ class ContactsResourceTest {
         client.contacts.profilePicture("s", "a@c.us");
         assertEquals("http://h/api/sessions/s/contacts/a@c.us/profile-picture", tx.lastRequest().url());
         assertEquals(HttpMethod.GET, tx.lastRequest().method());
+    }
+
+    @Test
+    void profilePicturesBatchResolvesIdsQuery() {
+        tx.respond(200, "{\"pictures\":{\"a@c.us\":\"http://p/a\",\"b@c.us\":null}}");
+        ProfilePicturesResponse res = client.contacts.profilePictures("s", List.of("a@c.us", "b@c.us"));
+        assertEquals(
+            "http://h/api/sessions/s/contacts/profile-pictures?ids=a%40c.us%2Cb%40c.us",
+            tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+        assertEquals("http://p/a", res.pictures().get("a@c.us"));
+        assertTrue(res.pictures().containsKey("b@c.us"));
+        assertNull(res.pictures().get("b@c.us"));
     }
 
     @Test

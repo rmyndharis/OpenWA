@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from openwa import OpenWAClient, OpenWAApiError, OpenWANotFoundError
@@ -123,6 +124,22 @@ class TestMessages:
         make_client(backend).messages.send_text("s1", {"chatId": "a@c.us", "text": "hi"})
         assert backend.last_call.url == "http://localhost:2785/api/sessions/s1/messages/send-text"
         assert backend.last_call.body == {"chatId": "a@c.us", "text": "hi"}
+
+    def test_send_text_forwards_mentions_verbatim(self):
+        backend = MockBackend().on("POST", "/send-text", body={"messageId": "m1", "timestamp": 1})
+        make_client(backend).messages.send_text("s1", {"chatId": "g@g.us", "text": "hi @628123", "mentions": ["628123@c.us"]})
+        assert backend.last_call.body == {"chatId": "g@g.us", "text": "hi @628123", "mentions": ["628123@c.us"]}
+
+    def test_send_poll_uses_send_poll_path(self):
+        backend = MockBackend().on("POST", "/send-poll", body={"messageId": "m2", "timestamp": 2})
+        res = make_client(backend).messages.send_poll("s1", {
+            "chatId": "a@c.us", "name": "Where?", "options": ["Park", "Beach"], "allowMultipleAnswers": True,
+        })
+        assert backend.last_call.url == "http://localhost:2785/api/sessions/s1/messages/send-poll"
+        assert backend.last_call.body == {
+            "chatId": "a@c.us", "name": "Where?", "options": ["Park", "Beach"], "allowMultipleAnswers": True,
+        }
+        assert res["messageId"] == "m2"
 
     @pytest.mark.parametrize("method,segment", [
         ("send_image", "send-image"),
@@ -419,6 +436,15 @@ class TestContacts:
         client.contacts.unblock("s", "a@c.us")
         assert backend.calls[-1].method == "DELETE"
 
+    def test_profile_pictures_batch_resolves_ids_query(self):
+        backend = MockBackend().on("GET", "/contacts/profile-pictures", body={
+            "pictures": {"a@c.us": "http://p/a", "b@c.us": None}
+        })
+        res = make_client(backend).contacts.profile_pictures("s", ["a@c.us", "b@c.us"])
+        assert backend.last_call.method == "GET"
+        assert backend.last_call.url == "http://localhost:2785/api/sessions/s/contacts/profile-pictures?ids=a%40c.us%2Cb%40c.us"
+        assert res["pictures"] == {"a@c.us": "http://p/a", "b@c.us": None}
+
 
 class TestWebhooks:
     def test_crud_test(self):
@@ -442,6 +468,18 @@ class TestWebhooks:
         client.webhooks.test("s", "w1")
         assert "/webhooks/w1/test" in backend.calls[-1].url
 
+    def test_create_forwards_polymorphic_filter_values_verbatim(self):
+        backend = MockBackend().on("POST", "/webhooks", body={"id": "w1"})
+        filters = {
+            "conditions": [
+                {"field": "sender", "operator": "is", "value": ["123@c.us"]},
+                {"field": "body", "operator": "contains", "value": "invoice", "caseSensitive": True},
+                {"field": "isGroup", "operator": "is", "value": False},
+            ]
+        }
+        make_client(backend).webhooks.create("s", {"url": "u", "events": ["message.received"], "filters": filters})
+        assert backend.last_call.body == {"url": "u", "events": ["message.received"], "filters": filters}
+
 
 class TestStatus:
     def test_send_image_video_forward_nested_media_body(self):
@@ -455,6 +493,22 @@ class TestStatus:
         assert backend.calls[-1].body == {"image": {"url": "http://img"}, "recipients": ["a@c.us"], "caption": "hi"}
         client.status.send_video("s", {"video": {"url": "http://vid"}, "recipients": ["a@c.us"]})
         assert backend.calls[-1].body == {"video": {"url": "http://vid"}, "recipients": ["a@c.us"]}
+
+    def test_media_fetches_stored_status_bytes(self):
+        backend = MockBackend()
+        backend.fallback = lambda _: httpx.Response(200, content=b"PNG_BYTES", headers={"content-type": "image/png"})
+        res = make_client(backend).status.media("s", "w1")
+        assert backend.last_call.method == "GET"
+        assert backend.last_call.url == "http://localhost:2785/api/sessions/s/status/w1/media"
+        assert res == {"data": b"PNG_BYTES", "contentType": "image/png"}
+
+    def test_media_404_maps_to_not_found_error(self):
+        backend = MockBackend()
+        backend.fallback = lambda _: httpx.Response(
+            404, content=b'{"statusCode": 404, "message": "Status media not found or expired"}'
+        )
+        with pytest.raises(OpenWANotFoundError):
+            make_client(backend).status.media("s", "w1")
 
 
 class TestChatsAndHealth:

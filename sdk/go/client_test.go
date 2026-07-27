@@ -1047,3 +1047,229 @@ func TestCallReceivedPayloadDecodes(t *testing.T) {
 		t.Fatalf("call decode: %+v", p)
 	}
 }
+
+func TestSendTextForwardsMentions(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"messageId":"m1","timestamp":1}`}
+	c := newTestClient(t, rt)
+
+	if _, err := c.Messages.SendText(context.Background(), "s1", SendTextRequest{
+		ChatID:   "g@g.us",
+		Text:     "hi @628123",
+		Mentions: []string{"628123@c.us"},
+	}); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	mentions, ok := sent["mentions"].([]any)
+	if !ok || len(mentions) != 1 || mentions[0] != "628123@c.us" {
+		t.Fatalf("sent body = %v", sent)
+	}
+}
+
+func TestSendPollHitsCorrectPath(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"messageId":"m2","timestamp":2}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Messages.SendPoll(context.Background(), "s1", SendPollRequest{
+		ChatID:               "a@c.us",
+		Name:                 "Where?",
+		Options:              []string{"Park", "Beach"},
+		AllowMultipleAnswers: Ptr(true),
+	})
+	if err != nil {
+		t.Fatalf("SendPoll: %v", err)
+	}
+	if res.MessageID != "m2" {
+		t.Fatalf("unexpected response: %+v", res)
+	}
+
+	wantPath := "/api/sessions/s1/messages/send-poll"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	if rt.lastReq.Method != "POST" {
+		t.Fatalf("method = %q, want POST", rt.lastReq.Method)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if sent["name"] != "Where?" || sent["allowMultipleAnswers"] != true {
+		t.Fatalf("sent body = %v", sent)
+	}
+	options, ok := sent["options"].([]any)
+	if !ok || len(options) != 2 || options[0] != "Park" || options[1] != "Beach" {
+		t.Fatalf("sent options = %v", sent["options"])
+	}
+}
+
+func TestProfilePicturesBatchQuery(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"pictures":{"a@c.us":"http://p/a","b@c.us":null}}`}
+	c := newTestClient(t, rt)
+
+	res, err := c.Contacts.ProfilePictures(context.Background(), "s1", []string{"a@c.us", "b@c.us"})
+	if err != nil {
+		t.Fatalf("ProfilePictures: %v", err)
+	}
+
+	if rt.lastReq.Method != "GET" {
+		t.Fatalf("method = %q, want GET", rt.lastReq.Method)
+	}
+	wantPath := "/api/sessions/s1/contacts/profile-pictures"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	if got := rt.lastReq.URL.Query().Get("ids"); got != "a@c.us,b@c.us" {
+		t.Fatalf("ids query = %q", got)
+	}
+
+	if res.Pictures["a@c.us"] == nil || *res.Pictures["a@c.us"] != "http://p/a" {
+		t.Fatalf("pictures[a@c.us] = %v", res.Pictures["a@c.us"])
+	}
+	if url, present := res.Pictures["b@c.us"]; !present || url != nil {
+		t.Fatalf("pictures[b@c.us] should decode as an explicit null, got %v (present=%v)", url, present)
+	}
+}
+
+func TestStatusMediaReturnsBytes(t *testing.T) {
+	rt := &recordTransport{
+		status: 200,
+		body:   "PNG_BYTES",
+		header: http.Header{"Content-Type": []string{"image/png"}},
+	}
+	c := newTestClient(t, rt)
+
+	media, err := c.Status.Media(context.Background(), "s1", "w1")
+	if err != nil {
+		t.Fatalf("Media: %v", err)
+	}
+	if string(media.Data) != "PNG_BYTES" || media.ContentType != "image/png" {
+		t.Fatalf("media = %q (%q)", media.Data, media.ContentType)
+	}
+
+	wantPath := "/api/sessions/s1/status/w1/media"
+	if got := rt.lastReq.URL.Path; got != wantPath {
+		t.Fatalf("path = %q, want %q", got, wantPath)
+	}
+	if rt.lastReq.Method != "GET" {
+		t.Fatalf("method = %q, want GET", rt.lastReq.Method)
+	}
+}
+
+// A status with no stored media surfaces as 404.
+func TestStatusMediaNotFound(t *testing.T) {
+	rt := &recordTransport{
+		status: 404,
+		body:   `{"statusCode":404,"message":"Status media not found or expired","error":"Not Found"}`,
+	}
+	c := newTestClient(t, rt)
+
+	_, err := c.Status.Media(context.Background(), "s1", "w1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("errors.Is ErrNotFound = false for %v", err)
+	}
+}
+
+// The escape hatch mirrors the JS/Python/PHP raw-text fallback for non-JSON
+// 2xx bodies: *[]byte takes the body verbatim, *string falls back to raw text,
+// and a typed target still requires JSON.
+func TestDoRawFallbacks(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("bytes take the body verbatim", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: "PNG_BYTES", header: http.Header{"Content-Type": []string{"image/png"}}}
+		c := newTestClient(t, rt)
+		var raw []byte
+		if err := c.Do(ctx, "GET", "/api/x", nil, nil, &raw); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		if string(raw) != "PNG_BYTES" {
+			t.Fatalf("raw = %q", raw)
+		}
+	})
+
+	t.Run("string falls back to raw text on non-JSON", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: "plain text"}
+		c := newTestClient(t, rt)
+		var s string
+		if err := c.Do(ctx, "GET", "/api/x", nil, nil, &s); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		if s != "plain text" {
+			t.Fatalf("s = %q", s)
+		}
+	})
+
+	t.Run("string still decodes a JSON string body", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: `"quoted"`}
+		c := newTestClient(t, rt)
+		var s string
+		if err := c.Do(ctx, "GET", "/api/x", nil, nil, &s); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		if s != "quoted" {
+			t.Fatalf("s = %q", s)
+		}
+	})
+
+	t.Run("typed target still requires JSON", func(t *testing.T) {
+		rt := &recordTransport{status: 200, body: "plain text"}
+		c := newTestClient(t, rt)
+		var out MessageResponse
+		if err := c.Do(ctx, "GET", "/api/x", nil, nil, &out); err == nil {
+			t.Fatal("expected a decode error for a non-JSON body into a typed target")
+		}
+	})
+}
+
+// The filter value is polymorphic on the wire: a string for text fields, a
+// string array for id/enum fields, a bool for boolean fields, plus the
+// caseSensitive flag — all must serialize verbatim.
+func TestWebhookFiltersPolymorphicWireShape(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"id":"w1"}`}
+	c := newTestClient(t, rt)
+
+	_, err := c.Webhooks.Create(context.Background(), "s1", CreateWebhookRequest{
+		URL:    "https://example.com/hook",
+		Events: []string{EventMessageReceived},
+		Filters: &WebhookFilters{
+			Conditions: []WebhookFilterCondition{
+				{Field: "sender", Operator: "is", Value: []string{"123@c.us"}},
+				{Field: "body", Operator: "contains", Value: "invoice", CaseSensitive: Ptr(true)},
+				{Field: "isGroup", Operator: "is", Value: false},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(rt.lastRaw, &sent); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	conditions := sent["filters"].(map[string]any)["conditions"].([]any)
+	if len(conditions) != 3 {
+		t.Fatalf("conditions = %v", conditions)
+	}
+	first := conditions[0].(map[string]any)
+	if values, ok := first["value"].([]any); !ok || len(values) != 1 || values[0] != "123@c.us" {
+		t.Fatalf("id condition value = %v", first["value"])
+	}
+	second := conditions[1].(map[string]any)
+	if second["value"] != "invoice" || second["caseSensitive"] != true {
+		t.Fatalf("text condition = %v", second)
+	}
+	third := conditions[2].(map[string]any)
+	if third["value"] != false {
+		t.Fatalf("boolean condition value = %v", third["value"])
+	}
+	if _, present := first["caseSensitive"]; present {
+		t.Fatal("caseSensitive should be omitted when unset")
+	}
+}

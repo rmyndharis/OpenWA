@@ -144,6 +144,16 @@ describe('ContactsResource — exact paths', () => {
     await c.contacts.unblock('s', 'a@c.us');
     expect(t.lastCall!.method).toBe('DELETE');
   });
+
+  it('profilePictures batch-resolves ids via the ids query param', async () => {
+    const t = new MockTransport().on('GET', /\/contacts\/profile-pictures$/, {
+      body: { pictures: { 'a@c.us': 'http://p/a', 'b@c.us': null } },
+    });
+    const res = await client(t).contacts.profilePictures('s', ['a@c.us', 'b@c.us']);
+    expect(t.lastCall!.method).toBe('GET');
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s/contacts/profile-pictures?ids=a%40c.us%2Cb%40c.us');
+    expect(res.pictures).toEqual({ 'a@c.us': 'http://p/a', 'b@c.us': null });
+  });
 });
 
 describe('WebhooksResource — exact paths', () => {
@@ -176,6 +186,21 @@ describe('WebhooksResource — exact paths', () => {
     await c.webhooks.test('s', 'w1');
     expect(t.lastCall!.url).toContain('/webhooks/w1/test');
   });
+
+  it('create forwards polymorphic filter values (string, string[], boolean) verbatim', async () => {
+    const t = new MockTransport().on('POST', /\/webhooks$/, {
+      body: { id: 'w1', sessionId: 's', url: 'u', events: ['*'], active: true, createdAt: '', updatedAt: '' },
+    });
+    const filters = {
+      conditions: [
+        { field: 'sender', operator: 'is', value: ['123@c.us'] },
+        { field: 'body', operator: 'contains', value: 'invoice', caseSensitive: true },
+        { field: 'isGroup', operator: 'is', value: false },
+      ],
+    };
+    await client(t).webhooks.create('s', { url: 'u', events: ['message.received'], filters });
+    expect(t.lastCall!.body).toEqual({ url: 'u', events: ['message.received'], filters });
+  });
 });
 
 describe('StatusResource — nested media bodies', () => {
@@ -188,6 +213,15 @@ describe('StatusResource — nested media bodies', () => {
     expect(t.lastCall!.body).toEqual({ image: { url: 'http://img' }, recipients: ['a@c.us'], caption: 'hi' });
     await c.status.sendVideo('s', { video: { url: 'http://vid' }, recipients: ['a@c.us'] });
     expect(t.lastCall!.body).toEqual({ video: { url: 'http://vid' }, recipients: ['a@c.us'] });
+  });
+
+  it('media fetches the stored status bytes with their content type', async () => {
+    const t = new MockTransport().on('GET', /\/status\/w1\/media$/, { text: 'PNG_BYTES', contentType: 'image/png' });
+    const res = await client(t).status.media('s', 'w1');
+    expect(t.lastCall!.method).toBe('GET');
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s/status/w1/media');
+    expect(new TextDecoder().decode(res.data)).toBe('PNG_BYTES');
+    expect(res.contentType).toBe('image/png');
   });
 });
 

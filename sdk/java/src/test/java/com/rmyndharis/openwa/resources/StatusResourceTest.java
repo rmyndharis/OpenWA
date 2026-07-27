@@ -1,10 +1,14 @@
 package com.rmyndharis.openwa.resources;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rmyndharis.openwa.ClientConfig;
 import com.rmyndharis.openwa.OpenWAClient;
+import com.rmyndharis.openwa.errors.OpenWANotFoundError;
+import com.rmyndharis.openwa.http.BinaryResponse;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.SendImageStatusRequest;
 import com.rmyndharis.openwa.model.SendTextStatusRequest;
@@ -12,7 +16,9 @@ import com.rmyndharis.openwa.model.SendVideoStatusRequest;
 import com.rmyndharis.openwa.model.StatusMediaInput;
 import com.rmyndharis.openwa.model.StatusRecord;
 import com.rmyndharis.openwa.support.MockTransport;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class StatusResourceTest {
@@ -117,5 +123,24 @@ class StatusResourceTest {
         status.delete("s", "status/1");
         assertEquals("http://h/api/sessions/s/status/status%2F1", tx.lastRequest().url());
         assertEquals(HttpMethod.DELETE, tx.lastRequest().method());
+    }
+
+    @Test
+    void mediaReturnsStoredBytes() {
+        tx.respondRaw(
+            200,
+            "PNG_BYTES".getBytes(StandardCharsets.UTF_8),
+            Map.of("content-type", List.of("image/png")));
+        BinaryResponse media = status.media("s", "w1");
+        assertEquals("http://h/api/sessions/s/status/w1/media", tx.lastRequest().url());
+        assertEquals(HttpMethod.GET, tx.lastRequest().method());
+        assertArrayEquals("PNG_BYTES".getBytes(StandardCharsets.UTF_8), media.data());
+        assertEquals("image/png", media.contentType());
+    }
+
+    @Test
+    void media404MapsToNotFoundError() {
+        tx.respond(404, "{\"statusCode\":404,\"message\":\"Status media not found or expired\",\"error\":\"Not Found\"}");
+        assertThrows(OpenWANotFoundError.class, () -> status.media("s", "w1"));
     }
 }

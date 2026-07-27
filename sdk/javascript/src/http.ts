@@ -76,6 +76,54 @@ export async function request<T>(
   config: Required<Omit<ClientConfig, 'fetch'>> & { fetch: FetchLike },
   options: RequestOptions,
 ): Promise<T> {
+  return send(config, options, async res => {
+    if (res.status === 204) {
+      return null as T;
+    }
+    const text = await res.text();
+    if (!text) return null as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return text as unknown as T;
+    }
+  });
+}
+
+/** A binary (non-JSON) 2xx body, e.g. the stored status media bytes. */
+export interface BinaryResponse {
+  data: Uint8Array;
+  contentType: string | null;
+}
+
+/**
+ * Like {@link request}, but for endpoints that stream raw bytes instead of
+ * JSON (e.g. status media). Returns the body verbatim plus the served
+ * Content-Type; a 204/empty body resolves to zero-length data.
+ */
+export async function requestBytes(
+  config: Required<Omit<ClientConfig, 'fetch'>> & { fetch: FetchLike },
+  options: RequestOptions,
+): Promise<BinaryResponse> {
+  return send(config, options, async res => {
+    if (res.status === 204) {
+      return { data: new Uint8Array(0), contentType: null };
+    }
+    return { data: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+  });
+}
+
+/**
+ * Shared transport for {@link request} and {@link requestBytes}: builds the
+ * URL/headers, performs the fetch under the per-request timeout, translates a
+ * non-2xx into a typed error, then hands the response to `consume` — still
+ * inside the timeout window, so a stalled body read aborts too.
+ */
+async function send<T>(
+  config: Required<Omit<ClientConfig, 'fetch'>> & { fetch: FetchLike },
+  options: RequestOptions,
+  consume: (res: Response) => Promise<T>,
+): Promise<T> {
   const url = buildUrl(config.baseUrl, options.path, options.query);
   const timeoutMs = options.timeoutMs ?? config.timeoutMs;
 
@@ -110,16 +158,7 @@ export async function request<T>(
       throw classifyApiError(apiError.status, apiError.message, apiError.body, apiError.errorKind);
     }
 
-    if (res.status === 204) {
-      return null as T;
-    }
-    const text = await res.text();
-    if (!text) return null as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      return text as unknown as T;
-    }
+    return await consume(res);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       throw new OpenWATimeoutError(timeoutMs);

@@ -38,6 +38,7 @@ func TestRouting(t *testing.T) {
 		{"Messages.SendLocation", func(c *Client) { c.Messages.SendLocation(ctx, "s1", SendLocationRequest{}) }, "POST", "/api/sessions/s1/messages/send-location"},
 		{"Messages.SendContact", func(c *Client) { c.Messages.SendContact(ctx, "s1", SendContactRequest{}) }, "POST", "/api/sessions/s1/messages/send-contact"},
 		{"Messages.SendTemplate", func(c *Client) { c.Messages.SendTemplate(ctx, "s1", SendTemplateRequest{}) }, "POST", "/api/sessions/s1/messages/send-template"},
+		{"Messages.SendPoll", func(c *Client) { c.Messages.SendPoll(ctx, "s1", SendPollRequest{}) }, "POST", "/api/sessions/s1/messages/send-poll"},
 		{"Messages.Reply", func(c *Client) { c.Messages.Reply(ctx, "s1", ReplyMessageRequest{}) }, "POST", "/api/sessions/s1/messages/reply"},
 		{"Messages.Forward", func(c *Client) { c.Messages.Forward(ctx, "s1", ForwardMessageRequest{}) }, "POST", "/api/sessions/s1/messages/forward"},
 		{"Messages.React", func(c *Client) { c.Messages.React(ctx, "s1", ReactMessageRequest{}) }, "POST", "/api/sessions/s1/messages/react"},
@@ -53,6 +54,7 @@ func TestRouting(t *testing.T) {
 		{"Contacts.Get", func(c *Client) { c.Contacts.Get(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/contacts/u1"},
 		{"Contacts.Check", func(c *Client) { c.Contacts.Check(ctx, "s1", "628") }, "GET", "/api/sessions/s1/contacts/check/628"},
 		{"Contacts.ProfilePicture", func(c *Client) { c.Contacts.ProfilePicture(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/contacts/u1/profile-picture"},
+		{"Contacts.ProfilePictures", func(c *Client) { c.Contacts.ProfilePictures(ctx, "s1", []string{"u1"}) }, "GET", "/api/sessions/s1/contacts/profile-pictures"},
 		{"Contacts.Phone", func(c *Client) { c.Contacts.Phone(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/contacts/u1/phone"},
 		{"Contacts.Block", func(c *Client) { c.Contacts.Block(ctx, "s1", "u1") }, "POST", "/api/sessions/s1/contacts/u1/block"},
 		{"Contacts.Unblock", func(c *Client) { c.Contacts.Unblock(ctx, "s1", "u1") }, "DELETE", "/api/sessions/s1/contacts/u1/block"},
@@ -88,6 +90,7 @@ func TestRouting(t *testing.T) {
 
 		{"Status.List", func(c *Client) { c.Status.List(ctx, "s1") }, "GET", "/api/sessions/s1/status"},
 		{"Status.FromContact", func(c *Client) { c.Status.FromContact(ctx, "s1", "u1") }, "GET", "/api/sessions/s1/status/u1"},
+		{"Status.Media", func(c *Client) { c.Status.Media(ctx, "s1", "st1") }, "GET", "/api/sessions/s1/status/st1/media"},
 		{"Status.SendText", func(c *Client) { c.Status.SendText(ctx, "s1", SendTextStatusRequest{}) }, "POST", "/api/sessions/s1/status/send-text"},
 		{"Status.SendImage", func(c *Client) { c.Status.SendImage(ctx, "s1", SendImageStatusRequest{}) }, "POST", "/api/sessions/s1/status/send-image"},
 		{"Status.SendVideo", func(c *Client) { c.Status.SendVideo(ctx, "s1", SendVideoStatusRequest{}) }, "POST", "/api/sessions/s1/status/send-video"},

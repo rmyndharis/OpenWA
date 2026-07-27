@@ -12,6 +12,7 @@ import type {
   ContactPhoneResponse,
   ContactRecord,
   ProfilePictureResponse,
+  ProfilePicturesResponse,
   SuccessResult,
 } from '../types.js';
 
@@ -53,6 +54,18 @@ export class ContactsResource {
     return this.client.request<ProfilePictureResponse>({
       method: 'GET',
       path: `/api/sessions/${encodeSegment(sessionId)}/contacts/${encodeSegment(contactId)}/profile-picture`,
+    });
+  }
+
+  /**
+   * Batch-resolve profile picture URLs for up to 50 contacts in one request.
+   * Returns a map of contact id → URL (null when a lookup fails).
+   */
+  profilePictures(sessionId: string, ids: string[]): Promise<ProfilePicturesResponse> {
+    return this.client.request<ProfilePicturesResponse>({
+      method: 'GET',
+      path: `/api/sessions/${encodeSegment(sessionId)}/contacts/profile-pictures`,
+      query: { ids: ids.join(',') },
     });
   }
 

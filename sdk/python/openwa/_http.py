@@ -97,6 +97,30 @@ class HttpExecutor:
 
     def request(self, method: HttpMethod, path: str, *, query: Mapping[str, Any] | None = None, body: Any = None) -> Any:
         """Perform one request and return the parsed JSON (or ``None`` for 204)."""
+        res = self._send(method, path, query=query, body=body)
+        if res.status_code == 204 or not res.content:
+            return None
+        try:
+            return res.json()
+        except ValueError:
+            # A 2xx body that isn't JSON surfaces as text rather than a raw
+            # JSONDecodeError (mirrors the JS and PHP transports).
+            return res.text
+
+    def request_bytes(
+        self, method: HttpMethod, path: str, *, query: Mapping[str, Any] | None = None
+    ) -> tuple[bytes, str | None]:
+        """Perform one request for a non-JSON (binary) 2xx body — e.g. stored
+        status media — and return ``(body bytes, content type)``. A 204/empty
+        body yields empty bytes and ``None``."""
+        res = self._send(method, path, query=query, body=None)
+        if res.status_code == 204:
+            return b"", None
+        return res.content, res.headers.get("content-type")
+
+    def _send(self, method: HttpMethod, path: str, *, query: Mapping[str, Any] | None, body: Any) -> httpx.Response:
+        """Shared transport for :meth:`request` and :meth:`request_bytes`: builds
+        the URL, performs the request, and translates a non-2xx into a typed error."""
         url = build_url("", path, query)
         try:
             res = self._client.request(method, url, json=body if body is not None else None)
@@ -108,11 +132,4 @@ class HttpExecutor:
         if res.status_code >= 300:
             context = f"{method} {path}"
             raise OpenWAApiError.from_response(res.status_code, res.text, context)
-        if res.status_code == 204 or not res.content:
-            return None
-        try:
-            return res.json()
-        except ValueError:
-            # A 2xx body that isn't JSON surfaces as text rather than a raw
-            # JSONDecodeError (mirrors the JS and PHP transports).
-            return res.text
+        return res

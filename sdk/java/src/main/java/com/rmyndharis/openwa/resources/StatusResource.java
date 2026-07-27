@@ -3,6 +3,7 @@ package com.rmyndharis.openwa.resources;
 import static com.rmyndharis.openwa.http.Http.encodeSegment;
 
 import com.rmyndharis.openwa.OpenWAClient;
+import com.rmyndharis.openwa.http.BinaryResponse;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.SendImageStatusRequest;
 import com.rmyndharis.openwa.model.SendTextStatusRequest;
@@ -40,6 +41,14 @@ public final class StatusResource {
             null,
             null,
             StatusListResult.class);
+    }
+
+    /** Fetch the stored media bytes for a status update (404 when there is no stored media). */
+    public BinaryResponse media(String sessionId, String statusId) {
+        return client.requestBytes(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/status/" + encodeSegment(statusId) + "/media",
+            null);
     }
 
     /** Post a text status update. */

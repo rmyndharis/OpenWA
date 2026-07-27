@@ -46,6 +46,16 @@ class MockBackend
         return $this;
     }
 
+    /**
+     * Queue a raw (non-JSON) response body for the next matching call — e.g.
+     * the binary stream of a stored status media.
+     */
+    public function onRaw(int $status, string $body, array $headers = []): self
+    {
+        $this->mock->append(new Response($status, $headers, $body));
+        return $this;
+    }
+
     public function httpClient(): GuzzleClient
     {
         // Record at the handler layer (innermost). The handler always sees the

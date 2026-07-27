@@ -12,6 +12,9 @@ type MessageResponse struct {
 type SendTextRequest struct {
 	ChatID string `json:"chatId"`
 	Text   string `json:"text"`
+	// Mentions lists WIDs to @mention (e.g. ["62811@c.us"]). The text must
+	// also contain the @<number> token.
+	Mentions []string `json:"mentions,omitempty"`
 }
 
 // SendMediaRequest sends image/video/document/sticker media. Provide exactly
@@ -60,6 +63,17 @@ type SendTemplateRequest struct {
 	TemplateID   string            `json:"templateId,omitempty"`
 	TemplateName string            `json:"templateName,omitempty"`
 	Vars         map[string]string `json:"vars,omitempty"`
+}
+
+// SendPollRequest sends a native WhatsApp poll. Options holds the choices to
+// vote on (WhatsApp allows between 2 and 12).
+type SendPollRequest struct {
+	ChatID string `json:"chatId"`
+	// Name is the poll question / title (max 255 chars).
+	Name    string   `json:"name"`
+	Options []string `json:"options"`
+	// AllowMultipleAnswers lets voters pick several options (default single choice).
+	AllowMultipleAnswers *bool `json:"allowMultipleAnswers,omitempty"`
 }
 
 // ReplyMessageRequest replies to a quoted message.

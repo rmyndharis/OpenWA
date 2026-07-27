@@ -39,6 +39,14 @@ type StatusResult struct {
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 }
 
+// StatusMedia is the one non-JSON shape on the wire: the raw bytes of a stored
+// status media file plus the Content-Type the server served them as. Returned
+// by StatusService.Media; a 404 surfaces when no media is stored.
+type StatusMedia struct {
+	Data        []byte
+	ContentType string
+}
+
 // SendTextStatusRequest posts a text status. Recipients is required on the Baileys
 // engine only (absent/empty → 400 there); whatsapp-web.js ignores it — leave nil.
 type SendTextStatusRequest struct {

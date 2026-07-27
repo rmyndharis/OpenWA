@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace OpenWA\Tests;
 
+use OpenWA\Exceptions\OpenWANotFoundException;
 use PHPUnit\Framework\TestCase;
 
 class ResourcesTest extends TestCase
@@ -158,6 +159,18 @@ class ResourcesTest extends TestCase
         $this->assertSame('DELETE', $backend->calls()[1]['method']);
     }
 
+    public function testProfilePicturesBatchResolvesIdsQuery(): void
+    {
+        $backend = (new MockBackend())->on(200, ['pictures' => ['a@c.us' => 'http://p/a', 'b@c.us' => null]]);
+        $client = $backend->makeClient();
+        $res = $client->contacts->profilePictures('s', ['a@c.us', 'b@c.us']);
+        $call = $backend->lastCall();
+        $this->assertSame('GET', $call['method']);
+        $this->assertSame('/api/sessions/s/contacts/profile-pictures', $call['path']);
+        $this->assertSame('ids=a%40c.us%2Cb%40c.us', $call['query']);
+        $this->assertSame(['a@c.us' => 'http://p/a', 'b@c.us' => null], $res['pictures']);
+    }
+
     // ── Webhooks ──────────────────────────────────────────────────────
 
     public function testWebhookCrudTest(): void
@@ -180,6 +193,26 @@ class ResourcesTest extends TestCase
         $client->webhooks->delete('s', 'w1');
         $client->webhooks->test('s', 'w1');
         $this->assertStringContainsString('/webhooks/w1/test', $backend->calls()[5]['url']);
+    }
+
+    public function testWebhookCreateForwardsPolymorphicFilterValuesVerbatim(): void
+    {
+        $backend = (new MockBackend())->on(201, ['id' => 'w1']);
+        $client = $backend->makeClient();
+        // The filter value is polymorphic on the wire: string (text fields),
+        // string list (id/enum fields), bool (boolean fields) + caseSensitive.
+        $filters = [
+            'conditions' => [
+                ['field' => 'sender', 'operator' => 'is', 'value' => ['123@c.us']],
+                ['field' => 'body', 'operator' => 'contains', 'value' => 'invoice', 'caseSensitive' => true],
+                ['field' => 'isGroup', 'operator' => 'is', 'value' => false],
+            ],
+        ];
+        $client->webhooks->create('s', ['url' => 'u', 'events' => ['message.received'], 'filters' => $filters]);
+        $this->assertSame(
+            ['url' => 'u', 'events' => ['message.received'], 'filters' => $filters],
+            $backend->lastCall()['body']
+        );
     }
 
     // ── Chats & Health ────────────────────────────────────────────────
@@ -218,6 +251,29 @@ class ResourcesTest extends TestCase
         $this->assertSame(['image' => ['url' => 'http://img'], 'recipients' => ['a@c.us'], 'caption' => 'c'], $backend->lastCall()['body']);
         $client->status->sendVideo('s', ['video' => ['url' => 'http://vid'], 'recipients' => ['a@c.us']]);
         $this->assertSame(['video' => ['url' => 'http://vid'], 'recipients' => ['a@c.us']], $backend->lastCall()['body']);
+    }
+
+    public function testStatusMediaReturnsStoredBytes(): void
+    {
+        $backend = (new MockBackend())->onRaw(200, 'PNG_BYTES', ['Content-Type' => 'image/png']);
+        $client = $backend->makeClient();
+        $media = $client->status->media('s', 'w1');
+        $call = $backend->lastCall();
+        $this->assertSame('GET', $call['method']);
+        $this->assertSame('/api/sessions/s/status/w1/media', $call['path']);
+        $this->assertSame('PNG_BYTES', $media['data']);
+        $this->assertSame('image/png', $media['contentType']);
+    }
+
+    public function testStatusMedia404MapsToNotFoundException(): void
+    {
+        $backend = (new MockBackend())->on(404, [
+            'statusCode' => 404,
+            'message' => 'Status media not found or expired',
+            'error' => 'Not Found',
+        ]);
+        $this->expectException(OpenWANotFoundException::class);
+        $backend->makeClient()->status->media('s', 'w1');
     }
 
     public function testHealthAndAuth(): void

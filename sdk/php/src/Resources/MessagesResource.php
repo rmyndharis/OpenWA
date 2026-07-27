@@ -101,6 +101,17 @@ class MessagesResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-template", [], $body);
     }
 
+    /**
+     * Send a native WhatsApp poll (2–12 options).
+     *
+     * @param array<string,mixed> $body {chatId, name, options, allowMultipleAnswers?}
+     * @return array<string,mixed>
+     */
+    public function sendPoll(string $sessionId, array $body): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($sessionId)}/messages/send-poll", [], $body);
+    }
+
     /** @return array<string,mixed> */
     public function reply(string $sessionId, array $body): array
     {

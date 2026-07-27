@@ -47,6 +47,21 @@ class ContactsResource
         return $this->http->request('GET', "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/{$this->http->encodeSegment($contactId)}/profile-picture");
     }
 
+    /**
+     * Batch-resolve profile picture URLs for up to 50 contacts in one request.
+     *
+     * @param list<string> $ids
+     * @return array{pictures: array<string,?string>} Map of contact id → URL (null when a lookup fails).
+     */
+    public function profilePictures(string $sessionId, array $ids): array
+    {
+        return $this->http->request(
+            'GET',
+            "/api/sessions/{$this->http->encodeSegment($sessionId)}/contacts/profile-pictures",
+            ['ids' => implode(',', $ids)]
+        );
+    }
+
     /** @return array<string,mixed> */
     public function phone(string $sessionId, string $contactId): array
     {

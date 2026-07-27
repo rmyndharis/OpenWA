@@ -27,6 +27,16 @@ func (s *StatusService) FromContact(ctx context.Context, sessionID, contactID st
 	return out.Statuses, err
 }
 
+// Media fetches the stored media bytes for a status update. The server
+// answers 404 when no media is stored (text status, omitted, or expired).
+func (s *StatusService) Media(ctx context.Context, sessionID, statusID string) (*StatusMedia, error) {
+	data, contentType, err := s.client.doRaw(ctx, "GET", s.base(sessionID)+"/"+pathEscape(statusID)+"/media", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &StatusMedia{Data: data, ContentType: contentType}, nil
+}
+
 // SendText posts a text status.
 func (s *StatusService) SendText(ctx context.Context, sessionID string, body SendTextStatusRequest) (*StatusResult, error) {
 	return s.send(ctx, sessionID, "/send-text", body)

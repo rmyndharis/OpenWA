@@ -1,6 +1,10 @@
 package openwa
 
-import "context"
+import (
+	"context"
+	"net/url"
+	"strings"
+)
 
 // ContactsService looks up and manages contacts.
 // Backed by src/modules/contact/contact.controller.ts.
@@ -41,6 +45,19 @@ func (s *ContactsService) Check(ctx context.Context, sessionID, number string) (
 func (s *ContactsService) ProfilePicture(ctx context.Context, sessionID, contactID string) (*ProfilePictureResponse, error) {
 	var out ProfilePictureResponse
 	err := s.client.do(ctx, "GET", s.base(sessionID)+"/"+pathEscape(contactID)+"/profile-picture", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ProfilePictures batch-resolves profile picture URLs for up to 50 contacts
+// in one request. The result maps each requested id to its URL (nil when the
+// lookup failed).
+func (s *ContactsService) ProfilePictures(ctx context.Context, sessionID string, ids []string) (*ProfilePicturesResponse, error) {
+	var out ProfilePicturesResponse
+	q := url.Values{"ids": []string{strings.Join(ids, ",")}}
+	err := s.client.do(ctx, "GET", s.base(sessionID)+"/profile-pictures", q, nil, &out)
 	if err != nil {
 		return nil, err
 	}

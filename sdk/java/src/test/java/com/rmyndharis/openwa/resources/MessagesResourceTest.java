@@ -21,6 +21,7 @@ import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
 import com.rmyndharis.openwa.model.SendMediaRequest;
 import com.rmyndharis.openwa.model.SendAudioRequest;
+import com.rmyndharis.openwa.model.SendPollRequest;
 import com.rmyndharis.openwa.model.SendTemplateRequest;
 import com.rmyndharis.openwa.model.SendTextRequest;
 import com.rmyndharis.openwa.support.MockTransport;
@@ -57,6 +58,37 @@ class MessagesResourceTest {
         assertEquals("http://h/api/sessions/s/messages/send-text", tx.lastRequest().url());
         assertEquals(HttpMethod.POST, tx.lastRequest().method());
         assertTrue(tx.lastRequest().body().contains("hello-text"));
+    }
+
+    @Test
+    void sendTextForwardsMentionsVerbatim() {
+        tx.respond(200, MSG);
+        client.messages.sendText(
+            "s",
+            SendTextRequest.builder()
+                .chatId("120363@g.us")
+                .text("hi @628123")
+                .mentions(List.of("628123@c.us"))
+                .build());
+        assertTrue(tx.lastRequest().body().contains("\"mentions\":[\"628123@c.us\"]"));
+    }
+
+    @Test
+    void sendPollResolvesToSendPollPath() {
+        tx.respond(200, MSG);
+        client.messages.sendPoll(
+            "s",
+            SendPollRequest.builder()
+                .chatId("628@c.us")
+                .name("Where?")
+                .options(List.of("Park", "Beach"))
+                .allowMultipleAnswers(true)
+                .build());
+        assertEquals("http://h/api/sessions/s/messages/send-poll", tx.lastRequest().url());
+        assertEquals(HttpMethod.POST, tx.lastRequest().method());
+        assertTrue(tx.lastRequest().body().contains("\"name\":\"Where?\""));
+        assertTrue(tx.lastRequest().body().contains("\"options\":[\"Park\",\"Beach\"]"));
+        assertTrue(tx.lastRequest().body().contains("\"allowMultipleAnswers\":true"));
     }
 
     @Test

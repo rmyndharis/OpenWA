@@ -1,14 +1,20 @@
 package com.rmyndharis.openwa;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.rmyndharis.openwa.errors.OpenWAError;
 import com.rmyndharis.openwa.errors.OpenWANotFoundError;
+import com.rmyndharis.openwa.http.BinaryResponse;
 import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.SuccessResult;
 import com.rmyndharis.openwa.support.MockTransport;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ClientTest {
@@ -54,5 +60,41 @@ class ClientTest {
         tx.respond(204, "");
         SuccessResult r = client.request(HttpMethod.DELETE, "/api/x", null, null, SuccessResult.class);
         assertNull(r);
+    }
+
+    @Test
+    void nonJson2xxFallsBackToRawTextForStringTargets() {
+        tx.respond(200, "plain text");
+        String r = client.request(HttpMethod.GET, "/api/x", null, null, String.class);
+        assertEquals("plain text", r);
+    }
+
+    @Test
+    void nonJson2xxForTypedTargetsThrowsTidySdkError() {
+        tx.respond(200, "plain text");
+        // Must surface the SDK's own error type — a raw Gson JsonSyntaxException
+        // leaking to callers is the bug this guards.
+        OpenWAError e = assertThrows(OpenWAError.class,
+            () -> client.request(HttpMethod.GET, "/api/x", null, null, SuccessResult.class));
+        assertEquals(OpenWAError.class, e.getClass());
+    }
+
+    @Test
+    void requestBytesReturnsRawBodyAndContentType() {
+        tx.respondRaw(
+            200,
+            "PNG_BYTES".getBytes(StandardCharsets.UTF_8),
+            Map.of("content-type", List.of("image/png")));
+        BinaryResponse r = client.requestBytes(HttpMethod.GET, "/api/x", null);
+        assertArrayEquals("PNG_BYTES".getBytes(StandardCharsets.UTF_8), r.data());
+        assertEquals("image/png", r.contentType());
+    }
+
+    @Test
+    void requestBytes204ReturnsEmptyData() {
+        tx.respond(204, "");
+        BinaryResponse r = client.requestBytes(HttpMethod.GET, "/api/x", null);
+        assertEquals(0, r.data().length);
+        assertNull(r.contentType());
     }
 }

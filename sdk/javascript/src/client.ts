@@ -23,7 +23,7 @@
  * @packageDocumentation
  */
 
-import { request, encodeSegment, warnIfInsecureHttpUrl, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
+import { request, requestBytes, encodeSegment, warnIfInsecureHttpUrl, type BinaryResponse, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
 import { CallsResource } from './resources/calls.js';
 import { CatalogResource } from './resources/catalog.js';
 import { ChannelsResource } from './resources/channels.js';
@@ -102,6 +102,11 @@ export class OpenWAClient {
   /** Issue a raw request against the API. (Public for advanced use.) */
   request<T>(options: RequestOptions): Promise<T> {
     return request<T>(this.config, options);
+  }
+
+  /** Issue a raw request expecting a non-JSON (binary) body. (Public for advanced use.) */
+  requestBytes(options: RequestOptions): Promise<BinaryResponse> {
+    return requestBytes(this.config, options);
   }
 
   /**

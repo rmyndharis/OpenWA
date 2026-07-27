@@ -24,7 +24,7 @@ public final class DefaultHttpTransport implements HttpTransport {
             .method(req.method().name(), pub);
         req.headers().forEach(b::header);
         try {
-            HttpResponse<String> res = client.send(b.build(), HttpResponse.BodyHandlers.ofString());
+            HttpResponse<byte[]> res = client.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
             return new HttpResponseData(res.statusCode(), res.headers().map(), res.body());
         } catch (HttpTimeoutException e) {
             throw new OpenWATimeoutError(req.timeout().toMillis());

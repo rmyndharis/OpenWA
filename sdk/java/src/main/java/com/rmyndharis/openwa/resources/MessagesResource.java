@@ -22,6 +22,7 @@ import com.rmyndharis.openwa.model.SendContactRequest;
 import com.rmyndharis.openwa.model.SendLocationRequest;
 import com.rmyndharis.openwa.model.SendMediaRequest;
 import com.rmyndharis.openwa.model.SendAudioRequest;
+import com.rmyndharis.openwa.model.SendPollRequest;
 import com.rmyndharis.openwa.model.SendTemplateRequest;
 import com.rmyndharis.openwa.model.SendTextRequest;
 import com.rmyndharis.openwa.model.SuccessResult;
@@ -109,6 +110,16 @@ public final class MessagesResource {
         return client.request(
             HttpMethod.POST,
             "/api/sessions/" + encodeSegment(sessionId) + "/messages/send-template",
+            null,
+            body,
+            MessageResponse.class);
+    }
+
+    /** Send a native WhatsApp poll (2–12 options). */
+    public MessageResponse sendPoll(String sessionId, SendPollRequest body) {
+        return client.request(
+            HttpMethod.POST,
+            "/api/sessions/" + encodeSegment(sessionId) + "/messages/send-poll",
             null,
             body,
             MessageResponse.class);

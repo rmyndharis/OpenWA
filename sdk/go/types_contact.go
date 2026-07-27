@@ -24,6 +24,12 @@ type ProfilePictureResponse struct {
 	URL *string `json:"url,omitempty"`
 }
 
+// ProfilePicturesResponse is a batch profile-picture lookup: a map of contact
+// id → picture URL (null when the lookup failed).
+type ProfilePicturesResponse struct {
+	Pictures map[string]*string `json:"pictures"`
+}
+
 // ContactPhoneResponse resolves a contact's phone number.
 type ContactPhoneResponse struct {
 	ContactID string  `json:"contactId"`

@@ -28,6 +28,7 @@ from ..types import (
     SendLocationRequest,
     SendAudioRequest,
     SendMediaRequest,
+    SendPollRequest,
     SendTemplateRequest,
     SendTextRequest,
     SuccessResult,
@@ -73,6 +74,10 @@ class MessagesResource:
 
     def send_template(self, session_id: str, body: SendTemplateRequest) -> MessageResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/send-template", body=body)
+
+    def send_poll(self, session_id: str, body: SendPollRequest) -> MessageResponse:
+        """Send a native WhatsApp poll (2–12 options)."""
+        return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/send-poll", body=body)
 
     def reply(self, session_id: str, body: ReplyMessageRequest) -> MessageResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/messages/reply", body=body)

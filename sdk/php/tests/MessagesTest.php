@@ -21,6 +21,36 @@ class MessagesTest extends TestCase
         $this->assertSame(['chatId' => 'a@c.us', 'text' => 'hi'], $call['body']);
     }
 
+    public function testSendTextForwardsMentionsVerbatim(): void
+    {
+        $backend = (new MockBackend())->on(201, ['messageId' => 'm1', 'timestamp' => 1]);
+        $client = $backend->makeClient();
+        $client->messages->sendText('s1', ['chatId' => 'g@g.us', 'text' => 'hi @628123', 'mentions' => ['628123@c.us']]);
+        $this->assertSame(
+            ['chatId' => 'g@g.us', 'text' => 'hi @628123', 'mentions' => ['628123@c.us']],
+            $backend->lastCall()['body']
+        );
+    }
+
+    public function testSendPollUsesSendPollPath(): void
+    {
+        $backend = (new MockBackend())->on(201, ['messageId' => 'm2', 'timestamp' => 2]);
+        $client = $backend->makeClient();
+        $res = $client->messages->sendPoll('s1', [
+            'chatId' => 'a@c.us',
+            'name' => 'Where?',
+            'options' => ['Park', 'Beach'],
+            'allowMultipleAnswers' => true,
+        ]);
+        $call = $backend->lastCall();
+        $this->assertSame('/api/sessions/s1/messages/send-poll', $call['path']);
+        $this->assertSame(
+            ['chatId' => 'a@c.us', 'name' => 'Where?', 'options' => ['Park', 'Beach'], 'allowMultipleAnswers' => true],
+            $call['body']
+        );
+        $this->assertSame('m2', $res['messageId']);
+    }
+
     public function testListReturnsMessagesPageEnvelope(): void
     {
         // The server responds with a {messages, total} page, not a flat array. Pin the shape so a

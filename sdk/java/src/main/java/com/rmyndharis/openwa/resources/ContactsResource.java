@@ -9,8 +9,10 @@ import com.rmyndharis.openwa.model.ContactPhoneResponse;
 import com.rmyndharis.openwa.model.ContactRecord;
 import com.rmyndharis.openwa.model.ListContactsQuery;
 import com.rmyndharis.openwa.model.ProfilePictureResponse;
+import com.rmyndharis.openwa.model.ProfilePicturesResponse;
 import com.rmyndharis.openwa.model.SuccessResult;
 import java.util.List;
+import java.util.Map;
 
 /** Contacts resource — contact lookup and management. */
 public final class ContactsResource {
@@ -58,6 +60,19 @@ public final class ContactsResource {
             null,
             null,
             ProfilePictureResponse.class);
+    }
+
+    /**
+     * Batch-resolve profile picture URLs for up to 50 contacts in one request.
+     * Returns a map of contact id → URL (null when a lookup fails).
+     */
+    public ProfilePicturesResponse profilePictures(String sessionId, List<String> ids) {
+        return client.request(
+            HttpMethod.GET,
+            "/api/sessions/" + encodeSegment(sessionId) + "/contacts/profile-pictures",
+            Map.of("ids", String.join(",", ids)),
+            null,
+            ProfilePicturesResponse.class);
     }
 
     /** Resolve a contact id (e.g. a {@code @lid}) to a phone number. */

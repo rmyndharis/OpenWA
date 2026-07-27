@@ -76,6 +76,51 @@ class HttpExecutor
      */
     public function request(string $method, string $path, array $query = [], $body = null)
     {
+        $response = $this->send($method, $path, $query, $body);
+
+        $text = (string) $response->getBody();
+        if ($response->getStatusCode() === 204 || $text === '') {
+            return null;
+        }
+
+        $decoded = json_decode($text, true);
+        return $decoded === null && json_last_error() !== JSON_ERROR_NONE ? $text : $decoded;
+    }
+
+    /**
+     * Perform one request for a non-JSON (binary) 2xx body — e.g. stored
+     * status media — and return it as ['data' => raw bytes, 'contentType' =>
+     * ?string]. A 204/empty body yields empty data and a null content type.
+     *
+     * @param string              $method HTTP method.
+     * @param string              $path   Path beginning with /.
+     * @param array<string,mixed> $query  Query parameters (null values skipped).
+     *
+     * @return array{data: string, contentType: ?string}
+     *
+     * @throws OpenWAApiException  On any non-2xx response (typed subclass).
+     * @throws OpenWATimeoutException On timeout.
+     */
+    public function requestBinary(string $method, string $path, array $query = []): array
+    {
+        $response = $this->send($method, $path, $query, null);
+        if ($response->getStatusCode() === 204) {
+            return ['data' => '', 'contentType' => null];
+        }
+        $contentType = $response->getHeaderLine('Content-Type');
+        return ['data' => (string) $response->getBody(), 'contentType' => $contentType === '' ? null : $contentType];
+    }
+
+    /**
+     * Shared transport for {@see request()} and {@see requestBinary()}:
+     * builds options, performs the Guzzle call, and maps a non-2xx (including
+     * an unfollowed 3xx) to a typed SDK exception.
+     *
+     * @param array<string,mixed> $query
+     * @param mixed|null          $body
+     */
+    private function send(string $method, string $path, array $query, $body): ResponseInterface
+    {
         // Auth/JSON headers are applied per-request so they are correct whether
         // a default or injected client is used (and never leak Guzzle exceptions:
         // http_errors disabled so we translate status into typed SDK exceptions).
@@ -125,14 +170,7 @@ class HttpExecutor
         if ($status >= 300) {
             throw $this->buildApiException($response, $method, $path);
         }
-
-        $text = (string) $response->getBody();
-        if ($status === 204 || $text === '') {
-            return null;
-        }
-
-        $decoded = json_decode($text, true);
-        return $decoded === null && json_last_error() !== JSON_ERROR_NONE ? $text : $decoded;
+        return $response;
     }
 
     private function buildApiException(ResponseInterface $response, string $method, string $path): OpenWAApiException

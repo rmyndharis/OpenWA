@@ -66,6 +66,11 @@ func (s *MessagesService) SendTemplate(ctx context.Context, sessionID string, bo
 	return s.send(ctx, sessionID, "send-template", body)
 }
 
+// SendPoll sends a native WhatsApp poll (2–12 options).
+func (s *MessagesService) SendPoll(ctx context.Context, sessionID string, body SendPollRequest) (*MessageResponse, error) {
+	return s.send(ctx, sessionID, "send-poll", body)
+}
+
 func (s *MessagesService) send(ctx context.Context, sessionID, segment string, body any) (*MessageResponse, error) {
 	var out MessageResponse
 	err := s.client.do(ctx, "POST", s.base(sessionID)+"/"+segment, nil, body, &out)

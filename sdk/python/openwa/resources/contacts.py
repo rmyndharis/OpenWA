@@ -13,6 +13,7 @@ from ..types import (
     ContactPhoneResponse,
     ContactRecord,
     ProfilePictureResponse,
+    ProfilePicturesResponse,
     SuccessResult,
 )
 
@@ -41,6 +42,13 @@ class ContactsResource:
     def profile_picture(self, session_id: str, contact_id: str) -> ProfilePictureResponse:
         return self._http.request(
             "GET", f"/api/sessions/{quote_segment(session_id)}/contacts/{quote_segment(contact_id)}/profile-picture"
+        )
+
+    def profile_pictures(self, session_id: str, ids: list[str]) -> ProfilePicturesResponse:
+        """Batch-resolve profile picture URLs for up to 50 contacts in one request.
+        Returns a map of contact id → URL (None when a lookup fails)."""
+        return self._http.request(
+            "GET", f"/api/sessions/{quote_segment(session_id)}/contacts/profile-pictures", query={"ids": ",".join(ids)}
         )
 
     def phone(self, session_id: str, contact_id: str) -> ContactPhoneResponse:

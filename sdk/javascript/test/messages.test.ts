@@ -14,6 +14,30 @@ describe('MessagesResource — exact paths', () => {
     expect(t.lastCall!.body).toEqual({ chatId: 'a@c.us', text: 'hi' });
   });
 
+  it('sendText forwards mentions verbatim', async () => {
+    const t = new MockTransport().on('POST', /send-text$/, { body: { messageId: 'm1', timestamp: 1 } });
+    await client(t).messages.sendText('s1', { chatId: 'g@g.us', text: 'hi @628123', mentions: ['628123@c.us'] });
+    expect(t.lastCall!.body).toEqual({ chatId: 'g@g.us', text: 'hi @628123', mentions: ['628123@c.us'] });
+  });
+
+  it('sendPoll posts to /messages/send-poll', async () => {
+    const t = new MockTransport().on('POST', /send-poll$/, { body: { messageId: 'm2', timestamp: 2 } });
+    const res = await client(t).messages.sendPoll('s1', {
+      chatId: 'a@c.us',
+      name: 'Where?',
+      options: ['Park', 'Beach'],
+      allowMultipleAnswers: true,
+    });
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s1/messages/send-poll');
+    expect(t.lastCall!.body).toEqual({
+      chatId: 'a@c.us',
+      name: 'Where?',
+      options: ['Park', 'Beach'],
+      allowMultipleAnswers: true,
+    });
+    expect(res.messageId).toBe('m2');
+  });
+
   it('sendImage posts to /messages/send-image', async () => {
     const t = new MockTransport().on('POST', /send-image$/, { body: { messageId: 'm', timestamp: 2 } });
     await client(t).messages.sendImage('s', { chatId: 'a@c.us', url: 'http://img' });

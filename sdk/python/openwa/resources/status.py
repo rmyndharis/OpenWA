@@ -13,6 +13,7 @@ from ..types import (
     SendImageStatusRequest,
     SendTextStatusRequest,
     SendVideoStatusRequest,
+    StatusMedia,
     StatusRecord,
     StatusResult,
 )
@@ -30,6 +31,13 @@ class StatusResource:
 
     def from_contact(self, session_id: str, contact_id: str) -> dict[str, list[StatusRecord]]:
         return self._http.request("GET", f"/api/sessions/{quote_segment(session_id)}/status/{quote_segment(contact_id)}")
+
+    def media(self, session_id: str, status_id: str) -> StatusMedia:
+        """Fetch the stored media bytes for a status update (404 when there is no stored media)."""
+        data, content_type = self._http.request_bytes(
+            "GET", f"/api/sessions/{quote_segment(session_id)}/status/{quote_segment(status_id)}/media"
+        )
+        return {"data": data, "contentType": content_type}
 
     def send_text(self, session_id: str, body: SendTextStatusRequest) -> StatusResult:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/status/send-text", body=body)
