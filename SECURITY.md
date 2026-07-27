@@ -6,12 +6,13 @@ socket. Security matters here, and we appreciate responsible disclosure.
 
 ## Supported versions
 
-Security fixes land on the latest minor release. Please upgrade older deployments.
+Security fixes land on the latest minor release (currently 0.10.x). Older minor
+lines receive no backports — please upgrade older deployments.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.8.x   | :white_check_mark: |
-| < 0.8   | :x:                |
+| 0.10.x  | :white_check_mark: |
+| < 0.10  | :x:                |
 
 ## Reporting a vulnerability
 

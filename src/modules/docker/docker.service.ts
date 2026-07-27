@@ -204,8 +204,24 @@ export class DockerService implements OnModuleInit {
   }
 
   /**
-   * Container specifications for optional services
-   * Mirrors docker-compose.yml settings but uses Docker API directly
+   * Container specifications for the three managed profiles, kept in parity with the matching
+   * services in docker-compose.yml (same image pin, container/volume/network names, command,
+   * healthcheck, labels, restart policy, no-new-privileges). compose-parity.spec.ts is the
+   * regression lock: it reads docker-compose.yml and fails when either side drifts.
+   *
+   * Deliberate differences from the compose services — do not "fix" these:
+   *  - Credentials: the compose services are the MANUAL operator path and deliberately ship no
+   *    default secret (empty POSTGRES_PASSWORD / MINIO_ROOT_* fail fast on boot). The specs below
+   *    are the dashboard built-in path: they provision the fixed built-in credentials
+   *    (openwa/openwa, minioadmin/minioadmin) that infra.controller writes to data/.env.generated
+   *    and that the production boot guard (bootstrap-security.ts) exempts only while the
+   *    *_BUILTIN flag is set AND the datastore host resolves to the internal-only container.
+   *  - Postgres init script: compose bind-mounts scripts/postgres-init-schema.sh from the host
+   *    checkout to support a custom POSTGRES_SCHEMA. The Docker-API path cannot know a host path
+   *    to mount, and the built-in flow always pins POSTGRES_SCHEMA=public, so no init script (or
+   *    POSTGRES_SCHEMA env) is set here.
+   *  - Resource limits: neither path sets CPU/memory/PID limits on the datastore containers;
+   *    only openwa-api carries mem_limit/pids_limit (in compose).
    */
   private getContainerSpec(profile: string): {
     image: string;
@@ -217,6 +233,7 @@ export class DockerService implements OnModuleInit {
     healthcheck?: { test: string[]; interval: number; timeout: number; retries: number };
     labels: Record<string, string>;
     ports?: { container: number; host: number }[];
+    securityOpt: string[];
   } | null {
     const specs: Record<string, ReturnType<typeof this.getContainerSpec>> = {
       redis: {
@@ -235,12 +252,15 @@ export class DockerService implements OnModuleInit {
           'com.openwa.service': 'cache',
           'com.openwa.builtin': 'true',
         },
+        securityOpt: ['no-new-privileges:true'],
       },
       postgres: {
         image: 'postgres:16-alpine',
         name: 'openwa-postgres',
         alias: 'postgres',
-        // Use hardcoded defaults for built-in container (don't inherit SQLite paths)
+        // Fixed built-in credentials — the dashboard saves these same values to
+        // data/.env.generated (infra.controller) and the production boot guard exempts them only
+        // for the built-in, internal-host deployment (see the getContainerSpec docblock).
         env: ['POSTGRES_USER=openwa', 'POSTGRES_PASSWORD=openwa', 'POSTGRES_DB=openwa'],
         volumes: [{ name: 'openwa_postgres-data', path: '/var/lib/postgresql/data' }],
         healthcheck: {
@@ -253,9 +273,11 @@ export class DockerService implements OnModuleInit {
           'com.openwa.service': 'database',
           'com.openwa.builtin': 'true',
         },
+        securityOpt: ['no-new-privileges:true'],
       },
       minio: {
-        image: 'minio/minio',
+        // Same pin as the compose minio service — never track the floating `latest` tag.
+        image: 'minio/minio:RELEASE.2025-09-07T16-13-09Z',
         name: 'openwa-minio',
         alias: 'minio',
         cmd: ['server', '/data', '--console-address', ':9001'],
@@ -280,6 +302,7 @@ export class DockerService implements OnModuleInit {
           'com.openwa.service': 'storage',
           'com.openwa.builtin': 'true',
         },
+        securityOpt: ['no-new-privileges:true'],
       },
     };
     return specs[profile] || null;
@@ -352,6 +375,7 @@ export class DockerService implements OnModuleInit {
           NetworkMode: 'openwa-network',
           RestartPolicy: { Name: 'unless-stopped' },
           Binds: spec.volumes?.map(v => `${v.name}:${v.path}`),
+          SecurityOpt: spec.securityOpt,
           PortBindings: spec.ports?.reduce<Record<string, { HostIp: string; HostPort: string }[]>>((acc, p) => {
             acc[`${p.container}/tcp`] = [{ HostIp: '127.0.0.1', HostPort: p.host.toString() }];
             return acc;
