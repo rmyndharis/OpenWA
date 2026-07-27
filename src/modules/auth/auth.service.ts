@@ -12,6 +12,7 @@ import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
+import { KeyedAsyncLock } from '../integration/ordering-lock';
 
 const API_KEY_FILE = join(process.cwd(), 'data', '.api-key');
 
@@ -53,6 +54,19 @@ export class AuthService implements OnModuleInit {
   private static readonly STAT_FLUSH_INTERVAL_MS = 60_000;
   /** keyId -> usage increments observed but not yet persisted (flushed on the next windowed write). */
   private readonly pendingUsage = new Map<string, number>();
+
+  /**
+   * Serializes every last-usable-admin check with the mutation it guards, in ONE critical section.
+   * The check is check-then-act across awaits: without serialization, two concurrent requests that
+   * demote/delete/revoke the last two admins both pass the check before either writes — leaving zero
+   * usable admins, a total management lockout (the boot seed only fires on an EMPTY table, not on
+   * zero admins). The guarded invariant is global ("count of OTHER usable admins"), so the lock key
+   * must be a single global key too: keying per target key id would serialize nothing — the racing
+   * requests target DIFFERENT keys. An in-process mutex is sufficient under the single-process
+   * deployment contract.
+   */
+  private readonly adminCapabilityLock = new KeyedAsyncLock();
+  private static readonly ADMIN_CAPABILITY_LOCK_KEY = 'admin-capability';
 
   constructor(
     @InjectRepository(ApiKey, 'main')
@@ -176,50 +190,68 @@ export class AuthService implements OnModuleInit {
     const removesOrSchedulesLastAdmin =
       (dto.role !== undefined && dto.role !== ApiKeyRole.ADMIN) ||
       (dto.expiresAt !== undefined && dto.expiresAt !== null);
-    if (removesOrSchedulesLastAdmin) {
-      await this.assertNotLastUsableAdmin(apiKey);
-    }
 
-    // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
-    // allowedIps, allowedSessions, or expiry can widen or restrict what an already-connected WebSocket
-    // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
-    // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
-    // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
-    const before = {
-      role: apiKey.role,
-      allowedIps: apiKey.allowedIps,
-      allowedSessions: apiKey.allowedSessions,
-      expiresAt: apiKey.expiresAt,
+    const applyAndSave = async (): Promise<ApiKey> => {
+      if (removesOrSchedulesLastAdmin) {
+        await this.assertNotLastUsableAdmin(apiKey);
+      }
+
+      // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
+      // allowedIps, allowedSessions, or expiry can widen or restrict what an already-connected WebSocket
+      // socket may see, so only those trigger eviction of live /events sockets — a benign rename must
+      // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
+      // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
+      const before = {
+        role: apiKey.role,
+        allowedIps: apiKey.allowedIps,
+        allowedSessions: apiKey.allowedSessions,
+        expiresAt: apiKey.expiresAt,
+      };
+
+      if (dto.name) apiKey.name = dto.name;
+      if (dto.role) apiKey.role = dto.role;
+      if (dto.allowedIps !== undefined) apiKey.allowedIps = dto.allowedIps;
+      if (dto.allowedSessions !== undefined) apiKey.allowedSessions = dto.allowedSessions;
+      if (dto.expiresAt !== undefined) apiKey.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+
+      const saved = await this.apiKeyRepository.save(apiKey);
+
+      // Compare membership, not order: a pure reorder of allowedIps/allowedSessions is a no-op for the
+      // .includes()-based enforcement, so sort before stringify to avoid a spurious eviction on a reorder.
+      const ordered = (v: string[] | null) => (v ? [...v].sort() : v);
+      const authzChanged =
+        saved.role !== before.role ||
+        saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
+        JSON.stringify(ordered(saved.allowedIps)) !== JSON.stringify(ordered(before.allowedIps)) ||
+        JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions));
+      if (authzChanged) {
+        this.evictActiveSockets(id, 'authorization_changed');
+      }
+      return saved;
     };
 
-    if (dto.name) apiKey.name = dto.name;
-    if (dto.role) apiKey.role = dto.role;
-    if (dto.allowedIps !== undefined) apiKey.allowedIps = dto.allowedIps;
-    if (dto.allowedSessions !== undefined) apiKey.allowedSessions = dto.allowedSessions;
-    if (dto.expiresAt !== undefined) apiKey.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
-
-    const saved = await this.apiKeyRepository.save(apiKey);
-
-    // Compare membership, not order: a pure reorder of allowedIps/allowedSessions is a no-op for the
-    // .includes()-based enforcement, so sort before stringify to avoid a spurious eviction on a reorder.
-    const ordered = (v: string[] | null) => (v ? [...v].sort() : v);
-    const authzChanged =
-      saved.role !== before.role ||
-      saved.expiresAt?.getTime() !== before.expiresAt?.getTime() ||
-      JSON.stringify(ordered(saved.allowedIps)) !== JSON.stringify(ordered(before.allowedIps)) ||
-      JSON.stringify(ordered(saved.allowedSessions)) !== JSON.stringify(ordered(before.allowedSessions));
-    if (authzChanged) {
-      this.evictActiveSockets(id, 'authorization_changed');
-    }
-    return saved;
+    // Run check+write inside the shared critical section ONLY when this update can strip the last
+    // usable admin; every other update (rename, promotion, non-admin keys) stays lock-free.
+    return removesOrSchedulesLastAdmin && AuthService.isUsableAdmin(apiKey)
+      ? this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, applyAndSave)
+      : applyAndSave();
   }
 
   async delete(id: string): Promise<void> {
     const apiKey = await this.findOne(id);
-    await this.assertNotLastUsableAdmin(apiKey);
-    // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
-    this.pendingUsage.delete(id);
-    await this.apiKeyRepository.remove(apiKey);
+    const removeKey = async (): Promise<void> => {
+      await this.assertNotLastUsableAdmin(apiKey);
+      // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
+      this.pendingUsage.delete(id);
+      await this.apiKeyRepository.remove(apiKey);
+    };
+    // A target that is not a usable admin can skip the lock: it is not counted as one, so removing
+    // it cannot strand the system — some other usable admin (or none at all) exists independently.
+    if (AuthService.isUsableAdmin(apiKey)) {
+      await this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, removeKey);
+    } else {
+      await removeKey();
+    }
     this.evictActiveSockets(id, 'deleted');
     this.logger.log(`API key deleted: ${apiKey.name}`, {
       keyId: id,
@@ -229,23 +261,30 @@ export class AuthService implements OnModuleInit {
 
   async revoke(id: string): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
-    await this.assertNotLastUsableAdmin(apiKey);
-    // A revoked key fails validation before its next flush, so its accumulator would orphan —
-    // drop it here.
-    this.pendingUsage.delete(id);
-    apiKey.isActive = false;
-    const saved = await this.apiKeyRepository.save(apiKey);
+    const revokeKey = async (): Promise<ApiKey> => {
+      await this.assertNotLastUsableAdmin(apiKey);
+      // A revoked key fails validation before its next flush, so its accumulator would orphan —
+      // drop it here.
+      this.pendingUsage.delete(id);
+      apiKey.isActive = false;
+      return this.apiKeyRepository.save(apiKey);
+    };
+    const saved = AuthService.isUsableAdmin(apiKey)
+      ? await this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, revokeKey)
+      : await revokeKey();
     // Kick any WebSocket connections already authenticated with this key: without this, a revoked
     // key keeps receiving events on already-subscribed sockets until they happen to disconnect.
     this.evictActiveSockets(id, 'revoked');
     return saved;
   }
 
+  private static isUsableAdmin(key: ApiKey, now = new Date()): boolean {
+    return key.role === ApiKeyRole.ADMIN && key.isActive && (!key.expiresAt || key.expiresAt > now);
+  }
+
   private async assertNotLastUsableAdmin(target: ApiKey): Promise<void> {
     const now = new Date();
-    const targetIsUsableAdmin =
-      target.role === ApiKeyRole.ADMIN && target.isActive && (!target.expiresAt || target.expiresAt > now);
-    if (!targetIsUsableAdmin) return;
+    if (!AuthService.isUsableAdmin(target, now)) return;
 
     const otherUsableAdmins = await this.apiKeyRepository.count({
       where: [

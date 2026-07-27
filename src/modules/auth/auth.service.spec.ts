@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { UnauthorizedException, NotFoundException, ConflictException } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
 import { AuthService, resolveSeedApiKey, bannerKeyLine } from './auth.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
@@ -347,6 +347,105 @@ describe('AuthService', () => {
       await expect(service.revoke('uuid-1')).rejects.toThrow(/last active admin/i);
       expect(repository.save).not.toHaveBeenCalled();
       expect(key.isActive).toBe(true);
+    });
+  });
+
+  // ── last-admin guard under concurrency ─────────────────────────────
+
+  describe('last-admin guard under concurrency', () => {
+    /**
+     * In-memory stand-in for the DB: the set of currently usable admin key ids. count() reports
+     * OTHER usable admins (the guard's query always excludes the target, itself a live usable
+     * admin at check time); save()/remove() apply the capability change synchronously at call
+     * time. Interleaving is then driven purely by promise resolution order, so each scenario
+     * below has a deterministic outcome regardless of which request runs its section first.
+     */
+    function setupLiveAdmins(...ids: string[]): void {
+      const liveAdmins = new Set(ids);
+      const keys = new Map(ids.map(id => [id, createMockApiKey({ id, role: ApiKeyRole.ADMIN })]));
+      (repository.findOne as jest.Mock).mockImplementation((options: { where: { id: string } }) =>
+        Promise.resolve(keys.get(options.where.id) ?? null),
+      );
+      (repository.count as jest.Mock).mockImplementation(() => Promise.resolve(liveAdmins.size - 1));
+      (repository.remove as jest.Mock).mockImplementation((key: ApiKey) => {
+        liveAdmins.delete(key.id);
+        return Promise.resolve(key);
+      });
+      (repository.save as jest.Mock).mockImplementation((key: ApiKey) => {
+        if (key.role === ApiKeyRole.ADMIN && key.isActive) {
+          liveAdmins.add(key.id);
+        } else {
+          liveAdmins.delete(key.id);
+        }
+        return Promise.resolve(key);
+      });
+    }
+
+    const outcomes = (results: PromiseSettledResult<unknown>[]) => ({
+      succeeded: results.filter(r => r.status === 'fulfilled'),
+      conflicts: results.filter(r => r.status === 'rejected' && r.reason instanceof ConflictException),
+    });
+
+    it('rejects exactly one of two concurrent deletes against the last two admins', async () => {
+      setupLiveAdmins('admin-a', 'admin-b');
+
+      // Without serialization both counts run before either remove commits and both deletes pass.
+      const results = await Promise.allSettled([service.delete('admin-a'), service.delete('admin-b')]);
+
+      const { succeeded, conflicts } = outcomes(results);
+      expect(succeeded).toHaveLength(1);
+      expect(conflicts).toHaveLength(1);
+      expect(repository.remove).toHaveBeenCalledTimes(1); // one admin survives — no lockout
+    });
+
+    it('rejects exactly one of a concurrent demote and revoke against the last two admins', async () => {
+      setupLiveAdmins('admin-a', 'admin-b');
+
+      const results = await Promise.allSettled([
+        service.update('admin-a', { role: ApiKeyRole.OPERATOR }),
+        service.revoke('admin-b'),
+      ]);
+
+      const { succeeded, conflicts } = outcomes(results);
+      expect(succeeded).toHaveLength(1);
+      expect(conflicts).toHaveLength(1);
+      // The loser's write never happened: exactly one capability-stripping write in total.
+      const strippingSaves = (repository.save as jest.Mock).mock.calls.filter(
+        ([key]: [ApiKey]) => key.role !== ApiKeyRole.ADMIN || key.isActive === false,
+      );
+      expect((repository.remove as jest.Mock).mock.calls.length + strippingSaves.length).toBe(1);
+    });
+
+    it('lets concurrent deletes proceed when another usable admin remains', async () => {
+      setupLiveAdmins('admin-a', 'admin-b', 'admin-c');
+
+      const results = await Promise.allSettled([service.delete('admin-a'), service.delete('admin-b')]);
+
+      const { succeeded, conflicts } = outcomes(results);
+      expect(succeeded).toHaveLength(2);
+      expect(conflicts).toHaveLength(0);
+      expect(repository.remove).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps non-admin mutations and benign admin updates off the mutex (no contention)', async () => {
+      const lockRun = jest.spyOn(
+        (service as unknown as { adminCapabilityLock: { run: (...args: unknown[]) => unknown } }).adminCapabilityLock,
+        'run',
+      );
+      const operatorKey = createMockApiKey({ id: 'op-1', role: ApiKeyRole.OPERATOR });
+      const adminKey = createMockApiKey({ id: 'adm-1', role: ApiKeyRole.ADMIN });
+      (repository.findOne as jest.Mock).mockImplementation((options: { where: { id: string } }) =>
+        Promise.resolve(options.where.id === 'op-1' ? operatorKey : adminKey),
+      );
+      (repository.remove as jest.Mock).mockImplementation((key: ApiKey) => Promise.resolve(key));
+      (repository.save as jest.Mock).mockImplementation((key: ApiKey) => Promise.resolve(key));
+
+      await service.delete('op-1'); // non-admin delete
+      await service.revoke('op-1'); // non-admin revoke
+      await service.update('op-1', { role: ApiKeyRole.VIEWER }); // demote of a non-admin
+      await service.update('adm-1', { name: 'renamed' }); // benign update of an admin
+
+      expect(lockRun).not.toHaveBeenCalled();
     });
   });
 
