@@ -29,6 +29,7 @@ describe('ScopeBindingService.onApplicationBootstrap reconciliation', () => {
         .mockResolvedValue([
           { pluginId: 'chatwoot', instanceId: 'a', sessionScope: 'sess-1', config: { baseUrl: 'x' }, enabled: true },
         ]),
+      list: jest.fn().mockResolvedValue([]),
     } as unknown as PluginInstanceService;
 
     await new ScopeBindingService(instances, loader, audit).onApplicationBootstrap();
@@ -114,7 +115,10 @@ describe('ScopeBindingService.onApplicationBootstrap reconciliation', () => {
       [concrete, wildcard],
     ] as const) {
       plugin.activeSessions = [];
-      const instances = { listAll: jest.fn().mockResolvedValue(rowOrder) } as unknown as PluginInstanceService;
+      const instances = {
+        listAll: jest.fn().mockResolvedValue(rowOrder),
+        list: jest.fn().mockResolvedValue([]),
+      } as unknown as PluginInstanceService;
       await new ScopeBindingService(instances, loader, audit).onApplicationBootstrap();
       // The wildcard activation must survive in both row orders ('*' subsumes the concrete scope).
       expect(plugin.activeSessions).toContain('*');

@@ -46,12 +46,13 @@ export class ScopeBindingService implements OnApplicationBootstrap {
 
     // Order-independent reconciliation: listAll() is repo.find() with no ORDER BY, so its row order
     // is DB/restart-dependent (differs between SQLite and Postgres). applyScopeBinding mutates the
-    // SAME in-memory plugin.activeSessions each iteration — the concrete-scope path strips '*' while
-    // the wildcard path overwrites with ['*'] — so for a plugin with BOTH a wildcard and a concrete
-    // instance the final set would otherwise depend on row order (a concrete processed after a
-    // wildcard drops the '*'). Sort concrete scopes before wildcard/null so the wildcard's ['*'] is
-    // the last write (correct: '*' subsumes every concrete scope), making the result stable across
-    // DBs and restarts. instanceId is the deterministic tiebreak among same-rank rows.
+    // SAME in-memory plugin.activeSessions each iteration — the concrete-scope path strips '*' (unless
+    // an enabled wildcard sibling still binds it) while the wildcard path overwrites with ['*'] — so for
+    // a plugin with BOTH a wildcard and a concrete instance the final set would otherwise depend on row
+    // order (a concrete processed after a wildcard could drop the '*'). Sort concrete scopes before
+    // wildcard/null so the wildcard's ['*'] is the last write (correct: '*' subsumes every concrete
+    // scope), making the result stable across DBs and restarts. instanceId is the deterministic
+    // tiebreak among same-rank rows.
     rows.sort((a, b) => {
       const rank = (i: PluginInstance) => (!i.sessionScope || i.sessionScope === '*' ? 1 : 0);
       if (rank(a) !== rank(b)) return rank(a) - rank(b);
@@ -80,6 +81,9 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * (see PluginLoaderService.dispatchWebhookForInstance) and activate the session — iff `activate` (a
    * disabled or removed instance must not keep firing). A concrete scope writes sessionConfig[scope] and
    * toggles that session in activeSessions; a null/'*' scope binds the base config + all sessions ('*').
+   * A concrete teardown/activation never strips state a still-ENABLED sibling depends on: the scope's
+   * session + sessionConfig survive while a sibling binds the same scope, and '*' survives while a
+   * sibling binds a wildcard/null scope.
    * Best-effort: provisioning must not fail because the plugin is momentarily unloaded.
    */
   async applyScopeBinding(
@@ -112,11 +116,27 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         }
         return;
       }
+      // Concrete scope → per-session config + toggle that session in activeSessions. Mirror the
+      // wildcard path's retirement guard in BOTH directions: runtime state a still-ENABLED sibling
+      // instance depends on must survive this instance's change. The controller persists the row
+      // first (PATCH updates/disables it, DELETE removes it), so the list below never counts the
+      // instance being torn down.
+      const siblings = await this.instances.list(pluginId);
+      if (!activate && siblings.some(i => i.enabled && i.sessionScope === scope)) {
+        // A sibling still binds this scope: leave the session active and its sessionConfig intact —
+        // stripping either would silence the sibling until the next boot-time reconciliation.
+        return;
+      }
       this.loader.setPluginSessionConfig(pluginId, scope, activate ? config : {});
       const current = this.loader.getPlugin(pluginId)?.activeSessions ?? [];
       const set = new Set(current.filter(s => s !== '*'));
       if (activate) set.add(scope);
       else set.delete(scope);
+      // Preserve '*' while an enabled wildcard/null sibling still binds all sessions ('*' subsumes
+      // every concrete scope): a concrete activation/teardown must not silence that sibling either.
+      if (current.includes('*') && siblings.some(i => i.enabled && (!i.sessionScope || i.sessionScope === '*'))) {
+        set.add('*');
+      }
       this.loader.setPluginSessions(pluginId, [...set]);
     } catch (err) {
       // Best-effort: don't fail provisioning if the plugin is momentarily unloaded.
