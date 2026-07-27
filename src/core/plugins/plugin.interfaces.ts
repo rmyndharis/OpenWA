@@ -187,8 +187,8 @@ export interface IngressSignatureSpec {
    *   `webhook-signature`, signed content `${webhook-id}.${webhook-timestamp}.${rawBody}`, base64
    *   HMAC-SHA256 with the base64-decoded Svix key, `v1,` prefix, space-separated candidate list), so
    *   `header`/`contentTemplate`/`encoding`/`prefix`/`timestampHeader` are IGNORED — only
-   *   `toleranceSec` (default 300) and `dedupHeader` apply. The operator pastes the Svix secret
-   *   (`v1,whsec_<base64>`) as `instance.secret`.
+   *   `toleranceSec` (falling back to the host default, itself 300) and `dedupHeader` apply. The
+   *   operator pastes the Svix secret (`v1,whsec_<base64>`) as `instance.secret`.
    */
   scheme: 'hmac-sha256' | 'shared-secret' | 'standard-webhooks' | 'none';
   header?: string;
@@ -197,7 +197,10 @@ export interface IngressSignatureSpec {
   encoding?: 'hex' | 'base64';
   prefix?: string;
   timestampHeader?: string;
-  toleranceSec?: number; // when present, must be > 0 (see validateIngressManifest)
+  // Replay window for the declared timestampHeader. When absent, the host default applies
+  // (INGRESS_TIMESTAMP_TOLERANCE_SEC, default 300) — freshness is enforced either way; an explicit
+  // value only narrows/widens the window. When present, must be > 0 (see validateIngressManifest).
+  toleranceSec?: number;
   dedupHeader?: string;
 }
 
@@ -361,6 +364,43 @@ export function warnUnauthenticatedIngressRoutes(
           `UNAUTHENTICATED public endpoint that can trigger WhatsApp sends. Only keep this if the provider ` +
           `offers no HMAC and the URL is guarded by a network/reverse-proxy ACL.`,
         { pluginId: manifest.id, route: r.route, action: 'ingress_unauthenticated_route' },
+      );
+    }
+  }
+}
+
+/**
+ * Warns about hmac-sha256 ingress routes whose declared timestamp is not actually bound into the
+ * signature. Declaring `timestampHeader` makes the host enforce timestamp freshness, but freshness
+ * alone does not stop a replay: if the provider's `contentTemplate` omits `{timestamp}`, the
+ * timestamp is UNSIGNED, so a captured (body, signature) pair can be re-sent with a freshly-minted
+ * timestamp and a new delivery id forever. Binding the timestamp (`contentTemplate` containing
+ * `{timestamp}`, e.g. `{timestamp}.{rawBody}`) makes the signed bytes expire with the window. The
+ * inverse declaration — a `{timestamp}` token with no `timestampHeader` — signs the empty string,
+ * which is equally inert. Warn-only (SDK v1 is additive within a major; a load-time rejection would
+ * break already-installed manifests). Called from PluginLoaderService.loadPlugin.
+ */
+export function warnUnsignedTimestampRoutes(
+  manifest: PluginManifest,
+  logger: { warn: (message: string, context?: Record<string, unknown>) => void },
+): void {
+  for (const r of manifest.ingress ?? []) {
+    if (r.signature.scheme !== 'hmac-sha256') continue; // only hmac templates can bind a timestamp
+    const signsTimestamp = (r.signature.contentTemplate ?? '{rawBody}').includes('{timestamp}');
+    if (r.signature.timestampHeader && !signsTimestamp) {
+      logger.warn(
+        `Ingress route '${r.route}' of plugin '${manifest.id}' declares timestampHeader ` +
+          `'${r.signature.timestampHeader}' but its contentTemplate does not sign it — the timestamp is ` +
+          `freshness-checked but UNSIGNED, so a replayed body can mint a fresh timestamp. Include ` +
+          `{timestamp} in the contentTemplate (e.g. '{timestamp}.{rawBody}') to bind it.`,
+        { pluginId: manifest.id, route: r.route, action: 'ingress_unsigned_timestamp' },
+      );
+    } else if (!r.signature.timestampHeader && signsTimestamp) {
+      logger.warn(
+        `Ingress route '${r.route}' of plugin '${manifest.id}' signs a {timestamp} token but declares no ` +
+          `timestampHeader — the token binds the empty string and no freshness check runs. Declare the ` +
+          `provider's timestamp header (and optionally toleranceSec) to activate the replay window.`,
+        { pluginId: manifest.id, route: r.route, action: 'ingress_unsigned_timestamp' },
       );
     }
   }

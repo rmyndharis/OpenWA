@@ -1,4 +1,9 @@
-import { validateIngressManifest, SUPPORTED_SDK_MAJOR, warnUnauthenticatedIngressRoutes } from './plugin.interfaces';
+import {
+  validateIngressManifest,
+  SUPPORTED_SDK_MAJOR,
+  warnUnauthenticatedIngressRoutes,
+  warnUnsignedTimestampRoutes,
+} from './plugin.interfaces';
 
 const baseManifest = () => ({
   id: 'chatwoot',
@@ -112,6 +117,83 @@ describe('warnUnauthenticatedIngressRoutes', () => {
   it('is a no-op for a manifest with no ingress routes', () => {
     const logger = { warn: jest.fn() };
     warnUnauthenticatedIngressRoutes({ id: 'x', name: 'X', version: '1.0.0', main: 'i.js' } as never, logger);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('warnUnsignedTimestampRoutes', () => {
+  const hmacRoute = (signature: Record<string, unknown>) => ({
+    id: 'p',
+    name: 'p',
+    version: '1.0.0',
+    main: 'index.js',
+    sdkVersion: '1',
+    permissions: ['webhook:ingress'],
+    ingress: [{ route: 'r', mode: 'async', verify: 'core', maxBodyBytes: 1024, signature }],
+  });
+
+  it('warns when a timestampHeader is declared but the contentTemplate does not sign it', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(
+      hmacRoute({
+        scheme: 'hmac-sha256',
+        header: 'X-Sig',
+        contentTemplate: '{rawBody}',
+        timestampHeader: 'X-Ts',
+      }) as never,
+      logger,
+    );
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/UNSIGNED/i),
+      expect.objectContaining({ pluginId: 'p', route: 'r', action: 'ingress_unsigned_timestamp' }),
+    );
+  });
+
+  it('warns when the contentTemplate signs {timestamp} but no timestampHeader is declared', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(
+      hmacRoute({ scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: '{timestamp}.{rawBody}' }) as never,
+      logger,
+    );
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/no timestampHeader/i),
+      expect.objectContaining({ pluginId: 'p', route: 'r', action: 'ingress_unsigned_timestamp' }),
+    );
+  });
+
+  it('stays silent when the declared timestamp is signed (the bound form)', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(
+      hmacRoute({
+        scheme: 'hmac-sha256',
+        header: 'X-Sig',
+        contentTemplate: '{timestamp}.{rawBody}',
+        timestampHeader: 'X-Ts',
+        toleranceSec: 300,
+      }) as never,
+      logger,
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when no timestamp is involved at all', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(
+      hmacRoute({ scheme: 'hmac-sha256', header: 'X-Sig', contentTemplate: '{rawBody}' }) as never,
+      logger,
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-hmac schemes (their wire format is not templatable)', () => {
+    const logger = { warn: jest.fn() };
+    warnUnsignedTimestampRoutes(hmacRoute({ scheme: 'standard-webhooks', dedupHeader: 'webhook-id' }) as never, logger);
+    warnUnsignedTimestampRoutes(
+      hmacRoute({ scheme: 'shared-secret', header: 'X-Token', timestampHeader: 'X-Ts' }) as never,
+      logger,
+    );
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });

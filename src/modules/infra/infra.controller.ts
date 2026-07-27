@@ -394,7 +394,9 @@ interface IngressEventRow {
   pluginId: string;
   providerDeliveryId: string;
   route: string;
-  payload: string | Record<string, unknown>;
+  // Retired to NULL once the dispatch outcome is recorded; only 'pending' rows still carry one.
+  payload: string | Record<string, unknown> | null;
+  payloadHash?: string | null;
   sessionId: string | null;
   createdAt: string;
 }

@@ -18,6 +18,12 @@ export type IngressDispatchState = 'pending' | 'dispatched' | 'failed';
 // Persist-before-ack durable row + inbound dedup oracle. UNIQUE(pluginId, instanceId, providerDeliveryId):
 // instanceId is only unique within a plugin, so pluginId must be part of the key or two plugins sharing an
 // instanceId string would drop each other's deliveries as false duplicates.
+//
+// Storage shape: the FULL payload is carried only while the row is the sole durability handle — from
+// recordOrSkip until the dispatch outcome is recorded ('dispatched') or the reconciler dead-letters it
+// ('failed'). At that point the dispatch tier owns the payload (the BullMQ job, or the DLQ row on
+// failure) and the row's payload is retired to NULL, leaving a slim dedup marker (~hundreds of bytes
+// instead of up to 2× maxBodyBytes). payloadHash is kept permanently as the content fingerprint.
 @Entity('ingress_events')
 @Index('UQ_ingress_events_instance_delivery', ['pluginId', 'instanceId', 'providerDeliveryId'], { unique: true })
 @Index('IDX_ingress_events_createdAt', ['createdAt'])
@@ -40,8 +46,17 @@ export class IngressEvent {
   @Column()
   route: string;
 
-  @Column({ type: jsonColumnType() })
-  payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
+  // NULL once the dispatch outcome is recorded (see the storage-shape comment above). The reconciler
+  // only replays 'pending' rows, which always still carry the payload. NULL on a 'pending' row is
+  // unreadable history (e.g. imported without one) — the reconciler skips it loudly.
+  @Column({ type: jsonColumnType(), nullable: true })
+  payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string } | null;
+
+  // sha256 hex of the rawBody, written at recordOrSkip. Survives payload retirement so operators can
+  // still correlate a dedup row with a provider delivery without storing the payload. NULL on rows
+  // that predate the column (no backfill — their payloads are retired anyway).
+  @Column({ type: 'varchar', nullable: true })
+  payloadHash: string | null;
 
   @Column({ type: 'varchar', nullable: true })
   sessionId: string | null;

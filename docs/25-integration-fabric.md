@@ -134,7 +134,15 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   markers the reconciler sweeps on: `dispatchState` (`pending | dispatched | failed`, `NULL` on rows
   that predate the columns on a synchronize-bootstrapped DB — "not watched"), `dispatchAttempts`, and
   `lastDispatchAt`. New rows are `pending`; a recorded enqueue outcome flips them to `dispatched`;
-  `failed` is terminal (recovery continues via the DLQ row + redrive).
+  `failed` is terminal (recovery continues via the DLQ row + redrive). The row carries the **full
+  request payload only while it is the sole durability handle** — from the persist until the dispatch
+  outcome is recorded. Once the dispatch tier owns the delivery (the BullMQ job data, or the DLQ row
+  on failure), the payload is retired to `NULL` and the row slims to its dedup marker plus
+  `payloadHash` (a sha256 of the raw body kept for operator correlation). This keeps steady-state
+  growth at a few hundred bytes per delivery instead of up to 2× `maxBodyBytes`; dedup rows are
+  pruned on their own short window (`INGRESS_DEDUP_RETENTION_DAYS`, default 7 — a dedup oracle is not
+  an audit log, and `<= 0` falls back to the default rather than disabling the prune into unbounded
+  growth).
 - **`integration_delivery_failures`** — a dead-letter record of last resort for both directions, with a
   redrive path (added in P1).
 
@@ -150,7 +158,17 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   `(instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id provides
   best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
   to its signed `webhook-id`; other handlers must remain idempotent because arbitrary provider headers
-  are not authenticated by every scheme.
+  are not authenticated by every scheme. Freshness is enforced whenever a route declares
+  `signature.timestampHeader`: the declared `toleranceSec` wins, and otherwise the host default
+  (`INGRESS_TIMESTAMP_TOLERANCE_SEC`, default 300) applies — a declared timestamp is never accepted
+  without a freshness check. Freshness alone is not replay protection, though: an **unsigned**
+  timestamp can simply be re-minted by whoever replays a captured (body, signature) pair with a new
+  delivery id. hmac-sha256 routes should therefore bind the timestamp into the signed bytes by
+  including `{timestamp}` in the `contentTemplate` (e.g. `{timestamp}.{rawBody}`, the Chatwoot shape)
+  so the signature itself expires with the window; the loader warns when a route declares the header
+  without signing it (or signs the token without declaring the header). `standard-webhooks` binds
+  id + timestamp by spec. A provider that sends no timestamp header at all stays outside the replay
+  window by construction — dedup and handler idempotency are its only protections.
 - **Tenancy scoping.** Every durable ingress artifact — secret, dedup store, and dead-letter row — is
   partitioned by instance, and downstream capability calls carry the instance's resolved session scope, so
   a cross-tenant send is blocked host-side.
@@ -183,12 +201,23 @@ with the provider already acknowledged. The **ingress reconciler** closes that w
 (`INGRESS_RECONCILE_BATCH_SIZE`, default 50) of `pending` rows whose last activity is older than a
 grace period (`INGRESS_RECONCILE_GRACE_MS`, default 60s), through the same queue-or-inline enqueue the
 live path uses and with the original delivery id as job id, so a replay is idempotent against a job
-the crashed live path may have enqueued. The stored row is sufficient for re-dispatch — it is the full
-verified request (headers/query/body/rawBody) plus the route and session provenance; the conversation
-lane is re-derived from the current manifest. After `INGRESS_RECONCILE_MAX_ATTEMPTS` (default 5) the
-row goes `failed` (terminal) and a dead-letter row is guaranteed to exist, so recovery continues
-through the bounded redrive path instead of an infinite replay loop; a successful replay retires any
-live-path dead-letter row for the same delivery so a later redrive never double-delivers.
+the crashed live path may have enqueued. The stored row is sufficient for re-dispatch — while
+`pending` it is the full verified request (headers/query/body/rawBody) plus the route and session
+provenance; the conversation lane is re-derived from the current manifest. After
+`INGRESS_RECONCILE_MAX_ATTEMPTS` (default 5) the row goes `failed` (terminal) and a dead-letter row
+is guaranteed to exist **before** the row's payload is retired, so recovery continues through the
+bounded redrive path instead of an infinite replay loop; a successful replay likewise retires the
+row's payload with the `dispatched` mark and retires any live-path dead-letter row for the same
+delivery so a later redrive never double-delivers. A `pending` row found without a payload (only
+possible for imported/corrupt history — payloads are retired only with a recorded outcome) is
+skipped loudly, never replayed empty.
+
+Table growth is bounded by construction rather than by operator hygiene: the per-instance ingress
+throttle caps the row-creation rate, dispatched rows slim to a marker + hash, and the two retention
+windows prune what remains — `INGRESS_DEDUP_RETENTION_DAYS` (default 7) for the dedup oracle and
+`INGRESS_RETENTION_DAYS` (default 90, `<= 0` disables) for the DLQ. There is deliberately no
+per-instance row-count cap: eviction under a flood of forged delivery ids would silently drop legit
+dedup rows and re-admit their replays, which is worse than the bounded growth it would prevent.
 
 ## 25.8 The Integration SDK (v1)
 
@@ -205,13 +234,16 @@ The `signature.scheme` field enumerates `hmac-sha256` (HMAC over a `contentTempl
 `standard-webhooks` scheme verifies a [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
 payload host-side — Supabase Auth's Send-SMS hook and any Svix-routed provider speak it natively. Its wire
 format is fixed by the spec (the `webhook-id` / `webhook-timestamp` / `webhook-signature` header triple,
-signed over `${id}.${timestamp}.${rawBody}`), so only `toleranceSec` (default 300) and `dedupHeader`
-apply; `header`, `contentTemplate`, `encoding`, `prefix`, and `timestampHeader` are ignored, and the
+signed over `${id}.${timestamp}.${rawBody}`), so only `toleranceSec` (falling back to the host
+`INGRESS_TIMESTAMP_TOLERANCE_SEC`, default 300) and `dedupHeader` apply; `header`, `contentTemplate`,
+`encoding`, `prefix`, and `timestampHeader` are ignored, and the
 operator pastes the provider's Svix secret (`v1,whsec_<base64>`) as the instance secret. It is the
 recommended scheme for Standard-Webhooks providers: because the `session-alive` preflight (§25.4) runs
 *after* signature verification, an unauthenticated caller can no longer use that preflight as a liveness
 oracle on a route that previously declared `scheme: "none"`. The existing `hmac-sha256`/`shared-secret`/
-`none` behavior is unchanged.
+`none` behavior is unchanged. For `hmac-sha256`, declaring `timestampHeader` always activates the replay
+window (§25.6) — declare it together with a `contentTemplate` that includes `{timestamp}` so the checked
+timestamp is also signed.
 
 Within major 1 the surface grows additively. A route's optional `response` contract — `preflight[]`
 (host-side checks such as `session-alive`, evaluated after signature verify), `ack{}` (`status`/`body`/

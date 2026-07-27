@@ -132,6 +132,22 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
     expect(remainingFailures.every(f => f.createdAt > daysAgo(10))).toBe(true);
   });
 
+  it('applies independent windows per table (dedup short, failures long)', async () => {
+    // Events older than 2d: 30d/15d/3d (3 rows). Failures older than 10d: 40d/20d (2 rows).
+    const result = await service.pruneOlderThan(2, 10);
+
+    expect(result).toEqual({ events: 3, failures: 2 });
+    expect((await ds.getRepository(IngressEvent).find({ order: { id: 'ASC' } })).map(e => e.id)).toEqual(['ev-new-2']);
+    expect(await ds.getRepository(IntegrationDeliveryFailure).count()).toBe(2);
+  });
+
+  it('skips the failures prune entirely when the failures window is null', async () => {
+    const result = await service.pruneOlderThan(2, null);
+
+    expect(result).toEqual({ events: 3, failures: 0 });
+    expect(await ds.getRepository(IntegrationDeliveryFailure).count()).toBe(4);
+  });
+
   it('deletes nothing when the window exceeds every row age', async () => {
     const result = await service.pruneOlderThan(365);
     expect(result).toEqual({ events: 0, failures: 0 });
@@ -140,8 +156,9 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
   });
 
   it('deletes everything when the window is 0 days', async () => {
-    // A 0-day cutoff = everything strictly older than "now" is pruned. (onModuleInit treats <=0 as a
-    // disabled opt-out and never calls this; here we confirm the method itself is bounded by age.)
+    // A 0-day cutoff = everything strictly older than "now" is pruned. (onModuleInit never passes a
+    // 0-day events window — INGRESS_DEDUP_RETENTION_DAYS <= 0 clamps to the default; here we confirm
+    // the method itself is bounded by age.)
     const result = await service.pruneOlderThan(0);
     expect(result.events + result.failures).toBe(8);
   });
@@ -152,6 +169,7 @@ describe('IntegrationRetentionService.pruneOlderThan', () => {
 
 describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () => {
   const original = process.env.INGRESS_RETENTION_DAYS;
+  const originalDedup = process.env.INGRESS_DEDUP_RETENTION_DAYS;
 
   const mockRepos = () => {
     const eventsDelete = jest.fn().mockResolvedValue({ affected: 0 });
@@ -167,21 +185,28 @@ describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () =
   afterEach(() => {
     if (original === undefined) delete process.env.INGRESS_RETENTION_DAYS;
     else process.env.INGRESS_RETENTION_DAYS = original;
+    if (originalDedup === undefined) delete process.env.INGRESS_DEDUP_RETENTION_DAYS;
+    else process.env.INGRESS_DEDUP_RETENTION_DAYS = originalDedup;
   });
 
-  it('disables pruning (no startup prune, no timer) when INGRESS_RETENTION_DAYS <= 0', () => {
+  it('disables only the failures prune when INGRESS_RETENTION_DAYS <= 0 — dedup pruning still applies', async () => {
     process.env.INGRESS_RETENTION_DAYS = '0';
+    delete process.env.INGRESS_DEDUP_RETENTION_DAYS;
     const repos = mockRepos();
     const svc = new IntegrationRetentionService(repos.events, repos.failures);
 
-    expect(() => svc.onModuleInit()).not.toThrow();
-    expect(repos.eventsDelete).not.toHaveBeenCalled();
+    svc.onModuleInit();
+    // Let the startup prune promise settle (the method runs before the log .then()).
+    await Promise.resolve();
+    // Dedup rows are never an audit log — their prune cannot be disabled to infinity.
+    expect(repos.eventsDelete).toHaveBeenCalled();
     expect(repos.failuresDelete).not.toHaveBeenCalled();
     svc.onModuleDestroy();
   });
 
-  it('defaults to 90 days when unset, prunes once at startup, and schedules a daily timer', () => {
+  it('defaults to 7-day dedup + 90-day failures windows, prunes once at startup, and schedules daily', () => {
     delete process.env.INGRESS_RETENTION_DAYS;
+    delete process.env.INGRESS_DEDUP_RETENTION_DAYS;
     const repos = mockRepos();
     const svc = new IntegrationRetentionService(repos.events, repos.failures);
 
@@ -189,12 +214,12 @@ describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () =
     try {
       const pruneSpy = jest.spyOn(svc, 'pruneOlderThan');
       svc.onModuleInit();
-      // Startup prune fires immediately (90-day default).
-      expect(pruneSpy).toHaveBeenCalledWith(90);
+      // Startup prune fires immediately (7-day dedup + 90-day failures defaults).
+      expect(pruneSpy).toHaveBeenCalledWith(7, 90);
       pruneSpy.mockClear();
       // The recurring timer fires daily thereafter.
       jest.advanceTimersByTime(24 * 60 * 60 * 1000);
-      expect(pruneSpy).toHaveBeenCalledWith(90);
+      expect(pruneSpy).toHaveBeenCalledWith(7, 90);
       svc.onModuleDestroy();
       // After destroy, advancing the timer must NOT trigger further prunes.
       pruneSpy.mockClear();
@@ -203,5 +228,30 @@ describe('IntegrationRetentionService.onModuleInit (retention scheduling)', () =
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('honors an explicit INGRESS_DEDUP_RETENTION_DAYS window', () => {
+    delete process.env.INGRESS_RETENTION_DAYS;
+    process.env.INGRESS_DEDUP_RETENTION_DAYS = '21';
+    const repos = mockRepos();
+    const svc = new IntegrationRetentionService(repos.events, repos.failures);
+
+    const pruneSpy = jest.spyOn(svc, 'pruneOlderThan');
+    svc.onModuleInit();
+    expect(pruneSpy).toHaveBeenCalledWith(21, 90);
+    svc.onModuleDestroy();
+  });
+
+  it('clamps INGRESS_DEDUP_RETENTION_DAYS <= 0 to the default instead of disabling dedup pruning', () => {
+    delete process.env.INGRESS_RETENTION_DAYS;
+    process.env.INGRESS_DEDUP_RETENTION_DAYS = '0';
+    const repos = mockRepos();
+    const svc = new IntegrationRetentionService(repos.events, repos.failures);
+
+    const pruneSpy = jest.spyOn(svc, 'pruneOlderThan');
+    svc.onModuleInit();
+    // <=0 would mean an unbounded dedup table — the trap this knob exists to avoid.
+    expect(pruneSpy).toHaveBeenCalledWith(7, 90);
+    svc.onModuleDestroy();
   });
 });

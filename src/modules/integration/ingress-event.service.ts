@@ -12,6 +12,8 @@ export interface IngressEventInput {
   providerDeliveryId: string;
   route: string;
   payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
+  // sha256 hex of payload.rawBody — the slim content fingerprint that survives payload retirement.
+  payloadHash: string;
   sessionId: string | null;
 }
 
@@ -43,8 +45,10 @@ export class IngressEventService {
   /**
    * Record the enqueue outcome on the persisted event. 'queued'/'dispatched' mean the event reached
    * the dispatch tier → 'dispatched' (a later in-tier failure dead-letters via the processor/DLQ, not
-   * this row). 'failed' (the swallowed inline-dispatch failure) bumps the attempt counter and leaves
-   * the row 'pending' so the reconciler sweeps it — the live path's own retry signal.
+   * this row) — and the full payload is retired to NULL: the dispatch tier now owns it (the BullMQ job
+   * data, or the DLQ row on failure), so the dedup row slims down to its hash + metadata. 'failed'
+   * (the swallowed inline-dispatch failure) bumps the attempt counter and leaves the row 'pending'
+   * WITH its payload so the reconciler can still replay from it — the live path's own retry signal.
    */
   async markDispatchOutcome(key: IngressEventKey, outcome: EnqueueOutcome['outcome']): Promise<void> {
     if (outcome === 'failed') {
@@ -52,6 +56,6 @@ export class IngressEventService {
       await this.repo.update(key, { lastDispatchAt: new Date() });
       return;
     }
-    await this.repo.update(key, { dispatchState: 'dispatched', lastDispatchAt: new Date() });
+    await this.repo.update(key, { dispatchState: 'dispatched', lastDispatchAt: new Date(), payload: null });
   }
 }

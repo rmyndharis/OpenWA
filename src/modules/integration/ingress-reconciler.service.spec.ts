@@ -94,6 +94,29 @@ describe('IngressReconcilerService.sweep', () => {
     expect(event.lastDispatchAt).toBeInstanceOf(Date);
   });
 
+  it('retires the row payload once the replay is dispatched (the job data already carried it)', async () => {
+    const id = await insertEvent();
+
+    await service.sweep(OPTS);
+
+    // The replay itself was built from the full stored payload…
+    expect(enqueuedJobs()[0][0].payload).toEqual({ headers: {}, query: {}, body: '{}', rawBody: '{}' });
+    // …and the dedup row then slimmed down — the dispatch tier owns the payload from here.
+    expect((await stored(id)).payload).toBeNull();
+  });
+
+  it('skips a pending row whose payload is gone (nothing to replay from) without burning its budget', async () => {
+    const id = await insertEvent({ payload: null });
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toMatchObject({ scanned: 0, skipped: 1 });
+    expect(enqueue).not.toHaveBeenCalled();
+    const event = await stored(id);
+    expect(event.dispatchState).toBe('pending');
+    expect(event.dispatchAttempts).toBe(0);
+  });
+
   it('re-derives the conversation lane from the manifest route instead of degrading per-instance', async () => {
     getPlugin.mockReturnValue({
       manifest: { ingress: [{ route: 'chatwoot', conversationId: { jsonPointer: '/conversation/id' } }] },
@@ -154,6 +177,7 @@ describe('IngressReconcilerService.sweep', () => {
     const event = await stored(id);
     expect(event.dispatchState).toBe('pending');
     expect(event.dispatchAttempts).toBe(1);
+    expect(event.payload).not.toBeNull(); // the next sweep replays from it
     expect(await failures.count()).toBe(0);
   });
 
@@ -166,6 +190,7 @@ describe('IngressReconcilerService.sweep', () => {
     const event = await stored(id);
     expect(event.dispatchState).toBe('failed');
     expect(event.dispatchAttempts).toBe(5);
+    expect(event.payload).toBeNull(); // retired — the DLQ row is the payload's new home
     const dlq = await failures.find({ where: { deliveryId: 'd-1' } });
     expect(dlq).toHaveLength(1);
     expect(dlq[0]).toMatchObject({
@@ -184,6 +209,21 @@ describe('IngressReconcilerService.sweep', () => {
     const stats = await service.sweep(OPTS);
     expect(stats.scanned).toBe(0);
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('writes the DLQ row BEFORE retiring the payload on terminal failure (redrive never loses the payload)', async () => {
+    await insertEvent({ dispatchAttempts: 4 });
+    enqueue.mockResolvedValue({ outcome: 'failed', error: 'sandbox 5xx' });
+    const saveSpy = jest.spyOn(failures, 'save');
+    const updateSpy = jest.spyOn(events, 'update');
+
+    await service.sweep(OPTS);
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(saveSpy.mock.invocationCallOrder[0]).toBeLessThan(updateSpy.mock.invocationCallOrder[0]);
+    saveSpy.mockRestore();
+    updateSpy.mockRestore();
   });
 
   it('does not write a second DLQ row when the live path already dead-lettered the delivery', async () => {

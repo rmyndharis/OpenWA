@@ -4,6 +4,7 @@ import { IngressEventService } from './ingress-event.service';
 import { AddIntegrationFabric1781900000000 } from '../../database/migrations/1781900000000-AddIntegrationFabric';
 import { WidenIngressDedupKey1782100000000 } from '../../database/migrations/1782100000000-WidenIngressDedupKey';
 import { AddIngressEventDispatchState1785112230000 } from '../../database/migrations/1785112230000-AddIngressEventDispatchState';
+import { SlimIngressEventPayload1785600000000 } from '../../database/migrations/1785600000000-SlimIngressEventPayload';
 
 describe('IngressEventService.recordOrSkip', () => {
   let ds: DataSource;
@@ -15,6 +16,7 @@ describe('IngressEventService.recordOrSkip', () => {
     await new AddIntegrationFabric1781900000000().up(runner);
     await new WidenIngressDedupKey1782100000000().up(runner);
     await new AddIngressEventDispatchState1785112230000().up(runner);
+    await new SlimIngressEventPayload1785600000000().up(runner);
     await runner.release();
     service = new IngressEventService(ds.getRepository(IngressEvent));
   });
@@ -28,6 +30,7 @@ describe('IngressEventService.recordOrSkip', () => {
     providerDeliveryId: 'd1',
     route: 'chatwoot',
     payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+    payloadHash: 'hash-of-{}',
     sessionId: null,
   });
   const key = { pluginId: 'plug', instanceId: 'inst', providerDeliveryId: 'd1' };
@@ -57,6 +60,13 @@ describe('IngressEventService.recordOrSkip', () => {
     expect(event.lastDispatchAt).toBeNull();
   });
 
+  it('keeps the full payload (the reconciler replay source) plus its hash while pending', async () => {
+    await service.recordOrSkip(row());
+    const event = await stored();
+    expect(event.payload).toEqual({ headers: {}, query: {}, body: '{}', rawBody: '{}' });
+    expect(event.payloadHash).toBe('hash-of-{}');
+  });
+
   it.each(['queued', 'dispatched'] as const)(
     'marks outcome %s as dispatched with a dispatch timestamp',
     async outcome => {
@@ -69,13 +79,28 @@ describe('IngressEventService.recordOrSkip', () => {
     },
   );
 
-  it('marks outcome failed as still-pending with the attempt counted (reconciler sweeps it)', async () => {
+  it.each(['queued', 'dispatched'] as const)(
+    'retires the full payload on outcome %s but keeps the hash and the dedup oracle',
+    async outcome => {
+      await service.recordOrSkip(row());
+      await service.markDispatchOutcome(key, outcome);
+      const event = await stored();
+      // The dispatch tier owns the payload now — the dedup row slims to its marker + fingerprint.
+      expect(event.payload).toBeNull();
+      expect(event.payloadHash).toBe('hash-of-{}');
+      // Dedup is keyed on (pluginId, instanceId, providerDeliveryId), never on the payload.
+      expect(await service.recordOrSkip(row())).toBe(false);
+    },
+  );
+
+  it('marks outcome failed as still-pending with the attempt counted AND the payload kept (reconciler replays from it)', async () => {
     await service.recordOrSkip(row());
     await service.markDispatchOutcome(key, 'failed');
     const event = await stored();
     expect(event.dispatchState).toBe('pending');
     expect(event.dispatchAttempts).toBe(1);
     expect(event.lastDispatchAt).toBeInstanceOf(Date);
+    expect(event.payload).not.toBeNull();
 
     // Repeated failures accumulate against the reconciler's replay budget.
     await service.markDispatchOutcome(key, 'failed');

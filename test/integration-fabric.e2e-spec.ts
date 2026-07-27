@@ -2,7 +2,7 @@
 // AppModule boots; stub it so ts-jest (CommonJS) can load the module graph.
 jest.mock('archiver', () => ({ TarArchive: jest.fn() }));
 
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -188,6 +188,10 @@ describe('Integration Fabric ingress (e2e)', () => {
     const row = await eventRepo.findOneByOrFail({ providerDeliveryId: 'delivery-marked-1' });
     expect(row.dispatchState).toBe('dispatched');
     expect(row.lastDispatchAt).not.toBeNull();
+    // With the outcome recorded, the dispatch tier owns the payload: the dedup row retires it to
+    // NULL and keeps only the slim content fingerprint for operator correlation.
+    expect(row.payload).toBeNull();
+    expect(row.payloadHash).toBe(createHash('sha256').update(raw).digest('hex'));
   });
 
   it('persists a redrivable dead-letter row (still 202) when inline dispatch fails', async () => {
@@ -219,9 +223,12 @@ describe('Integration Fabric ingress (e2e)', () => {
     });
 
     // The event row itself stays 'pending' with the failure counted, so the reconciler retries the
-    // dispatch on its next sweep instead of waiting for a manual redrive alone.
+    // dispatch on its next sweep instead of waiting for a manual redrive alone. Its payload is KEPT
+    // — it is the reconciler's replay source (the DLQ row carries the copy redrive uses).
     const event = await eventRepo.findOneByOrFail({ providerDeliveryId: 'delivery-dlq-1' });
     expect(event.dispatchState).toBe('pending');
     expect(event.dispatchAttempts).toBe(1);
+    expect(event.payload).not.toBeNull();
+    expect(event.payloadHash).toBe(createHash('sha256').update(raw).digest('hex'));
   });
 });

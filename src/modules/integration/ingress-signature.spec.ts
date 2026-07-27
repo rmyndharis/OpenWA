@@ -60,6 +60,138 @@ describe('verifyIngressSignature', () => {
     expect(r.ok).toBe(true);
   });
 
+  // --- default replay window (declared timestampHeader, no toleranceSec) ---
+  describe('declared timestampHeader without toleranceSec (host default window)', () => {
+    const original = process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC;
+    afterEach(() => {
+      if (original === undefined) delete process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC;
+      else process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC = original;
+    });
+
+    const tsSpec = { ...spec, timestampHeader: 'X-Ts', contentTemplate: '{timestamp}.{rawBody}' };
+    const signAt = (t: number) => 'sha256=' + createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
+
+    it('rejects a stale timestamp against the 300s default (previously an always-401 trap)', () => {
+      delete process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC;
+      const t = 1000;
+      const r = verifyIngressSignature(tsSpec, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 301) * 1000,
+        instanceId,
+      });
+      expect(r.ok).toBe(false);
+      expect(r.reason).toMatch(/replay|tolerance/i);
+    });
+
+    it('accepts a fresh timestamp within the 300s default', () => {
+      delete process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC;
+      const t = 1000;
+      const r = verifyIngressSignature(tsSpec, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 10) * 1000,
+        instanceId,
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it('honors INGRESS_TIMESTAMP_TOLERANCE_SEC when the manifest declares no toleranceSec', () => {
+      process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC = '10';
+      const t = 1000;
+      const stale = verifyIngressSignature(tsSpec, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 11) * 1000,
+        instanceId,
+      });
+      expect(stale.ok).toBe(false);
+      const fresh = verifyIngressSignature(tsSpec, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 10) * 1000,
+        instanceId,
+      });
+      expect(fresh.ok).toBe(true);
+    });
+
+    it('lets a declared toleranceSec win over the env default', () => {
+      process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC = '10';
+      const declared = { ...tsSpec, toleranceSec: 300 };
+      const t = 1000;
+      const r = verifyIngressSignature(declared, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 60) * 1000,
+        instanceId,
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it('falls back to the 300s default when the env value is invalid', () => {
+      process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC = '0'; // a zero window would reject every delivery
+      const t = 1000;
+      const r = verifyIngressSignature(tsSpec, {
+        rawBody,
+        headers: { 'x-sig': signAt(t), 'x-ts': String(t) },
+        secret,
+        now: (t + 60) * 1000,
+        instanceId,
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it('enforces freshness for shared-secret routes that declare a timestampHeader', () => {
+      delete process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC;
+      const sharedSpec = { scheme: 'shared-secret' as const, header: 'X-Token', timestampHeader: 'X-Ts' };
+      const t = 1000;
+      const fresh = verifyIngressSignature(sharedSpec, {
+        rawBody,
+        headers: { 'x-token': secret, 'x-ts': String(t) },
+        secret,
+        now: (t + 10) * 1000,
+        instanceId,
+      });
+      expect(fresh.ok).toBe(true);
+      const stale = verifyIngressSignature(sharedSpec, {
+        rawBody,
+        headers: { 'x-token': secret, 'x-ts': String(t) },
+        secret,
+        now: (t + 301) * 1000,
+        instanceId,
+      });
+      expect(stale.ok).toBe(false);
+    });
+
+    it('applies the env default to standard-webhooks when toleranceSec is undeclared', () => {
+      process.env.INGRESS_TIMESTAMP_TOLERANCE_SEC = '10';
+      const key = Buffer.from('0123456789abcdef0123456789abcdef', 'hex');
+      const swSecretLocal = 'v1,whsec_' + key.toString('base64');
+      const signSw = (id: string, t: number, body: string) =>
+        'v1,' + createHmac('sha256', key).update(`${id}.${t}.${body}`).digest('base64');
+      const r = verifyIngressSignature(
+        { scheme: 'standard-webhooks' as const },
+        {
+          rawBody,
+          headers: {
+            'webhook-id': 'msg_1',
+            'webhook-timestamp': '1000',
+            'webhook-signature': signSw('msg_1', 1000, rawBody),
+          },
+          secret: swSecretLocal,
+          now: (1000 + 11) * 1000,
+          instanceId,
+        },
+      );
+      expect(r.ok).toBe(false);
+    });
+  });
+
   it('rejects a missing signature header', () => {
     const r = verifyIngressSignature(spec, { rawBody, headers: {}, secret, now: 0, instanceId });
     expect(r.ok).toBe(false);
