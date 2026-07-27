@@ -212,6 +212,34 @@ export class PluginStorageService {
   // Plugin Data Storage (sandboxed per-plugin storage)
   // ============================================================================
 
+  /**
+   * Remove a plugin's entire data-storage directory (<dataDir>/plugins/<id>). Called on uninstall.
+   * Containment-guarded exactly like the package-dir delete in the loader: an id that resolves
+   * outside the storage root is refused, so only the named plugin's directory can ever be touched.
+   * Best-effort — a removal failure is logged, never thrown, so the uninstall still completes.
+   */
+  deletePluginData(pluginId: string): void {
+    const root = path.resolve(this.dataDir, 'plugins');
+    const dir = path.resolve(root, pluginId);
+    if (dir === root || !dir.startsWith(root + path.sep)) {
+      this.logger.warn(`Refusing to delete plugin storage outside the storage root: ${pluginId}`, {
+        pluginId,
+        action: 'plugin_storage_delete_refused',
+      });
+      return;
+    }
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      this.logger.debug(`Deleted plugin storage: ${pluginId}`, { pluginId, action: 'plugin_storage_deleted' });
+    } catch (error) {
+      this.logger.warn(`Failed to delete plugin storage for ${pluginId}`, {
+        pluginId,
+        action: 'plugin_storage_delete_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   createPluginStorage(pluginId: string): PluginStorage {
     const pluginDataDir = path.join(this.dataDir, 'plugins', pluginId);
 

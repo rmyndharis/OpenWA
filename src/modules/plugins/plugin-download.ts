@@ -1,9 +1,64 @@
+import { createHash } from 'crypto';
 import { withSafeFetch } from '../../common/security/ssrf-guard';
 
 /** Default cap on a server-side plugin download: 5 MiB (matches the upload limit). */
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 /** Default timeout for a server-side plugin download: 30s. */
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+
+/**
+ * Optional content integrity for a plugin download, carried IN the URL so it works over any
+ * transport (a catalog `download` link, a dashboard paste, a raw API call):
+ *   - URL fragment:  https://host/pkg.zip#sha256=<64 hex>   — never sent to the server
+ *   - query param:    https://host/pkg.zip?sha256=<64 hex>  — `checksum=` is accepted too
+ * Returns the lowercase expected digest, or null when the URL carries no integrity marker.
+ *
+ * Throws when a marker is present but malformed (not 64 hex chars) or when fragment and query
+ * disagree: the caller explicitly asked for integrity, so an unusable marker fails closed rather
+ * than silently degrading to no verification.
+ */
+export function expectedSha256FromUrl(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null; // not a parseable URL — the SSRF guard / fetch rejects it downstream
+  }
+  const markers: string[] = [];
+  if (parsed.hash.startsWith('#sha256=')) {
+    markers.push(parsed.hash.slice('#sha256='.length));
+  }
+  for (const key of ['sha256', 'checksum']) {
+    const value = parsed.searchParams.get(key);
+    if (value !== null) markers.push(value);
+  }
+  if (markers.length === 0) return null;
+  const digests = markers.map(marker => marker.trim().toLowerCase());
+  if (digests.some(digest => !SHA256_HEX.test(digest))) {
+    throw new Error('the URL carries a sha256 integrity marker that is not a 64-character hex digest');
+  }
+  if (new Set(digests).size > 1) {
+    throw new Error('the URL carries conflicting sha256 integrity markers');
+  }
+  return digests[0];
+}
+
+/**
+ * Fail-closed sha256 verification of a downloaded plugin package. No-op when the URL carries no
+ * integrity marker (HTTPS + the SSRF guard remain the baseline); otherwise the digest of the
+ * downloaded bytes MUST equal the expected one — a mismatch means the bytes were substituted in
+ * transit (or the marker is stale), and the caller must not install them.
+ */
+export function assertDownloadSha256(url: string, body: Buffer): void {
+  const expected = expectedSha256FromUrl(url);
+  if (expected === null) return;
+  const actual = createHash('sha256').update(body).digest('hex');
+  if (actual !== expected) {
+    throw new Error(`sha256 mismatch for the downloaded package (expected ${expected}, got ${actual})`);
+  }
+}
 
 /**
  * Fetch a remote resource (plugin .zip or catalog JSON) as a Buffer, always behind the SSRF guard:

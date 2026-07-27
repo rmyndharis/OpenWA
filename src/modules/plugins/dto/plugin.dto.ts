@@ -83,8 +83,18 @@ export class PluginSessionsDto {
 }
 
 export class InstallFromUrlDto {
-  @ApiProperty({ description: 'HTTP(S) URL of the plugin .zip to download and install' })
+  @ApiProperty({
+    description:
+      'HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is ' +
+      'executable code, so it must be integrity-protected in transit (hosts on private networks remain ' +
+      'subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never ' +
+      'sent to the server) or `?sha256=<64 hex>` to require the downloaded archive to match that digest; ' +
+      'a mismatch fails the install.',
+  })
   @IsString()
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true },
+    { message: 'url must be an https:// URL — plain http is not accepted for plugin downloads' },
+  )
   url!: string;
 }

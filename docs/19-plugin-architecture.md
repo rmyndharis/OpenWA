@@ -486,8 +486,10 @@ double-enable, and engines must match the configured active engine):
 **Disable / unload / uninstall.** `disablePlugin` runs `onDisable` (force-terminating the worker for a
 sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
 disables every enabled plugin on graceful shutdown so stateful plugins can flush. `uninstallPlugin`
-disables + unloads, drops the registry entry, and deletes the plugin's directory (built-ins are
-protected and cannot be uninstalled).
+disables + unloads, drops the registry entry, and deletes the plugin's directory and its `ctx.storage`
+data dir (built-ins are protected and cannot be uninstalled). The unload path dispatches `onUnload`:
+for a sandboxed plugin it runs in the worker between `onDisable` and terminate (a plain disable does
+NOT fire `onUnload` — disable is reversible and its cleanup hook is `onDisable`).
 
 **Context.** `createPluginContext` builds the `PluginContext` (§19.4): a per-plugin logger, plugin-scoped
 storage, `registerHook` (wrapped with the per-session activation gate), the live `config` getter, and
@@ -569,8 +571,8 @@ URL / catalog), not an npm/github source descriptor.
 | `GET /plugins/catalog` | List the remote plugin catalog, annotated with install state |
 | `GET /plugins/:id` | Get a single plugin |
 | `POST /plugins/install` | Install from an uploaded `.zip` (`multipart/form-data`, field `file`, ≤ 5 MB) |
-| `POST /plugins/install-url` | Install by downloading a `.zip` from a URL (SSRF-guarded) |
-| `POST /plugins/:id/update` | Update an installed plugin in place from a URL (preserves config + enabled state) |
+| `POST /plugins/install-url` | Install by downloading a `.zip` from an https URL (SSRF-guarded; optional `#sha256=` digest pin) |
+| `POST /plugins/:id/update` | Update an installed plugin in place from a URL (staged swap, crash-safe; preserves config + enabled state) |
 | `POST /plugins/:id/enable` | Enable a plugin |
 | `POST /plugins/:id/disable` | Disable a plugin |
 | `PUT /plugins/:id/config` | Update the plugin's base config |

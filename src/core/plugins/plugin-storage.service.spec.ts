@@ -159,3 +159,46 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     await expect(storage.delete('../../escape')).rejects.toThrow();
   });
 });
+
+describe('PluginStorageService.deletePluginData (uninstall storage cleanup)', () => {
+  let dataDir: string;
+  let service: PluginStorageService;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-plugindata-rm-'));
+    const configService = {
+      get: (k: string) => (k === 'dataDir' ? dataDir : undefined),
+    } as unknown as ConfigService;
+    service = new PluginStorageService(configService);
+  });
+
+  afterEach(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('removes the named plugin’s storage dir, leaving other plugins untouched', async () => {
+    await service.createPluginStorage('gone-plg').set('token', { secret: 'abc' });
+    await service.createPluginStorage('keep-plg').set('token', { secret: 'xyz' });
+
+    service.deletePluginData('gone-plg');
+
+    expect(fs.existsSync(path.join(dataDir, 'plugins', 'gone-plg'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'plugins', 'keep-plg'))).toBe(true);
+    expect(await service.createPluginStorage('keep-plg').get('token')).toEqual({ secret: 'xyz' });
+  });
+
+  it('is a no-op for a plugin with no storage dir', () => {
+    expect(() => service.deletePluginData('never-stored')).not.toThrow();
+  });
+
+  it('refuses a traversal id that resolves outside the storage root', () => {
+    // A real directory the escaping id would resolve to — it must survive the call.
+    const outside = path.join(dataDir, 'not-plugin-storage');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep');
+
+    service.deletePluginData('../not-plugin-storage');
+
+    expect(fs.existsSync(path.join(outside, 'keep.txt'))).toBe(true);
+  });
+});

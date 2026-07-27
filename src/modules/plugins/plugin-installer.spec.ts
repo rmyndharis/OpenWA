@@ -171,6 +171,18 @@ describe('parsePluginPackage', () => {
     expect(() => parsePluginPackage(buf)).toThrow(/missing its main file/i);
   });
 
+  it('rejects a manifest whose main escapes the plugin directory', () => {
+    // Previously only caught indirectly ("missing its main file", since an escaping main can never
+    // match an in-archive entry). The shared manifest validator now rejects it explicitly — the same
+    // message the boot-time loader enforces on a hand-placed directory.
+    for (const main of ['../evil.js', '../../etc/passwd', '/etc/passwd', '..\\evil.js']) {
+      const bad = { ...validManifest, main };
+      expect(() => parsePluginPackage(zipOf({ 'manifest.json': JSON.stringify(bad), 'index.js': 'x' }))).toThrow(
+        /escapes the plugin directory/i,
+      );
+    }
+  });
+
   it('rejects too many files', () => {
     const files: Record<string, string> = { 'manifest.json': JSON.stringify(validManifest), 'index.js': 'x' };
     for (let i = 0; i < 5; i++) files[`f${i}.txt`] = 'x';

@@ -1,11 +1,24 @@
+// Spread the real fs so every method passes through, but as configurable props the test can spy on
+// (the bare `import * as fs` namespace is non-configurable, so jest.spyOn can't redefine its methods).
+jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('fs')>('fs') }));
+
+// fetchSafeBuffer stays REAL by default (the SSRF redaction test below depends on it); individual
+// integrity tests queue a one-shot resolved download instead of hitting the network.
+jest.mock('./plugin-download', () => {
+  const actual = jest.requireActual<typeof import('./plugin-download')>('./plugin-download');
+  return { ...actual, fetchSafeBuffer: jest.fn(actual.fetchSafeBuffer) };
+});
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import AdmZip from 'adm-zip';
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginsService, isIngressCapable } from './plugins.service';
+import { fetchSafeBuffer } from './plugin-download';
 import { SECRET_SENTINEL } from './redact-config';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
@@ -137,6 +150,63 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     enableSpy.mockRestore();
   });
 
+  it('cleans up the staging + backup dirs after a successful update (swap happened)', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+
+    const dto = await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+
+    expect(dto.version).toBe('2.0.0');
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('2.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+  });
+
+  it('keeps the old install fully intact when the update fails BEFORE the swap (staging)', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    // A package whose entries collide as file-then-directory makes the staging WRITE fail:
+    // 'index.js' lands as a file, then 'index.js/extra.js' needs it to be a directory.
+    const z = new AdmZip();
+    z.addFile('manifest.json', Buffer.from(JSON.stringify({ ...manifest, version: '2.0.0' })));
+    z.addFile('index.js', Buffer.from('module.exports = class {};'));
+    z.addFile('index.js/extra.js', Buffer.from('module.exports = class {};'));
+
+    await expect(service.updatePackage('svc-plg', z.toBuffer())).rejects.toThrow(/Failed to stage/i);
+
+    // The old version never stopped being the install: still loaded, still on disk, no leftovers.
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+  });
+
+  it('restores the previous version when the swap itself fails mid-way', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+
+    // Let the first swap rename (live → backup) through, then fail the second (staging → live).
+    const realRename = fs.renameSync;
+    const spy = jest.spyOn(fs, 'renameSync').mockImplementation((a: fs.PathLike, b: fs.PathLike) => {
+      if (String(a).endsWith('.new')) throw new Error('simulated swap failure');
+      return realRename(a, b);
+    });
+
+    await expect(service.updatePackage('svc-plg', pkg({ version: '2.0.0' }))).rejects.toThrow(
+      /Failed to update plugin/i,
+    );
+    spy.mockRestore();
+
+    // The failed swap must leave the OLD version loadable: backup restored on disk and reloaded.
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(pluginsDir, 'svc-plg', 'manifest.json'), 'utf8')) as {
+      version: string;
+    };
+    expect(onDisk.version).toBe('1.0.0');
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.new'))).toBe(false);
+    expect(fs.existsSync(path.join(pluginsDir, '.svc-plg.bak'))).toBe(false);
+  });
+
   it('serializes concurrent lifecycle operations on the same plugin id', async () => {
     service.install({ buffer: pkg() });
     let resolveFirst: () => void = () => undefined;
@@ -169,6 +239,108 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     expect(message).toMatch(/^Failed to download plugin from URL: /);
     expect(message).not.toMatch(/169\.254\.169\.254/);
     expect(message).toBe('Failed to download plugin from URL: Destination address is not allowed');
+  });
+});
+
+describe('PluginsService — download integrity (optional #sha256 pinning)', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let loader: PluginLoaderService;
+  let service: PluginsService;
+  const fetchMock = fetchSafeBuffer as unknown as jest.Mock;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-dl-integrity-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+    loader = new PluginLoaderService(
+      config,
+      new HookManager(),
+      new PluginStorageService(config),
+      {} as unknown as ModuleRef,
+    );
+    service = new PluginsService(loader, config);
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  /** Queue a one-shot offline download; the mock then falls back to the real (SSRF-guarded) implementation. */
+  const serveOnce = (buffer: Buffer): void => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(buffer));
+  };
+  const sha256 = (buffer: Buffer): string => createHash('sha256').update(buffer).digest('hex');
+
+  it('installs when the #sha256 fragment matches the downloaded bytes', async () => {
+    const buf = pkg();
+    serveOnce(buf);
+
+    const dto = await service.installFromUrl(`https://plugins.example/svc-plg.zip#sha256=${sha256(buf)}`);
+
+    expect(dto.id).toBe('svc-plg');
+    expect(loader.getPlugin('svc-plg')).toBeDefined();
+  });
+
+  it('also accepts the digest as a ?sha256= query parameter', async () => {
+    const buf = pkg();
+    serveOnce(buf);
+
+    const dto = await service.installFromUrl(`https://plugins.example/svc-plg.zip?sha256=${sha256(buf)}`);
+
+    expect(dto.id).toBe('svc-plg');
+  });
+
+  it('fails closed when the pinned digest does not match (package substituted in transit)', async () => {
+    serveOnce(pkg());
+    const wrong = '0'.repeat(64);
+
+    await expect(service.installFromUrl(`https://plugins.example/svc-plg.zip#sha256=${wrong}`)).rejects.toThrow(
+      /integrity check failed/i,
+    );
+
+    // Nothing was installed from the substituted bytes.
+    expect(loader.getPlugin('svc-plg')).toBeUndefined();
+    expect(fs.existsSync(path.join(pluginsDir, 'svc-plg'))).toBe(false);
+  });
+
+  it('rejects a malformed integrity marker instead of silently skipping verification', async () => {
+    serveOnce(pkg());
+
+    await expect(service.installFromUrl('https://plugins.example/svc-plg.zip#sha256=not-hex')).rejects.toThrow(
+      /integrity check failed/i,
+    );
+    expect(loader.getPlugin('svc-plg')).toBeUndefined();
+  });
+
+  it('rejects conflicting markers (fragment vs query disagree)', async () => {
+    const buf = pkg();
+    serveOnce(buf);
+    const other = '1'.repeat(64);
+
+    await expect(
+      service.installFromUrl(`https://plugins.example/svc-plg.zip?sha256=${sha256(buf)}#sha256=${other}`),
+    ).rejects.toThrow(/integrity check failed/i);
+  });
+
+  it('installs without a marker (HTTPS + the SSRF guard remain the baseline)', async () => {
+    serveOnce(pkg());
+
+    const dto = await service.installFromUrl('https://plugins.example/svc-plg.zip');
+
+    expect(dto.id).toBe('svc-plg');
+  });
+
+  it('updateFromUrl fails closed on a mismatch and leaves the old version intact', async () => {
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    serveOnce(pkg({ version: '2.0.0' }));
+    const wrong = '0'.repeat(64);
+
+    await expect(
+      service.updateFromUrl('svc-plg', `https://plugins.example/svc-plg.zip#sha256=${wrong}`),
+    ).rejects.toThrow(/integrity check failed/i);
+
+    expect(loader.getPlugin('svc-plg')?.manifest.version).toBe('1.0.0');
   });
 });
 

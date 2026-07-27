@@ -41,11 +41,12 @@ describe('PluginLoaderService — restoring the operator enable decision across 
     config = { get: (k: string) => (k === 'dataDir' ? tmpDir : undefined) } as unknown as ConfigService;
     storage = new PluginStorageService(config);
     loader = makeLoader(storage);
-    // A plugin on disk is only a manifest as far as loadPlugin is concerned — the code itself runs in
-    // the sandbox worker, so no module is required here.
+    // A plugin on disk needs its manifest AND its declared main file to load (boot validates both,
+    // like install); the code itself runs in the sandbox worker, so a stub main file suffices here.
     pluginDir = path.join(tmpDir, 'plugins', manifest.id);
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'manifest.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(pluginDir, 'index.js'), 'module.exports = class {};');
   });
 
   afterEach(() => {
@@ -123,6 +124,7 @@ describe('PluginLoaderService — restoring the operator enable decision across 
     const secondDir = path.join(tmpDir, 'plugins', second.id);
     fs.mkdirSync(secondDir, { recursive: true });
     fs.writeFileSync(path.join(secondDir, 'manifest.json'), JSON.stringify(second));
+    fs.writeFileSync(path.join(secondDir, 'index.js'), 'module.exports = class {};');
 
     const storage2 = new PluginStorageService(config);
     const loader2 = makeLoader(storage2);

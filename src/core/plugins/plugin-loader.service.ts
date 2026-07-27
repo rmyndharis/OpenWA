@@ -28,6 +28,7 @@ import {
   validateIngressManifest,
   warnUnauthenticatedIngressRoutes,
 } from './plugin.interfaces';
+import { validatePluginManifest } from './plugin-manifest';
 import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
 import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
@@ -89,6 +90,19 @@ export function resolvePluginMainPath(pluginsDir: string, pluginId: string, main
     throw new Error(`Plugin ${pluginId} main path escapes the plugin directory`);
   }
   return mainPath;
+}
+
+/**
+ * Sibling directory names an in-place plugin update stages into / backs up to (see
+ * PluginsService.updatePackageInner). Dot-prefixed so the boot directory scan skips them, and placed
+ * inside the plugins dir so the swap renames stay on one filesystem (EXDEV-safe). The loader's
+ * boot-time reconciler (recoverInterruptedUpdates) keys off these exact names.
+ */
+export function pluginUpdateStagingDirName(pluginId: string): string {
+  return `.${pluginId}.new`;
+}
+export function pluginUpdateBackupDirName(pluginId: string): string {
+  return `.${pluginId}.bak`;
 }
 
 /**
@@ -271,11 +285,16 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   }
 
   private loadPluginsFromDirectory(dir: string): void {
+    // Reconcile any interrupted-update leftovers BEFORE scanning, so a crash mid-swap can't make a
+    // plugin silently vanish while its registry entry still claims it is installed.
+    this.recoverInterruptedUpdates(dir);
+
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 
     for (const entry of entries) {
-      // Skip non-directories and dot-prefixed dirs (e.g. a crash-leftover `.<id>.bak` update backup),
-      // so a half-finished update can't be re-loaded as a duplicate-id plugin on the next boot.
+      // Skip non-directories and dot-prefixed dirs (e.g. a crash-leftover `.<id>.bak` update backup or
+      // `.<id>.new` staging tree), so a half-finished update can't be re-loaded as a duplicate-id
+      // plugin on the next boot. recoverInterruptedUpdates has already reconciled them by this point.
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
 
       const pluginPath = path.join(dir, entry.name);
@@ -307,15 +326,81 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     }
   }
 
+  /**
+   * Crash recovery for in-place updates (see PluginsService.updatePackageInner). An update stages the
+   * new tree at `.<id>.new`, then swaps with two renames (live → `.<id>.bak`, staging → live). Both
+   * siblings are dot-prefixed, so the scan above skips them — but without reconciliation a crash
+   * BETWEEN the renames loses the live dir and the plugin silently vanishes from the runtime while
+   * its registry entry still claims it is installed. Reconcile before scanning:
+   *  - live dir missing + `.<id>.bak` present → the swap was interrupted: restore the backup as the
+   *    live dir (the previous version comes back; the update never touched the registry entry or the
+   *    operator's config, so nothing else needs repairing).
+   *  - live dir present + `.<id>.bak` present → the swap completed but the process died before the
+   *    backup cleanup: drop the backup.
+   *  - `.<id>.new` present → staging from an interrupted/failed update; the live install (if any)
+   *    was never swapped: drop it.
+   * Best-effort: a reconciliation failure is logged and left for the next boot rather than aborting
+   * plugin loading entirely.
+   */
+  private recoverInterruptedUpdates(dir: string): void {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const match = /^\.(.+)\.(?:bak|new)$/.exec(entry.name);
+      if (!match) continue;
+      const pluginId = match[1];
+      const leftover = path.join(dir, entry.name);
+      const liveDir = path.join(dir, pluginId);
+      try {
+        if (entry.name === pluginUpdateStagingDirName(pluginId)) {
+          fs.rmSync(leftover, { recursive: true, force: true });
+          this.logger.warn(`Dropped stale update staging for plugin ${pluginId}`, {
+            pluginId,
+            action: 'plugin_update_staging_pruned',
+          });
+        } else if (!fs.existsSync(liveDir)) {
+          fs.renameSync(leftover, liveDir);
+          this.logger.warn(
+            `Restored plugin ${pluginId} from its update backup — a previous update was interrupted mid-swap`,
+            { pluginId, action: 'plugin_update_backup_restored' },
+          );
+        } else {
+          fs.rmSync(leftover, { recursive: true, force: true });
+          this.logger.warn(`Dropped stale update backup for plugin ${pluginId}`, {
+            pluginId,
+            action: 'plugin_update_backup_pruned',
+          });
+        }
+      } catch (error) {
+        this.logger.error(
+          `Failed to reconcile the interrupted-update leftover ${entry.name}`,
+          error instanceof Error ? error.message : String(error),
+          { pluginId, action: 'plugin_update_recovery_failed' },
+        );
+      }
+    }
+  }
+
   loadPlugin(pluginPath: string): PluginInstance {
     const manifestPath = path.join(pluginPath, 'manifest.json');
     const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
-    const manifest = JSON.parse(manifestContent) as PluginManifest;
+    const manifest = JSON.parse(manifestContent) as unknown;
 
-    // Validate manifest
-    if (!manifest.id || !manifest.name || !manifest.version || !manifest.type || !manifest.main) {
-      throw new Error(`Invalid manifest: missing required fields`);
+    // Boot-time validation is the SAME validation install runs (parsePluginPackage): a hand-placed
+    // or crash-leftover directory must satisfy the install contract too — plain-object shape,
+    // required string fields, id format + reserved ids, extension-only type, and a `main` that
+    // cannot escape the plugin dir. Otherwise a manifest the installer would have rejected loads
+    // anyway and only fails (or worse, runs unexpected code) at enable time.
+    validatePluginManifest(manifest);
+
+    // Anchor `main` inside THIS on-disk directory: the lexical check above is forward-slash only,
+    // so a platform-separator escape (e.g. Windows-style `..\x`) would slip past it — resolve and
+    // re-check containment here. Parity with install's in-archive check: the entry must exist as a
+    // file, or the plugin loads "successfully" and only blows up when someone enables it.
+    const mainPath = resolvePluginMainPath(path.dirname(pluginPath), path.basename(pluginPath), manifest.main);
+    if (!fs.existsSync(mainPath) || !fs.statSync(mainPath).isFile()) {
+      throw new Error(`Plugin ${manifest.id}: main file not found in the plugin directory: ${manifest.main}`);
     }
+
     // Reject a malformed ingress declaration (SDK-major mismatch, missing webhook:ingress permission,
     // duplicate/empty routes, non-positive toleranceSec) at load time instead of letting it silently
     // load and become provisionable. No-op for plugins that declare no ingress. A route declaring
@@ -486,7 +571,15 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     }
   }
 
-  async disablePlugin(pluginId: string): Promise<void> {
+  /**
+   * Disable an enabled plugin (best-effort force-teardown for sandboxed ones). `opts.unload` is set
+   * ONLY by the unload path (uninstall / in-place update): it additionally dispatches the plugin's
+   * onUnload hook. A plain disable (REST / shutdown teardown) deliberately does NOT fire onUnload —
+   * disable is reversible and its cleanup hook is onDisable, while onUnload means "removed from the
+   * runtime". (For a sandboxed plugin the worker thread does die on disable, but terminate() itself
+   * releases its timers/sockets; the hook contract stays: onUnload only on unload.)
+   */
+  async disablePlugin(pluginId: string, opts?: { unload?: boolean }): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
@@ -510,6 +603,21 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
             action: 'sandbox_disable_lifecycle_failed',
             error: error instanceof Error ? error.message : String(error),
           });
+        }
+        if (opts?.unload) {
+          // The worker is about to be terminated, so this is the ONLY chance onUnload ever gets for
+          // a sandboxed plugin — after terminate the hook is unreachable, and unloadPlugin's
+          // in-process call can't help (plugin.instance is null). Same bounded, best-effort policy
+          // as onDisable above: a wedged/throwing onUnload must never block the teardown.
+          try {
+            await host.runLifecycle('onUnload', SANDBOX_LIFECYCLE_TIMEOUT_MS);
+          } catch (error) {
+            this.logger.warn(`Sandboxed plugin ${pluginId} onUnload failed during unload; terminating anyway`, {
+              pluginId,
+              action: 'sandbox_unload_lifecycle_failed',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
         await host.terminate().catch(() => undefined);
         this.sandboxHosts.delete(pluginId);
@@ -546,12 +654,16 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
-    // Disable first if enabled
+    // Disable first if enabled. `unload: true` so a SANDBOXED plugin also gets its onUnload hook:
+    // disable terminates the worker thread, which would otherwise make onUnload unreachable. An
+    // in-process plugin's onUnload runs below instead (its instance survives disable). A sandboxed
+    // plugin that is already disabled has no live worker left to notify — its resources were
+    // released when the worker terminated, so there is nothing to clean up.
     if (plugin.status === PluginStatus.ENABLED) {
-      await this.disablePlugin(pluginId);
+      await this.disablePlugin(pluginId, { unload: true });
     }
 
-    // Call onUnload
+    // Call onUnload (in-process plugins; a sandboxed one received it above, before terminate)
     if (plugin.instance?.onUnload) {
       const context = this.createPluginContext(plugin);
       await plugin.instance.onUnload(context);
@@ -596,6 +708,12 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     if (dir !== base && dir.startsWith(base + path.sep) && fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+
+    // Drop the plugin's ctx.storage data dir. Under shipped defaults it lives INSIDE the package
+    // dir (already gone above), but a split-dir deployment (PLUGINS_DIR outside the data dir) would
+    // otherwise leak <dataDir>/plugins/<id> — persisted secrets included — on every uninstall.
+    // Best-effort, and strictly that one plugin's directory.
+    this.pluginStorage.deletePluginData(pluginId);
 
     this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });
   }

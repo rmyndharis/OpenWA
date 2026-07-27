@@ -14,6 +14,7 @@ const CTX_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-aware-plugin.c
 const HOOK_CONFIG_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/hook-config-plugin.cjs');
 const CTX_LIFECYCLE_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/ctx-lifecycle-plugin.cjs');
 const SEARCH_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/search-plugin.cjs');
+const UNLOAD_FIXTURE = path.resolve(ROOT, 'test/fixtures/sandbox/unload-plugin.cjs');
 const flushAsync = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 // Run the TS bootstrap inside the worker via ts-node. The base tsconfig is nodenext; we pin the
@@ -46,6 +47,20 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     await host.load(FIXTURE);
     await host.runLifecycle('onEnable');
     await host.runLifecycle('onDisable');
+    await host.terminate();
+  });
+
+  it('dispatches onUnload to the plugin inside the worker (the hook the loader fires on uninstall)', async () => {
+    const host = makeHost();
+    await host.load(UNLOAD_FIXTURE);
+    await host.runLifecycle('onEnable');
+    await expect(host.healthCheck()).resolves.toMatchObject({ message: 'loaded' });
+
+    await host.runLifecycle('onUnload');
+
+    // The worker-side instance observed its onUnload — before this hook was dispatched on the
+    // unload path, a sandboxed plugin's cleanup (timers, connections) never ran.
+    await expect(host.healthCheck()).resolves.toMatchObject({ message: 'unloaded' });
     await host.terminate();
   });
 

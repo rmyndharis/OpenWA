@@ -4324,7 +4324,9 @@ Install a plugin from an uploaded `.zip` package.
 
 #### POST /api/plugins/install-url
 
-Install a plugin by downloading its `.zip` from an HTTP(S) URL (SSRF-guarded fetch: host validated, redirects refused, size-capped at `plugins.downloadMaxBytes`, default 5 MB).
+Install a plugin by downloading its `.zip` from an HTTPS URL (SSRF-guarded fetch: host validated, redirects refused, size-capped at `plugins.downloadMaxBytes`, default 5 MB). Plain `http://` is rejected — the package is executable code and must be integrity-protected in transit; private-network targets remain subject to the SSRF guard.
+
+Optional content pinning: append `#sha256=<64 hex>` (URL fragment — never sent to the server) or `?sha256=<64 hex>` (`checksum=` also accepted) to require the downloaded bytes to match that digest. A mismatch, a malformed marker, or conflicting markers fail the install closed; no marker means no verification (HTTPS + the SSRF guard are the baseline).
 
 **Auth:** API key (ADMIN)
 
@@ -4332,7 +4334,7 @@ Install a plugin by downloading its `.zip` from an HTTP(S) URL (SSRF-guarded fet
 
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
-| `url` | string | Yes | `@IsUrl({ protocols:['http','https'], require_protocol:true })` | Absolute http(s) URL of the package |
+| `url` | string | Yes | `@IsUrl({ protocols:['https'], require_protocol:true })` | Absolute https URL of the package; optional `#sha256=` / `?sha256=` digest pin |
 
 ```json
 { "url": "https://github.com/openwa-plugins/chat-flow/releases/download/v1.0.0/chat-flow.zip" }
@@ -4340,7 +4342,7 @@ Install a plugin by downloading its `.zip` from an HTTP(S) URL (SSRF-guarded fet
 
 **Response** `201` — the newly installed `PluginDto`.
 
-**Errors:** `400` invalid URL / download or package invalid · `401` · `403` · `409` already installed
+**Errors:** `400` invalid URL / download, integrity check, or package invalid · `401` · `403` · `409` already installed
 
 ---
 
@@ -4489,7 +4491,7 @@ A session-restricted key requesting `"*"` or out-of-scope sessions gets `403 API
 
 #### POST /api/plugins/:id/update
 
-Update an installed plugin in place from a URL, preserving config + enabled state (old directory backed up and restored on failure).
+Update an installed plugin in place from a URL, preserving config + enabled state. The new package is written to a staging sibling and validated BEFORE the running plugin is stopped, then swapped in with two renames (live → backup, staging → live); a failure before or during the swap restores the previous version, and a process crash mid-swap is reconciled at boot (the backup is restored when the live directory is missing), so an interrupted update can never make the plugin silently vanish. Accepts the same optional `#sha256=` / `?sha256=` digest pin as `install-url` (fail-closed on mismatch).
 
 **Auth:** API key (ADMIN)
 
@@ -4503,7 +4505,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
-| `url` | string | Yes | `@IsUrl({ protocols:['http','https'], require_protocol:true })` | Absolute http(s) URL of the new `.zip` (SSRF-guarded download) |
+| `url` | string | Yes | `@IsUrl({ protocols:['https'], require_protocol:true })` | Absolute https URL of the new `.zip` (SSRF-guarded download); optional `#sha256=` / `?sha256=` digest pin |
 
 ```json
 { "url": "https://example.com/plugins/chat-flow-1.1.0.zip" }
@@ -4517,7 +4519,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 #### DELETE /api/plugins/:id
 
-Uninstall a plugin and delete its files. Built-in plugins are protected.
+Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, drop its registry entry, and remove its `ctx.storage` data directory (`<dataDir>/plugins/<id>` — a separate tree when `PLUGINS_DIR` points outside the data dir). Built-in plugins are protected.
 
 **Auth:** API key (ADMIN)
 
