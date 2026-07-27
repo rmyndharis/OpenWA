@@ -637,6 +637,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
           if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
         }
+        // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created
+        // them — purge again so the window leaves no credential residue behind (no-op for a stop()).
+        await this.purgeAuthDirsIfDeleted(id, session.name);
       }
       return this.findOne(id);
     } finally {
@@ -1997,6 +2000,32 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return (await this.sessionRepository.findOne({ where: { id } })) == null;
   }
 
+  /**
+   * Re-purge a retired session's on-disk auth dirs when its row was deleted while a slow
+   * engine.initialize() was still in flight. A start()/(re)connect that lands between delete()'s
+   * engine eviction and its row removal initializes a fresh engine that RE-CREATES the auth dir
+   * purgeSessionData just emptied (both engines mkdir at init); the post-init guard tears the engine
+   * down, but engine teardown never touches the on-disk dirs, so without this second purge the race
+   * leaves live WhatsApp credentials behind — and a later same-name recreate would silently re-link
+   * them. Gated two ways so ONLY the delete race purges: a stop() retirement still has its row (its
+   * credentials must survive), and a row re-created under the SAME name now owns those dirs, so
+   * purging would wipe the fresh session's link. Best-effort: a failure is logged, never thrown —
+   * the retirement path must still surface the deleted session as NotFound.
+   */
+  private async purgeAuthDirsIfDeleted(id: string, name: string): Promise<void> {
+    try {
+      if ((await this.sessionRepository.findOne({ where: { id } })) != null) return;
+      if ((await this.sessionRepository.findOne({ where: { name } })) != null) return;
+      await this.engineFactory.purgeSessionData(name);
+    } catch (error) {
+      this.logger.warn('Failed to re-purge session auth dirs after a start/delete race', {
+        sessionId: id,
+        action: 'engine_repurge_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async executeReconnect(id: string, session: Session, state: ReconnectState): Promise<void> {
     // The session may have been stopped/deleted before this fired — don't resurrect it.
     if (this.stoppingSessions.has(id)) {
@@ -2035,6 +2064,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
           if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
         }
+        // Same start/delete window as start()'s post-init guard: this re-init re-created auth dirs
+        // delete() had already purged — purge again so no credentials outlive the row.
+        await this.purgeAuthDirsIfDeleted(id, session.name);
         return;
       }
     } catch (error: unknown) {
