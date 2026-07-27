@@ -52,4 +52,27 @@ describe('main CLI DataSource', () => {
       else delete process.env.MAIN_DATABASE_NAME;
     }
   });
+
+  it('refuses to load when DATABASE_NAME resolves to the main DB file (CLI collision guard)', () => {
+    // The migration CLI never runs ConfigModule's validate(), so the SQLite main/data collision
+    // guard is applied at module load instead — a shared broken env must fail the CLI too, before
+    // any migration runs against the wrong file.
+    const prevMain = process.env.MAIN_DATABASE_NAME;
+    const prevData = process.env.DATABASE_NAME;
+    process.env.MAIN_DATABASE_NAME = '/tmp/cli-guard-main.sqlite';
+    process.env.DATABASE_NAME = '/tmp/cli-guard-main.sqlite';
+    jest.resetModules();
+    try {
+      expect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('./data-source-main');
+      }).toThrow(/DATABASE_NAME/);
+    } finally {
+      if (prevMain !== undefined) process.env.MAIN_DATABASE_NAME = prevMain;
+      else delete process.env.MAIN_DATABASE_NAME;
+      if (prevData !== undefined) process.env.DATABASE_NAME = prevData;
+      else delete process.env.DATABASE_NAME;
+      jest.resetModules();
+    }
+  });
 });

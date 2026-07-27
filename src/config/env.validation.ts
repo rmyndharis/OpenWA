@@ -2,8 +2,40 @@ import { resolve } from 'path';
 
 type EnvConfig = Record<string, unknown>;
 
-// The 'main' (auth/audit) connection is always this fixed SQLite file (not env-overridable).
-const MAIN_DB_PATH = './data/main.sqlite';
+// Default SQLite file of the 'main' (auth/audit) connection. The runtime path is env-overridable via
+// MAIN_DATABASE_NAME (configuration.ts), so the collision guard below must resolve the EFFECTIVE
+// path — comparing against this constant alone would false-negative when MAIN_DATABASE_NAME moves
+// the main DB and DATABASE_NAME follows it, and false-positive when the main DB moved away but
+// DATABASE_NAME still points at the (now unused) default file.
+const MAIN_DB_DEFAULT_PATH = './data/main.sqlite';
+
+/**
+ * Collision guard shared by boot validation (validateEnv below) and the migration CLI
+ * (src/database/data-source.ts / data-source-main.ts — the TypeORM CLI never runs ConfigModule's
+ * validate(), so both entry points apply this guard themselves). When the 'data' connection is
+ * SQLite (explicit or defaulted), its file must not BE the 'main' connection's file: two TypeORM
+ * connections on one SQLite file run separate migration ledgers + synchronize policies against the
+ * same tables. Both paths are resolved exactly like the runtime (MAIN_DATABASE_NAME / DATABASE_NAME
+ * overriding the defaults in configuration.ts) and normalized to absolute, so a relative spelling
+ * ('./data/../data/main.sqlite') or an absolute path naming the same file is caught. Returns the
+ * error message on collision, null otherwise.
+ */
+export function sqliteDataMainPathCollision(config: EnvConfig): string | null {
+  const read = (key: string): string | undefined => {
+    const value = config[key];
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+  };
+  // Postgres uses a bare database NAME, never a file path — no collision is possible there.
+  const dbType = read('DATABASE_TYPE');
+  if (dbType !== undefined && dbType !== 'sqlite') return null;
+  const dataDbName = read('DATABASE_NAME');
+  if (!dataDbName) return null;
+  const mainDbPath = read('MAIN_DATABASE_NAME') || MAIN_DB_DEFAULT_PATH;
+  if (resolve(dataDbName) === resolve(mainDbPath)) {
+    return `DATABASE_NAME must not point at the main database file (${mainDbPath}); use a separate file`;
+  }
+  return null;
+}
 
 /**
  * Fail-fast environment validation. Wired as ConfigModule's `validate`
@@ -74,11 +106,14 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     // SQLite (explicit or default): DATABASE_NAME is a file path for the 'data' connection. It must
     // not resolve to the 'main' DB file — two TypeORM connections on one SQLite file run separate
     // migration ledgers + synchronize policies against the same tables, risking schema divergence and
-    // lock contention. (Postgres DATABASE_NAME is a bare db name, so this never applies there.)
-    const dataDbName = str('DATABASE_NAME');
-    if (dataDbName && resolve(dataDbName) === resolve(MAIN_DB_PATH)) {
-      errors.push(`DATABASE_NAME must not point at the main database file (${MAIN_DB_PATH}); use a separate file`);
+    // lock contention. The main path is resolved like the runtime (MAIN_DATABASE_NAME || default),
+    // not assumed to be the default file. (Postgres DATABASE_NAME is a bare db name, so this never
+    // applies there.)
+    const collision = sqliteDataMainPathCollision(config);
+    if (collision) {
+      errors.push(collision);
     }
+    const dataDbName = str('DATABASE_NAME');
     // Reject a bare name with no path separator and no .sqlite/.db suffix — the exact signature of a
     // PostgreSQL DATABASE_NAME (e.g. 'openwa') leaking into a SQLite run (#677). That bare name becomes
     // the SQLite file PATH, opening a file named 'openwa' under the read-only app rootfs →
@@ -185,6 +220,9 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'RESOLVE_LID_TO_PHONE',
     'SIMULATE_TYPING',
     'SEARCH_ENABLED',
+    // Read at boot by the throttler factory (app.module.ts) and CacheService with `=== 'true'`: a
+    // typo like `ture` silently downgrades rate-limit storage + cache to per-process in-memory.
+    'REDIS_ENABLED',
   ]) {
     checkBool(key);
   }

@@ -1114,6 +1114,103 @@ describe('InfraController.exportStorage keeps the export import-able and sweeps 
   });
 });
 
+describe('InfraController.sweepStaleExportArchives (boot orphan sweep)', () => {
+  function buildController() {
+    return new InfraController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  }
+
+  // A name in exactly the shape exportStorage writes: storage-export-<epochMs>-<uuid>.tar.gz.
+  const archiveName = (epochMs: number): string =>
+    `storage-export-${epochMs}-3b241101-e2bb-4255-8caf-4136c566a962.tar.gz`;
+
+  const exists = (p: string): Promise<boolean> =>
+    fs.promises
+      .access(p)
+      .then(() => true)
+      .catch(() => false);
+
+  let dir: string | undefined;
+  let cwdSpy: jest.SpyInstance | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-exports-'));
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    cwdSpy = undefined;
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+    delete process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS;
+  });
+
+  const touch = async (name: string): Promise<string> => {
+    const p = path.join(dir!, name);
+    await fs.promises.writeFile(p, 'archive-bytes');
+    return p;
+  };
+
+  it('deletes export archives older than the default 24h but keeps young archives and non-export files', async () => {
+    const stale = await touch(archiveName(Date.now() - 25 * 60 * 60 * 1000));
+    const young = await touch(archiveName(Date.now() - 60 * 1000));
+    const operatorImportCandidate = await touch('to-import.tar.gz');
+    // Near-miss names are NOT ours: no uuid / wrong extension / different prefix.
+    const noUuid = await touch(`storage-export-${Date.now() - 48 * 60 * 60 * 1000}.tar.gz`);
+    const wrongExt = await touch(archiveName(Date.now() - 48 * 60 * 60 * 1000).replace(/\.tar\.gz$/, '.zip'));
+    const otherPrefix = await touch(`backup-${Date.now() - 48 * 60 * 60 * 1000}.tar.gz`);
+
+    await buildController().sweepStaleExportArchives(dir);
+
+    expect(await exists(stale)).toBe(false);
+    expect(await exists(young)).toBe(true);
+    expect(await exists(operatorImportCandidate)).toBe(true);
+    expect(await exists(noUuid)).toBe(true);
+    expect(await exists(wrongExt)).toBe(true);
+    expect(await exists(otherPrefix)).toBe(true);
+  });
+
+  it('takes the max age from STORAGE_EXPORT_SWEEP_MAX_AGE_MS', async () => {
+    const oneHourOld = archiveName(Date.now() - 60 * 60 * 1000);
+
+    // A 30-minute cap sweeps a 1-hour-old archive...
+    process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS = '1800000';
+    const swept = await touch(oneHourOld);
+    await buildController().sweepStaleExportArchives(dir);
+    expect(await exists(swept)).toBe(false);
+
+    // ...while a 2-hour cap keeps it.
+    process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS = '7200000';
+    const kept = await touch(oneHourOld);
+    await buildController().sweepStaleExportArchives(dir);
+    expect(await exists(kept)).toBe(true);
+  });
+
+  it('resolves quietly when the exports directory does not exist yet', async () => {
+    await expect(buildController().sweepStaleExportArchives(path.join(dir!, 'never-created'))).resolves.toBeUndefined();
+  });
+
+  it('runs the sweep against <cwd>/data/exports at application bootstrap', async () => {
+    cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(dir!);
+    const exportDir = path.join(dir!, 'data', 'exports');
+    await fs.promises.mkdir(exportDir, { recursive: true });
+    const stale = path.join(exportDir, archiveName(Date.now() - 25 * 60 * 60 * 1000));
+    await fs.promises.writeFile(stale, 'archive-bytes');
+
+    await buildController().onApplicationBootstrap();
+
+    expect(await exists(stale)).toBe(false);
+  });
+});
+
 describe('InfraController.requestRestart constrains teardown to managed profiles', () => {
   const buildController = (dockerService: Record<string, unknown>) =>
     new InfraController(

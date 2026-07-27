@@ -9,6 +9,7 @@ import {
   HttpException,
   HttpCode,
   HttpStatus,
+  OnApplicationBootstrap,
   Optional,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -506,7 +507,7 @@ interface SavedConfigResponse {
 
 @ApiTags('infrastructure')
 @Controller('infra')
-export class InfraController {
+export class InfraController implements OnApplicationBootstrap {
   private readonly logger = createLogger('InfraController');
 
   constructor(
@@ -562,6 +563,62 @@ export class InfraController {
       return false;
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  // Matches exactly the filename exportStorage writes: storage-export-<Date.now()>-<randomUUID()>.tar.gz.
+  // The captured group is the creation epoch-ms, so the sweep reads the age from the name — anything
+  // not in this exact shape (an operator's import candidate, any other file) is never touched.
+  private static readonly EXPORT_ARCHIVE_PATTERN =
+    /^storage-export-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tar\.gz$/;
+
+  /**
+   * Boot sweep for orphaned storage-export archives. exportStorage deletes each archive on a TTL
+   * timer, but that timer dies with the process — an archive whose process restarted or crashed
+   * before the timer fired would accumulate on the data volume forever. At bootstrap, delete the
+   * archives WE created whose embedded creation timestamp is older than
+   * STORAGE_EXPORT_SWEEP_MAX_AGE_MS (default 24h; kept generous so the documented
+   * export→restart→import migration flow still finds its file). Young archives and any
+   * non-export file in data/exports/ are left untouched.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    await this.sweepStaleExportArchives();
+  }
+
+  /**
+   * Delete export archives older than STORAGE_EXPORT_SWEEP_MAX_AGE_MS from exportDir. Sweep
+   * failures are logged, never thrown: a leftover archive must not block boot.
+   */
+  async sweepStaleExportArchives(exportDir = path.join(process.cwd(), 'data', 'exports')): Promise<void> {
+    const maxAgeRaw = Number.parseInt(process.env.STORAGE_EXPORT_SWEEP_MAX_AGE_MS ?? '', 10);
+    const maxAgeMs = Number.isInteger(maxAgeRaw) && maxAgeRaw > 0 ? maxAgeRaw : 24 * 60 * 60 * 1000; // default 24h
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(exportDir, { withFileTypes: true });
+    } catch (error) {
+      // ENOENT just means no export has ever run on this deployment — nothing to sweep.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.logger.warn('Storage export sweep could not read the exports directory', {
+          exportDir,
+          error: String(error),
+        });
+      }
+      return;
+    }
+
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const match = InfraController.EXPORT_ARCHIVE_PATTERN.exec(entry.name);
+      if (!match) continue;
+      if (now - Number(match[1]) < maxAgeMs) continue;
+      try {
+        await fs.promises.unlink(path.join(exportDir, entry.name));
+        this.logger.log('Swept stale storage export archive', { file: entry.name });
+      } catch (error) {
+        this.logger.warn('Failed to sweep stale storage export archive', { file: entry.name, error: String(error) });
+      }
     }
   }
 

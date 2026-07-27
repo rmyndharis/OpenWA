@@ -117,6 +117,20 @@ describe('validateEnv', () => {
     expect(() => validateEnv({})).not.toThrow();
   });
 
+  it('rejects a REDIS_ENABLED typo instead of silently downgrading throttler+cache to in-memory', () => {
+    // REDIS_ENABLED is read at boot with `=== 'true'` (throttler storage in app.module.ts,
+    // CacheService), so a typo flips rate limiting + caching to per-process in-memory with zero
+    // diagnostics — a silent behavior/security downgrade on a multi-replica deployment.
+    expect(() => validateEnv({ REDIS_ENABLED: 'ture' })).toThrow(/REDIS_ENABLED/);
+    expect(() => validateEnv({ REDIS_ENABLED: 'True' })).toThrow(/REDIS_ENABLED/);
+    expect(() => validateEnv({ REDIS_ENABLED: '1' })).toThrow(/REDIS_ENABLED/);
+    // Canonical values, blank (compose `${KEY:-}` forward), and unset all pass.
+    expect(() => validateEnv({ REDIS_ENABLED: 'true' })).not.toThrow();
+    expect(() => validateEnv({ REDIS_ENABLED: 'false' })).not.toThrow();
+    expect(() => validateEnv({ REDIS_ENABLED: '' })).not.toThrow();
+    expect(() => validateEnv({})).not.toThrow();
+  });
+
   it('rejects a SEARCH_PROVIDER typo instead of silently falling back to auto', () => {
     // A bogus / typo value must fail fast at boot rather than silently selecting the default provider.
     expect(() => validateEnv({ SEARCH_PROVIDER: 'bogus' })).toThrow(/SEARCH_PROVIDER/);
@@ -148,6 +162,44 @@ describe('validateEnv', () => {
         DATABASE_USERNAME: 'u',
         DATABASE_PASSWORD: 'p',
         DATABASE_NAME: 'main.sqlite',
+      }),
+    ).not.toThrow();
+  });
+
+  it('resolves the main DB path from MAIN_DATABASE_NAME like the runtime (no false-negative/-positive)', () => {
+    // The runtime main path is MAIN_DATABASE_NAME || ./data/main.sqlite (configuration.ts). When it
+    // is overridden, a DATABASE_NAME following it to the same file must still be caught — comparing
+    // against the hardcoded default alone would miss this.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'sqlite',
+        MAIN_DATABASE_NAME: '/srv/openwa/main.sqlite',
+        DATABASE_NAME: '/srv/openwa/main.sqlite',
+      }),
+    ).toThrow(/DATABASE_NAME/);
+    // Same collision via a non-normalized spelling (relative/absolute forms of one file).
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'sqlite',
+        MAIN_DATABASE_NAME: './custom/main.sqlite',
+        DATABASE_NAME: './custom/../custom/main.sqlite',
+      }),
+    ).toThrow(/DATABASE_NAME/);
+    // And the reverse: when MAIN_DATABASE_NAME moves the main DB elsewhere, the DEFAULT main file
+    // is no longer the runtime main DB, so using it for data must NOT be rejected.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'sqlite',
+        MAIN_DATABASE_NAME: '/srv/openwa/main.sqlite',
+        DATABASE_NAME: './data/main.sqlite',
+      }),
+    ).not.toThrow();
+    // Distinct overridden paths pass.
+    expect(() =>
+      validateEnv({
+        DATABASE_TYPE: 'sqlite',
+        MAIN_DATABASE_NAME: './data/auth.sqlite',
+        DATABASE_NAME: './data/openwa.sqlite',
       }),
     ).not.toThrow();
   });
