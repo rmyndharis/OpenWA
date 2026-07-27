@@ -117,6 +117,22 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
    * receiver outage. (Mirrors AuditService's audit-log retention.)
    */
   onModuleInit(): void {
+    // Warn on the default-derived misconfiguration that silently truncates in-flight deliveries at
+    // shutdown: WEBHOOK_SHUTDOWN_DRAIN_MS (default 5s) bounds how long onModuleDestroy waits for a
+    // delivery in flight, while WEBHOOK_TIMEOUT (default 10s) bounds the delivery itself. When the
+    // drain is shorter than the timeout, a delivery that takes nearly the full timeout is abandoned
+    // (logged, not dead-lettered — the receiver may already have it). The defaults already cross, so
+    // surface the cross so an operator who raised the timeout without raising the drain notices.
+    const drainMs = this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS);
+    const deliveryTimeoutMs = this.configService.get<number>('webhook.timeout', 10_000);
+    if (Number.isFinite(drainMs) && Number.isFinite(deliveryTimeoutMs) && drainMs < deliveryTimeoutMs) {
+      this.logger.warn(
+        `WEBHOOK_SHUTDOWN_DRAIN_MS (${drainMs}ms) is shorter than WEBHOOK_TIMEOUT (${deliveryTimeoutMs}ms) — ` +
+          `an in-flight delivery that takes nearly the full timeout will be abandoned at shutdown. ` +
+          `Raise WEBHOOK_SHUTDOWN_DRAIN_MS to at least WEBHOOK_TIMEOUT if you want shutdown to wait for deliveries to complete.`,
+      );
+    }
+
     const parsed = Number.parseInt(process.env.WEBHOOK_FAILURE_RETENTION_DAYS ?? '', 10);
     const retentionDays = Number.isInteger(parsed) ? Math.max(0, parsed) : 90;
     if (retentionDays <= 0) {

@@ -306,6 +306,52 @@ describe('WebhookService', () => {
     });
   });
 
+  // The drain bound at shutdown must cover the per-delivery timeout, or a delivery that takes nearly
+  // the full timeout is abandoned at shutdown. The defaults already cross (drain 5s < timeout 10s),
+  // so the warning is the only signal an operator gets that their config silently truncates deliveries.
+  describe('onModuleInit drain-vs-timeout warning', () => {
+    const drainSpy = () =>
+      jest.spyOn((service as unknown as { logger: { warn: jest.Mock; error: jest.Mock } }).logger, 'warn');
+
+    const withConfig = (drainMs: number, timeoutMs: number, fn: () => void): void => {
+      const orig = configService.get as jest.Mock;
+      const impl = orig.getMockImplementation() as ((key: string, def?: unknown) => unknown) | undefined;
+      orig.mockImplementation((key: string, def?: unknown) => {
+        if (key === 'webhook.shutdownDrainMs') return drainMs;
+        if (key === 'webhook.timeout') return timeoutMs;
+        // Preserve the other keys the service reads at startup (queue.enabled etc.) by delegating
+        // to the original implementation for anything we did not override.
+        if (impl) return impl(key, def);
+        return def;
+      });
+      try {
+        fn();
+      } finally {
+        if (impl) orig.mockImplementation(impl);
+      }
+    };
+
+    it('warns when WEBHOOK_SHUTDOWN_DRAIN_MS < WEBHOOK_TIMEOUT (the default-derived cross)', () => {
+      const warn = drainSpy();
+      withConfig(5000, 10000, () => service.onModuleInit());
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('WEBHOOK_SHUTDOWN_DRAIN_MS');
+      expect(warn.mock.calls[0][0]).toContain('WEBHOOK_TIMEOUT');
+    });
+
+    it('does not warn when WEBHOOK_SHUTDOWN_DRAIN_MS >= WEBHOOK_TIMEOUT (drain covers the delivery)', () => {
+      const warn = drainSpy();
+      withConfig(15000, 10000, () => service.onModuleInit());
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('does not warn when either value is non-finite (let the per-call site handle a bad config)', () => {
+      const warn = drainSpy();
+      withConfig(Number.NaN, 10000, () => service.onModuleInit());
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('dispatch (direct mode)', () => {
     const mockFetch = undiciFetch as jest.Mock;
 
