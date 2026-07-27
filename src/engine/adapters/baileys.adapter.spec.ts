@@ -661,6 +661,97 @@ describe('BaileysAdapter reconnect socket teardown (no leak)', () => {
   });
 });
 
+describe('BaileysAdapter status honesty across the reconnect backoff', () => {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+  const baileys = () => jest.requireMock('@whiskeysockets/baileys') as { default: jest.Mock };
+
+  const fireRecoverableClose = (): void => {
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+  };
+
+  const initReady = async (over: Partial<EngineEventCallbacks> = {}): Promise<BaileysAdapter> => {
+    fakeSock.user = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+    const adapter = newAdapter();
+    await adapter.initialize(noopCallbacks(over));
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('a transient close drops the session to INITIALIZING immediately — no READY across the backoff', async () => {
+    const states: EngineStatus[] = [];
+    const adapter = await initReady({ onStateChanged: s => states.push(s) });
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    states.length = 0; // count only the transitions from READY onward
+
+    jest.useFakeTimers();
+    fireRecoverableClose();
+
+    // The reconnect timer is still pending (first attempt is ~1 s out, later ones up to 60 s) and
+    // the socket is already dead — the session must NOT read READY in this window.
+    expect(adapter.getStatus()).toBe(EngineStatus.INITIALIZING);
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+    expect(states).toEqual([EngineStatus.INITIALIZING]);
+  });
+
+  it('stays INITIALIZING until the reconnected socket actually opens, then reports READY again', async () => {
+    const adapter = await initReady({});
+    baileys().default.mockClear();
+    jest.useFakeTimers();
+    jest.spyOn(Math, 'random').mockReturnValue(0); // deterministic 1 s first-attempt delay
+
+    fireRecoverableClose();
+    expect(adapter.getStatus()).toBe(EngineStatus.INITIALIZING);
+
+    await jest.advanceTimersByTimeAsync(1_000); // attempt 1 runs → new socket created
+    expect(baileys().default).toHaveBeenCalledTimes(1);
+    // The new socket exists but has not opened yet — still not READY.
+    expect(adapter.getStatus()).toBe(EngineStatus.INITIALIZING);
+
+    fakeSock.fire('connection.update', { connection: 'open' });
+    expect(adapter.getStatus()).toBe(EngineStatus.READY);
+    await expect(adapter.probeLiveness()).resolves.toBe(true);
+  });
+
+  it('back-to-back transient closes do not flap onStateChanged', async () => {
+    const states: EngineStatus[] = [];
+    await initReady({ onStateChanged: s => states.push(s) });
+    states.length = 0; // count only the transitions from READY onward
+
+    jest.useFakeTimers();
+    fireRecoverableClose();
+    fireRecoverableClose(); // duplicate for the same drop — ignored, no extra transition
+    expect(states).toEqual([EngineStatus.INITIALIZING]);
+
+    await jest.advanceTimersByTimeAsync(2_000); // let the pending attempt run (1 s + jitter)
+    fireRecoverableClose(); // the next drop lands while already INITIALIZING — still no emission
+    expect(states).toEqual([EngineStatus.INITIALIZING]);
+  });
+
+  it('a logged-out close still reports DISCONNECTED (terminal behavior unchanged)', async () => {
+    const onDisconnected = jest.fn();
+    const adapter = await initReady({ onDisconnected });
+
+    fakeSock.fire('connection.update', {
+      connection: 'close',
+      lastDisconnect: { error: { output: { statusCode: 401 } } },
+    });
+
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onDisconnected).toHaveBeenCalledWith('logged out');
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+  });
+});
+
 describe('BaileysAdapter capability gating', () => {
   it('throws EngineNotSupportedError for still-gated methods (e.g. getChatHistory)', async () => {
     const adapter = newAdapter();

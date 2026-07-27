@@ -438,8 +438,15 @@ export class BaileysAdapter implements IWhatsAppEngine {
       // backoff and NO attempt ceiling — a long network outage must
       // not kill the session. The counter resets on 'open' and via the stability window below.
       // Do NOT fire onDisconnected here; this is a transient drop, not a terminal disconnect.
-      // connect() calls setStatus(INITIALIZING) which fires onStateChanged — that is the correct signal.
       this.logger.log('Baileys connection dropped; reconnecting', { statusCode });
+
+      // The socket is dead NOW, but the reconnect attempt only runs after the backoff delay below
+      // (up to 60 s + jitter; connectInner's own setStatus(INITIALIZING) fires just before the new
+      // socket is created). Staying READY across that window makes probeLiveness() report a live
+      // session and lets sends fail against the dead socket, so drop to INITIALIZING here — the
+      // 'open' branch restores READY. setStatus no-ops on an unchanged status, so the duplicate
+      // closes Baileys can emit per drop do not flap onStateChanged.
+      this.setStatus(EngineStatus.INITIALIZING);
 
       // Duplicate close while a reconnect timer is already pending — ignore it WITHOUT burning an
       // attempt (Baileys can emit more than one close per drop; the increment must come after this).
@@ -580,7 +587,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
   /**
    * Cheap local liveness check for the session watchdog. Genuine dead-connection detection is owned
    * by Baileys' built-in keepalive, which surfaces a close event (408) within ~35 s of a silent
-   * drop and drives the reconnect path above — so READY + a live socket is sufficient here.
+   * drop — and the close handler above drops the status to INITIALIZING for the whole reconnect
+   * backoff, so READY + a live socket is sufficient here.
    */
   // eslint-disable-next-line @typescript-eslint/require-await
   async probeLiveness(): Promise<boolean> {
