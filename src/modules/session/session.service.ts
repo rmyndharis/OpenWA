@@ -535,10 +535,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         action: 'delete',
       });
 
-      // Purge the engine's persistent on-disk auth/store dir. It's keyed by session NAME and lives
-      // independently of the (now torn-down, and on delete often never-loaded) engine instance, so the
-      // teardown above doesn't touch it. Without this, recreating a session under the same name reloads
-      // a stale store. Best-effort inside the factory — never fails an otherwise-successful delete.
+      // Purge the persistent on-disk auth/store dirs — BOTH engine shapes (see EngineFactory), since
+      // an engine switch may have left a live link for the other engine behind. They're keyed by
+      // session NAME and live independently of the (now torn-down, and on delete often never-loaded)
+      // engine instance, so the teardown above doesn't touch them. Without this, recreating a session
+      // under the same name reloads a stale store. Best-effort inside the factory — never fails an
+      // otherwise-successful delete.
       await this.engineFactory.purgeSessionData(session.name);
     } finally {
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.

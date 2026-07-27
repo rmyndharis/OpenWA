@@ -237,7 +237,7 @@ describe('SessionService', () => {
       expect(dataSource.transaction).toHaveBeenCalled(); // DB removal still ran
     });
 
-    it('delete() purges the engine on-disk auth dir (keyed by session NAME) so a same-name recreate starts clean', async () => {
+    it('delete() purges the on-disk auth dirs (keyed by session NAME) so a same-name recreate starts clean', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(
         createMockSession({ id: 'sess-uuid-1', name: 'test-session' }),
       );
@@ -246,6 +246,23 @@ describe('SessionService', () => {
       await service.delete('sess-uuid-1');
 
       expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('test-session');
+    });
+
+    it('delete() delegates the both-engines purge exactly once, after the DB rows are removed', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ id: 'sess-uuid-1', name: 'test-session' }),
+      );
+
+      await expect(service.delete('sess-uuid-1')).resolves.toBeUndefined();
+
+      // The factory owns the per-engine best-effort isolation (covered in engine.factory.spec);
+      // the service hands it the session NAME once, only after the DB removal has committed.
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledTimes(1);
+      expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('test-session');
+      const txOrder = (dataSource.transaction as jest.Mock).mock.invocationCallOrder[0];
+      const purgeOrder = (engineFactory.purgeSessionData as jest.Mock).mock.invocationCallOrder[0];
+      expect(txOrder).toBeLessThan(purgeOrder);
     });
 
     it('delete() purges even when no engine is loaded (a stopped session has none)', async () => {
