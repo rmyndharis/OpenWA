@@ -5,8 +5,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
-import Redis from 'ioredis';
 import { RedisThrottlerStorage } from './common/throttler/redis-throttler.storage';
+import { createThrottlerRedisClient } from './common/throttler/throttler-redis.client';
 import configuration from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { SessionModule } from './modules/session/session.module';
@@ -241,19 +241,12 @@ if (dashboardServingEnabled && dashboardBuildPresent) {
             limit: configService.get<number>('api.rateLimit.longLimit', 1000),
           },
         ];
-        // Fail-open on Redis error (see RedisThrottlerStorage), so a Redis outage never blocks the API.
+        // Fail-open on Redis error (see RedisThrottlerStorage), so a Redis outage never blocks the
+        // API. The client is built fail-fast (see throttler-redis.client.ts) so that fail-open
+        // engages immediately instead of after a queue/timeout stall per request.
         const redisStorage =
           process.env.REDIS_ENABLED === 'true'
-            ? new RedisThrottlerStorage(
-                new Redis({
-                  host: configService.get<string>('redis.host', 'localhost'),
-                  port: configService.get<number>('redis.port', 6379),
-                  username: configService.get<string>('redis.username'),
-                  password: configService.get<string>('redis.password'),
-                  connectTimeout: configService.get<number>('redis.connectTimeoutMs', 5000),
-                  maxRetriesPerRequest: 3,
-                }),
-              )
+            ? new RedisThrottlerStorage(createThrottlerRedisClient(configService))
             : undefined;
         return { throttlers, ...(redisStorage ? { storage: redisStorage } : {}) };
       },
