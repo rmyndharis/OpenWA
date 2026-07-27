@@ -1288,7 +1288,7 @@
             "name": "from",
             "required": false,
             "in": "query",
-            "description": "Filter by sender. A phone also matches messages from a lid that resolves to it.",
+            "description": "Filter by sender. A phone also matches group messages via the author field and any lid that resolves to it.",
             "schema": {
               "type": "string"
             }

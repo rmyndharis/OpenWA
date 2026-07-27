@@ -14,14 +14,14 @@ import { TemplateService } from '../template/template.service';
 import { renderTemplate } from '../../common/utils/template-render';
 import { createLogger } from '../../common/services/logger.service';
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
-import { userPart } from '../../engine/identity/wa-id';
+import { parseWaId } from '../../engine/identity/wa-id';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 
 export interface GetMessagesOptions {
   chatId?: string;
-  /** Filter by sender. A phone matches stored `@c.us`/`@s.whatsapp.net` ids AND any lid resolving to it. */
+  /** Filter by sender. A phone matches stored `@c.us`/`@s.whatsapp.net` ids AND any lid resolving to it. Group messages match on `author` (the real sender) as well as `from` (which holds the group JID). */
   from?: string;
   limit?: number;
   offset?: number;
@@ -296,7 +296,17 @@ export class MessageService {
       // Resolve the filter through the lid->phone table so a phone matches not just the stored
       // `<phone>@c.us` id but also any lid that resolves to the same person - turning the prior
       // silent miss (a lid-stored author vs a phone filter) into a hit.
-      query.andWhere('message.from IN (:...froms)', { froms: this.resolveJidCandidates(from) });
+      // A group message stores the real sender in `author` (`from` holds the group JID), so match
+      // BOTH columns against the same candidate set or the filter skips every group message the
+      // person wrote. Query plan: neither `from` nor `author` is indexed - the predicate applies
+      // within the (sessionId, createdAt)-narrowed scan exactly as the from-only filter did, so the
+      // OR costs nothing the old plan didn't already pay. No new index: per-session narrowing
+      // dominates selectivity and a single btree cannot serve an OR across two columns anyway.
+      const froms = this.resolveJidCandidates(from);
+      query.andWhere('(message.from IN (:...froms) OR message.author IN (:...authorFroms))', {
+        froms,
+        authorFroms: froms,
+      });
     }
 
     const [messages, total] = await query.getManyAndCount();
@@ -304,12 +314,32 @@ export class MessageService {
   }
 
   /**
-   * Expand a JID filter into every stored id that refers to the same chat/person: the literal input (so
-   * an exact group/lid filter still matches), the user-part in both user dialects (`@c.us` /
+   * Expand a user JID filter into every stored id that refers to the same person: the literal input
+   * (so an exact lid filter still matches), the user-part in both user dialects (`@c.us` /
    * `@s.whatsapp.net`), and every lid the resolution table maps to that phone.
+   *
+   * Scoped by chat kind. For a non-user kind (group/status/newsletter/broadcast) the stored id can
+   * only ever be the literal JID, so no candidates are generated: expanding a group or channel id's
+   * digits into the user dialects (or probing the lid table with them) could mis-resolve the filter
+   * onto an unrelated entity whose phone digits happen to match — fail closed on the literal id.
+   * A `@lid` input forward-resolves to its phone instead of minting `<lid-digits>@c.us` (the lid's
+   * digits are NOT a phone), so rows stored under the resolved form still match a raw-lid filter.
    */
   private resolveJidCandidates(value: string): string[] {
-    const phone = userPart(value);
+    const parsed = parseWaId(value);
+    if (parsed.kind !== 'user' && parsed.kind !== 'lid' && parsed.kind !== 'unknown') {
+      return [value];
+    }
+    if (parsed.kind === 'lid') {
+      const candidates = new Set<string>([value]);
+      const resolved = this.lidMappingStore.getCached(parsed.userPart);
+      if (resolved) {
+        candidates.add(`${resolved}@c.us`);
+        candidates.add(`${resolved}@s.whatsapp.net`);
+      }
+      return [...candidates];
+    }
+    const phone = parsed.userPart;
     const candidates = new Set<string>([value, `${phone}@c.us`, `${phone}@s.whatsapp.net`]);
     for (const lid of this.lidMappingStore.lidsForPhone(phone)) {
       candidates.add(`${lid}@lid`);

@@ -41,7 +41,7 @@ describe('MessageService', () => {
   let sessionService: jest.Mocked<Partial<SessionService>>;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let templateService: jest.Mocked<Partial<TemplateService>>;
-  let lidMappingStore: { lidsForPhone: jest.Mock };
+  let lidMappingStore: { lidsForPhone: jest.Mock; getCached: jest.Mock };
   let mockEngine: ReturnType<typeof createMockEngine>;
 
   // Auto-typing is on by default; disable it for the unrelated send tests so they don't incur the
@@ -84,7 +84,7 @@ describe('MessageService', () => {
       resolve: jest.fn(),
     };
 
-    lidMappingStore = { lidsForPhone: jest.fn().mockReturnValue([]) };
+    lidMappingStore = { lidsForPhone: jest.fn().mockReturnValue([]), getCached: jest.fn().mockReturnValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -584,21 +584,30 @@ describe('MessageService', () => {
     const dmRow = { id: 'm-dm', from: '628999@c.us', chatId: '628999@c.us' } as Message;
     const rows = [lidRow, dmRow];
 
-    // A query-builder fake that actually filters by the `from IN (:...froms)` clause it receives, so the
-    // test exercises the resolution-driven expansion end to end (filter -> rows returned).
+    // A query-builder fake that actually filters by the `(from IN (:...froms) OR author IN (:...authorFroms))`
+    // clause it receives, so the test exercises the resolution-driven expansion end to end (filter -> rows).
     const makeFilteringQb = () => {
       let froms: string[] | null = null;
+      let authorFroms: string[] | null = null;
       const qb = {
         where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockImplementation((_clause: string, params?: { froms?: string[] }) => {
-          if (params?.froms) froms = params.froms;
-          return qb;
-        }),
+        andWhere: jest
+          .fn()
+          .mockImplementation((_clause: string, params?: { froms?: string[]; authorFroms?: string[] }) => {
+            if (params?.froms) froms = params.froms;
+            if (params?.authorFroms) authorFroms = params.authorFroms;
+            return qb;
+          }),
         getManyAndCount: jest.fn().mockImplementation(() => {
-          const matched = froms ? rows.filter(r => froms!.includes(r.from)) : rows;
+          const matched =
+            froms || authorFroms
+              ? rows.filter(
+                  r => froms?.includes(r.from) || (r.author != null && (authorFroms?.includes(r.author) ?? false)),
+                )
+              : rows;
           return Promise.resolve([matched, matched.length]);
         }),
       };
@@ -624,6 +633,166 @@ describe('MessageService', () => {
       const { messages } = await service.getMessages('sess-1', { from: '628999' });
 
       expect(messages.map(m => m.id)).toEqual(['m-dm']); // only the @c.us DM matches
+    });
+  });
+
+  // ── getMessages from-filter matches the group author ──────────────
+  describe('getMessages from-filter matches the group author', () => {
+    // Group rows: `from` holds the group JID; the real sender lives in `author`.
+    const aliceGroupRow = { id: 'm-grp-alice', from: 'grp@g.us', author: '628999@c.us', chatId: 'grp@g.us' } as Message;
+    const bobGroupRow = { id: 'm-grp-bob', from: 'grp@g.us', author: '628111@c.us', chatId: 'grp@g.us' } as Message;
+    const aliceDmRow = { id: 'm-dm', from: '628999@c.us', chatId: '628999@c.us' } as Message;
+    // A query-builder fake applying the chatId AND (from OR author) predicates like the real SQL.
+    const makeAuthorQb = (rows: Message[]) => {
+      let chatIds: string[] | null = null;
+      let froms: string[] | null = null;
+      let authorFroms: string[] | null = null;
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        andWhere: jest
+          .fn()
+          .mockImplementation(
+            (_clause: string, params?: { chatIds?: string[]; froms?: string[]; authorFroms?: string[] }) => {
+              if (params?.chatIds) chatIds = params.chatIds;
+              if (params?.froms) froms = params.froms;
+              if (params?.authorFroms) authorFroms = params.authorFroms;
+              return qb;
+            },
+          ),
+        getManyAndCount: jest.fn().mockImplementation(() => {
+          let matched = rows;
+          if (chatIds) matched = matched.filter(r => chatIds!.includes(r.chatId));
+          if (froms || authorFroms) {
+            matched = matched.filter(
+              r => froms?.includes(r.from) || (r.author != null && (authorFroms?.includes(r.author) ?? false)),
+            );
+          }
+          return Promise.resolve([matched, matched.length]);
+        }),
+      };
+      return qb;
+    };
+
+    it('returns group messages authored by the filtered phone (matched via author, not from)', async () => {
+      lidMappingStore.lidsForPhone.mockReturnValue([]);
+      const qb = makeAuthorQb([aliceGroupRow, bobGroupRow, aliceDmRow]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      const { messages } = await service.getMessages('sess-1', { from: '628999' });
+
+      // Alice's group row + her DM; Bob's group row (same `from` = group JID) stays out.
+      expect(messages.map(m => m.id).sort()).toEqual(['m-dm', 'm-grp-alice']);
+    });
+
+    it('matches a group author stored as a lid once the table maps the lid to the phone', async () => {
+      const lidAuthorRow = { id: 'm-grp-lid', from: 'grp@g.us', author: '111@lid', chatId: 'grp@g.us' } as Message;
+      lidMappingStore.lidsForPhone.mockReturnValue(['111']); // table: lid 111 -> phone 628999
+      const qb = makeAuthorQb([aliceGroupRow, bobGroupRow, aliceDmRow, lidAuthorRow]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      const { messages } = await service.getMessages('sess-1', { from: '628999' });
+
+      expect(messages.map(m => m.id).sort()).toEqual(['m-dm', 'm-grp-alice', 'm-grp-lid']);
+    });
+
+    it('still applies the chatId filter alongside the from/author match', async () => {
+      lidMappingStore.lidsForPhone.mockReturnValue([]);
+      const qb = makeAuthorQb([aliceGroupRow, bobGroupRow, aliceDmRow]);
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      const { messages } = await service.getMessages('sess-1', { chatId: 'grp@g.us', from: '628999' });
+
+      // Alice's DM is excluded by the chatId filter, Bob's row by the from/author filter.
+      expect(messages.map(m => m.id)).toEqual(['m-grp-alice']);
+    });
+  });
+
+  // ── candidate expansion is scoped by chat kind ────────────────────
+  describe('getMessages candidate expansion is scoped by chat kind', () => {
+    // Captures the candidate arrays the service binds, so the scoping is asserted directly.
+    const makeCaptureQb = () => {
+      const captured: { chatIds?: string[]; froms?: string[]; authorFroms?: string[] } = {};
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        andWhere: jest
+          .fn()
+          .mockImplementation(
+            (_clause: string, params?: { chatIds?: string[]; froms?: string[]; authorFroms?: string[] }) => {
+              if (params?.chatIds) captured.chatIds = params.chatIds;
+              if (params?.froms) captured.froms = params.froms;
+              if (params?.authorFroms) captured.authorFroms = params.authorFroms;
+              return qb;
+            },
+          ),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      return { qb, captured };
+    };
+
+    it('does not expand a group chatId into the user dialects (fail-closed on the literal id)', async () => {
+      const { qb, captured } = makeCaptureQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.getMessages('sess-1', { chatId: '120363999@g.us' });
+
+      // No `120363999@c.us`/`@s.whatsapp.net` and no lid-table probe with the group's digits.
+      expect(captured.chatIds).toEqual(['120363999@g.us']);
+      expect(lidMappingStore.lidsForPhone).not.toHaveBeenCalled();
+      expect(lidMappingStore.getCached).not.toHaveBeenCalled();
+    });
+
+    it('does not expand a status broadcast or newsletter chatId', async () => {
+      const { qb, captured } = makeCaptureQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.getMessages('sess-1', { chatId: 'status@broadcast' });
+      expect(captured.chatIds).toEqual(['status@broadcast']);
+
+      await service.getMessages('sess-1', { chatId: '12345@newsletter' });
+      expect(captured.chatIds).toEqual(['12345@newsletter']);
+
+      expect(lidMappingStore.lidsForPhone).not.toHaveBeenCalled();
+    });
+
+    it('forward-resolves a @lid from-filter to its phone instead of minting <lid-digits>@c.us', async () => {
+      lidMappingStore.getCached.mockReturnValue('628999'); // table: lid 111 -> phone 628999
+      const { qb, captured } = makeCaptureQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.getMessages('sess-1', { from: '111@lid' });
+
+      expect(lidMappingStore.getCached).toHaveBeenCalledWith('111');
+      expect(captured.froms).toEqual(['111@lid', '628999@c.us', '628999@s.whatsapp.net']);
+      expect(captured.authorFroms).toEqual(captured.froms); // same candidates drive the author match
+      expect(captured.froms).not.toContain('111@c.us'); // the lid's digits are not a phone
+      expect(lidMappingStore.lidsForPhone).not.toHaveBeenCalled();
+    });
+
+    it('keeps an unresolved @lid filter to the literal id only', async () => {
+      lidMappingStore.getCached.mockReturnValue(null); // known-unresolved
+      const { qb, captured } = makeCaptureQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.getMessages('sess-1', { from: '111@lid' });
+
+      expect(captured.froms).toEqual(['111@lid']);
+    });
+
+    it('keeps the user-dialect expansion for a bare phone filter', async () => {
+      lidMappingStore.lidsForPhone.mockReturnValue(['111']);
+      const { qb, captured } = makeCaptureQb();
+      (repository.createQueryBuilder as jest.Mock).mockReturnValue(qb);
+
+      await service.getMessages('sess-1', { from: '628999' });
+
+      expect(captured.froms).toEqual(['628999', '628999@c.us', '628999@s.whatsapp.net', '111@lid']);
+      expect(lidMappingStore.lidsForPhone).toHaveBeenCalledWith('628999');
     });
   });
 

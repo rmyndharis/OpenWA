@@ -33,7 +33,8 @@ export class MessageController {
   @ApiQuery({
     name: 'from',
     required: false,
-    description: 'Filter by sender. A phone also matches messages from a lid that resolves to it.',
+    description:
+      'Filter by sender. A phone also matches group messages via the author field and any lid that resolves to it.',
   })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max messages to return (default 50)' })
   @ApiQuery({ name: 'offset', required: false, type: Number, description: 'Offset for pagination' })
