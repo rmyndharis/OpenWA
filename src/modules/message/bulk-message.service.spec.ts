@@ -623,7 +623,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     repo = {
       findOne: jest.fn().mockResolvedValue(undefined),
       save: jest.fn().mockImplementation(b => Promise.resolve(b)),
-      create: jest.fn().mockImplementation((b: MessageBatch) => ({ id: 'b1', ...b })),
+      create: jest.fn().mockImplementation((b: MessageBatch) => Object.assign({ id: 'b1' }, b)),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     sessionService = { getEngine: jest.fn().mockReturnValue({}) };
