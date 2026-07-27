@@ -1168,14 +1168,18 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
           else resolve(stdout);
         });
       });
+      // Token-exact marker match: the marker is a single argv token, so it must appear delimited by
+      // whitespace or string boundaries. A plain substring test would let restarting session
+      // `sales` SIGKILL the LIVE browser of sibling `sales2` (their markers share a prefix).
       const marker = `--openwa-session=${this.config.sessionId}`;
+      const markerRe = new RegExp('(?:^|\\s)' + marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=\\s|$)');
       const killedPids: number[] = [];
       for (const line of psOutput.split('\n')) {
         const match = /^\s*(\d+)\s+(.*)$/.exec(line);
         if (!match) continue;
         const pid = Number(match[1]);
         const args = match[2];
-        if (pid === process.pid || !args.includes(marker)) continue;
+        if (pid === process.pid || !markerRe.test(args)) continue;
         // Never kill a non-browser process that happens to carry the marker string
         // (e.g. a `grep --openwa-session=…` probing the process table).
         if (!/chrome|chromium|headless/i.test(args)) continue;

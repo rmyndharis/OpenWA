@@ -3338,6 +3338,32 @@ describe('WhatsAppWebJsAdapter orphaned Chromium sweep (pre-launch)', () => {
     expect(killSpy).not.toHaveBeenCalled();
   });
 
+  it('does NOT kill a live sibling whose marker merely SHARES A PREFIX with ours (sess vs sess-2)', async () => {
+    // `--openwa-session=sess-orphan` is a substring of `--openwa-session=sess-orphan-2`: a substring
+    // match would SIGKILL the sibling's live browser; the token-exact match must spare it.
+    mockPsResult({
+      stdout: psTable([
+        [1801, `/usr/lib/chromium/chromium --headless --no-sandbox --openwa-session=${SESSION_ID}-2`],
+        [1802, `/usr/lib/chromium/chromium --headless --no-sandbox --openwa-session=${SESSION_ID}extra`],
+      ]),
+    });
+
+    await newAdapter().initialize({});
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it('kills the orphan when the marker is the LAST token on the command line', async () => {
+    mockPsResult({
+      stdout: psTable([[1803, `/usr/lib/chromium/chromium --headless --no-sandbox --openwa-session=${SESSION_ID}`]]),
+    });
+
+    await newAdapter().initialize({});
+
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(1803, 'SIGKILL');
+  });
+
   it('skips the sweep on platforms other than darwin/linux (no ps, no kill)', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
     Object.defineProperty(process, 'platform', { value: 'win32' });
