@@ -1,8 +1,13 @@
+// Spread the real fs so every method passes through, but as configurable props the test can spy on
+// (the bare `import * as fs` namespace is non-configurable, so jest.spyOn can't redefine its methods).
+jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('fs')>('fs') }));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UnauthorizedException, NotFoundException, ConflictException } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
+import * as fs from 'fs';
 import { AuthService, resolveSeedApiKey, bannerKeyLine } from './auth.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
@@ -93,6 +98,7 @@ describe('AuthService', () => {
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
+      increment: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -568,6 +574,181 @@ describe('AuthService', () => {
       await expect(service.validateApiKey('sess-restricted', undefined, 'session-B')).rejects.toThrow(
         'API key not authorized for this session',
       );
+    });
+  });
+
+  // ── usage-stat lost-update safety + shutdown flush ────────────────
+
+  describe('usage-stat lost-update safety', () => {
+    it('keeps the accumulated delta when the windowed save fails, and the next flush carries it', async () => {
+      const rawKey = 'flaky-key';
+      // Fresh row per findOne, as TypeORM returns it (no identity map): the DB state never
+      // reflects the failed write, so the delta must survive in the pending map.
+      const freshRow = () =>
+        createMockApiKey({ keyHash: hashKey(rawKey), lastUsedAt: new Date(Date.now() - 5 * 60_000), usageCount: 5 });
+      (repository.findOne as jest.Mock).mockImplementation(() => Promise.resolve(freshRow()));
+      (repository.save as jest.Mock)
+        .mockRejectedValueOnce(new Error('db write failed'))
+        .mockImplementation(k => Promise.resolve(k));
+
+      // The windowed write fails: the request still succeeds (the key is valid) and the delta is kept.
+      const first = await service.validateApiKey(rawKey);
+      expect(first.usageCount).toBe(6);
+
+      // Still due on the next request (DB lastUsedAt was never written) → the retry persists the
+      // failed delta plus this request's increment — nothing is lost.
+      await service.validateApiKey(rawKey);
+      const saves = (repository.save as jest.Mock).mock.calls as Array<[ApiKey]>;
+      expect(saves[1][0].usageCount).toBe(7); // DB 5 + failed delta 1 + this request 1
+
+      // The successful retry drained the accumulator — nothing left for the shutdown flush.
+      await service.onModuleDestroy();
+      expect(repository.increment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('usage-stat shutdown flush', () => {
+    it('flushes pending deltas on module destroy with an atomic increment, only once', async () => {
+      const rawKey = 'recent-key';
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockApiKey({ keyHash: hashKey(rawKey), lastUsedAt: new Date(), usageCount: 5 }),
+      );
+      (repository.increment as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.validateApiKey(rawKey); // inside the throttle window → coalesced, no DB write
+      expect(repository.save).not.toHaveBeenCalled();
+
+      await service.onModuleDestroy();
+      expect(repository.increment).toHaveBeenCalledWith({ id: 'uuid-1' }, 'usageCount', 1);
+
+      await service.onModuleDestroy(); // idempotent — nothing left pending
+      expect(repository.increment).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing on destroy when there is nothing pending', async () => {
+      await service.onModuleDestroy();
+      expect(repository.increment).not.toHaveBeenCalled();
+    });
+
+    it('tolerates a failing flush (destroy still resolves — stats are best-effort)', async () => {
+      const rawKey = 'recent-key';
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockApiKey({ keyHash: hashKey(rawKey), lastUsedAt: new Date(), usageCount: 5 }),
+      );
+      (repository.increment as jest.Mock).mockRejectedValue(new Error('db gone'));
+
+      await service.validateApiKey(rawKey);
+      await expect(service.onModuleDestroy()).resolves.toBeUndefined();
+    });
+  });
+
+  // ── bootstrap API key file (data/.api-key) staleness ─────────────
+
+  describe('bootstrap API key file (data/.api-key)', () => {
+    let existsSpy: jest.SpyInstance;
+    let readSpy: jest.Mock;
+    let unlinkSpy: jest.Mock;
+    let logSpy: jest.SpyInstance;
+
+    const bannerText = (): string => (logSpy.mock.calls as unknown[][]).map(call => String(call[0])).join('\n');
+
+    beforeEach(() => {
+      existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      readSpy = jest.spyOn(fs, 'readFileSync') as unknown as jest.Mock;
+      readSpy.mockReturnValue('');
+      unlinkSpy = jest.spyOn(fs, 'unlinkSync') as unknown as jest.Mock;
+      unlinkSpy.mockImplementation(() => undefined);
+      logSpy = jest
+        .spyOn((service as unknown as { logger: { log: (...args: unknown[]) => void } }).logger, 'log')
+        .mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('revoke removes the bootstrap key file when it still holds the revoked key', async () => {
+      const key = createMockApiKey({ isActive: true }); // keyHash matches hashKey('test-key')
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('test-key\n');
+
+      await service.revoke('uuid-1');
+
+      expect(unlinkSpy).toHaveBeenCalledWith(expect.stringContaining('.api-key'));
+    });
+
+    it('revoke leaves the file alone when it holds a different (still live) key', async () => {
+      const key = createMockApiKey({ isActive: true });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('another-key');
+
+      await service.revoke('uuid-1');
+
+      expect(unlinkSpy).not.toHaveBeenCalled();
+    });
+
+    it('delete removes the bootstrap key file when it still holds the deleted key', async () => {
+      const key = createMockApiKey();
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.remove as jest.Mock).mockResolvedValue(key);
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('test-key');
+
+      await service.delete('uuid-1');
+
+      expect(unlinkSpy).toHaveBeenCalledWith(expect.stringContaining('.api-key'));
+    });
+
+    it('tolerates a missing file on revoke (nothing to clean up)', async () => {
+      const key = createMockApiKey({ isActive: true });
+      (repository.findOne as jest.Mock).mockResolvedValue(key);
+      (repository.save as jest.Mock).mockImplementation(k => Promise.resolve(k));
+      existsSpy.mockReturnValue(false);
+
+      await service.revoke('uuid-1');
+
+      expect(unlinkSpy).not.toHaveBeenCalled();
+    });
+
+    it('boot removes a stale bootstrap file and the banner no longer advertises the dead key', async () => {
+      (repository.count as jest.Mock).mockResolvedValue(1); // not first boot → the file path is consulted
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('owa_k1_deaddeaddead');
+      (repository.findOne as jest.Mock).mockResolvedValue(null); // hash no longer resolves to any key
+
+      await service.onModuleInit();
+
+      expect(unlinkSpy).toHaveBeenCalledWith(expect.stringContaining('.api-key'));
+      expect(bannerText()).toContain('(check dashboard for keys)');
+      expect(bannerText()).not.toContain('owa_k1_d'); // no fingerprint of the dead key
+    });
+
+    it('boot treats a revoked bootstrap key as stale too', async () => {
+      (repository.count as jest.Mock).mockResolvedValue(1);
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('test-key');
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockApiKey({ isActive: false }));
+
+      await service.onModuleInit();
+
+      expect(unlinkSpy).toHaveBeenCalled();
+      expect(bannerText()).toContain('(check dashboard for keys)');
+    });
+
+    it('boot keeps a live bootstrap key: file untouched, banner shows the masked fingerprint', async () => {
+      (repository.count as jest.Mock).mockResolvedValue(1);
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('test-key');
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockApiKey({ isActive: true }));
+
+      await service.onModuleInit();
+
+      expect(unlinkSpy).not.toHaveBeenCalled();
+      expect(bannerText()).toContain('(full key in data/.api-key');
     });
   });
 

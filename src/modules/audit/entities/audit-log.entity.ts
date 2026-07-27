@@ -13,6 +13,9 @@ export enum AuditAction {
   // EventsGateway — so enforcing a limit never becomes an audit-write flood of its own).
   RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',
 
+  // Queue dashboard (Bull Board) events
+  QUEUE_BOARD_MUTATED = 'queue_board_mutated',
+
   // Session events
   SESSION_CREATED = 'session_created',
   SESSION_STARTED = 'session_started',

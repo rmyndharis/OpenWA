@@ -4,6 +4,8 @@ import { Request, Response } from 'express';
 import { BullBoardAuthMiddleware } from './bull-board-auth.middleware';
 import { AuthService } from '../../modules/auth/auth.service';
 import { ApiKeyRole } from '../../modules/auth/entities/api-key.entity';
+import { AuditService } from '../../modules/audit/audit.service';
+import { AuditAction } from '../../modules/audit/entities/audit-log.entity';
 import { KeyRateLimiter } from '../../modules/mcp/mcp-rate-limit';
 
 const res = {} as Response;
@@ -111,6 +113,7 @@ describe('BullBoardAuthMiddleware pre-auth IP throttle (mirrors MCP createIpThro
     return new BullBoardAuthMiddleware(
       authService as unknown as AuthService,
       configService as unknown as ConfigService,
+      undefined, // no audit service needed for the throttle tests
       new KeyRateLimiter(ipLimit, 60_000),
     );
   };
@@ -185,5 +188,154 @@ describe('BullBoardAuthMiddleware pre-auth IP throttle (mirrors MCP createIpThro
     const next = jest.fn();
     await defaultMw.use(reqFromIp('203.0.113.9', { 'x-api-key': 'admin' }), res, next);
     expect(next).toHaveBeenCalledWith(); // allowed
+  });
+});
+
+// The Bull Board mount is raw Express, so the Nest guard's audit trail never sees it. The middleware
+// now mirrors it at the boundary: 401/403 → WARN API_KEY_AUTH_FAILED; an authenticated non-GET/HEAD
+// request → INFO QUEUE_BOARD_MUTATED. A throttled 429 is NOT audited — the pre-auth IP limiter is the
+// flood bound for both the credential check and the audit table.
+describe('BullBoardAuthMiddleware audit trail', () => {
+  let mw: BullBoardAuthMiddleware;
+  let authService: { validateApiKey: jest.Mock; hasPermission: jest.Mock };
+  let auditService: { logWarn: jest.Mock; logInfo: jest.Mock };
+  const res = {} as Response;
+
+  const adminKey = { id: 'key-1', name: 'Admin', role: ApiKeyRole.ADMIN };
+
+  const reqFor = (
+    method: string,
+    headers: Record<string, unknown> = {},
+    originalUrl = '/api/admin/queues/api/queues/webhookQueue/1/retry',
+  ): Request =>
+    ({
+      headers,
+      query: {},
+      ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' },
+      method,
+      originalUrl,
+      url: originalUrl,
+    }) as unknown as Request;
+
+  beforeEach(() => {
+    authService = { validateApiKey: jest.fn(), hasPermission: jest.fn() };
+    auditService = { logWarn: jest.fn(), logInfo: jest.fn() };
+    const configService = { get: jest.fn().mockReturnValue(undefined) };
+    mw = new BullBoardAuthMiddleware(
+      authService as unknown as AuthService,
+      configService as unknown as ConfigService,
+      auditService as unknown as AuditService,
+    );
+  });
+
+  it('audits a 401 (missing key) with IP, method and path', async () => {
+    const next = jest.fn();
+    await mw.use(reqFor('GET', {}, '/api/admin/queues/'), res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({
+        ipAddress: '127.0.0.1',
+        method: 'GET',
+        path: '/api/admin/queues/',
+        errorMessage: 'API key is required to access the queue dashboard',
+      }),
+    );
+  });
+
+  it('audits a 401 (invalid key) rejection from validateApiKey', async () => {
+    authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
+    const next = jest.fn();
+    await mw.use(reqFor('GET', { 'x-api-key': 'bad' }, '/api/admin/queues/'), res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ errorMessage: 'Invalid API key' }),
+    );
+  });
+
+  it('audits a 403 (valid non-admin key)', async () => {
+    authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.OPERATOR });
+    authService.hasPermission.mockReturnValue(false);
+    const next = jest.fn();
+    await mw.use(reqFor('GET', { 'x-api-key': 'op' }, '/api/admin/queues/'), res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.any(ForbiddenException));
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ errorMessage: 'Admin role required to access the queue dashboard' }),
+    );
+  });
+
+  it('strips the query string from the audited path', async () => {
+    const next = jest.fn();
+    await mw.use(reqFor('GET', {}, '/api/admin/queues/?foo=bar'), res, next);
+
+    expect(auditService.logWarn).toHaveBeenCalledWith(
+      AuditAction.API_KEY_AUTH_FAILED,
+      expect.objectContaining({ path: '/api/admin/queues/' }),
+    );
+  });
+
+  it('audits an authenticated non-GET request as a queue-board mutation with the actor key and method+path', async () => {
+    authService.validateApiKey.mockResolvedValue(adminKey);
+    authService.hasPermission.mockReturnValue(true);
+    const next = jest.fn();
+    await mw.use(reqFor('POST', { 'x-api-key': 'admin' }), res, next);
+
+    expect(next).toHaveBeenCalledWith(); // allowed through
+    expect(auditService.logInfo).toHaveBeenCalledWith(
+      AuditAction.QUEUE_BOARD_MUTATED,
+      expect.objectContaining({
+        apiKey: adminKey,
+        ipAddress: '127.0.0.1',
+        method: 'POST',
+        path: '/api/admin/queues/api/queues/webhookQueue/1/retry',
+      }),
+    );
+    expect(auditService.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('does not audit GET or HEAD requests (read/poll traffic)', async () => {
+    authService.validateApiKey.mockResolvedValue(adminKey);
+    authService.hasPermission.mockReturnValue(true);
+
+    await mw.use(reqFor('GET', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn());
+    await mw.use(reqFor('HEAD', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn());
+
+    expect(auditService.logInfo).not.toHaveBeenCalled();
+    expect(auditService.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('does not audit a throttled 429 — the pre-auth IP limiter is the flood bound', async () => {
+    const tightMw = new BullBoardAuthMiddleware(
+      authService as unknown as AuthService,
+      { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService,
+      auditService as unknown as AuditService,
+      new KeyRateLimiter(1, 60_000),
+    );
+    authService.validateApiKey.mockResolvedValue(adminKey);
+    authService.hasPermission.mockReturnValue(true);
+
+    await tightMw.use(reqFor('GET', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, jest.fn()); // consumes the slot
+    const next = jest.fn();
+    await tightMw.use(reqFor('GET', { 'x-api-key': 'admin' }, '/api/admin/queues/'), res, next); // throttled
+
+    expect(next).toHaveBeenCalledWith(expect.any(HttpException));
+    expect(auditService.logWarn).not.toHaveBeenCalled();
+    expect(auditService.logInfo).not.toHaveBeenCalled();
+  });
+
+  it('degrades gracefully when no audit service is provided (rejections still work)', async () => {
+    const noAuditMw = new BullBoardAuthMiddleware(
+      authService as unknown as AuthService,
+      { get: jest.fn().mockReturnValue(undefined) } as unknown as ConfigService,
+    );
+    const next = jest.fn();
+    await noAuditMw.use(reqFor('GET', {}, '/api/admin/queues/'), res, next);
+    expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedException));
   });
 });
