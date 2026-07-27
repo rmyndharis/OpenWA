@@ -3,7 +3,7 @@
 // webhook Worker's @Processor connection) see the configured values rather than pre-dotenv defaults.
 import './config/load-env';
 import { NestFactory } from '@nestjs/core';
-import { ShutdownSignal } from '@nestjs/common';
+import { INestApplication, ShutdownSignal } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
@@ -12,6 +12,7 @@ import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
+import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
@@ -31,6 +32,11 @@ import { Request, Response, NextFunction, json, urlencoded } from 'express';
 import { randomBytes } from 'crypto';
 import { readFileSync } from 'fs';
 import { extname, join } from 'path';
+
+// The created app, exposed at module scope so the fatal handler below can run a best-effort teardown
+// (engine sessions, Redis/pg) when bootstrap fails AFTER NestFactory.create succeeded — notably a
+// listen() bind failure (EADDRINUSE), where full init already ran.
+let appInstance: INestApplication | undefined;
 
 async function bootstrap() {
   // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset/invalid → INFO.
@@ -82,6 +88,7 @@ async function bootstrap() {
 
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+  appInstance = app;
 
   // Cap request body size (DoS hardening). Media sends carry base64 in the JSON body,
   // so the default is generous; tune with BODY_SIZE_LIMIT.
@@ -334,7 +341,13 @@ async function bootstrap() {
   }
 }
 
-bootstrap().catch((err: unknown) => {
-  createLogger('Bootstrap').error('Fatal error during bootstrap', err instanceof Error ? err.stack : String(err));
-  process.exitCode = 1;
+// A failed bootstrap MUST terminate the process with a non-zero code, not just set `process.exitCode`:
+// listen() runs the FULL init (sessions, Redis, pg, Chromium) before binding the port, so a bind failure
+// (EADDRINUSE) would otherwise leave a zombie process — no HTTP port, yet still holding the event loop
+// open and running WhatsApp sessions, invisible to Docker's restart policy. runBootstrapOrExit logs the
+// failure, runs a bounded best-effort app.close() teardown, then exits(1); a successful boot returns
+// without touching exit. Puppeteer's own `exit` handlers kill any browser children still up.
+void runBootstrapOrExit(bootstrap, {
+  logger: createLogger('Bootstrap'),
+  closeApp: () => (appInstance ? appInstance.close() : Promise.resolve()),
 });
