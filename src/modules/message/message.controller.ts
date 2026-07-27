@@ -1,5 +1,6 @@
-import { Controller, Post, Get, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Query, Res, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
@@ -311,16 +312,23 @@ export class MessageController {
     @Query('limit') limit?: string,
     @Query('includeMedia') includeMedia?: string,
     @Query('deep') deep?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
     // Parse the limit defensively: a non-numeric query value (?limit=abc) yields NaN,
     // so fall back to undefined and let the service apply its default + clamp.
     const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    // A client that disconnects mid-history (includeMedia can mean dozens of multi-MB downloads) must
+    // stop the loop: `close` fires on premature disconnect AND after a normal finish — aborting then is
+    // a no-op because the loop has already run to completion.
+    const abort = new AbortController();
+    res?.on('close', () => abort.abort());
     return this.messageService.getChatHistory(
       sessionId,
       chatId,
       parsedLimit !== undefined && !Number.isNaN(parsedLimit) ? parsedLimit : undefined,
       includeMedia === 'true' || includeMedia === '1',
       deep === 'true' || deep === '1',
+      abort.signal,
     );
   }
 

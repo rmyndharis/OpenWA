@@ -1178,6 +1178,12 @@ describe('MessageService', () => {
       expect(result).toBe(fake);
     });
 
+    it('threads an abort signal through to the engine when one is given', async () => {
+      const { signal } = new AbortController();
+      await service.getChatHistory('sess-1', 'test@c.us', 50, true, false, signal);
+      expect(mockEngine.getChatHistory).toHaveBeenCalledWith('test@c.us', 50, true, undefined, signal);
+    });
+
     describe('deep mode (#347)', () => {
       it('allows a limit above the standard 100 cap when deep=true', async () => {
         await service.getChatHistory('sess-1', 'test@c.us', 500, false, true);

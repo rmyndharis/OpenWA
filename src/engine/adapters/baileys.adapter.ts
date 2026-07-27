@@ -1108,6 +1108,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
     _limit?: number,
     _includeMedia?: boolean,
     _mediaMaxBytes?: number,
+    _signal?: AbortSignal,
   ): Promise<IncomingMessage[]> {
     return this.unsupported('getChatHistory');
   }

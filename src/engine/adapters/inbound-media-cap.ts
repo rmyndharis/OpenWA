@@ -72,6 +72,23 @@ export function isMediaDownloadEnabled(): boolean {
 }
 
 /**
+ * Default aggregate base64 budget for one getChatHistory(includeMedia=true) call: 25 MiB of inlined
+ * payload. The per-message cap (MEDIA_DOWNLOAD_MAX_BYTES) bounds ONE blob, but a 100-message history
+ * could otherwise stack ~100 × 50 MiB of base64 into a single response (and its JSON serialisation).
+ */
+const DEFAULT_CHAT_HISTORY_MEDIA_BUDGET_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Aggregate budget (counted in base64 characters, the actual response/heap payload) for media inlined
+ * by one getChatHistory pass. Once the running total crosses it, remaining media messages carry the
+ * usual `omitted` marker instead of a download. A non-positive/garbage override falls back to the default.
+ */
+export function chatHistoryMediaBudgetBytes(): number {
+  const parsed = Number.parseInt(process.env.CHAT_HISTORY_MEDIA_BUDGET_BYTES ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_CHAT_HISTORY_MEDIA_BUDGET_BYTES;
+}
+
+/**
  * Coerce a sender-declared media size (a protobuf `fileLength`, which may be a number, a Long-like
  * `{ toNumber() }`, a numeric string, or absent) to a finite byte count. Unknown/garbage → 0, i.e.
  * "don't pre-gate" (the streaming abort is the backstop), never NaN.

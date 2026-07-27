@@ -9,16 +9,75 @@ interface LastMessage {
   text: string;
 }
 
+// Default per-map entry cap, matching the other per-session bounds (LID_MAPPING_CACHE_MAX,
+// BAILEYS_MESSAGE_STORE_LIMIT, the session lidPhoneCache — all 5000). Every read below has a defined
+// miss path, so an eviction only costs a re-resolution/re-read, never data loss.
+export const SESSION_STORE_MAP_CAP_DEFAULT = 5000;
+
+/**
+ * Insertion-ordered Map with an LRU cap, the same discipline as LidMappingStoreService: a read or
+ * write re-inserts the key at the most-recent end, and a set evicts the least-recently-used entry
+ * while over `max`. `max = 0` means unbounded.
+ */
+class LruMap<K, V> {
+  private readonly map = new Map<K, V>();
+
+  constructor(private readonly max: number) {}
+
+  has(key: K): boolean {
+    return this.map.has(key);
+  }
+
+  get(key: K): V | undefined {
+    if (!this.map.has(key)) {
+      return undefined;
+    }
+    const value = this.map.get(key) as V;
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    this.map.delete(key);
+    this.map.set(key, value);
+    if (!this.max) {
+      return;
+    }
+    while (this.map.size > this.max) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.map.delete(oldest);
+    }
+  }
+
+  values(): IterableIterator<V> {
+    return this.map.values();
+  }
+}
+
 /**
  * Per-session, in-memory snapshot of Baileys contacts + chats, fed from `sock.ev` events. Baileys has
  * no fetch-all; this data arrives via `contacts.*`/`chats.*`/`messaging-history.set` (a full re-sync on
  * each connect) and is mapped to the neutral `Contact`/`ChatSummary` on read. Holds no socket — pure data.
+ *
+ * Every map is LRU-bounded (`BAILEYS_SESSION_STORE_MAX_ENTRIES`, default 5000 per map, 0 = unbounded)
+ * because contacts/chats/lastMessages/lidToPn all grow from peer-controlled traffic — without a cap a
+ * chatty account leaks one entry per distinct peer ever seen. Miss paths after an eviction:
+ * `lidToPn` falls back to the contacts map and then the persisted cross-session lid->phone table (all
+ * writes are written through), `lastMessage` reads null (callers treat it as "nothing known"),
+ * `getEphemeralExpiration` falls back to `Chat.ephemeralExpiration` then undefined (never forces a
+ * timer), and contact/name lookups degrade to the raw user-part. `ephemeralByChat` is keyed under both
+ * the raw and neutral JID (two entries per chat), so its cap is doubled to cover the same number of
+ * chats.
  */
 export class BaileysSessionStore {
-  private readonly contacts = new Map<string, BaileysContact>();
-  private readonly chats = new Map<string, Chat>();
-  private readonly lastMessages = new Map<string, LastMessage>();
-  private readonly lidToPn = new Map<string, string>();
+  private readonly contacts: LruMap<string, BaileysContact>;
+  private readonly chats: LruMap<string, Chat>;
+  private readonly lastMessages: LruMap<string, LastMessage>;
+  private readonly lidToPn: LruMap<string, string>;
   /**
    * Per-chat disappearing-messages timer (seconds) learned from inbound messages (#473), the reliable
    * source for it: `Chat.ephemeralExpiration` (from `chats.*`/history sync) is empirically absent for a
@@ -27,7 +86,7 @@ export class BaileysSessionStore {
    * `@s.whatsapp.net` or `@lid`) resolves to the same entry. See {@link extractEphemeralDuration} for
    * which message field is read.
    */
-  private readonly ephemeralByChat = new Map<string, number>();
+  private readonly ephemeralByChat: LruMap<string, number>;
 
   /**
    * @param lidStore  optional persisted, cross-session lid->phone table that backs resolution beyond
@@ -37,7 +96,17 @@ export class BaileysSessionStore {
   constructor(
     private readonly lidStore?: LidMappingStore,
     private readonly sessionId?: string,
-  ) {}
+  ) {
+    // Mirrors LidMappingStoreService: a finite default, 0 opts back into unbounded, garbage falls back.
+    const parsed = Number(process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES ?? SESSION_STORE_MAP_CAP_DEFAULT);
+    const maxEntries = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : SESSION_STORE_MAP_CAP_DEFAULT;
+    this.contacts = new LruMap(maxEntries);
+    this.chats = new LruMap(maxEntries);
+    this.lastMessages = new LruMap(maxEntries);
+    this.lidToPn = new LruMap(maxEntries);
+    // Double-keyed (raw + neutral JID per chat), so it needs two slots per chat to cover the same span.
+    this.ephemeralByChat = new LruMap(maxEntries * 2);
+  }
 
   upsertContacts(records: Partial<BaileysContact>[] = []): void {
     for (const r of records) {

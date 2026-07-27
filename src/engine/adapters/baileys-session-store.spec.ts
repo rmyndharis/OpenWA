@@ -1,4 +1,5 @@
 import { BaileysSessionStore } from './baileys-session-store';
+import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 
 describe('BaileysSessionStore', () => {
   let store: BaileysSessionStore;
@@ -361,6 +362,121 @@ describe('BaileysSessionStore', () => {
       const s = new BaileysSessionStore(lidStore, 'sess-1');
       expect(s.resolvePhone('555@lid')).toBeNull();
       expect(s.resolvePhone('666@lid')).toBeNull();
+    });
+  });
+
+  describe('map bounds (BAILEYS_SESSION_STORE_MAX_ENTRIES)', () => {
+    const ENV = 'BAILEYS_SESSION_STORE_MAX_ENTRIES';
+    const orig = process.env[ENV];
+    afterEach(() => {
+      if (orig === undefined) delete process.env[ENV];
+      else process.env[ENV] = orig;
+    });
+
+    const storeWithCap = (cap: string, lidStore?: LidMappingStore) => {
+      process.env[ENV] = cap;
+      return new BaileysSessionStore(lidStore);
+    };
+
+    it('evicts the oldest contact once over the cap; the miss reads as "unknown"', () => {
+      const s = storeWithCap('2');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'A' }]);
+      s.upsertContacts([{ id: '628222@s.whatsapp.net', name: 'B' }]);
+      s.upsertContacts([{ id: '628333@s.whatsapp.net', name: 'C' }]);
+      expect(s.listContacts()).toHaveLength(2);
+      expect(s.findContact('628111@s.whatsapp.net')).toBeNull(); // evicted — same as never seen
+      expect(s.findContact('628222@s.whatsapp.net')?.name).toBe('B');
+      expect(s.findContact('628333@s.whatsapp.net')?.name).toBe('C');
+    });
+
+    it('treats a read as usage: a refreshed entry survives while a stale one is evicted (LRU)', () => {
+      const s = storeWithCap('2');
+      s.upsertContacts([{ id: '628111@s.whatsapp.net', name: 'A' }]);
+      s.upsertContacts([{ id: '628222@s.whatsapp.net', name: 'B' }]);
+      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('A'); // refresh A
+      s.upsertContacts([{ id: '628333@s.whatsapp.net', name: 'C' }]); // evicts B, not A
+      expect(s.findContact('628111@s.whatsapp.net')?.name).toBe('A');
+      expect(s.findContact('628222@s.whatsapp.net')).toBeNull();
+    });
+
+    it('bounds chats: listChats stays at the cap and drops the oldest conversation', () => {
+      const s = storeWithCap('2');
+      s.upsertChats([{ id: '628111@s.whatsapp.net', name: 'A' }]);
+      s.upsertChats([{ id: '628222@s.whatsapp.net', name: 'B' }]);
+      s.upsertChats([{ id: '628333@s.whatsapp.net', name: 'C' }]);
+      expect(s.listChats().map(c => c.id)).toEqual(['628222@c.us', '628333@c.us']);
+    });
+
+    it('bounds lastMessages: an evicted preview reads as the null miss callers already handle', () => {
+      const s = storeWithCap('2');
+      for (const [i, ts] of [
+        ['628111', 100],
+        ['628222', 200],
+        ['628333', 300],
+      ] as const) {
+        s.recordMessage({
+          key: { remoteJid: `${i}@s.whatsapp.net`, fromMe: false, id: `M-${i}` },
+          message: { conversation: 'hi' },
+          messageTimestamp: ts,
+        });
+      }
+      expect(s.lastMessage('628111@s.whatsapp.net')).toBeNull(); // sendSeen/markUnread/deleteChat → false
+      expect(s.lastMessage('628333@s.whatsapp.net')?.key.id).toBe('M-628333');
+    });
+
+    it('bounds lidToPn: an evicted mapping still resolves via the write-through persistent table', () => {
+      const map = new Map<string, string | null>();
+      const lidStore = {
+        getCached: jest.fn((lid: string) => map.get(lid)),
+        lidsForPhone: jest.fn(() => [] as string[]),
+        remember: jest.fn((lid: string, phone: string | null) => {
+          map.set(lid, phone);
+          return Promise.resolve();
+        }),
+      };
+      const s = storeWithCap('2', lidStore);
+      s.addLidMappings([
+        { lid: '111@lid', pn: '628111@s.whatsapp.net' },
+        { lid: '222@lid', pn: '628222@s.whatsapp.net' },
+        { lid: '333@lid', pn: '628333@s.whatsapp.net' },
+      ]);
+      // 111 was evicted from memory: resolution falls through to the persisted row (getCached hit).
+      expect(s.resolvePhone('111@lid')).toBe('628111');
+      expect(lidStore.getCached).toHaveBeenCalledWith('111');
+      // 333 is still in memory: no persistent-table read needed.
+      expect(s.resolvePhone('333@lid')).toBe('628333');
+      expect(lidStore.getCached).not.toHaveBeenCalledWith('333');
+    });
+
+    it('bounds ephemeralByChat (two keys per chat): the oldest chat timer falls back to undefined', () => {
+      const s = storeWithCap('2'); // timer map allows 2 × cap = 4 keys → two chats
+      for (const i of ['628111', '628222', '628333']) {
+        s.recordMessage({
+          key: { remoteJid: `${i}@s.whatsapp.net`, fromMe: false, id: `M-${i}` },
+          message: { conversation: 'hi' },
+          messageTimestamp: 100,
+          ephemeralDuration: 86400,
+        });
+      }
+      expect(s.getEphemeralExpiration('628111@s.whatsapp.net')).toBeUndefined(); // evicted → no forced timer
+      expect(s.getEphemeralExpiration('628222@s.whatsapp.net')).toBe(86400);
+      expect(s.getEphemeralExpiration('628333@s.whatsapp.net')).toBe(86400);
+    });
+
+    it('treats 0 as unbounded (legacy behaviour)', () => {
+      const s = storeWithCap('0');
+      for (let i = 0; i < 100; i++) {
+        s.upsertContacts([{ id: `62${1000 + i}@s.whatsapp.net` }]);
+      }
+      expect(s.listContacts()).toHaveLength(100);
+    });
+
+    it('falls back to the 5000 default for a garbage override', () => {
+      const s = storeWithCap('not-a-number');
+      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net` })));
+      expect(s.listContacts()).toHaveLength(5000);
+      expect(s.findContact('62100000@s.whatsapp.net')).toBeNull(); // the oldest went first
+      expect(s.findContact('62105000@s.whatsapp.net')).not.toBeNull();
     });
   });
 });

@@ -403,6 +403,94 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
     expect(mediaMsg.downloadMedia).not.toHaveBeenCalled();
     expect(out[0].media).toMatchObject({ omitted: true, sizeBytes: 12 * 1024 * 1024, mimetype: 'image/jpeg' });
   });
+
+  describe('aggregate media budget + abort', () => {
+    const ENV = 'CHAT_HISTORY_MEDIA_BUDGET_BYTES';
+    const orig = process.env[ENV];
+    afterEach(() => {
+      if (orig === undefined) delete process.env[ENV];
+      else process.env[ENV] = orig;
+    });
+
+    const mediaMsg = (id: string, data: string) => ({
+      id: { _serialized: id },
+      from: '621@c.us',
+      to: 'me',
+      body: '',
+      type: 'image',
+      timestamp: 100,
+      fromMe: false,
+      hasMedia: true,
+      hasQuotedMsg: false,
+      _data: { size: data.length, mimetype: 'image/jpeg' },
+      downloadMedia: jest.fn().mockResolvedValue({ data, mimetype: 'image/jpeg' }),
+    });
+    const clientFor = (...msgs: unknown[]) => ({
+      getChatById: jest.fn().mockResolvedValue({ fetchMessages: jest.fn().mockResolvedValue(msgs) }),
+    });
+
+    it('inlines every media payload while the running total stays under the budget (unchanged behaviour)', async () => {
+      process.env[ENV] = '100';
+      const m1 = mediaMsg('M6', 'QUJD');
+      const m2 = mediaMsg('M7', 'QUJDRA');
+
+      const out = await readyAdapter(clientFor(m1, m2)).getChatHistory('621@c.us', 50, true);
+
+      expect(m1.downloadMedia).toHaveBeenCalled();
+      expect(m2.downloadMedia).toHaveBeenCalled();
+      expect(out[0].media).toEqual({ mimetype: 'image/jpeg', data: 'QUJD' });
+      expect(out[1].media).toEqual({ mimetype: 'image/jpeg', data: 'QUJDRA' });
+    });
+
+    it('marks later media omitted once the budget is spent — no download, bounded response', async () => {
+      process.env[ENV] = '4'; // exactly the first payload's base64 length
+      const m1 = mediaMsg('M8', 'QUJD');
+      const m2 = mediaMsg('M9', 'QUJD');
+      const m3 = mediaMsg('M10', 'QUJD');
+
+      const out = await readyAdapter(clientFor(m1, m2, m3)).getChatHistory('621@c.us', 50, true);
+
+      // The message that consumes the last of the budget stays inline (check-then-spend); only the
+      // messages AFTER the budget is exhausted degrade to the declared-only marker.
+      expect(out[0].media).toEqual({ mimetype: 'image/jpeg', data: 'QUJD' });
+      expect(out[1].media).toEqual({ mimetype: 'image/jpeg', omitted: true, sizeBytes: 4 });
+      expect(out[2].media).toEqual({ mimetype: 'image/jpeg', omitted: true, sizeBytes: 4 });
+      expect(m2.downloadMedia).not.toHaveBeenCalled();
+      expect(m3.downloadMedia).not.toHaveBeenCalled();
+    });
+
+    it('stops the read loop when the abort signal fires (client disconnect)', async () => {
+      const controller = new AbortController();
+      const m1 = mediaMsg('M11', 'QUJD');
+      m1.downloadMedia.mockImplementation(() => {
+        controller.abort(); // the disconnect lands while the first download is in flight
+        return Promise.resolve({ data: 'QUJD', mimetype: 'image/jpeg' });
+      });
+      const m2 = mediaMsg('M12', 'QUJD');
+
+      const out = await readyAdapter(clientFor(m1, m2)).getChatHistory(
+        '621@c.us',
+        50,
+        true,
+        undefined,
+        controller.signal,
+      );
+
+      expect(out).toHaveLength(1); // the second message is never processed
+      expect(m2.downloadMedia).not.toHaveBeenCalled();
+    });
+
+    it('returns an empty result without downloading when the signal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const m1 = mediaMsg('M13', 'QUJD');
+
+      const out = await readyAdapter(clientFor(m1)).getChatHistory('621@c.us', 50, true, undefined, controller.signal);
+
+      expect(out).toEqual([]);
+      expect(m1.downloadMedia).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('WhatsAppWebJsAdapter.sendPollMessage', () => {

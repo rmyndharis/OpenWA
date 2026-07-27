@@ -78,6 +78,7 @@ import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from '
 import { buildVCard } from './vcard';
 import {
   capInboundMedia,
+  chatHistoryMediaBudgetBytes,
   coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
@@ -170,6 +171,22 @@ export function extractWwebjsCall(msg: Message): { video: boolean; missed: boole
   if ((msg.type as string) !== 'call_log') return undefined;
   const d = (msg as unknown as { _data?: { isVideoCall?: boolean; callDuration?: number } })._data ?? {};
   return { video: Boolean(d.isVideoCall), missed: !msg.fromMe && !d.callDuration };
+}
+
+/**
+ * The `media` envelope for a message whose blob is not downloaded: keeps the sender-declared metadata
+ * so the `media` field stays present (n8n/dashboard contract) while carrying the `omitted` marker
+ * instead of base64. Used when downloads are disabled, the size pre-gate trips, the aggregate history
+ * budget is spent, or the download fails/times out.
+ */
+function declaredOnlyMedia(msg: Message): IncomingMessage['media'] {
+  const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
+  return {
+    mimetype: data?.mimetype ?? '',
+    filename: data?.filename || undefined,
+    omitted: true,
+    sizeBytes: coerceDeclaredSize(data?.size),
+  };
 }
 
 /**
@@ -372,13 +389,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     maxBytesOverride?: number,
   ): Promise<IncomingMessage['media'] | undefined> {
     if (!isMediaDownloadEnabled()) {
-      const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
-      return {
-        mimetype: data?.mimetype ?? '',
-        filename: data?.filename || undefined,
-        omitted: true,
-        sizeBytes: coerceDeclaredSize(data?.size),
-      };
+      return declaredOnlyMedia(msg);
     }
     const maxBytes = maxBytesOverride ?? inboundMediaMaxBytes();
     const data = (msg as unknown as { _data?: { size?: number; mimetype?: string; filename?: string } })._data;
@@ -389,12 +400,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         sizeBytes: declared,
         maxBytes,
       });
-      return {
-        mimetype: data?.mimetype ?? '',
-        filename: data?.filename || undefined,
-        omitted: true,
-        sizeBytes: declared,
-      };
+      return declaredOnlyMedia(msg);
     }
     // msg.downloadMedia() can't be aborted, so freeing the slot the moment the wall-clock deadline fires
     // would admit a fresh download while the abandoned one is still materialising in heap — letting the
@@ -437,12 +443,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     });
     const media = await boundedReady;
     if (!media) {
-      return {
-        mimetype: data?.mimetype ?? '',
-        filename: data?.filename || undefined,
-        omitted: true,
-        sizeBytes: declared,
-      };
+      return declaredOnlyMedia(msg);
     }
     const capped = capInboundMedia({
       mimetype: media.mimetype,
@@ -2204,12 +2205,22 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     limit: number = 50,
     includeMedia: boolean = false,
     mediaMaxBytes?: number,
+    signal?: AbortSignal,
   ): Promise<IncomingMessage[]> {
     this.ensureReady();
     const chat = await this.client!.getChatById(chatId);
     const messages = await chat.fetchMessages({ limit });
     const results: IncomingMessage[] = [];
+    // Aggregate base64 budget across the whole pass: the per-message cap bounds ONE blob, but without
+    // an aggregate bound a 100-message history could stack ~100 × 50 MiB into one response. Once the
+    // running total crosses the budget, later media messages get the declared-only `omitted` marker —
+    // no download — while everything already inlined stays inline (a small history is byte-identical
+    // to before). `signal` (client disconnect) stops the loop between messages; partials are returned.
+    let mediaBudget = includeMedia ? chatHistoryMediaBudgetBytes() : 0;
     for (const msg of messages) {
+      if (signal?.aborted) {
+        break;
+      }
       // Reuse the shared mapper so history messages carry the same author/contact
       // enrichment as live incoming messages (#223). The mapper defaults chatId to
       // msg.from, which is wrong here (history includes fromMe messages whose `from`
@@ -2242,13 +2253,23 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         }
       }
       if (includeMedia && msg.hasMedia) {
-        try {
-          // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the
-          // response/heap. Callers (the status seed) can tighten the cap below the global default.
-          const capped = await this.capInboundMediaFor(msg, mediaMaxBytes);
-          if (capped) out.media = capped;
-        } catch (error) {
-          this.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
+        if (mediaBudget <= 0) {
+          out.media = declaredOnlyMedia(msg);
+        } else {
+          try {
+            // Same pre-gate + limiter as live media: a large historical blob shouldn't bloat the
+            // response/heap. Callers (the status seed) can tighten the cap below the global default.
+            const capped = await this.capInboundMediaFor(msg, mediaMaxBytes);
+            if (capped) {
+              out.media = capped;
+              // Only an inlined payload spends budget; an omitted marker carries no base64.
+              if (capped.data) {
+                mediaBudget -= capped.data.length;
+              }
+            }
+          } catch (error) {
+            this.logger.warn(`Failed to download media for ${msg.id._serialized}: ${String(error)}`);
+          }
         }
       }
       results.push(out);

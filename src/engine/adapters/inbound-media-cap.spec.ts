@@ -1,5 +1,6 @@
 import {
   capInboundMedia,
+  chatHistoryMediaBudgetBytes,
   inboundMediaMaxBytes,
   inboundMediaConcurrency,
   inboundMediaTimeoutMs,
@@ -168,6 +169,30 @@ describe('inbound media cap', () => {
       expect(isMediaDownloadEnabled()).toBe(true);
       process.env[ENV] = 'whatever';
       expect(isMediaDownloadEnabled()).toBe(true);
+    });
+  });
+
+  describe('chatHistoryMediaBudgetBytes', () => {
+    const ENV = 'CHAT_HISTORY_MEDIA_BUDGET_BYTES';
+    const orig = process.env[ENV];
+    afterEach(() => {
+      if (orig === undefined) delete process.env[ENV];
+      else process.env[ENV] = orig;
+    });
+
+    it('defaults to 25 MiB', () => {
+      delete process.env[ENV];
+      expect(chatHistoryMediaBudgetBytes()).toBe(25 * 1024 * 1024);
+    });
+    it('honors a positive override', () => {
+      process.env[ENV] = '1024';
+      expect(chatHistoryMediaBudgetBytes()).toBe(1024);
+    });
+    it('falls back to the default for a non-positive/garbage override', () => {
+      process.env[ENV] = '0';
+      expect(chatHistoryMediaBudgetBytes()).toBe(25 * 1024 * 1024);
+      process.env[ENV] = 'abc';
+      expect(chatHistoryMediaBudgetBytes()).toBe(25 * 1024 * 1024);
     });
   });
 
