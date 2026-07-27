@@ -71,6 +71,18 @@ interface StatusReceivedEvent {
   timestamp: string;
 }
 
+/** Ack frame answering a client `subscribe` request (`{type: 'subscribed'}`). */
+interface SubscribedEvent {
+  sessionId: string;
+  events: string[];
+}
+
+/** Error frame answering a client request (`{type: 'error'}`), e.g. FORBIDDEN_SESSION. */
+interface ServerErrorEvent {
+  code: string;
+  message: string;
+}
+
 interface WebSocketEvents {
   onSessionStatus?: (event: SessionStatusEvent) => void;
   onQRCode?: (event: QRCodeEvent) => void;
@@ -80,17 +92,36 @@ interface WebSocketEvents {
   onMessageRevoked?: (event: MessageRevokedEvent) => void;
   onMessageEdited?: (event: MessageEditedEvent) => void;
   onStatusReceived?: (event: StatusReceivedEvent) => void;
+  onSubscribed?: (event: SubscribedEvent) => void;
+  onServerError?: (event: ServerErrorEvent) => void;
 }
 
 // Shape of the server -> client event envelope produced by the NestJS gateway.
+// `type` is the 'event' literal so the frame union below narrows on it.
 interface ServerEventEnvelope {
-  type: string;
+  type: 'event';
   timestamp: string;
   payload?: {
     event: string;
     sessionId: string;
     data: Record<string, unknown>;
   };
+}
+
+// The gateway also answers client requests (subscribe/unsubscribe/ping) with ack frames
+// (`subscribed` / `unsubscribed` / `pong`) and error frames (`error`) on the same 'message'
+// channel. Routing them to the UI matters: a scoped key's rejected wildcard subscribe must be
+// visible so the caller can fall back to per-session rooms instead of waiting forever.
+interface ServerAckFrame {
+  type: 'subscribed' | 'unsubscribed' | 'pong';
+  sessionId?: string;
+  events?: string[];
+}
+
+interface ServerErrorFrame {
+  type: 'error';
+  code?: string;
+  message?: string;
 }
 
 // Use current origin for WebSocket (goes through nginx proxy in Docker)
@@ -198,8 +229,21 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
     const socket = socketRef.current;
 
-    const handleIncomingMessage = (msg: ServerEventEnvelope) => {
-      if (!msg || msg.type !== 'event' || !msg.payload) return;
+    const handleIncomingMessage = (msg: ServerEventEnvelope | ServerAckFrame | ServerErrorFrame) => {
+      if (!msg || typeof msg.type !== 'string') return;
+
+      if (msg.type === 'error') {
+        events.onServerError?.({ code: String(msg.code ?? ''), message: String(msg.message ?? '') });
+        return;
+      }
+      if (msg.type === 'subscribed') {
+        events.onSubscribed?.({
+          sessionId: String(msg.sessionId ?? ''),
+          events: Array.isArray(msg.events) ? msg.events : [],
+        });
+        return;
+      }
+      if (msg.type !== 'event' || !msg.payload) return;
 
       const { event, sessionId, data } = msg.payload;
 

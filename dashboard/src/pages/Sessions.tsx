@@ -8,6 +8,11 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
+import {
+  createSessionFeedState,
+  noteSessionFeedError,
+  subscribeSessionFeed,
+} from '../utils/sessionFeedSubscription';
 import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
@@ -67,6 +72,12 @@ export function Sessions() {
     sessionsRef.current = sessions;
   }, [sessions]);
 
+  // Live session-feed subscription state: wildcard first, per-session fallback for scoped keys.
+  const feedStateRef = useRef(createSessionFeedState());
+  // Most recent server error frame; folded into feedStateRef by the effect below (kept as state
+  // so the fallback runs after `subscribe` exists — the handler can't reference it directly).
+  const [feedErrorFrame, setFeedErrorFrame] = useState<{ code: string } | null>(null);
+
   const { isConnected, subscribe } = useWebSocket({
     onQRCode: useCallback((event: { sessionId: string; qrCode: string }) => {
       // Fill the open QR modal straight from the push — the REST endpoint 400s BY DESIGN until a QR
@@ -96,15 +107,35 @@ export function Sessions() {
       },
       [toast, t, fetchSessions],
     ),
+    onServerError: useCallback((frame: { code: string }) => {
+      setFeedErrorFrame(frame);
+    }, []),
   });
 
-  // The gateway delivers events only to subscribed rooms; join the wildcard
-  // session.status room so status changes for every session are received live.
+  // Fold a server error frame into the feed state: a session-scoped key may not join the '*'
+  // room — silently fall back to one subscription per listed session (the list endpoint is
+  // already scope-filtered server-side), otherwise no status/QR push ever arrives and the QR
+  // modal sits on "generating" forever.
+  useEffect(() => {
+    if (!feedErrorFrame) return;
+    if (noteSessionFeedError(feedStateRef.current, feedErrorFrame.code)) {
+      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessionsRef.current.map(s => s.id));
+    }
+  }, [feedErrorFrame, subscribe]);
+
+  // Join the live session feed (wildcard attempt, or per-session rooms after a scope fallback).
   useEffect(() => {
     if (isConnected) {
-      subscribe('*', ['session.status', 'session.qr']);
+      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessionsRef.current.map(s => s.id));
     }
   }, [isConnected, subscribe]);
+
+  // In per-session mode, sessions loaded/created after the fallback still need their rooms.
+  useEffect(() => {
+    if (isConnected && feedStateRef.current.scope === 'per-session') {
+      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessions.map(s => s.id));
+    }
+  }, [isConnected, sessions, subscribe]);
 
   useEffect(() => {
     fetchSessions();

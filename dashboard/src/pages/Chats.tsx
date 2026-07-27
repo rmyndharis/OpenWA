@@ -58,9 +58,13 @@ import { useChannelMessages } from '../hooks/useChannelMessages';
 import { useContactStatuses } from '../hooks/useContactStatuses';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
 import { useCurrentEngineQuery } from '../hooks/queries';
+import { createTrailingCoalescer } from '../utils/trailingCoalescer';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
 import './Chats.css';
+
+// Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
+const MARK_READ_DEBOUNCE_MS = 750;
 
 type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
 
@@ -572,13 +576,28 @@ export function Chats() {
     return () => URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
 
+  // Coalesce mark-as-read RPCs per chat: every incoming message in the visible chat raises a
+  // read event, and a per-event POST sprays the gateway into 429s. One trailing call per chat
+  // after a quiet window carries the same effect.
+  const markReadCoalescer = useMemo(
+    () =>
+      createTrailingCoalescer<string>(chatId => {
+        void sessionApi.markChatRead(selectedSessionId, chatId).catch(err => {
+          showWarningToast(t('chats.errors.markRead'), err instanceof Error ? err.message : undefined);
+        });
+      }, MARK_READ_DEBOUNCE_MS),
+    [selectedSessionId, t, showWarningToast],
+  );
+
+  // Drop pending trailing calls on unmount / session switch so a late fire never targets an
+  // unmounted component or the previous session.
+  useEffect(() => () => markReadCoalescer.cancel(), [markReadCoalescer]);
+
   const markChatRead = useCallback(
     (chatId: string) => {
-      void sessionApi.markChatRead(selectedSessionId, chatId).catch(err => {
-        showWarningToast(t('chats.errors.markRead'), err instanceof Error ? err.message : undefined);
-      });
+      markReadCoalescer.call(chatId);
     },
-    [selectedSessionId, t, showWarningToast],
+    [markReadCoalescer],
   );
 
   // 3. WebSocket integration for real-time messages
