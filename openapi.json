@@ -2642,6 +2642,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "force": {
+                    "type": "boolean",
+                    "description": "Allow the replace to proceed even while engines are running for sessions the backup does not contain (they keep running until restart; see restartRequired)."
+                  },
                   "tables": {
                     "type": "object",
                     "properties": {
@@ -2656,6 +2660,9 @@
                       },
                       "messageBatches": {
                         "type": "array"
+                      },
+                      "statusUpdates": {
+                        "type": "array"
                       }
                     }
                   }
@@ -2667,6 +2674,9 @@
         "responses": {
           "200": {
             "description": "Data imported successfully"
+          },
+          "409": {
+            "description": "Refused: live engines exist for sessions the backup would remove (retry with force=true)"
           }
         },
         "summary": "Import data to Data DB (replaces existing data)",

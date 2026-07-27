@@ -226,6 +226,35 @@ describe('StorageService import resource caps (decompression-bomb defense)', () 
   });
 });
 
+describe('StorageService import stream error handling (request fails, process survives)', () => {
+  let baseDir: string;
+  let service: StorageService;
+
+  beforeEach(() => {
+    ({ service, baseDir } = makeLocalService());
+  });
+
+  afterEach(() => {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it("rejects on a non-gzip input instead of crashing on gunzip's unhandled error event", async () => {
+    // zlib emits 'error' on the gunzip stream for a corrupt/non-gzip payload; pipe() does not forward
+    // it, so without a listener on gunzip this would take down the whole process.
+    const notGzip = Readable.from([Buffer.from('this is definitely not a gzip stream')]);
+    await expect(service.importFromStream(notGzip)).rejects.toThrow();
+  });
+
+  it('rejects when the input stream itself errors mid-read', async () => {
+    const failing = new Readable({
+      read() {
+        this.destroy(new Error('read boom'));
+      },
+    });
+    await expect(service.importFromStream(failing)).rejects.toThrow(/read boom/);
+  });
+});
+
 describe('StorageService local traversal (async + bounded)', () => {
   let baseDir: string;
   let service: StorageService;

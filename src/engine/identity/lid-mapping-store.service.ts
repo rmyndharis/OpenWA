@@ -54,8 +54,21 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    await this.reload();
+  }
+
+  /**
+   * (Re)load the in-memory mirror from the table. Called on boot, and by the infra data import after
+   * a committed full-replace restore — the mirror is otherwise write-through only, so restored rows
+   * would never reach it and entries the restore removed would stay resolvable until the next start.
+   * Never throws: a missing table (migration not yet applied) or a read error must not block boot or
+   * fail the import — resolution falls back to engine re-resolution until the table is readable.
+   */
+  async reload(): Promise<void> {
     try {
       const rows = await this.repo.find();
+      this.lidToPhone.clear();
+      this.phoneToLids.clear();
       for (const row of rows) {
         this.index(row.lid, row.phone);
       }
@@ -63,8 +76,6 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
         `Loaded ${rows.length} lid->phone mappings into cache${this.maxCachedLids ? ` (cap ${this.maxCachedLids})` : ''}`,
       );
     } catch (err) {
-      // A missing table (migration not yet applied) or a read error must not block boot: resolution
-      // falls back to the per-session in-memory map until the table is available.
       this.logger.warn(`Could not preload lid->phone mappings: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

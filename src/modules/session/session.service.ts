@@ -2356,6 +2356,15 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return this.engines.has(id);
   }
 
+  /**
+   * Ids of every session with a live engine — including ones mid-initialization (their engine is not
+   * in `engines` yet but will register when start() completes). The infra import pre-flight uses this
+   * to refuse a full-replace restore that would orphan a running engine.
+   */
+  getActiveSessionIds(): string[] {
+    return [...new Set([...this.engines.keys(), ...this.initializingSessions])];
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }

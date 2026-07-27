@@ -315,8 +315,23 @@ export class StorageService {
         if (settled) return;
         settled = true;
         extract.destroy();
+        gunzip.destroy();
+        // Destroying the input mid-pipe stops the source; without an error arg it emits no 'error'.
+        inputStream.destroy();
         reject(err);
       };
+      // Every stream in the pipeline needs an 'error' listener: an EventEmitter with none CRASHES the
+      // process on error. pipe() does not forward errors, so a corrupt gzip (zlib error on gunzip) or
+      // an input read failure (disk I/O, file replaced mid-read) would otherwise kill the server
+      // mid-request instead of failing the import.
+      gunzip.on('error', (err: Error) => {
+        this.logger.error('Import failed (gzip)', String(err));
+        fail(err);
+      });
+      inputStream.on('error', (err: Error) => {
+        this.logger.error('Import failed (input)', String(err));
+        fail(err);
+      });
 
       extract.on('entry', (header, stream, next) => {
         if (settled) {

@@ -28,6 +28,7 @@ jest.mock('fs', () => {
 });
 
 import { DataSource, QueryFailedError } from 'typeorm';
+import { ConflictException } from '@nestjs/common';
 import { InfraController } from './infra.controller';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -43,6 +44,7 @@ import { ConversationMapping } from '../integration/entities/conversation-mappin
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
+import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
 describe('InfraController access control (Vuln 2)', () => {
@@ -1331,5 +1333,325 @@ describe('InfraController C002 audit trail — import emits only on a committed 
     expect(res.imported).toBe(false);
     const actions = (audit.logInfo.mock.calls as Array<[AuditAction, unknown]>).map(c => c[0]);
     expect(actions).not.toContain(AuditAction.INFRA_DATA_IMPORTED);
+  });
+});
+
+describe('InfraController.exportData optional-table strictness', () => {
+  const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
+  const build = (query: jest.Mock) =>
+    new InfraController(
+      cfg as never,
+      {} as never,
+      { query } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+  it('rethrows a non-missing-table error (lock/IO/timeout) instead of reporting a partial export as complete', async () => {
+    // A lock on ONE optional table must fail the whole export: silently exporting without that table
+    // produces a backup the import then treats as authoritative, DELETing the table's existing rows.
+    const query = jest.fn((sql: string) =>
+      sql === 'SELECT * FROM messages'
+        ? Promise.reject(new Error('SQLITE_BUSY: database is locked'))
+        : Promise.resolve([]),
+    );
+    await expect(build(query).exportData()).rejects.toThrow(/database is locked/);
+  });
+
+  it('tolerates a genuinely absent optional table — and marks it in skippedTables', async () => {
+    const missing = Object.assign(new Error('no such table: messages'), { name: 'SqliteError' });
+    const query = jest.fn((sql: string) =>
+      sql === 'SELECT * FROM messages' ? Promise.reject(missing) : Promise.resolve([]),
+    );
+    const dump = await build(query).exportData();
+    expect(dump.counts.messages).toBe(0);
+    expect(dump.tables.messages).toEqual([]);
+    expect(dump.skippedTables).toContain('messages');
+    // Every other table still exported (all empty here, none skipped).
+    expect(dump.skippedTables).toEqual(['messages']);
+  });
+
+  it('strips the Postgres generated body_ts tsvector from exported message rows', async () => {
+    // Postgres' STORED generated FTS column rides along in `SELECT *`; it is an index artifact, not
+    // payload, and must not be serialized into a (dialect-neutral) backup.
+    const messageRow = {
+      id: 'm1',
+      sessionId: 's1',
+      waMessageId: 'WA1',
+      chatId: 'c1',
+      chatName: null,
+      author: null,
+      from: 'a',
+      to: 'b',
+      body: 'hello',
+      type: 'text',
+      direction: 'incoming',
+      timestamp: 1700000000,
+      metadata: null,
+      status: 'delivered',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      body_ts: "'hello'",
+    };
+    const query = jest.fn((sql: string) => Promise.resolve(sql === 'SELECT * FROM messages' ? [messageRow] : []));
+    const dump = await build(query).exportData();
+    expect(dump.tables.messages).toHaveLength(1);
+    expect(dump.tables.messages[0]).not.toHaveProperty('body_ts');
+    expect(dump.tables.messages[0].body).toBe('hello');
+  });
+});
+
+describe('InfraController.importData status_updates + runtime reconciliation', () => {
+  let ds: DataSource;
+  const cfg = { get: (key: string, def?: unknown) => (key === 'dataDatabase.type' ? 'sqlite' : def) };
+
+  // Positional constructor: (config, mainDs, dataDs, engineFactory, dockerService, cacheService,
+  // storageService, shutdownService, webhookQueue?, auditService?, sessionService?, lidMappingStore?).
+  const build = (opts: { sessionService?: unknown; lidMappingStore?: unknown } = {}) =>
+    new InfraController(
+      cfg as never,
+      {} as never,
+      ds,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      undefined as never,
+      undefined,
+      opts.sessionService as never,
+      opts.lidMappingStore as never,
+    );
+
+  beforeEach(async () => {
+    ds = new DataSource({
+      type: 'better-sqlite3',
+      database: ':memory:',
+      entities: [
+        Session,
+        Webhook,
+        Message,
+        MessageBatch,
+        Template,
+        BaileysStoredMessage,
+        LidMapping,
+        PluginInstance,
+        ConversationMapping,
+        IngressEvent,
+        WebhookDeliveryFailure,
+        IntegrationDeliveryFailure,
+        StatusUpdate,
+      ],
+      synchronize: true,
+    });
+    await ds.initialize();
+  });
+
+  afterEach(async () => {
+    await ds.destroy();
+  });
+
+  const seedSession = (id: string) =>
+    ds.getRepository(Session).save(
+      ds.getRepository(Session).create({
+        id,
+        name: `session-${id}`,
+        status: SessionStatus.READY,
+        phone: null,
+        pushName: null,
+        config: {},
+        proxyUrl: null,
+        proxyType: null,
+        connectedAt: null,
+        lastActiveAt: null,
+      }),
+    );
+
+  it('exports and restores status_updates (the table the docs promise is covered)', async () => {
+    await seedSession('s1');
+    const statusRepo = ds.getRepository(StatusUpdate);
+    await statusRepo.save(
+      statusRepo.create({
+        id: 'su1',
+        sessionId: 's1',
+        contactJid: '628111@c.us',
+        contactName: 'Alice',
+        contactPushName: 'alice',
+        waStatusId: 'false_status@broadcast_ABC',
+        type: 'text',
+        caption: 'on vacation',
+        mediaOmitted: true,
+        omitReason: 'over_cap',
+        backgroundColor: '#FF0000',
+        font: 2,
+        postedAt: 1750000000000,
+        expiresAt: 1750086400000,
+      }),
+    );
+
+    const controller = build();
+    const dump = await controller.exportData();
+    expect(dump.counts.statusUpdates).toBe(1);
+    expect(dump.skippedTables).toEqual([]);
+
+    await statusRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.statusUpdates).toBe(1);
+    const restored = await statusRepo.findOneByOrFail({ id: 'su1' });
+    expect(restored.waStatusId).toBe('false_status@broadcast_ABC');
+    expect(restored.caption).toBe('on vacation');
+    expect(restored.mediaOmitted).toBe(true); // boolean survives the 0/1 round-trip
+    expect(restored.omitReason).toBe('over_cap');
+    expect(restored.font).toBe(2);
+    expect(restored.postedAt).toBe(1750000000000);
+    expect(restored.expiresAt).toBe(1750086400000);
+  });
+
+  it('tolerates body_ts on imported message rows (backup made before the strip)', async () => {
+    await seedSession('s1');
+    const res = await build().importData({
+      tables: {
+        sessions: [
+          {
+            id: 's1',
+            name: 'session-s1',
+            status: 'ready',
+            config: '{}',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ] as never,
+        messages: [
+          {
+            id: 'm1',
+            sessionId: 's1',
+            waMessageId: 'WA1',
+            chatId: 'c1',
+            from: 'a',
+            to: 'b',
+            body: 'hello',
+            type: 'text',
+            direction: 'incoming',
+            status: 'delivered',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            body_ts: "'hello'", // legacy Postgres export artifact — must be ignored, not fail
+          },
+        ] as never,
+      },
+    });
+    expect(res.imported).toBe(true);
+    expect(res.warnings).toEqual([]);
+    expect((await ds.getRepository(Message).findOneByOrFail({ id: 'm1' })).body).toBe('hello');
+  });
+
+  it('reloads the in-memory lid mappings after a committed restore', async () => {
+    await seedSession('s1');
+    const lidMappingStore = { reload: jest.fn().mockResolvedValue(undefined) };
+    const controller = build({ lidMappingStore });
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+    expect(res.imported).toBe(true);
+    expect(lidMappingStore.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT reload lid mappings when the import is refused (nothing committed)', async () => {
+    await seedSession('s1');
+    const lidMappingStore = { reload: jest.fn().mockResolvedValue(undefined) };
+    const res = await build({ lidMappingStore }).importData({ tables: {} });
+    expect(res.imported).toBe(false);
+    expect(lidMappingStore.reload).not.toHaveBeenCalled();
+  });
+
+  it('409s when a live engine would be orphaned by the replace — unless force=true', async () => {
+    await seedSession('s1');
+    const controller = build({ sessionService: { getActiveSessionIds: () => ['ghost'] } });
+    const dump = await controller.exportData(); // backup contains only s1, not the running 'ghost'
+
+    // Without force: 409 Conflict, and the destructive replace never started.
+    const err = await controller.importData({ tables: dump.tables }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getStatus()).toBe(409);
+    expect((err as ConflictException).message).toContain('ghost');
+    expect(await ds.getRepository(Session).count()).toBe(1); // nothing deleted
+
+    // With force: the restore proceeds and the response tells the operator a restart is required
+    // to stop the orphaned engine.
+    const res = await controller.importData({ tables: dump.tables, force: true });
+    expect(res.imported).toBe(true);
+    expect(res.restartRequired).toBe(true);
+    expect(res.orphanedEngines).toEqual(['ghost']);
+  });
+
+  it('reports restartRequired:false when no live engine is orphaned', async () => {
+    await seedSession('s1');
+    const controller = build({ sessionService: { getActiveSessionIds: () => ['s1'] } });
+    const dump = await controller.exportData();
+    const res = await controller.importData({ tables: dump.tables });
+    expect(res.imported).toBe(true);
+    expect(res.restartRequired).toBe(false);
+    expect(res.orphanedEngines).toEqual([]);
+  });
+});
+
+describe('InfraController storage stream failures surface as request errors, not process crashes', () => {
+  it('importStorage maps an archive/stream failure to a 400 with the real reason', async () => {
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue('/srv/openwa');
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/srv/openwa/data/exports/bad.tar.gz');
+    try {
+      const storage = {
+        importFromStream: jest.fn().mockRejectedValue(new Error('incorrect header check')),
+        getCurrentStorageType: () => 'local',
+      };
+      const controller = new InfraController(
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        storage as never,
+        {} as never,
+      );
+      const err = await controller.importStorage({ filePath: 'data/exports/bad.tar.gz' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect((err as BadRequestException).message).toContain('incorrect header check');
+    } finally {
+      cwdSpy.mockRestore();
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+    }
+  });
+
+  it('exportStorage rejects (and the process lives) when the export source stream errors', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-export-err-'));
+    const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      // pipe() never forwards source errors: without a listener on the source this would be an
+      // unhandled 'error' event and kill the process instead of failing the request.
+      const errStream = new Readable({
+        read() {
+          this.destroy(new Error('archive boom'));
+        },
+      });
+      const storage = { createExportStream: jest.fn().mockResolvedValue(errStream) };
+      const controller = new InfraController(
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        storage as never,
+        {} as never,
+      );
+      await expect(controller.exportStorage()).rejects.toThrow(/archive boom/);
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

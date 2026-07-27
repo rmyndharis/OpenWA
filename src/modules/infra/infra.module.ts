@@ -2,6 +2,7 @@ import { Module, DynamicModule, Type } from '@nestjs/common';
 import { InfraController } from './infra.controller';
 import { EngineModule } from '../../engine/engine.module';
 import { DockerModule } from '../docker';
+import { SessionModule } from '../session/session.module';
 
 // Only import QueueModule if explicitly enabled to avoid Redis connection errors. It registers and
 // exports the webhook queue, which the controller injects (@Optional) to report live job counts.
@@ -13,7 +14,9 @@ if (process.env.QUEUE_ENABLED === 'true') {
 }
 
 @Module({
-  imports: [EngineModule, DockerModule, ...queueModules],
+  // SessionModule gives the controller the live-engine registry for the import pre-flight orphan
+  // check. Its own imports (WebhookModule, StatusStoreModule) never point back here — no cycle.
+  imports: [EngineModule, DockerModule, SessionModule, ...queueModules],
   controllers: [InfraController],
 })
 export class InfraModule {}
