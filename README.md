@@ -125,7 +125,7 @@ For any deployment where ethical, legal, or regulatory compliance matters (healt
 | Proxy Support       | ✅     | Per-session proxy configuration    |
 | Rate Limiting       | ✅     | Configurable request limits        |
 | CIDR Whitelisting   | ✅     | IP-based access control            |
-| Audit Logging       | ✅     | Track all API operations           |
+| Audit Logging       | ✅     | Audit trail for API-key, session, integration-instance, and infra admin operations (message sends and webhook deliveries are tracked in their own tables, not the audit log) |
 
 ### Infrastructure
 

@@ -184,7 +184,7 @@ Every path below is prefixed with `/api`. Unless marked **public**, send `X-API-
 
 ### 6.4.1 Sessions
 
-Base path `/api/sessions`. Read routes return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config`, `proxyUrl`, and `proxyType` and renames the entity field `lastActiveAt` to `lastActive`. The one exception is `POST /api/sessions`, which returns the **raw `Session` entity** and therefore *does* expose `config`/`proxyUrl`/`proxyType`/`lastActiveAt`. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | failed`.
+Base path `/api/sessions`. All routes that return a session return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config`, `proxyUrl`, and `proxyType` and renames the entity field `lastActiveAt` to `lastActive`. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | failed`.
 
 #### GET /api/sessions
 
@@ -382,7 +382,7 @@ Create a new WhatsApp session.
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | `name` | string | Yes | `@IsString`; length 3–50; `@Matches(/^[a-zA-Z0-9-]+$/)` (letters, numbers, hyphens only) | Unique session name; duplicate → `409` |
-| `config` | object | No | `@IsOptional` (arbitrary object, no shape validation) | Opaque engine config; defaults to `{}`; never returned by read routes |
+| `config` | object | No | `@IsOptional` (arbitrary object, no shape validation) | Opaque engine config; defaults to `{}`; never returned in responses |
 | `proxyUrl` | string | No | `@IsOptional`; `@IsString`; max 255; `@IsUrl` (protocols `http`/`https`/`socks4`/`socks5`, `require_protocol`, `require_tld:false`, `allow_underscores`) | Per-session proxy egress; credentialed `http://user:pass@host` and single-label hosts allowed; not SSRF-blocked. ⚠ **Must be a real, reachable proxy** — an unreachable value silently blocks the WhatsApp WebSocket (no QR, start → `504`); leave unset unless you need it. See "Per-session egress proxy" below. |
 | `proxyType` | `http` \| `https` \| `socks4` \| `socks5` | No | `@IsOptional`; `@IsIn([...])` | Proxy protocol |
 
@@ -420,17 +420,15 @@ network cannot reach WhatsApp directly. Set `proxyUrl`/`proxyType` on the same r
   "status": "created",
   "phone": null,
   "pushName": null,
-  "config": { "autoReconnect": true },
-  "proxyUrl": null,
-  "proxyType": null,
   "connectedAt": null,
-  "lastActiveAt": null,
+  "lastActive": null,
   "createdAt": "2026-06-25T09:00:00.000Z",
-  "updatedAt": "2026-06-25T09:00:00.000Z"
+  "updatedAt": "2026-06-25T09:00:00.000Z",
+  "lastError": null
 }
 ```
 
-This route returns the **raw `Session` entity** (not via `fromEntity`), so `config`/`proxyUrl`/`proxyType`/`lastActiveAt` are present here only. Newly created `status` is `created`.
+Like every other session route, this returns the `SessionResponseDto` shape (via `fromEntity`), so `config`/`proxyUrl`/`proxyType` are stripped and `lastActiveAt` appears as `lastActive`. Newly created `status` is `created`.
 
 **Errors:** `400` validation (bad `name`/`proxyUrl`/`proxyType`, or an extra non-whitelisted field) · `401` · `403` key lacks OPERATOR role · `409` session name already exists
 

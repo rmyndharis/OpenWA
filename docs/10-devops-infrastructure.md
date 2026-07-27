@@ -133,8 +133,15 @@ services:
       - "2785:2785"
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://openwa:openwa@postgres:5432/openwa
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=openwa
+      - DATABASE_USERNAME=openwa
+      - DATABASE_PASSWORD=openwa
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
       # strong secret. Production refuses to boot with a placeholder/default.
       - API_MASTER_KEY=
@@ -194,8 +201,15 @@ services:
           memory: 1G
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=${DATABASE_PORT}
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_USERNAME=${DATABASE_USERNAME}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - REDIS_ENABLED=true
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
       - API_MASTER_KEY=${API_MASTER_KEY}
     volumes:
       - session-data:/app/.wwebjs_auth
@@ -287,7 +301,12 @@ jobs:
       - name: Run tests
         run: npm run test:cov
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          DATABASE_TYPE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USERNAME: test
+          DATABASE_PASSWORD: test
+          DATABASE_NAME: test
       
       - name: Upload coverage
         uses: codecov/codecov-action@v3
@@ -447,13 +466,18 @@ LOG_FORMAT=json
 # DATABASE (choose one)
 # ===========================================
 # Option 1: SQLite (for minimal deployments)
+# For SQLite, DATABASE_NAME is the database FILE PATH.
 DATABASE_TYPE=sqlite
-DATABASE_SQLITE_PATH=./data/openwa.db
+DATABASE_NAME=./data/openwa.sqlite
 
-# Option 2: PostgreSQL (for production)
+# Option 2: PostgreSQL (for production) — DATABASE_NAME is the database NAME here
 # DATABASE_TYPE=postgres
-# DATABASE_URL=postgresql://user:pass@localhost:5432/openwa
-# DATABASE_POOL_MAX=20
+# DATABASE_HOST=localhost
+# DATABASE_PORT=5432
+# DATABASE_NAME=openwa
+# DATABASE_USERNAME=user
+# DATABASE_PASSWORD=pass
+# DATABASE_POOL_SIZE=20
 # DATABASE_SSL=false
 
 # ===========================================
@@ -534,20 +558,36 @@ RATE_LIMIT_MEDIUM_LIMIT=100
 ### Configuration Service
 
 ```typescript
-// config/configuration.ts
+// config/configuration.ts (shape abbreviated — see src/config/configuration.ts for the real file)
 export default () => ({
   port: parseInt(process.env.PORT, 10) || 3000,
+  // Main boot DB: always SQLite (auth/audit)
   database: {
-    url: process.env.DATABASE_URL,
+    type: 'sqlite',
+    database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+  },
+  // Data DB: pluggable backend
+  dataDatabase: {
+    type: process.env.DATABASE_TYPE || 'sqlite',
+    // SQLite file path when type is sqlite; PostgreSQL database name when type is postgres
+    database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+    name: process.env.DATABASE_NAME || 'openwa',
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: parseInt(process.env.DATABASE_PORT || '5432', 10),
+    username: process.env.DATABASE_USERNAME,
+    password: process.env.DATABASE_PASSWORD,
   },
   redis: {
-    url: process.env.REDIS_URL,
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    username: process.env.REDIS_USERNAME,
+    password: process.env.REDIS_PASSWORD,
   },
   security: {
     masterApiKey: process.env.API_MASTER_KEY,
   },
   session: {
-    dataPath: process.env.SESSION_DATA_PATH || './.wwebjs_auth',
+    dataPath: process.env.SESSION_DATA_PATH || './data/sessions',
   },
   webhook: {
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),

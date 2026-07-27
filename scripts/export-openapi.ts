@@ -24,6 +24,13 @@ process.env.QUEUE_ENABLED = 'false';
 process.env.MCP_ENABLED = 'false';
 process.env.AUTO_START_SESSIONS = 'false';
 process.env.DATABASE_TYPE = 'sqlite';
+// Keep the throttler storage in-memory: with REDIS_ENABLED=true in the caller's env the export
+// would open a Redis connection for no benefit (the document doesn't change either way).
+process.env.REDIS_ENABLED = 'false';
+// The search module mounts conditionally on SEARCH_ENABLED (app.module.ts top-level), so an
+// export run with SEARCH_ENABLED=false in the caller's env would silently drop /api/search from
+// the snapshot. Pin it on — the committed snapshot documents the full default surface.
+process.env.SEARCH_ENABLED = 'true';
 // The 'data' connection must use a real SQLite file path to satisfy env-validation (an in-memory or
 // bare value is rejected to catch PostgreSQL db-name leaks — see env.validation.ts). Use a temp dir
 // so the export stays hermetic; the whole dir is removed in main()'s finally, and recursive rmSync

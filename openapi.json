@@ -4205,6 +4205,32 @@
         ]
       }
     },
+    "/api/metrics": {
+      "get": {
+        "operationId": "MetricsController_scrape",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus exposition text"
+          },
+          "401": {
+            "description": "METRICS_TOKEN is configured but the bearer is missing or wrong"
+          },
+          "404": {
+            "description": "Metrics endpoint is disabled (METRICS_TOKEN unset)"
+          }
+        },
+        "security": [
+          {
+            "metrics-bearer": []
+          }
+        ],
+        "summary": "Prometheus metrics (requires METRICS_TOKEN bearer)",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/status": {
       "get": {
         "operationId": "StatusController_getStatuses",
@@ -5836,6 +5862,18 @@
       "description": "Status/Stories"
     },
     {
+      "name": "calls",
+      "description": "Call handling"
+    },
+    {
+      "name": "profile",
+      "description": "Own profile management"
+    },
+    {
+      "name": "search",
+      "description": "Global message search"
+    },
+    {
       "name": "statistics",
       "description": "Usage statistics"
     },
@@ -5883,6 +5921,12 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key"
+      },
+      "metrics-bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+        "type": "http",
+        "description": "METRICS_TOKEN for the GET /api/metrics scrape endpoint"
       }
     },
     "schemas": {

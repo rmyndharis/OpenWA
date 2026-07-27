@@ -43,13 +43,13 @@ export class SessionController {
     type: SessionResponseDto,
   })
   @ApiResponse({ status: 409, description: 'Session name already exists' })
-  async create(@Body() dto: CreateSessionDto): Promise<Session> {
+  async create(@Body() dto: CreateSessionDto): Promise<SessionResponseDto> {
     const session = await this.sessionService.create(dto);
     await this.auditService.logInfo(AuditAction.SESSION_CREATED, {
       sessionId: session.id,
       sessionName: session.name,
     });
-    return session;
+    return this.transformSession(session);
   }
 
   @Get()

@@ -124,7 +124,9 @@ test/
 ├── integration-fabric.e2e-spec.ts
 ├── integration-instance.e2e-spec.ts
 ├── mcp-auth.e2e-spec.ts
+├── search.e2e-spec.ts
 ├── serve-static.e2e-spec.ts
+├── session-scope.e2e-spec.ts
 ├── webhooks.e2e-spec.ts
 ├── jest-e2e.json
 └── setup-e2e.ts
@@ -156,6 +158,7 @@ authoritative gate. Current policy:
 | `src/core/hooks/`          | 80%      | 70%       | 82%   | 81%        |
 | `src/modules/session/`     | 50%      | 63%       | 74%   | 72%        |
 | `src/modules/webhook/`     | 65%      | 83%       | 84%   | 80%        |
+| `src/modules/search/`      | 58%      | 72%       | 58%   | 58%        |
 
 The stricter scoped gates protect security-sensitive code and high-risk boundary layers. When adding
 security, engine-adapter, or integration-fabric behavior, add focused regression tests instead of relying
@@ -167,11 +170,13 @@ Main CI is defined in `.github/workflows/ci.yml`.
 
 | Job             | Checks                                                                                          |
 | --------------- | ----------------------------------------------------------------------------------------------- |
-| `lint`          | security audit, backend ESLint, full-program TypeScript check, formatting, version consistency, OpenAPI snapshot |
+| `lint`          | backend ESLint, full-program TypeScript check, formatting, version consistency, OpenAPI snapshot |
+| `audit`         | dependency security audit                                                                        |
 | `test`          | backend coverage run, e2e smoke tests, Codecov upload                                           |
 | `test-postgres` | real PostgreSQL 16 service, backend build, migration smoke, and PostgreSQL FTS provider spec     |
 | `dashboard`     | dashboard install, lint, test type-check, unit tests, i18n parity, build                         |
-| `build`         | backend build after lint/test/dashboard jobs pass                                               |
+| `scripts-smoke` | shellcheck on the backup/restore scripts plus the backup/restore smoke test                      |
+| `build`         | backend build after lint/audit/test/dashboard/scripts-smoke jobs pass                            |
 | `docker`        | multi-arch Docker build on pushes and pull requests; publish only where workflow permissions allow |
 
 SDK CI is defined in `.github/workflows/sdk-ci.yml` and is path-filtered to SDK sources plus server

@@ -247,7 +247,27 @@ async function bootstrap() {
     credentials: corsPolicy.credentials,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
-    exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+    // The throttlers are named (short/medium/long, plus instance on ingress), so @nestjs/throttler
+    // suffixes every rate-limit header with the throttler name — the unsuffixed variants are never
+    // sent. Expose the suffixed names so browser clients can actually read them.
+    exposedHeaders: [
+      'X-RateLimit-Limit-short',
+      'X-RateLimit-Remaining-short',
+      'X-RateLimit-Reset-short',
+      'X-RateLimit-Limit-medium',
+      'X-RateLimit-Remaining-medium',
+      'X-RateLimit-Reset-medium',
+      'X-RateLimit-Limit-long',
+      'X-RateLimit-Remaining-long',
+      'X-RateLimit-Reset-long',
+      'X-RateLimit-Limit-instance',
+      'X-RateLimit-Remaining-instance',
+      'X-RateLimit-Reset-instance',
+      'Retry-After-short',
+      'Retry-After-medium',
+      'Retry-After-long',
+      'Retry-After-instance',
+    ],
     maxAge: 86400, // 24 hours
   });
 

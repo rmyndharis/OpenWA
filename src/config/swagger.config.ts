@@ -6,6 +6,14 @@ import { DocumentBuilder, OpenAPIObject } from '@nestjs/swagger';
  */
 export const API_KEY_SECURITY_SCHEME = 'X-API-Key';
 
+/**
+ * Security scheme name for the METRICS_TOKEN bearer that gates `GET /api/metrics`.
+ * The endpoint is @Public() at the API-key guard and enforces the token itself, so the
+ * operation carries this scheme (which overrides the document's global X-API-Key
+ * requirement per OpenAPI 3) instead of the API-key one.
+ */
+export const METRICS_BEARER_SCHEME = 'metrics-bearer';
+
 // Routes whose controllers are @Public() — the ApiKeyGuard skips them at runtime, but the
 // global X-API-Key requirement applied below would otherwise make the spec claim they need a
 // key. Mirror the @Public() decorators: add a path here when you add one there.
@@ -51,6 +59,17 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       .setDescription('Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API')
       .setVersion(version)
       .addApiKey({ type: 'apiKey', name: 'X-API-Key', in: 'header' }, API_KEY_SECURITY_SCHEME)
+      // The METRICS_TOKEN bearer gates only GET /api/metrics (applied per-operation there —
+      // NOT as a global requirement, since every other route uses the API key).
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'opaque',
+          description: 'METRICS_TOKEN for the GET /api/metrics scrape endpoint',
+        },
+        METRICS_BEARER_SCHEME,
+      )
       // Apply the scheme globally so Swagger UI sends the key with every request
       // (mirrors the global ApiKeyGuard). Without this, "Authorize" is cosmetic.
       .addSecurityRequirements(API_KEY_SECURITY_SCHEME)
@@ -64,6 +83,9 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       .addTag('channels', 'Channel/Newsletter management')
       .addTag('catalog', 'Product catalog (WhatsApp Business)')
       .addTag('status', 'Status/Stories')
+      .addTag('calls', 'Call handling')
+      .addTag('profile', 'Own profile management')
+      .addTag('search', 'Global message search')
       .addTag('statistics', 'Usage statistics')
       .addTag('templates', 'Message templates')
       .addTag('plugins', 'Plugin management')

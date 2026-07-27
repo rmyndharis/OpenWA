@@ -331,7 +331,14 @@ TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are
 
 ### Response on limit
 
-Exceeding any window returns `429 Too Many Requests` with a `Retry-After` header. The `ThrottlerGuard` also sets `X-RateLimit-*` response headers (limit / remaining / reset) by default, and the API exposes them via CORS — but with three named windows in play, the `429` + `Retry-After` is the simplest backpressure signal to act on.
+Exceeding a window returns `429 Too Many Requests`. Because the windows are **named** throttlers (`short` / `medium` / `long`), `@nestjs/throttler` suffixes every rate-limit header with the throttler name — there are no unsuffixed `Retry-After` or `X-RateLimit-*` headers:
+
+- On success, each response carries one header triple per window: `X-RateLimit-Limit-short` / `-Remaining-short` / `-Reset-short`, plus the `-medium` and `-long` equivalents.
+- On `429`, the exceeded window sets `Retry-After-short`, `Retry-After-medium`, or `Retry-After-long` (seconds until the block expires) — read whichever is present rather than a plain `Retry-After`.
+
+The ingress route (`ALL /api/ingress/:pluginId/:instanceId/*path`) additionally evaluates a per-instance window named `instance` (env: `INGRESS_INSTANCE_LIMIT`, default 120, per `INGRESS_INSTANCE_TTL`, default 60000 ms), so its responses carry `X-RateLimit-*-instance` and, on saturation, `Retry-After-instance`.
+
+The API exposes the rate-limit headers via CORS (`exposedHeaders`) so browser clients can read them. The simplest backpressure signal remains the `429` status itself, with the suffixed `Retry-After-*` as the retry delay.
 
 ## 4.7 CORS Configuration
 
@@ -355,7 +362,9 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Request-ID'],
-  exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining'],
+  // Throttlers are named, so rate-limit headers carry a per-window suffix
+  // (see "Response on limit" above); there are no unsuffixed variants.
+  exposedHeaders: ['X-RateLimit-Limit-short', 'X-RateLimit-Remaining-short', '...'],
   maxAge: 86400, // 24 hours
 };
 ```

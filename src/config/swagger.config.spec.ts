@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { createSwaggerConfig, exemptPublicOperations, PUBLIC_PATHS } from './swagger.config';
+import { createSwaggerConfig, exemptPublicOperations, PUBLIC_PATHS, METRICS_BEARER_SCHEME } from './swagger.config';
 import type { OpenAPIObject } from '@nestjs/swagger';
 
 describe('createSwaggerConfig', () => {
@@ -11,6 +11,18 @@ describe('createSwaggerConfig', () => {
     const config = createSwaggerConfig();
 
     expect(config.security).toContainEqual({ 'X-API-Key': [] });
+  });
+
+  it('defines the METRICS_TOKEN bearer scheme without applying it globally', () => {
+    const config = createSwaggerConfig();
+
+    expect(config.components?.securitySchemes?.[METRICS_BEARER_SCHEME]).toMatchObject({
+      type: 'http',
+      scheme: 'bearer',
+    });
+    // Only the scrape endpoint uses it (per-operation @ApiSecurity) — a global bearer
+    // requirement would falsely claim every route accepts it.
+    expect(config.security).not.toContainEqual({ [METRICS_BEARER_SCHEME]: [] });
   });
 });
 
@@ -54,8 +66,9 @@ describe('exemptPublicOperations', () => {
 //   (1) the set of files with a real @Public() decorator must match EXPECTED_PUBLIC_CONTROLLERS —
 //       add a controller here AND its path(s) to PUBLIC_PATHS when you mark a new route @Public();
 //   (2) PUBLIC_PATHS must contain the expected entries (catches a typo or accidental removal).
-// MetricsController is @Public() but uses @ApiExcludeEndpoint, so it never appears in the spec and
-// is intentionally exempt from PUBLIC_PATHS.
+// MetricsController is @Public() but gates scrapes on the METRICS_TOKEN bearer instead, so its
+// operation carries the metrics-bearer security scheme (which overrides the global API-key
+// requirement) rather than a PUBLIC_PATHS security: [] exemption.
 describe('PUBLIC_PATHS drift guard', () => {
   const EXPECTED_PUBLIC_CONTROLLERS = [
     'src/modules/health/health.controller.ts',
