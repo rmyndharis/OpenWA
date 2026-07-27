@@ -25,6 +25,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { EditedMessage, EngineStatus, GroupEvent, IncomingCallEvent } from '../interfaces/whatsapp-engine.interface';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.error';
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -3444,14 +3445,14 @@ describe('WhatsAppWebJsAdapter page transport error detection (wedged page fast-
     expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
   });
 
-  // joinGroupViaInviteCode answers 400 for every acceptInvite failure, because a refused invite is
-  // indistinguishable from a page error at that call site. The 400 stays, but a dead page still has
-  // to reach the liveness path rather than being reported purely as the caller's bad invite code.
-  it('detects a transport error during joinGroupViaInviteCode (still a 400 to the caller)', async () => {
+  // joinGroupViaInviteCode answers 503 for a transport failure (a refused invite is no longer
+  // conflated with a dead page at that call site). The dead page still has to reach the liveness
+  // path rather than being reported purely as the caller's bad invite code.
+  it('detects a transport error during joinGroupViaInviteCode (a 503 to the caller)', async () => {
     const acceptInvite = jest.fn().mockRejectedValue(new Error('Protocol error: Target closed'));
     const { adapter, onDisconnected } = readyAdapter({ acceptInvite });
 
-    await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(InvalidInviteCodeError);
+    await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
 
     expect(onDisconnected).toHaveBeenCalledTimes(1);
     expect(onDisconnected).toHaveBeenCalledWith('Page transport error during joinGroupViaInviteCode');
@@ -3648,6 +3649,206 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
       expect(info?.announce).toBeUndefined();
       expect(info?.locked).toBeUndefined();
       expect(info?.ephemeralSeconds).toBeUndefined();
+    });
+  });
+});
+
+describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
+  const GROUP = '120363000@g.us';
+
+  const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+
+  const groupChat = (over: Record<string, unknown> = {}) => ({
+    isGroup: true,
+    id: { _serialized: GROUP },
+    name: 'G',
+    participants: [],
+    ...over,
+  });
+
+  describe('subscribeToChannel (phantom → honest 501)', () => {
+    it('throws EngineNotSupportedError instead of fabricating a Channel from the library boolean', async () => {
+      // wwebjs Client.subscribeToChannel(channelId) takes a channel id and resolves a boolean; the
+      // old wiring passed the invite code and mapped the boolean as a Channel ({ id: "undefined" }).
+      const subscribeToChannel = jest.fn().mockResolvedValue(true);
+      const adapter = readyAdapter({ subscribeToChannel });
+      await expect(adapter.subscribeToChannel('INVITE123')).rejects.toBeInstanceOf(EngineNotSupportedError);
+      expect(subscribeToChannel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('catalog reads (phantom stubs → honest 501s)', () => {
+    it.each(['getCatalog', 'getProducts', 'getProduct'] as const)('%s throws EngineNotSupportedError', async method => {
+      const adapter = readyAdapter({});
+      await expect((adapter as unknown as Record<string, () => Promise<unknown>>)[method]()).rejects.toBeInstanceOf(
+        EngineNotSupportedError,
+      );
+    });
+  });
+
+  describe('addParticipants (per-participant result is honored)', () => {
+    it('maps the per-participant {code, message} object — a partial refusal does not throw', async () => {
+      const addParticipants = jest.fn().mockResolvedValue({
+        '628111@c.us': { code: 200, message: 'The participant was added successfully', isInviteV4Sent: false },
+        '628222@c.us': {
+          code: 403,
+          message: 'The participant can be added by sending private invitation only',
+          isInviteV4Sent: true,
+        },
+        '628333@c.us': { code: 409, message: 'The participant is already a group member', isInviteV4Sent: false },
+      });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+
+      const results = await adapter.addParticipants(GROUP, ['628111', '628222@c.us', '628333']);
+
+      expect(addParticipants).toHaveBeenCalledWith(['628111@c.us', '628222@c.us', '628333@c.us']);
+      expect(results).toEqual([
+        { id: '628111@c.us', success: true, status: 200, message: 'The participant was added successfully' },
+        {
+          id: '628222@c.us',
+          success: false,
+          status: 403,
+          message: 'The participant can be added by sending private invitation only',
+        },
+        { id: '628333@c.us', success: false, status: 409, message: 'The participant is already a group member' },
+      ]);
+    });
+
+    it('throws EngineRefusedError (403) when the library resolves a batch-refusal STRING (e.g. not admin)', async () => {
+      const addParticipants = jest
+        .fn()
+        .mockResolvedValue('AddParticipantsError: You have no admin rights to add a participant to a group');
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/no admin rights/);
+    });
+
+    it('throws EngineRefusedError (403) when EVERY participant is refused', async () => {
+      const addParticipants = jest.fn().mockResolvedValue({
+        '628111@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
+        '628222@c.us': { code: 404, message: 'The phone number is not registered on WhatsApp', isInviteV4Sent: false },
+      });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const err = await adapter.addParticipants(GROUP, ['628111', '628222']).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/failed for all 2 participant/);
+    });
+  });
+
+  describe.each([['removeParticipants'], ['promoteParticipants'], ['demoteParticipants']])(
+    '%s (batch {status} is honored)',
+    op => {
+      it('resolves one success entry per requested participant on {status: 200}', async () => {
+        const chat = groupChat({ [op]: jest.fn().mockResolvedValue({ status: 200 }) });
+        const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+        const results = await (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<unknown>>)[op](
+          GROUP,
+          ['628111', '628222@c.us'],
+        );
+        expect(results).toEqual([
+          { id: '628111@c.us', success: true, status: 200 },
+          { id: '628222@c.us', success: true, status: 200 },
+        ]);
+      });
+
+      it('throws EngineRefusedError on a non-200 batch status instead of reporting success', async () => {
+        const chat = groupChat({ [op]: jest.fn().mockResolvedValue({ status: 403 }) });
+        const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+        await expect(
+          (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<unknown>>)[op](GROUP, ['628111']),
+        ).rejects.toBeInstanceOf(EngineRefusedError);
+      });
+    },
+  );
+
+  describe('setGroupSubject / setGroupDescription (library boolean is honored)', () => {
+    it.each([
+      ['setGroupSubject', 'setSubject'],
+      ['setGroupDescription', 'setDescription'],
+    ] as const)('%s throws EngineRefusedError when wwebjs resolves false', async (method, libMethod) => {
+      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(false) });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      await expect(
+        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
+      ).rejects.toBeInstanceOf(EngineRefusedError);
+    });
+
+    it.each([
+      ['setGroupSubject', 'setSubject'],
+      ['setGroupDescription', 'setDescription'],
+    ] as const)('%s resolves on true', async (method, libMethod) => {
+      const chat = groupChat({ [libMethod]: jest.fn().mockResolvedValue(true) });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
+      await expect(
+        (adapter as unknown as Record<string, (g: string, v: string) => Promise<void>>)[method](GROUP, 'New'),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('getChannelMessages limit guard (wwebjs fails OPEN on limit < 1)', () => {
+    const CHANNEL = '120363401234567890@newsletter';
+    const adapterWithChannel = (fetchMessages: jest.Mock) =>
+      readyAdapter({ getChannels: jest.fn().mockResolvedValue([{ id: { _serialized: CHANNEL }, fetchMessages }]) });
+
+    it.each([
+      [0, 50],
+      [-5, 50],
+      [NaN, 50],
+      [Number.POSITIVE_INFINITY, 50],
+      [30, 30],
+      [30.9, 30],
+    ])('limit %s is forwarded as { limit: %i }', async (input, expected) => {
+      const fetchMessages = jest.fn().mockResolvedValue([]);
+      await adapterWithChannel(fetchMessages).getChannelMessages(CHANNEL, input);
+      expect(fetchMessages).toHaveBeenCalledWith({ limit: expected });
+    });
+  });
+
+  describe('unsubscribeFromChannel (library boolean is honored)', () => {
+    it('throws EngineRefusedError when wwebjs resolves false', async () => {
+      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(false) });
+      await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).rejects.toBeInstanceOf(
+        EngineRefusedError,
+      );
+    });
+
+    it('resolves on true', async () => {
+      const adapter = readyAdapter({ unsubscribeFromChannel: jest.fn().mockResolvedValue(true) });
+      await expect(adapter.unsubscribeFromChannel('120363401234567890@newsletter')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('transport death vs genuine not-found', () => {
+    const transportError = () => new Error('Protocol error: Connection closed. Target closed');
+
+    it('getGroupInfo answers EngineTransportError (503) on a dead page — not null (→ false 404)', async () => {
+      const adapter = readyAdapter({ getChatById: jest.fn().mockRejectedValue(transportError()) });
+      await expect(adapter.getGroupInfo(GROUP)).rejects.toBeInstanceOf(EngineTransportError);
+    });
+
+    it('getGroupInfo still maps a genuine lookup failure to null (→ 404)', async () => {
+      // getChatById RESOLVES undefined for an unknown chat (wwebjs does not throw): dereferencing it
+      // fails inside the try — that is the genuine not-found path.
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(undefined) });
+      await expect(adapter.getGroupInfo(GROUP)).resolves.toBeNull();
+    });
+
+    it('joinGroupViaInviteCode answers EngineTransportError (503) on a dead page — not 400', async () => {
+      const adapter = readyAdapter({ acceptInvite: jest.fn().mockRejectedValue(transportError()) });
+      await expect(adapter.joinGroupViaInviteCode('CODE123')).rejects.toBeInstanceOf(EngineTransportError);
+    });
+
+    it('joinGroupViaInviteCode still maps a refused invite to InvalidInviteCodeError (400)', async () => {
+      const adapter = readyAdapter({
+        acceptInvite: jest.fn().mockRejectedValue(new Error('Evaluation failed: Error: 404')),
+      });
+      await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
     });
   });
 });

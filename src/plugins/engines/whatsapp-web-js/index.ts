@@ -90,7 +90,8 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
       'labels',
       'channels',
       'status-updates',
-      'catalog',
+      // No 'catalog': whatsapp-web.js has no catalog/product API, so the adapter 501s those methods —
+      // advertising the feature here would promise clients a capability the engine cannot deliver.
     ];
   }
 

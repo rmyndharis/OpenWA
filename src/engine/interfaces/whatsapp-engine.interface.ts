@@ -190,6 +190,26 @@ export interface GroupParticipant {
   isSuperAdmin: boolean;
 }
 
+/**
+ * Outcome of a group membership write (add/remove/promote/demote) for ONE participant. Engines
+ * that report per-participant results map them verbatim (whatsapp-web.js `addParticipants` resolves
+ * a `{[participantId]: {code, message}}` object; Baileys `groupParticipantsUpdate` resolves a
+ * `[{status, jid}]` array); engines that only confirm the batch as a whole (whatsapp-web.js
+ * remove/promote/demote resolve `{status: 200}`) report one success entry per requested participant.
+ * `status` is the engine's own code when it reported one (e.g. 200 ok, 403 invite-only/not-admin,
+ * 404 not registered, 409 already a member).
+ */
+export interface ParticipantOperationResult {
+  /** Neutral participant id the outcome belongs to. */
+  id: string;
+  /** True only when the engine confirmed the change for THIS participant. */
+  success: boolean;
+  /** Engine-reported status code, when it gave one. */
+  status?: number;
+  /** Engine-reported human-readable reason, when it gave one. */
+  message?: string;
+}
+
 export interface GroupInfo {
   id: string;
   name: string;
@@ -590,10 +610,16 @@ export interface IWhatsAppEngine {
   // Groups - Extended (Phase 3)
   getGroupInfo(groupId: string): Promise<GroupInfo | null>;
   createGroup(name: string, participants: string[]): Promise<Group>;
-  addParticipants(groupId: string, participants: string[]): Promise<void>;
-  removeParticipants(groupId: string, participants: string[]): Promise<void>;
-  promoteParticipants(groupId: string, participants: string[]): Promise<void>;
-  demoteParticipants(groupId: string, participants: string[]): Promise<void>;
+  /**
+   * Membership writes resolve one {@link ParticipantOperationResult} per participant, so a partial
+   * refusal (one invite-only number among several added) is visible instead of being flattened into
+   * a blanket success. They THROW only when the operation failed for every requested participant —
+   * e.g. the account lacks admin rights — or the batch itself was refused.
+   */
+  addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]>;
+  removeParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]>;
+  promoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]>;
+  demoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]>;
   leaveGroup(groupId: string): Promise<void>;
   setGroupSubject(groupId: string, subject: string): Promise<void>;
   setGroupDescription(groupId: string, description: string): Promise<void>;

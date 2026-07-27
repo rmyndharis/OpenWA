@@ -39,7 +39,12 @@ export class ChannelController {
   @ApiOperation({ summary: 'Get messages from a channel' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'channelId', description: 'Channel ID' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Max messages to return (default 50)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Max messages to return (default 50, max 100)',
+  })
   @ApiResponse({
     status: 200,
     description: 'List of channel messages',

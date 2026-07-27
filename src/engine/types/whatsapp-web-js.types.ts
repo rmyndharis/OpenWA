@@ -52,13 +52,18 @@ export interface GroupChat extends Omit<Chat, 'isReadOnly' | 'getLabels'> {
   isReadOnly?: boolean;
   isAnnounce?: boolean;
   groupMetadata?: GroupMetadataRaw;
-  addParticipants(ids: string[]): Promise<void>;
-  removeParticipants(ids: string[]): Promise<void>;
-  promoteParticipants(ids: string[]): Promise<void>;
-  demoteParticipants(ids: string[]): Promise<void>;
+  addParticipants(
+    ids: string[],
+    options?: Record<string, unknown>,
+  ): Promise<Record<string, { code: number; message: string; isInviteV4Sent: boolean }> | string>;
+  removeParticipants(ids: string[]): Promise<{ status: number }>;
+  promoteParticipants(ids: string[]): Promise<{ status: number }>;
+  demoteParticipants(ids: string[]): Promise<{ status: number }>;
   leave(): Promise<void>;
-  setSubject(subject: string): Promise<void>;
-  setDescription(desc: string): Promise<void>;
+  /** Resolves false when WA Web rejects the change (e.g. no admin rights) — does not throw. */
+  setSubject(subject: string): Promise<boolean>;
+  /** Resolves false when WA Web rejects the change (e.g. no admin rights) — does not throw. */
+  setDescription(desc: string): Promise<boolean>;
   getLabels(): Promise<Array<{ id: string; name: string; hexColor: string }>>;
   addLabel(id: string): Promise<void>;
   removeLabel(id: string): Promise<void>;
@@ -94,8 +99,10 @@ export interface BusinessClient extends Omit<
   getLabels(): Promise<Array<{ id: string; name: string; hexColor: string }>>;
   getLabelById(id: string): Promise<{ id: string; name: string; hexColor: string } | null>;
   getChannels(): Promise<WwjsChannelData[]>;
-  subscribeToChannel(inviteCode: string): Promise<WwjsChannelData>;
-  unsubscribeFromChannel(id: string): Promise<void>;
+  /** Takes a channel ID (`…@newsletter`), NOT an invite code; resolves true only on success. */
+  subscribeToChannel(channelId: string): Promise<boolean>;
+  /** Resolves true only when the unsubscription completed. */
+  unsubscribeFromChannel(id: string, options?: Record<string, unknown>): Promise<boolean>;
 }
 
 /**

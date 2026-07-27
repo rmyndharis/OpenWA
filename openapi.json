@@ -3257,7 +3257,7 @@
         },
         "responses": {
           "200": {
-            "description": "Participants added"
+            "description": "Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)"
           }
         },
         "summary": "Add participants to a group",
@@ -3299,7 +3299,7 @@
         },
         "responses": {
           "200": {
-            "description": "Participants removed"
+            "description": "Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)"
           }
         },
         "summary": "Remove participants from a group",
@@ -3343,7 +3343,7 @@
         },
         "responses": {
           "200": {
-            "description": "Participants promoted"
+            "description": "Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)"
           }
         },
         "summary": "Promote participants to admin",
@@ -3387,7 +3387,7 @@
         },
         "responses": {
           "200": {
-            "description": "Participants demoted"
+            "description": "Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)"
           }
         },
         "summary": "Demote participants from admin",
@@ -4074,7 +4074,7 @@
             "name": "limit",
             "required": false,
             "in": "query",
-            "description": "Max messages to return (default 50)",
+            "description": "Max messages to return (default 50, max 100)",
             "schema": {
               "type": "number"
             }

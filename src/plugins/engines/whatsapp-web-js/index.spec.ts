@@ -80,3 +80,13 @@ describe('WhatsAppWebJsPlugin.createEngine (opaque config)', () => {
     );
   });
 });
+
+describe('WhatsAppWebJsPlugin.getFeatures', () => {
+  it('does not advertise catalog — the wwjs adapter 501s every catalog method', () => {
+    const features = new WhatsAppWebJsPlugin().getFeatures();
+    expect(features).not.toContain('catalog');
+    expect(features).toEqual(
+      expect.arrayContaining(['text-messages', 'media-messages', 'group-management', 'labels', 'channels']),
+    );
+  });
+});

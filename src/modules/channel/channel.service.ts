@@ -8,6 +8,8 @@ import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interfa
  */
 @Injectable()
 export class ChannelService {
+  private static readonly MAX_CHANNEL_HISTORY_LIMIT = 100;
+
   constructor(private readonly sessionService: SessionService) {}
 
   private getEngine(sessionId: string): IWhatsAppEngine {
@@ -30,8 +32,16 @@ export class ChannelService {
     return channel;
   }
 
-  getChannelMessages(sessionId: string, channelId: string, limit?: number) {
-    return this.getEngine(sessionId).getChannelMessages(channelId, limit);
+  /**
+   * `limit` is clamped to [1, 100] (and falls back to 50 for non-finite input) so a caller cannot
+   * ask the engine for an unbounded history window — the wwjs engine treats a limit < 1 as "no
+   * limit" and would return every loaded message (same clamp discipline as MessageService.getChatHistory).
+   */
+  getChannelMessages(sessionId: string, channelId: string, limit = 50) {
+    const safeLimit = Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), ChannelService.MAX_CHANNEL_HISTORY_LIMIT)
+      : 50;
+    return this.getEngine(sessionId).getChannelMessages(channelId, safeLimit);
   }
 
   subscribeToChannel(sessionId: string, inviteCode: string) {

@@ -23,4 +23,23 @@ describe('ChannelService', () => {
     await makeService({ getChannelMessages }).getChannelMessages('s1', 'ch1', 25);
     expect(getChannelMessages).toHaveBeenCalledWith('ch1', 25);
   });
+
+  // The wwjs engine treats a limit < 1 as "no limit" (fail-open): the service clamps the window
+  // the same way MessageService.getChatHistory does, so no caller can pull an unbounded history.
+  it.each([
+    [undefined, 50],
+    [NaN, 50],
+    [Number.POSITIVE_INFINITY, 50],
+    [0, 1],
+    [-10, 1],
+    [1, 1],
+    [100, 100],
+    [101, 100],
+    [10 ** 9, 100],
+    [30.7, 30],
+  ])('clamps limit %s to %i before calling the engine', async (input, expected) => {
+    const getChannelMessages = jest.fn().mockResolvedValue([]);
+    await makeService({ getChannelMessages }).getChannelMessages('s1', 'ch1', input);
+    expect(getChannelMessages).toHaveBeenCalledWith('ch1', expected);
+  });
 });

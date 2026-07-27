@@ -48,4 +48,36 @@ describe('GroupController join + settings', () => {
     });
     await expect(controller.updateSettings('s1', 'g1', {})).rejects.toThrow(/At least one/);
   });
+
+  it('POST :groupId/participants returns the per-participant results as an additive field', async () => {
+    const results = [
+      { id: '628111@c.us', success: true, status: 200 },
+      { id: '628222@c.us', success: false, status: 403 },
+    ];
+    const { controller, service } = build({ addParticipants: jest.fn().mockResolvedValue(results) });
+    await expect(
+      controller.addParticipants('s1', 'g1', { participants: ['628111@c.us', '628222@c.us'] }),
+    ).resolves.toEqual({
+      success: true,
+      message: 'Participants added',
+      results,
+    });
+    expect(service.addParticipants).toHaveBeenCalledWith('s1', 'g1', ['628111@c.us', '628222@c.us']);
+  });
+
+  it.each([
+    ['removeParticipants', 'Participants removed'],
+    ['promoteParticipants', 'Participants promoted to admin'],
+    ['demoteParticipants', 'Participants demoted from admin'],
+  ] as const)('%s returns the per-participant results as an additive field', async (method, message) => {
+    const results = [{ id: '628111@c.us', success: true, status: 200 }];
+    const { controller } = build({ [method]: jest.fn().mockResolvedValue(results) });
+    await expect(
+      (controller as unknown as Record<string, (s: string, g: string, dto: unknown) => Promise<unknown>>)[method](
+        's1',
+        'g1',
+        { participants: ['628111@c.us'] },
+      ),
+    ).resolves.toEqual({ success: true, message, results });
+  });
 });

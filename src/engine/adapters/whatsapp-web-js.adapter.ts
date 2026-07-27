@@ -25,6 +25,7 @@ import {
   Group,
   GroupInfo,
   GroupParticipant,
+  ParticipantOperationResult,
   LocationInput,
   PollInput,
   ContactCard,
@@ -62,6 +63,7 @@ import { InvalidInviteCodeError } from '../../common/errors/invalid-invite-code.
 import { GroupNotFoundError } from '../../common/errors/group-not-found.error';
 import { ChannelNotFoundError } from '../../common/errors/channel-not-found.error';
 import { ChannelMediaNotSupportedError } from '../../common/errors/channel-media-not-supported.error';
+import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
 import {
   GroupChat,
@@ -1012,6 +1014,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private static readonly PAGE_TRANSPORT_ERROR_PATTERN =
     /protocol error|target closed|targetclosederror|detached frame|session closed|connection closed/i;
 
+  /** Whether the error carries a dead page/transport signature (see PAGE_TRANSPORT_ERROR_PATTERN). */
+  private isPageTransportError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return WhatsAppWebJsAdapter.PAGE_TRANSPORT_ERROR_PATTERN.test(message);
+  }
+
   /**
    * Report a failed client/page operation as a session death when the error matches
    * PAGE_TRANSPORT_ERROR_PATTERN. A wedged page can fire NO events while still reporting CONNECTED
@@ -1021,12 +1029,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * handlePuppeteerDeath's guard makes this safe during teardown and against double-reporting.
    */
   private reportIfPageTransportError(error: unknown, context: string): void {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!WhatsAppWebJsAdapter.PAGE_TRANSPORT_ERROR_PATTERN.test(message)) {
+    if (!this.isPageTransportError(error)) {
       return;
     }
     this.logger.warn(`Page transport error during ${context} — treating the session as dead`, {
-      error: message,
+      error: error instanceof Error ? error.message : String(error),
     });
     this.handlePuppeteerDeath(`Page transport error during ${context}`);
   }
@@ -1803,6 +1810,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         linkedParentJID: extractLinkedParentJID(groupChat.groupMetadata),
       };
     } catch (error) {
+      // A dead page and a genuinely-missing group both land in this catch; only the second may
+      // become null (→ service 404). A transport death surfaced as "group not found" sends
+      // operators debugging the wrong layer — report it and answer 503 instead.
+      if (this.isPageTransportError(error)) {
+        this.reportIfPageTransportError(error, 'getGroupInfo');
+        throw new EngineTransportError(`Transport died while reading group ${groupId}`);
+      }
       this.logger.warn(`Failed to get group: ${groupId}`, { error: String(error) });
       return null;
     }
@@ -1835,44 +1849,88 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     };
   }
 
-  async addParticipants(groupId: string, participants: string[]): Promise<void> {
+  async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
     this.ensureReady();
     const chat = await this.client!.getChatById(groupId);
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
     const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).addParticipants(participantIds);
+    const raw = await (chat as unknown as GroupChat).addParticipants(participantIds);
+    // whatsapp-web.js reports a batch-level refusal (no admin rights, empty group) by RESOLVING a
+    // plain reason string (GroupChat.js:106-107,128-130) instead of throwing — surface it as a
+    // refusal, not a success.
+    if (typeof raw === 'string') {
+      throw new EngineRefusedError(raw);
+    }
+    // Per-participant outcome: code 200 = added; 403 invite-only / 404 not registered / 408
+    // recently left / 409 already a member / 419 group full (GroupChat.js:102-116).
+    const results: ParticipantOperationResult[] = Object.entries(raw ?? {}).map(([id, r]) => ({
+      id,
+      success: r.code === 200,
+      status: r.code,
+      message: r.message || undefined,
+    }));
+    return this.assertParticipantResults('addParticipants', groupId, results);
   }
 
-  async removeParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).removeParticipants(participantIds);
+  async removeParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runStatusOnlyParticipantOp('removeParticipants', groupId, participants);
   }
 
-  async promoteParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    const chat = await this.client!.getChatById(groupId);
-    if (!chat.isGroup) {
-      throw new Error('Chat is not a group');
-    }
-    const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).promoteParticipants(participantIds);
+  async promoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runStatusOnlyParticipantOp('promoteParticipants', groupId, participants);
   }
 
-  async demoteParticipants(groupId: string, participants: string[]): Promise<void> {
+  async demoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runStatusOnlyParticipantOp('demoteParticipants', groupId, participants);
+  }
+
+  /**
+   * whatsapp-web.js remove/promote/demote resolve `{status: 200}` for the whole batch and reject on
+   * a page-side failure (GroupChat.js:267-298,305-340,343-374) — there is no per-participant
+   * breakdown to map. A non-200 status is a batch refusal; a 200 confirms the batch, so report one
+   * success entry per requested participant rather than discarding the outcome.
+   */
+  private async runStatusOnlyParticipantOp(
+    op: 'removeParticipants' | 'promoteParticipants' | 'demoteParticipants',
+    groupId: string,
+    participants: string[],
+  ): Promise<ParticipantOperationResult[]> {
     this.ensureReady();
     const chat = await this.client!.getChatById(groupId);
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
     const participantIds = participants.map(p => (p.includes('@') ? p : `${p}@c.us`));
-    await (chat as unknown as GroupChat).demoteParticipants(participantIds);
+    const res = await (chat as unknown as GroupChat)[op](participantIds);
+    if (res?.status !== 200) {
+      throw new EngineRefusedError(`${op} refused for group ${groupId} (status ${res?.status ?? 'unknown'})`);
+    }
+    return participantIds.map(id => ({ id, success: true, status: 200 }));
+  }
+
+  /**
+   * Shared gate for the membership writes: a result list with at least one success resolves as-is
+   * (partial refusals stay visible per participant); a batch that failed for EVERY requested
+   * participant is a refusal of the operation itself (HTTP 403), not a per-participant detail; and
+   * an empty result is no evidence of success at all.
+   */
+  private assertParticipantResults(
+    op: string,
+    groupId: string,
+    results: ParticipantOperationResult[],
+  ): ParticipantOperationResult[] {
+    if (results.length === 0) {
+      throw new EngineRefusedError(`${op} returned no per-participant outcome for group ${groupId}`);
+    }
+    if (results.every(r => !r.success)) {
+      const detail = results.map(r => `${r.id} (${r.status ?? '?'})`).join(', ');
+      throw new EngineRefusedError(
+        `${op} failed for all ${results.length} participant(s) in group ${groupId}: ${detail}`,
+      );
+    }
+    return results;
   }
 
   async leaveGroup(groupId: string): Promise<void> {
@@ -1890,7 +1948,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
-    await (chat as unknown as GroupChat).setSubject(subject);
+    // GroupChat.setSubject resolves false when WA Web rejects the change (e.g. the account lacks
+    // admin rights; index.d.ts:1982) instead of throwing — surface the refusal, not a false success.
+    const ok = await (chat as unknown as GroupChat).setSubject(subject);
+    if (!ok) {
+      throw new EngineRefusedError(`Failed to set the subject for group ${groupId} — admin rights required`);
+    }
   }
 
   async setGroupDescription(groupId: string, description: string): Promise<void> {
@@ -1899,7 +1962,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!chat.isGroup) {
       throw new Error('Chat is not a group');
     }
-    await (chat as unknown as GroupChat).setDescription(description);
+    // Same discarded-boolean contract as setSubject (index.d.ts:1984).
+    const ok = await (chat as unknown as GroupChat).setDescription(description);
+    if (!ok) {
+      throw new EngineRefusedError(`Failed to set the description for group ${groupId} — admin rights required`);
+    }
   }
 
   // Reactions (Phase 3)
@@ -2070,20 +2137,27 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return channels.find(c => c.id === channelId) ?? null;
   }
 
-  async subscribeToChannel(inviteCode: string): Promise<Channel> {
+  // whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a
+  // boolean (index.d.ts:71; Client.js:2533) — the interface contract here is subscribe-by-INVITE-CODE
+  // returning the subscribed Channel. The old wiring passed the invite code straight in and mapped
+  // the returned boolean as if it were a Channel, fabricating `{ id: "undefined" }`: a reported
+  // success that never subscribed anything. A real wiring is the two-step
+  // `getChannelByInviteCode(inviteCode)` (Client.js:1707) → `subscribeToChannel(channel.id)` flow;
+  // until that is verified against a live session, an honest 501 beats a phantom success.
+  // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
+  async subscribeToChannel(_inviteCode: string): Promise<Channel> {
     this.ensureReady();
-    const ch = await (this.client as unknown as BusinessClient).subscribeToChannel(inviteCode);
-    this.logger.log(`Subscribed to channel with invite code: ${inviteCode}`);
-    return {
-      id: String(typeof ch.id === 'object' ? ch.id._serialized : ch.id),
-      name: String(ch.name || ''),
-      description: ch.description ? String(ch.description) : undefined,
-    };
+    throw new EngineNotSupportedError('subscribeToChannel');
   }
 
   async unsubscribeFromChannel(channelId: string): Promise<void> {
     this.ensureReady();
-    await (this.client as unknown as BusinessClient).unsubscribeFromChannel(channelId);
+    // Resolves false instead of throwing when the unsubscription did not complete (Client.js:2556)
+    // — surface the refusal rather than reporting a false success.
+    const ok = await (this.client as unknown as BusinessClient).unsubscribeFromChannel(channelId);
+    if (!ok) {
+      throw new EngineRefusedError(`Failed to unsubscribe from channel ${channelId}`);
+    }
     this.logger.log(`Unsubscribed from channel: ${channelId}`);
   }
 
@@ -2099,7 +2173,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!channel) {
       throw new ChannelNotFoundError(channelId);
     }
-    const messages = await channel.fetchMessages({ limit });
+    // wwebjs Channel.fetchMessages only honors a limit > 0: its load-earlier loop AND the final
+    // splice are both gated on `searchOptions.limit > 0` (Channel.js:352), so a 0/negative/NaN
+    // limit fails OPEN and returns every loaded message. Substitute the default instead.
+    const safeLimit = Number.isFinite(limit) && limit >= 1 ? Math.trunc(limit) : 50;
+    const messages = await channel.fetchMessages({ limit: safeLimit });
     return (messages ?? []).map(msg => ({
       // Read `$1` before the sentinel (#747), and don't `String()` the object branch: that turned an
       // unreadable id into the literal "undefined" rather than the empty sentinel every other path
@@ -2312,9 +2390,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       groupId = await this.client!.acceptInvite(inviteCode);
     } catch (error) {
       // A refused invite and a broken page both land here, and only the first is the caller's
-      // fault. Surface the transport case to the liveness path and keep the original error in the
-      // log: without it an upstream rename turns every join into an unexplained 400.
-      this.reportIfPageTransportError(error, 'joinGroupViaInviteCode');
+      // fault. A transport death must not be reported as "invalid invite" (400): report the death
+      // to the liveness path and answer 503 so the caller can tell the layers apart.
+      if (this.isPageTransportError(error)) {
+        this.reportIfPageTransportError(error, 'joinGroupViaInviteCode');
+        throw new EngineTransportError('Transport died while accepting the group invite');
+      }
       this.logger.warn(`Failed to accept group invite: ${String(error)}`);
       groupId = undefined;
     }
@@ -2561,27 +2642,24 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   // ========== Catalog (Phase 3) ==========
+  // whatsapp-web.js has no Catalog API at all (no Client.getCatalog/getProducts/getProduct symbol in
+  // index.d.ts). These used to be phantom stubs — a warn log plus null/empty results — so the API
+  // reported "no catalog" / "no products" for a capability that never ran. Honest 501s instead,
+  // matching sendProduct/sendCatalog below.
 
   async getCatalog(): Promise<Catalog | null> {
     this.ensureReady();
-    // whatsapp-web.js doesn't have native Catalog API support
-    this.logger.warn('getCatalog not implemented in whatsapp-web.js adapter');
-    return null;
+    throw new EngineNotSupportedError('getCatalog');
   }
 
   async getProducts(_options?: ProductQueryOptions): Promise<PaginatedProducts> {
     this.ensureReady();
-    this.logger.warn('getProducts not implemented in whatsapp-web.js adapter');
-    return {
-      products: [],
-      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
-    };
+    throw new EngineNotSupportedError('getProducts');
   }
 
   async getProduct(_productId: string): Promise<Product | null> {
     this.ensureReady();
-    this.logger.warn('getProduct not implemented in whatsapp-web.js adapter');
-    return null;
+    throw new EngineNotSupportedError('getProduct');
   }
 
   async sendProduct(_chatId: string, _productId: string, _body?: string): Promise<MessageResult> {

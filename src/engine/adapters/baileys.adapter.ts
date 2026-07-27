@@ -35,6 +35,7 @@ import {
   MessageReaction,
   MessageResult,
   PaginatedProducts,
+  ParticipantOperationResult,
   PollInput,
   Product,
   ProductQueryOptions,
@@ -816,12 +817,38 @@ export class BaileysAdapter implements IWhatsAppEngine {
       const metadata = await this.sock!.groupMetadata(groupId);
       return mapBaileysGroupInfo(metadata, jid => this.sessionStore.toNeutralJid(jid));
     } catch (err) {
-      this.logger.debug('groupMetadata failed; treating as not-found', {
-        groupId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return null; // not a group / not found
+      // Only a SERVER refusal may become null (→ service 404): the group does not exist or the
+      // account cannot see it. Anything else — a dropped socket, a timeout, a protocol error —
+      // folded into null makes a dead transport look like a missing group, so it propagates.
+      const code = BaileysAdapter.refusedStatusCode(err);
+      if (code === 401 || code === 403 || code === 404) {
+        this.logger.debug('groupMetadata refused; treating as not-found', {
+          groupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null; // not a group / not visible to this account
+      }
+      throw err;
     }
+  }
+
+  /**
+   * WA error code of a SERVER-refused Baileys query, or undefined for a transport/local failure.
+   * Baileys carries a refusal two ways: `assertNodeErrorFree` puts the numeric WA code on Boom's
+   * `data` (WABinary/generic-utils.js:57), and `extractGroupMetadata` puts it on `output.statusCode`
+   * with the error node as `data` (Socket/groups.js:280). Transport deaths ('Connection Closed',
+   * 'Timed Out') are LOCAL Booms with DisconnectReason statusCodes (408/428) and no server error
+   * node — so a numeric `data` (or an object `data` alongside a statusCode) is the discriminator.
+   */
+  private static refusedStatusCode(error: unknown): number | undefined {
+    const err = error as { data?: unknown; output?: { statusCode?: unknown } } | null | undefined;
+    if (typeof err?.data === 'number') {
+      return err.data;
+    }
+    if (err?.data !== undefined && typeof err.output?.statusCode === 'number') {
+      return err.output.statusCode;
+    }
+    return undefined;
   }
 
   async createGroup(name: string, participants: string[]): Promise<Group> {
@@ -830,24 +857,53 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return mapBaileysGroup(metadata, this.normalizedSelfJid(), jid => this.sessionStore.toNeutralJid(jid));
   }
 
-  async addParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'add');
+  async addParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runParticipantsUpdate(groupId, participants, 'add');
   }
 
-  async removeParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'remove');
+  async removeParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runParticipantsUpdate(groupId, participants, 'remove');
   }
 
-  async promoteParticipants(groupId: string, participants: string[]): Promise<void> {
-    this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'promote');
+  async promoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runParticipantsUpdate(groupId, participants, 'promote');
   }
 
-  async demoteParticipants(groupId: string, participants: string[]): Promise<void> {
+  async demoteParticipants(groupId: string, participants: string[]): Promise<ParticipantOperationResult[]> {
+    return this.runParticipantsUpdate(groupId, participants, 'demote');
+  }
+
+  /**
+   * Baileys `groupParticipantsUpdate` resolves a per-participant `[{status, jid}]` array where
+   * `status` is the server's error attr or '200' (Socket/groups.js:153-155) — discarding it turned
+   * every not-admin/not-registered/already-member refusal into a reported success. Map the entries
+   * verbatim; THROW only when the operation failed for every requested participant (a refusal of
+   * the operation itself → HTTP 403) or the server returned no outcome at all.
+   */
+  private async runParticipantsUpdate(
+    groupId: string,
+    participants: string[],
+    action: 'add' | 'remove' | 'promote' | 'demote',
+  ): Promise<ParticipantOperationResult[]> {
     this.ensureReady();
-    await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), 'demote');
+    const raw = await this.sock!.groupParticipantsUpdate(groupId, this.toEngineParticipants(participants), action);
+    const results: ParticipantOperationResult[] = (raw ?? []).map(entry => ({
+      id: entry.jid ? this.sessionStore.toNeutralJid(entry.jid) : '',
+      success: entry.status === '200',
+      status: Number.isFinite(Number(entry.status)) ? Number(entry.status) : undefined,
+    }));
+    if (results.length === 0) {
+      throw new EngineRefusedError(
+        `groupParticipantsUpdate(${action}) returned no per-participant outcome for group ${groupId}`,
+      );
+    }
+    if (results.every(r => !r.success)) {
+      const detail = results.map(r => `${r.id || '?'} (${r.status ?? '?'})`).join(', ');
+      throw new EngineRefusedError(
+        `${action}Participants failed for all ${results.length} participant(s) in group ${groupId}: ${detail}`,
+      );
+    }
+    return results;
   }
 
   /**
@@ -897,15 +953,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.ensureReady();
     // Baileys resolves undefined when the invite is invalid/expired/revoked — no group id surfaces —
     // and rejects with an IQ error (e.g. not-authorized / gone) for the same client-facing cause.
-    // Both map to a 400, not a 500.
+    // Both map to a 400. A transport failure (dropped socket, timeout) is NOT a refused invite:
+    // folding it into the 400 makes a dead connection look like a bad code, so it propagates.
     let jid: string | undefined;
     try {
       jid = await this.sock!.groupAcceptInvite(inviteCode);
     } catch (error) {
-      // A refused invite and a socket/protocol failure both land here, and only the first is the
-      // caller's fault. The client-facing answer stays 400, but the original error is kept in the
-      // log: without it an upstream change turns every join into an unexplained 400.
-      this.logger.warn('Failed to accept group invite', { error: String(error) });
+      const code = BaileysAdapter.refusedStatusCode(error);
+      if (code === undefined || code < 400 || code >= 500) {
+        throw error;
+      }
+      this.logger.warn('Group invite refused', { error: String(error) });
       jid = undefined;
     }
     if (!jid) {

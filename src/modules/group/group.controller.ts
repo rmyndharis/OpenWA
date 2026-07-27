@@ -90,15 +90,19 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: ParticipantsDto })
-  @ApiResponse({ status: 200, description: 'Participants added' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+  })
   @HttpCode(HttpStatus.OK)
   async addParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: ParticipantsDto,
   ) {
-    await this.groupService.addParticipants(sessionId, groupId, dto.participants);
-    return { success: true, message: 'Participants added' };
+    const results = await this.groupService.addParticipants(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Participants added', results };
   }
 
   @Delete(':groupId/participants')
@@ -107,14 +111,18 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: ParticipantsDto })
-  @ApiResponse({ status: 200, description: 'Participants removed' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+  })
   async removeParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: ParticipantsDto,
   ) {
-    await this.groupService.removeParticipants(sessionId, groupId, dto.participants);
-    return { success: true, message: 'Participants removed' };
+    const results = await this.groupService.removeParticipants(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Participants removed', results };
   }
 
   @Post(':groupId/participants/promote')
@@ -123,15 +131,19 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: ParticipantsDto })
-  @ApiResponse({ status: 200, description: 'Participants promoted' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+  })
   @HttpCode(HttpStatus.OK)
   async promoteParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: ParticipantsDto,
   ) {
-    await this.groupService.promoteParticipants(sessionId, groupId, dto.participants);
-    return { success: true, message: 'Participants promoted to admin' };
+    const results = await this.groupService.promoteParticipants(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Participants promoted to admin', results };
   }
 
   @Post(':groupId/participants/demote')
@@ -140,15 +152,19 @@ export class GroupController {
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: ParticipantsDto })
-  @ApiResponse({ status: 200, description: 'Participants demoted' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Participants processed — `results` carries the per-participant outcome (a partial refusal does not fail the batch; a total refusal is an error)',
+  })
   @HttpCode(HttpStatus.OK)
   async demoteParticipants(
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: ParticipantsDto,
   ) {
-    await this.groupService.demoteParticipants(sessionId, groupId, dto.participants);
-    return { success: true, message: 'Participants demoted from admin' };
+    const results = await this.groupService.demoteParticipants(sessionId, groupId, dto.participants);
+    return { success: true, message: 'Participants demoted from admin', results };
   }
 
   @Put(':groupId/subject')
