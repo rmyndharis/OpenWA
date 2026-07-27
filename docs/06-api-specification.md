@@ -1389,12 +1389,14 @@ Send messages to multiple recipients as an async batch — returns immediately a
 | Field | Type | Required | Constraints | Description |
 | --- | --- | --- | --- | --- |
 | batchId | string | No | string | Auto-generated `batch_<hex>` if omitted; a duplicate id returns `400` |
-| messages | BulkMessageItemDto[] | Yes | array, max 100, nested-validated | The batch items (see below) |
+| messages | BulkMessageItemDto[] | Yes | array, max 100, nested-validated | The batch items (see below); duplicate `chatId`s are collapsed before processing — first occurrence wins, order preserved |
 | options | BulkMessageOptionsDto | No | nested-validated | Pacing/error options (see below) |
 
 Each `BulkMessageItemDto`: `{ chatId: string, type: 'text'|'image'|'video'|'audio'|'document', content: BulkMessageContentDto, variables?: Record<string,string> }`. `content` (all fields optional, nested-validated): `text?: string`, `image?`/`video?`/`audio?`/`document?`: `{ url?, base64?, mimetype?, filename? }`, `caption?: string`.
 
 `BulkMessageOptionsDto`: `{ delayBetweenMessages?: number (1000–60000, default 3000), randomizeDelay?: boolean (default true), stopOnError?: boolean (default false) }`.
+
+Each item's base64 media is checked against the media byte cap (`MEDIA_DOWNLOAD_MAX_BYTES`) twice: at batch creation, and again per item after `variables` and the `message:sending` plugin gate are applied. An item that outgrows the cap only after rendering fails individually (`failed` in `results`, with `message:failed` fired) instead of being sent. `totalMessages` in the response reflects the de-duplicated item count.
 
 ```json
 {

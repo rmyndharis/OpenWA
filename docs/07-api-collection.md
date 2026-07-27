@@ -399,7 +399,7 @@ curl -X POST "$BASE/api/sessions/my-session/messages/delete" \
 
 #### POST /api/sessions/:sessionId/messages/send-bulk
 
-Send to multiple recipients as an async batch (max 100 messages).
+Send to multiple recipients as an async batch (max 100 messages; duplicate `chatId`s are collapsed — first occurrence wins).
 
 ```bash
 curl -X POST "$BASE/api/sessions/my-session/messages/send-bulk" \

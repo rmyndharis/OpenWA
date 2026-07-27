@@ -132,7 +132,10 @@ export class SendBulkMessageDto {
   @IsString()
   batchId?: string;
 
-  @ApiProperty({ description: 'Array of messages (max 100 per request)', type: [BulkMessageItemDto] })
+  @ApiProperty({
+    description: 'Array of messages (max 100 per request; duplicate chatIds are collapsed — first occurrence wins)',
+    type: [BulkMessageItemDto],
+  })
   @IsArray()
   @ArrayMaxSize(100)
   @ValidateNested({ each: true })

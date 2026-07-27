@@ -7095,7 +7095,7 @@
             "description": "Custom batch ID (auto-generated if not provided)"
           },
           "messages": {
-            "description": "Array of messages (max 100 per request)",
+            "description": "Array of messages (max 100 per request; duplicate chatIds are collapsed — first occurrence wins)",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BulkMessageItemDto"
