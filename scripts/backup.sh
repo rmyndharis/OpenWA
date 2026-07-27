@@ -18,12 +18,22 @@
 # Usage:
 #   ./scripts/backup.sh
 # Environment:
-#   OPENWA_DATA_DIR   data directory (default: ./data)
+#   MAIN_DATABASE_NAME  auth/audit SQLite file (default: ./data/main.sqlite)
+#   DATABASE_NAME       data-store SQLite file (default: ./data/openwa.sqlite; sqlite only)
+#                       Both resolve EXACTLY like the app (src/config/configuration.ts): the
+#                       explicit env path wins, otherwise the fixed ./data default. They are NOT
+#                       derived from OPENWA_DATA_DIR — the app never does that either.
+#   OPENWA_DATA_DIR   data directory for the non-DB state below (default: ./data)
 #   BACKUP_DIR        where archives are written (default: ./backups)
 #   DATABASE_TYPE     sqlite (default) | postgres
 #   SESSION_DATA_PATH, BAILEYS_AUTH_DIR, STORAGE_LOCAL_PATH, PLUGINS_DIR
 #                     override the corresponding state directories
 #   For postgres: DATABASE_URL, or DATABASE_HOST/PORT/USERNAME/PASSWORD/NAME
+#
+# Failure policy: a missing source database is FATAL (no silent empty backup), and the finished
+# archive must contain every configured database or it is deleted and the run fails. When the
+# sqlite3 CLI is unavailable the databases are plain-copied (possibly torn if the app is live) and
+# the archive carries a CONSISTENCY-WARNING marker that restore.sh surfaces.
 #
 set -euo pipefail
 # The archive now contains bootstrap credentials and generated database secrets. Never inherit a
@@ -35,8 +45,11 @@ BACKUP_DIR="${BACKUP_DIR:-./backups}"
 DATABASE_TYPE="${DATABASE_TYPE:-sqlite}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
-MAIN_DB="$DATA_DIR/main.sqlite"
-DATA_DB="$DATA_DIR/openwa.sqlite"
+# Database paths resolve exactly like the app (src/config/configuration.ts): the explicit env path
+# wins, otherwise the fixed ./data default. OPENWA_DATA_DIR below only bases the non-DB state
+# directories — deriving DB paths from it would back up files the app never reads.
+MAIN_DB="${MAIN_DATABASE_NAME:-./data/main.sqlite}"
+DATA_DB="${DATABASE_NAME:-./data/openwa.sqlite}"
 SESSIONS_DIR="${SESSION_DATA_PATH:-$DATA_DIR/sessions}"
 BAILEYS_DIR="${BAILEYS_AUTH_DIR:-$DATA_DIR/baileys}"
 MEDIA_DIR="${STORAGE_LOCAL_PATH:-$DATA_DIR/media}"
@@ -50,24 +63,48 @@ log() { echo "[backup] $*"; }
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-# Online SQLite backup (consistent without stopping the app) when sqlite3 is present,
-# else a plain copy with a warning.
+CONSISTENCY_WARNING="$STAGE/CONSISTENCY-WARNING"
+
+# Marker file shipped INSIDE the archive so restore.sh can surface that the database snapshot was
+# plain-copied from a possibly-live app (rollback-journal mode) and may be torn.
+record_consistency_warning() {
+  if [ ! -f "$CONSISTENCY_WARNING" ]; then
+    cat >"$CONSISTENCY_WARNING" <<'EOF'
+This archive was produced WITHOUT sqlite3 .backup (the sqlite3 CLI was not found on the backup
+host). The database file(s) listed below were plain-copied while the app may have been writing
+(SQLite rollback-journal mode), so the snapshot may be TORN (partially committed). Re-take the
+backup with sqlite3 installed — or with the app stopped — before relying on it for recovery.
+EOF
+  fi
+  echo "plain-copied: $1" >>"$CONSISTENCY_WARNING"
+}
+
+# Online SQLite backup (consistent without stopping the app) when sqlite3 is present. A missing
+# source database is FATAL: an archive without the configured databases is not a backup, and a
+# silent skip is how an empty archive gets reported as "Backup complete".
 backup_sqlite() {
   src="$1"
   dest="$2"
   if [ ! -f "$src" ]; then
-    log "WARN: $src not found — skipping"
-    return 0
+    log "ERROR: database file not found: $src"
+    log "       the app reads this exact path — check MAIN_DATABASE_NAME / DATABASE_NAME / cwd, or start the app first"
+    exit 1
   fi
   if command -v sqlite3 >/dev/null 2>&1; then
     sqlite3 "$src" ".backup '$dest'"
   else
-    log "WARN: sqlite3 not found — plain-copying $src (stop the app first for a consistent copy)"
+    log "WARN: sqlite3 not found — plain-copying live database $src (the snapshot may be torn)"
     cp "$src" "$dest"
+    record_consistency_warning "$src"
   fi
 }
 
-log "Backing up auth/audit DB (main.sqlite) — the API-key + audit store"
+# Members the finished archive MUST contain (relative tar paths). A run that cannot stage any of
+# them has already failed hard above; the post-archive min-content check below is the last gate
+# against shipping an archive that would "restore" into a fresh-empty install.
+REQUIRED_MEMBERS=("./main.sqlite")
+
+log "Backing up auth/audit DB ($MAIN_DB) — the API-key + audit store"
 backup_sqlite "$MAIN_DB" "$STAGE/main.sqlite"
 
 if [ "$DATABASE_TYPE" = "postgres" ]; then
@@ -85,9 +122,11 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
       -U "${DATABASE_USERNAME:-openwa}" \
       "${DATABASE_NAME:-openwa}" >"$STAGE/database.sql"
   fi
+  REQUIRED_MEMBERS+=("./database.sql")
 else
-  log "Backing up data store (openwa.sqlite)"
+  log "Backing up data store ($DATA_DB)"
   backup_sqlite "$DATA_DB" "$STAGE/openwa.sqlite"
+  REQUIRED_MEMBERS+=("./openwa.sqlite")
 fi
 
 if [ -d "$SESSIONS_DIR" ]; then
@@ -133,7 +172,24 @@ mkdir -p "$BACKUP_DIR"
 ARCHIVE="$BACKUP_DIR/openwa-backup-$TIMESTAMP.tar.gz"
 tar -czf "$ARCHIVE" -C "$STAGE" .
 
+ARCHIVE_LIST="$(tar -tzf "$ARCHIVE")"
+
+# Min-content check on the finished archive: every configured database must be present. If not,
+# delete the defective archive and fail — leaving it on disk invites a restore into a fresh-empty
+# install (new API keys, new master key) reported as success.
+MISSING_MEMBERS=""
+for member in "${REQUIRED_MEMBERS[@]}"; do
+  if ! printf '%s\n' "$ARCHIVE_LIST" | grep -qxF "$member"; then
+    MISSING_MEMBERS="$MISSING_MEMBERS $member"
+  fi
+done
+if [ -n "$MISSING_MEMBERS" ]; then
+  log "ERROR: archive failed the min-content check — missing required member(s):$MISSING_MEMBERS"
+  rm -f "$ARCHIVE"
+  exit 1
+fi
+
 log "Backup complete: $ARCHIVE"
 log "SECURITY: this archive can contain database passwords, plugin secrets, and an admin API key; restrict and encrypt it"
 log "Contents:"
-tar -tzf "$ARCHIVE" | sed 's/^/[backup]   /'
+printf '%s\n' "$ARCHIVE_LIST" | sed 's/^/[backup]   /'

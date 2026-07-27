@@ -60,6 +60,8 @@ FROM docker.io/node:22-slim AS production
 # --no-sandbox would otherwise get a chromium that can't launch. Verified on real arm64 hardware:
 # with --no-install-recommends the package is dropped, and chromium launches fine under --no-sandbox.
 ARG TARGETARCH
+# sqlite3 ships the CLI so an in-container scripts/backup.sh run takes online-consistent SQLite
+# snapshots (.backup) instead of plain-copying a live database (which can archive a torn file).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     $([ "$TARGETARCH" = arm64 ] && echo "chromium chromium-sandbox") \
     fonts-liberation \
@@ -84,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     patch \
     curl \
     procps \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Puppeteer to skip automatic download during npm install (we download it explicitly below)

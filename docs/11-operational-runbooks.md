@@ -493,16 +493,24 @@ User-managed files outside that list (for example the project-level `.env`) must
 
 ```bash
 # scripts/backup.sh captures:
-#   - main.sqlite   — auth (API keys) + audit log   (ALWAYS SQLite)
-#   - openwa.sqlite — user data                      (or a pg_dump when DATABASE_TYPE=postgres)
+#   - main.sqlite   — auth (API keys) + audit log   (ALWAYS SQLite; MAIN_DATABASE_NAME, default ./data/main.sqlite)
+#   - openwa.sqlite — user data                      (DATABASE_NAME, default ./data/openwa.sqlite;
+#                                                     or a pg_dump when DATABASE_TYPE=postgres)
 #   - sessions/     — whatsapp-web.js state (SESSION_DATA_PATH)
 #   - baileys/      — Baileys credentials (BAILEYS_AUTH_DIR)
 #   - media/        — local media                    (skipped automatically when STORAGE_TYPE=s3)
 #   - plugin-packages/ — installed plugin code from PLUGINS_DIR
 #   - plugin-state/    — registry + ctx.storage state under OPENWA_DATA_DIR
 #   - .env.generated / .api-key — generated configuration and bootstrap secret
+#
+# The database paths resolve exactly like the app: the explicit MAIN_DATABASE_NAME /
+# DATABASE_NAME env path wins, otherwise the fixed ./data defaults — they are NOT derived from
+# OPENWA_DATA_DIR. A missing source database fails the run (no silent empty backup), the finished
+# archive is checked to contain every configured database, and with the sqlite3 CLI present the
+# databases are snapshotted online via .backup (otherwise plain-copied with a CONSISTENCY-WARNING
+# marker inside the archive).
 
-# Run from the repo root (operates on the data dir, default ./data):
+# Run from the repo root (database defaults are ./data/...; state dirs follow OPENWA_DATA_DIR):
 ./scripts/backup.sh
 
 # Customize via environment:
@@ -516,7 +524,8 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > compose. Run the script where that volume is mounted — e.g. point `OPENWA_DATA_DIR`
 > at the volume's mountpoint, or run it inside a container with `/app/data` mounted. When operating
 > directly on the host mount, also set any path that does not use its default below `OPENWA_DATA_DIR`
-> (notably compose's colocated `PLUGINS_DIR`) to the corresponding host-visible path.
+> (notably compose's colocated `PLUGINS_DIR`, and `MAIN_DATABASE_NAME` / `DATABASE_NAME` when the app
+> overrides them) to the corresponding host-visible path.
 
 **Verification:**
 
@@ -554,7 +563,9 @@ the current data dir first so a bad restore can be undone:
 docker compose down
 
 # 2. Restore from an archive produced by scripts/backup.sh
-#    (operates on the data dir, default ./data; override with OPENWA_DATA_DIR)
+#    (databases land on MAIN_DATABASE_NAME / DATABASE_NAME, default ./data/... — the same paths
+#    the app reads; non-DB state follows OPENWA_DATA_DIR. Pass --strict to refuse an archive
+#    whose CONSISTENCY-WARNING marker reports plain-copied, possibly-torn database snapshots)
 ./scripts/restore.sh ./backups/openwa-backup-<timestamp>.tar.gz
 
 # 3. (Postgres only) the archive contains database.sql — import it manually:
