@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **All five SDKs gain poll sending, batch profile pictures, and status media downloads, and their
+  webhook filter types now match the server's polymorphic contract.** New `sendPoll`,
+  `profilePictures` (batch lookup returning `{id: url|null}`), and status `media` (binary bytes +
+  content type) methods in the JavaScript, Python, Go, PHP, and Java SDKs — the binary path is a
+  new `byte[]` end-to-end transport in Java. The webhook filter `value` is now
+  `string | string[] | boolean` with `caseSensitive` support in the typed SDKs (Go already
+  matched), `mentions` is accepted on send-text everywhere, and Java/Go non-JSON 2xx responses
+  behave like the other three SDKs (raw text / verbatim bytes instead of leaking parser errors).
+  (#947)
+
 ### Fixed
 
 - **S3 storage no longer silently stays on the local fallback after a boot-time miss, the Baileys
@@ -143,6 +155,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marker is now matched token-exactly (whitespace/string-boundary delimited, session id
   regex-escaped). (#923)
 
+- **Bootstrap and shutdown now fail loudly instead of coasting, and request metrics see the
+  traffic guards reject.** A failed HTTP bind (e.g. `EADDRINUSE`) after full Nest init used to
+  leave a port-less zombie driving WhatsApp sessions with `exitCode` set but no exit; the process
+  now runs a bounded best-effort teardown and exits 1. A teardown that rejects during SIGTERM
+  handling similarly ended in `exit 0` — it now exits 1 (a hung teardown is still bounded by the
+  second-signal force-exit). The RED metrics also stopped at the interceptor, so 401/403/429/404
+  rejections never reached `http_requests_total`; a boundary middleware now records them (unmatched
+  routes folded into a `(unmatched)` label) with a claim flag preventing double-counts on handled
+  requests. Separately, a `start()` that completed after its session row was deleted re-created the
+  just-purged auth dir and emitted QR/status events for the dead session; the retirement guard now
+  re-purges both engines' auth dirs (gated by a by-name re-check so delete+recreate keeps its fresh
+  dir) on the start and reconnect paths alike. (#949, #961, #952)
+
+- **Infra config writes are section-scoped, mode-aware, and strictly coerced, and the bootstrap
+  config guards cover the paths the app actually uses.** Saving config used to clobber sections
+  absent from the payload and carry stale secrets across mode flips (built-in `minioadmin`/`openwa`
+  credentials surviving into an external-blank config, which the production secret guard then
+  rejected at the next boot — a crash-loop with the dashboard dead); writes now merge per key,
+  drop the old mode's secrets on a builtin→external flip (`S3_ENDPOINT` clearable), and re-run the
+  production default-secret assertion at save time (400 before anything hits disk). Controller-local
+  DTOs moved to `dto/` with strict coercion, so a form-encoded `'false'` can no longer persist as
+  `'true'` for the boolean flags. The SQLite main/data path-collision guard now resolves paths
+  exactly like the runtime (and also fires for CLI migration invocations), `REDIS_ENABLED` is
+  strictly validated (a typo fails boot instead of silently downgrading the throttler and cache to
+  in-memory), and a boot sweep deletes `storage-export-*` archives orphaned by a restart after
+  `STORAGE_EXPORT_SWEEP_MAX_AGE_MS` (default 24h). **Breaking (behavior):** partial config payloads
+  now preserve omitted fields instead of resetting them (the dashboard's full payload is
+  byte-identical), and non-canonical `REDIS_ENABLED` values now fail boot. (#946, #960)
+
+- **Bulk batches re-validate rendered payloads and cancel terminally, and outbound rows stuck
+  PENDING after a crash are reaped.** Media presence/size was only checked at batch creation, so
+  `{{variables}}` and the `message:sending` hook could grow a payload past the cap afterwards —
+  every item is now re-validated post-gate (violations fail the item, honoring `stopOnError`). A
+  cancel landing before the first item could be fully overwritten by the cadence/final writes and
+  send the whole batch anyway; all status transitions are now DB-conditional on the current status,
+  so CANCELLED stays terminal (duplicate chatIds are deduped first-wins at creation). Rows left
+  PENDING when the process dies between the pre-send save and the final save previously stayed
+  PENDING forever (in the DB and in plugin search indexes); a periodic reaper
+  (`MESSAGE_REAPER_INTERVAL_MS`/`_GRACE_MS`/`_BATCH_SIZE`, defaults 10min/1h/50) marks them FAILED
+  with a `reapedAt` marker and re-emits `message:persisted` so hook-driven providers reconcile.
+  (#955, #958)
+
+- **API-key usage accounting no longer loses deltas, and the queue dashboard leaves an audit
+  trail.** A failed `pendingUsage` save dropped the accumulated delta and 500'd the request (the
+  delta now merges back and the request stands); nothing flushed on shutdown, so the last window's
+  usage vanished (a bounded `onModuleDestroy` flush now writes it). Bull Board rejected requests
+  with no audit record and queue-mutating UI actions left none either — 401/403s now write the
+  standard failed-auth row (429s are left to the limiter), and authenticated non-GET requests write
+  a new `QUEUE_BOARD_MUTATED` action with actor/method/path. The bootstrap `data/.api-key` file and
+  boot banner pointed at keys after rotation/revoke; the file is now removed when its key no
+  longer validates (checked by hash at boot, and on the revoke/delete paths). (#963)
+
+- **Group participant batches, template renders, and status media are bounded and reconciled, and
+  the Postgres FTS probe reads the active schema.** Participant arrays accept at most 256 entries
+  (the engine works them serially) and a partially-failing settings patch now names the failed
+  field instead of silently half-applying. Rendered templates are capped at
+  `TEMPLATE_RENDER_MAX_CHARS` (default 64 KiB) instead of growing unbounded. Status media used to
+  write the file before its row (a crash between them left a permanent orphan) and purge deleted
+  the row even when the file delete failed; ingest is now row-first with `write_failed` recorded on
+  attachment failure, purge keeps the row for the next sweep when the file delete fails, and a
+  periodic sweep reclaims `statuses/` files no row references after a grace period. The search FTS
+  probe queried `information_schema` unscoped, so a `POSTGRES_SCHEMA` deployment could read a
+  namesake table in another schema and pick the wrong availability posture in degraded states; it
+  now resolves the table through the session `search_path` via `to_regclass('messages')` and probe
+  errors fail closed without caching. **Breaking (behavior):** batches over 256 participants and
+  renders over the cap are now 400s. (#964, #966)
+
+- **Contract and documentation drift corrections.** `POST /api/sessions` returned the raw entity
+  (leaking `config`/`proxyUrl`) instead of the documented DTO — it now maps through
+  `SessionResponseDto` like the sibling routes. The OpenAPI exporter pinned no env, so the
+  snapshot could drift with the operator's configuration — `SEARCH_ENABLED`/`REDIS_ENABLED` are now
+  pinned for deterministic output (two exports under different envs are byte-identical), the
+  `calls`/`profile`/`search` tags and the metrics Bearer scheme are declared, and `GET /api/metrics`
+  is in the spec. Docs corrections: the README's audit-trail claim now matches the explicit
+  audit-coverage registry, the rate-limit header documentation shows the actual per-throttler
+  suffixed headers (and CORS exposes them), the testing doc reflects the current suite inventory
+  and CI jobs, and the phantom `DATABASE_SQLITE_PATH`/`DATABASE_URL`/`openwa.db` references are
+  replaced with the real `DATABASE_NAME`/`MAIN_DATABASE_NAME` variables and `./data/*.sqlite`
+  paths. (#953)
+
 ### Security
 
 - **The HTTP body parser, the WebSocket gateway, and the plugin install path are now bounded against
@@ -277,6 +369,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key-management routes and can only manage instances bound inside their own sessions; unrestricted
   keys (including the bootstrap key) are unchanged. (#916, #920)
 
+- **The last-admin guard is race-safe, and webhook media fan-out is bounded.** The
+  last-usable-admin check ran check-then-act across an `await`, so two concurrent demote/delete
+  requests against the last two admins both passed and produced a total management lockout; the
+  check and its mutation now share one in-process mutex (a DB transaction cannot provide this
+  atomicity on the better-sqlite3 driver), entered only when an operation can actually strip admin
+  capability. On the webhook side, one inbound media message cloned its full base64 payload per
+  registered webhook (with no per-session webhook cap) and retained it in Redis on failure: new
+  registrations above `WEBHOOK_MAX_PER_SESSION` (default 16; existing webhooks grandfathered) are
+  rejected, media above `WEBHOOK_MEDIA_INLINE_MAX_BYTES` (default 1 MiB) travels as an omitted
+  marker instead of inline base64, oversized serialized bodies shed their media before enqueue
+  (delivering the event as a marker rather than dropping it), and the serialized bytes are built
+  once per delivery for both signing and posting. **Breaking (behavior):** media above the inline
+  threshold now arrives as a marker (fetch it via history or raise the knob), and webhook
+  registration past the cap returns 400. (#950, #948)
+
+- **The plugin sandbox runtime is bounded and no longer fails silently.** A hung plugin could pin
+  all 32 in-flight capability slots forever — capability RPCs now time out
+  (`PLUGIN_CAP_TIMEOUT_MS`, default 30s), freeing the slot and logging late settles as warnings
+  (worker work already running is not cancelled, by design). Hook handler errors inside the sandbox
+  were swallowed wholesale; the first handler error per hook now surfaces as a rate-limited
+  structured host log and in the plugin's health check. Per-plugin storage writes are quota-bounded
+  (`PLUGIN_STORAGE_MAX_BYTES`, default 50 MiB) and the log relay truncates and caps throughput per
+  plugin. Plugin search-provider responses are validated at the host boundary — malformed
+  hits/totals now fail with 502 instead of a bogus 200/500. `conversation.send` with
+  `type: 'location'` fell through to an empty text message; coordinates are now part of the
+  envelope and send a real location (invalid ranges are rejected). **Breaking (behavior):**
+  malformed plugin search results now 502, and plugins relying on the empty-text fallthrough get an
+  explicit error. (#954)
+
 ### Changed
 
 - **Dashboard stats aggregates now use a standalone `messages(createdAt)` index and a short TTL
@@ -374,6 +495,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the opt-outs (an operator-controlled copy via `WWEBJS_WEB_VERSION_REMOTE_PATH`). The active build
   and its source (`pinned`/`auto`/`native`) remain visible on the dashboard's Infrastructure page.
   (#917)
+
+- **The peer-fed Baileys session maps and chat-history inline media are now bounded, and an RFC for
+  wa-version content integrity is open for a maintainer decision.** `BaileysSessionStore` held five
+  unbounded maps fed by peer traffic (contacts, chats, lastMessages, lid, ephemeral markers); all
+  are now LRU-capped at `BAILEYS_SESSION_STORE_MAX_ENTRIES` (default 5000, `0` restores unbounded)
+  with defined fallbacks on eviction. `getChatHistory(includeMedia=true)` accumulated up to ~100 ×
+  50 MiB of base64 in one response with no way to cancel — an aggregate budget
+  (`CHAT_HISTORY_MEDIA_BUDGET_BYTES`, default 25 MiB) now omits further media behind the existing
+  `omitted` marker, and the loop honors request abort. `docs/plans/2026-07-27-wa-version-integrity-options.md`
+  analyzes the structural options for integrity-checking the pinned WhatsApp Web HTML (per-release
+  hash allowlist, signed hash channel/mirror, documented accepted-risk, operator pins) and asks the
+  maintainer for a decision; the transparency layer (warn log, accurate docs, dashboard source
+  badge) already shipped. (#951, #962)
+
+- **MCP tool inputs now enforce the same caps as the REST DTOs, and the dashboard's catalogs and
+  modals are complete.** Nine MCP tool fields (location description/address, contact name/number,
+  reply text, reaction emoji, group name/subject/description) accepted values the equivalent REST
+  endpoints reject — the Zod schemas now share the DTOs' cap constants. On the dashboard, 15
+  `plugins.*` keys used by the Plugins page are translated in all 12 locales, count badges use real
+  plural forms (including the Arabic and Hebrew category sets), `failed`/`authenticating` session
+  statuses render localized in both status renderers, and all 13 hand-written modals moved to the
+  shared Modal with `role="dialog"`, focus trap + restore-to-trigger, Escape-to-close, and
+  background scroll-lock. (#959, #965)
+
+- **CI now boots the queued dispatch path against a real Redis, and the Docker managed profiles
+  match compose.** A new `queue-on` e2e suite starts the app with `QUEUE_ENABLED=true` against a
+  Redis service (new in the CI test job) and proves ingress deliveries and webhooks actually travel
+  the BullMQ queues to their workers — the posture that previously shipped green while always
+  dispatching inline (the suite skips gracefully without a local Redis). DockerService's managed
+  containers now pin the same MinIO release as compose and set `no-new-privileges`, a
+  compose-parity spec locks the contract, and SECURITY.md's supported-versions table reflects the
+  current linear release policy. (#967, #968)
 
 ## [0.10.10] - 2026-07-25
 
