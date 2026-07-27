@@ -3850,5 +3850,19 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       });
       await expect(adapter.joinGroupViaInviteCode('BAD')).rejects.toBeInstanceOf(InvalidInviteCodeError);
     });
+
+    it('getProfilePicture answers EngineTransportError (503) on a dead page — not null (→ false "no picture")', async () => {
+      const adapter = readyAdapter({ getProfilePicUrl: jest.fn().mockRejectedValue(transportError()) });
+      await expect(adapter.getProfilePicture('12345@c.us')).rejects.toBeInstanceOf(EngineTransportError);
+    });
+
+    it('getProfilePicture still maps a genuine lookup failure to null (→ "no picture")', async () => {
+      // A wwebjs "this contact has no picture" rejects with a ServerError — it is NOT a transport
+      // signature. It must resolve to null so the API answers "no avatar" rather than a 503.
+      const adapter = readyAdapter({
+        getProfilePicUrl: jest.fn().mockRejectedValue(new Error("Server returned error: couldn't get profile picture")),
+      });
+      await expect(adapter.getProfilePicture('12345@c.us')).resolves.toBeNull();
+    });
   });
 });
