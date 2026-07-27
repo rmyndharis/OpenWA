@@ -25,7 +25,7 @@ jest.mock('@aws-sdk/client-s3', () => {
   };
 });
 
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { DEFAULT_S3_REPROBE_INTERVAL_MS, StorageService } from './storage.service';
 
 const ENV_KEYS = [
@@ -217,5 +217,92 @@ describe('StorageService S3 re-probe and recovery', () => {
 
     const data = await svc.getFile('present.bin');
     expect(data.toString()).toBe('from-s3');
+  });
+
+  it('deleteFile removes the local fallback copy as well as the S3 object', async () => {
+    mockSend.mockResolvedValue({}); // HeadBucket at boot, DeleteObject later
+    const svc = new StorageService(makeConfig());
+    await flush();
+    expect(svc.isS3Available()).toBe(true);
+
+    // Gap media: written to the local fallback dir while S3 was down, never uploaded. Without the
+    // delete-through, deleting the (missing) S3 key would leave these bytes orphaned forever.
+    fs.writeFileSync(path.join(localPath, 'gap.bin'), 'gap-media');
+
+    await svc.deleteFile('gap.bin');
+
+    expect(fs.existsSync(path.join(localPath, 'gap.bin'))).toBe(false);
+    const deleteCalls = mockSend.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand);
+    expect(deleteCalls.length).toBe(1);
+  });
+
+  it('deleteFile still resolves for an S3-only key (no local copy — ENOENT stays success)', async () => {
+    mockSend.mockResolvedValue({});
+    const svc = new StorageService(makeConfig());
+    await flush();
+
+    await expect(svc.deleteFile('s3-only.bin')).resolves.toBeUndefined();
+    const deleteCalls = mockSend.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand);
+    expect(deleteCalls.length).toBe(1);
+  });
+
+  it('listFiles unions S3 objects with the local fallback dir (each key once)', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({ Contents: [{ Key: 'media/s3-only.bin' }, { Key: 'media/shared.bin' }] });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    await flush();
+
+    fs.writeFileSync(path.join(localPath, 'local-only.bin'), 'x');
+    fs.writeFileSync(path.join(localPath, 'shared.bin'), 'stale-local-copy');
+
+    const files = await svc.listFiles();
+    expect(files.sort()).toEqual(['local-only.bin', 's3-only.bin', 'shared.bin']);
+  });
+
+  it('getFileCount counts local-only fallback files S3 does not know about', async () => {
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        return Promise.resolve({
+          Contents: [
+            { Key: 'media/s3.bin', Size: 1000 },
+            { Key: 'media/shared.bin', Size: 10 },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    await flush();
+
+    fs.writeFileSync(path.join(localPath, 'local.bin'), Buffer.alloc(500));
+    fs.writeFileSync(path.join(localPath, 'shared.bin'), Buffer.alloc(99999)); // S3 size wins for a shared key
+
+    const result = await svc.getFileCount();
+    expect(result.count).toBe(3);
+    expect(result.sizeBytes).toBe(1000 + 10 + 500);
+  });
+
+  it('iterateFiles paginates S3 and unions the local fallback dir (each key once)', async () => {
+    const pages = [
+      { Contents: [{ Key: 'media/p1.bin' }], NextContinuationToken: 'tok' },
+      { Contents: [{ Key: 'media/p2.bin' }] },
+    ];
+    mockSend.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) return Promise.resolve(pages.shift() ?? {});
+      return Promise.resolve({});
+    });
+    const svc = new StorageService(makeConfig());
+    await flush();
+
+    fs.writeFileSync(path.join(localPath, 'local.bin'), 'x');
+    fs.writeFileSync(path.join(localPath, 'p2.bin'), 'stale-copy');
+
+    const seen: string[] = [];
+    for await (const file of svc.iterateFiles()) seen.push(file);
+    expect(seen.sort()).toEqual(['local.bin', 'p1.bin', 'p2.bin']);
   });
 });

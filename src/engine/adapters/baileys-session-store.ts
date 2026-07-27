@@ -2,6 +2,7 @@ import type { Chat, Contact as BaileysContact, WAMessage, WAMessageKey } from '@
 import { ChatSummary, Contact } from '../interfaces/whatsapp-engine.interface';
 import { chatKind, parseWaId, toNeutralJid as canonicalizeWaId, userPart } from '../identity/wa-id';
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 interface LastMessage {
   key: WAMessageKey;
@@ -98,8 +99,10 @@ export class BaileysSessionStore {
     private readonly sessionId?: string,
   ) {
     // Mirrors LidMappingStoreService: a finite default, 0 opts back into unbounded, garbage falls back.
-    const parsed = Number(process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES ?? SESSION_STORE_MAP_CAP_DEFAULT);
-    const maxEntries = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : SESSION_STORE_MAP_CAP_DEFAULT;
+    const maxEntries = resolveNonNegativeIntEnv(
+      process.env.BAILEYS_SESSION_STORE_MAX_ENTRIES,
+      SESSION_STORE_MAP_CAP_DEFAULT,
+    );
     this.contacts = new LruMap(maxEntries);
     this.chats = new LruMap(maxEntries);
     this.lastMessages = new LruMap(maxEntries);

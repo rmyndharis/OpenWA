@@ -171,19 +171,24 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Bounded drain of the direct-delivery path (queued BullMQ jobs are durable in Redis and need no
-   * drain). Closing the limiter rejects every PARKED delivery; the dispatch catch records each one in
-   * webhook_delivery_failures like any other undispatched delivery. In-flight deliveries (a direct
-   * delivery can outlive WEBHOOK_TIMEOUT via its backoff sleeps) get up to WEBHOOK_SHUTDOWN_DRAIN_MS
-   * to finish; anything still running after that is about to be dropped by process exit, so it is
-   * logged per delivery — a dead-letter row would be wrong there, since the receiver may already
-   * have gotten the event. Nest awaits this hook during app.close(), so the bound also keeps
-   * app.close() itself bounded.
+   * drain). In direct mode, closing the limiter rejects every PARKED delivery; the dispatch catch
+   * records each one in webhook_delivery_failures like any other undispatched delivery. Queued mode
+   * skips the close: a parked dispatch's whole job is webhookQueue.add() — durable in Redis the
+   * moment it resolves — so rejecting it would dead-letter work Redis could have kept. A parked
+   * waiter holds an activeCount slot via handoff, so the drain loop below covers it either way.
+   * In-flight deliveries (a direct delivery can outlive WEBHOOK_TIMEOUT via its backoff sleeps) get
+   * up to WEBHOOK_SHUTDOWN_DRAIN_MS to finish; anything still running after that is about to be
+   * dropped by process exit, so it is logged per delivery — a dead-letter row would be wrong there,
+   * since the receiver may already have gotten the event. Nest awaits this hook during app.close(),
+   * so the bound also keeps app.close() itself bounded.
    */
   async onModuleDestroy(): Promise<void> {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
-    this.dispatchLimiter.close();
+    if (!this.queueEnabled) {
+      this.dispatchLimiter.close();
+    }
     const drainMs = Math.max(
       0,
       this.configService.get<number>('webhook.shutdownDrainMs', DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS),

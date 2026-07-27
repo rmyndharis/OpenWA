@@ -17,6 +17,10 @@ const e2eMainDb = join(tmpdir(), `openwa-e2e-main-${process.pid}.sqlite`);
 rmSync(e2eMainDb, { force: true });
 process.env.MAIN_DATABASE_NAME = e2eMainDb;
 process.env.QUEUE_ENABLED = 'false';
+// Likewise force Redis off per suite: queue-on.e2e-spec.ts flips REDIS_ENABLED=true at module
+// load and can't restore it when it self-skips, so without this reset later suites in the same
+// jest worker would boot with Redis-backed throttling/cache.
+process.env.REDIS_ENABLED = 'false';
 process.env.AUTO_START_SESSIONS = 'false';
 // Keep the auth/audit + data schema zero-config for the test boot.
 process.env.MAIN_DATABASE_SYNCHRONIZE = 'true';

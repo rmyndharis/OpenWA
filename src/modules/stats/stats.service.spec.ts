@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { StatsService, timeSeriesTimestampSql, hourBucketSql, maxCreatedAtSql } from './stats.service';
 import { Session, SessionStatus } from '../session/entities/session.entity';
@@ -337,6 +338,28 @@ describe('StatsService aggregate memo (in-process TTL)', () => {
     const n = spy.mock.calls.length;
     await service.getMessageStats('24h');
     expect(spy.mock.calls.length).toBeGreaterThan(n);
+  });
+
+  it('does not serve a deleted session from the memo — the stale entry is evicted, not served', async () => {
+    const service = makeService(30000);
+
+    const first = await service.getSessionStats('s1'); // populates the 'session:s1' memo entry
+    expect(first.session.name).toBe('n1');
+
+    await ds.getRepository(Session).delete('s1');
+    // Within the TTL the memo still holds the deleted session's snapshot; serving it would
+    // resurrect a deleted session with a 200 instead of the honest 404.
+    await expect(service.getSessionStats('s1')).rejects.toThrow(NotFoundException);
+
+    // The stale entry is evicted, not just bypassed: a re-created session recomputes immediately
+    // instead of waiting out the TTL with the pre-delete snapshot.
+    await ds
+      .getRepository(Session)
+      .save(
+        ds.getRepository(Session).create({ id: 's1', name: 'n1-recreated', status: SessionStatus.READY, config: {} }),
+      );
+    const recomputed = await service.getSessionStats('s1');
+    expect(recomputed.session.name).toBe('n1-recreated');
   });
 
   it('bounds every cross-session aggregate with a createdAt range predicate the standalone index serves', async () => {

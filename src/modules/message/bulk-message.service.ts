@@ -1,7 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Not, QueryDeepPartialEntity, Repository } from 'typeorm';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
   MessageBatch,
   BatchStatus,
@@ -18,6 +18,7 @@ import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util
 import { SsrfBlockedError, SSRF_BLOCKED_CLIENT_MESSAGE } from '../../common/security/ssrf-guard';
 import { renderTemplate } from '../../common/utils/template-render';
 import { IWhatsAppEngine, MessageResult } from '../../engine/interfaces/whatsapp-engine.interface';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 // Type definitions for bulk message content
 interface BulkMessageContent {
@@ -66,9 +67,7 @@ export function sanitizeBatchError(error: unknown): { code: string; message: str
  */
 const DEFAULT_MAX_CONCURRENT_BATCHES = 50;
 export function resolveMaxConcurrentBatches(): number {
-  const raw = Number(process.env.BULK_MAX_CONCURRENT_BATCHES);
-  if (!Number.isFinite(raw) || raw < 0) return DEFAULT_MAX_CONCURRENT_BATCHES;
-  return Math.floor(raw); // 0 = unlimited
+  return resolveNonNegativeIntEnv(process.env.BULK_MAX_CONCURRENT_BATCHES, DEFAULT_MAX_CONCURRENT_BATCHES); // 0 = unlimited
 }
 
 @Injectable()
@@ -112,14 +111,20 @@ export class BulkMessageService implements OnApplicationBootstrap {
       throw new BadRequestException(`Session '${sessionId}' is not active`);
     }
 
-    // Collapse duplicate chatIds — first occurrence wins, order preserved — so a recipient gets at
-    // most one message per batch. Repeats would only re-run the engine (and the moderation gate)
-    // for an id already covered by the first entry.
-    const seenChatIds = new Set<string>();
+    // Collapse exact duplicate entries — same chatId, type, content, and variables; first
+    // occurrence wins, order preserved. A true repeat would only re-run the engine (and the
+    // moderation gate) for an entry already covered, but distinct messages to the same chatId
+    // (a text followed by an image, say) must all be sent.
+    const seenEntries = new Set<string>();
     const messages: SendBulkMessageDto['messages'] = [];
     for (const message of dto.messages) {
-      if (seenChatIds.has(message.chatId)) continue;
-      seenChatIds.add(message.chatId);
+      // Hashed, not retained verbatim: the raw JSON of a 100-item media batch is a second copy of
+      // the whole payload (up to the body limit) held for the length of the loop.
+      const fingerprint = createHash('sha256')
+        .update(JSON.stringify([message.chatId, message.type, message.content, message.variables]))
+        .digest('base64');
+      if (seenEntries.has(fingerprint)) continue;
+      seenEntries.add(fingerprint);
       messages.push(message);
     }
 
@@ -185,7 +190,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
       `Created batch ${batchId} with ${messages.length} messages` +
         (messages.length === dto.messages.length
           ? ''
-          : ` (${dto.messages.length - messages.length} duplicate chatId entr${dto.messages.length - messages.length === 1 ? 'y' : 'ies'} dropped)`),
+          : ` (${dto.messages.length - messages.length} exact duplicate entr${dto.messages.length - messages.length === 1 ? 'y' : 'ies'} dropped)`),
     );
 
     // Start processing asynchronously

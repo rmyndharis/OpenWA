@@ -197,7 +197,8 @@ at-least-once HTTP, so plugin handlers must be idempotent and treat ingress as a
 Persist-before-acknowledge alone is not delivery: a crash between the persist and the enqueue, or a
 fire-and-forget enqueue on a `response` route whose outcome is never recorded, would strand the row
 with the provider already acknowledged. The **ingress reconciler** closes that window: every
-`INGRESS_RECONCILE_INTERVAL_MS` (default 60s, `<= 0` disables) it re-dispatches a bounded batch
+`INGRESS_RECONCILE_INTERVAL_MS` (default 60s, `0` disables; a blank or unparseable value falls
+back to the default rather than disabling the sweep) it re-dispatches a bounded batch
 (`INGRESS_RECONCILE_BATCH_SIZE`, default 50) of `pending` rows whose last activity is older than a
 grace period (`INGRESS_RECONCILE_GRACE_MS`, default 60s), through the same queue-or-inline enqueue the
 live path uses and with the original delivery id as job id, so a replay is idempotent against a job

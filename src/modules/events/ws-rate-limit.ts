@@ -143,4 +143,20 @@ export class SlidingWindowLimiter {
     evictOverflow(this.hits, this.maxKeys);
     return allowed;
   }
+
+  /**
+   * Give back the most recent attempt recorded for `subject`.
+   *
+   * The handshake window is consumed BEFORE authentication (that is the point — an unauthenticated
+   * flood must not reach the DB key validation on every attempt), which also charges every
+   * legitimate connect. Behind a NAT or a reverse proxy without TRUSTED_PROXIES every client shares
+   * one subject, so a handful of dashboards re-mounting could exhaust the window between them.
+   * Refunding a handshake that turned out to be authentic keeps the budget aimed at failures;
+   * authenticated abuse is bounded separately by the per-key socket cap.
+   */
+  refund(subject: string): void {
+    const recent = this.hits.get(subject);
+    if (!recent?.length) return;
+    recent.pop();
+  }
 }

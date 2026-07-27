@@ -133,8 +133,11 @@ warnIfInsecureHttpUrl(SOCKET_URL, 'VITE_WS_URL');
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  // True once Socket.IO exhausts its reconnection attempts and permanently gives up — lets the
-  // UI show a "connection lost" indicator + a manual retry instead of silently going stale.
+  // True when the connection is dead until the user retries: Socket.IO either exhausted its
+  // reconnection attempts, or the server itself closed the socket (rate limit, auth rejection,
+  // key eviction — a server-initiated close sets skipReconnect, so no auto-reconnect runs and
+  // `reconnect_failed` never fires). Lets the UI show a "connection lost" indicator + a manual
+  // retry instead of silently going stale.
   const [connectionFailed, setConnectionFailed] = useState(false);
 
   const connect = useCallback(() => {
@@ -168,8 +171,16 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       setConnectionFailed(false);
     });
 
-    socketRef.current.on('disconnect', () => {
+    socketRef.current.on('disconnect', reason => {
       setIsConnected(false);
+      // A server-initiated close (handshake rate limit, auth rejection, key eviction) sets
+      // Socket.IO's skipReconnect: no auto-reconnect runs, so `reconnect_failed` never fires
+      // and without this the tab would silently stop receiving events. Surface the same
+      // recoverable failure state — the banner's manual retry opens a fresh socket, which
+      // skipReconnect does not block.
+      if (reason === 'io server disconnect') {
+        setConnectionFailed(true);
+      }
     });
 
     socketRef.current.on('connect_error', error => {

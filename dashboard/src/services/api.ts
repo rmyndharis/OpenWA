@@ -1004,14 +1004,26 @@ export const infraApi = {
       tables: Record<string, unknown[]>;
       counts: Record<string, number>;
     }>('/infra/export-data'),
-  importData: (tables: Record<string, unknown[]>) =>
-    request<{ imported: boolean; counts?: Record<string, number>; message?: string; warnings?: string[] }>(
-      '/infra/import-data',
-      {
-        method: 'POST',
-        body: JSON.stringify({ tables }),
-      },
-    ),
+  // 200 contract includes the orphan-engine reconciliation result (restartRequired / notices /
+  // stopped+failed ids). A 409 (live engines exist for sessions the backup would remove; the error
+  // message lists them) is retried by the caller with stopOrphans=true, which stops those engines
+  // inside the request. force is deliberately NOT exposed: it leaves the engines writing into the
+  // restored tables until a restart — the window stopOrphans exists to close.
+  importData: (tables: Record<string, unknown[]>, options?: { stopOrphans?: boolean }) =>
+    request<{
+      imported: boolean;
+      counts?: Record<string, number>;
+      message?: string;
+      warnings?: string[];
+      notices?: string[];
+      restartRequired?: boolean;
+      orphanedEngines?: string[];
+      stoppedOrphanEngines?: string[];
+      failedOrphanEngines?: string[];
+    }>('/infra/import-data', {
+      method: 'POST',
+      body: JSON.stringify({ tables, ...options }),
+    }),
 };
 
 // =============================================================================

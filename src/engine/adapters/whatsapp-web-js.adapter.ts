@@ -82,6 +82,7 @@ import {
   coerceDeclaredSize,
   inboundMediaConcurrency,
   inboundMediaMaxBytes,
+  ingestMediaBudgetBytes,
   inboundMediaTimeoutMs,
   isMediaDownloadEnabled,
   withInboundDownloadTimeout,
@@ -1872,12 +1873,20 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
     // Per-participant outcome: code 200 = added; 403 invite-only / 404 not registered / 408
     // recently left / 409 already a member / 419 group full (GroupChat.js:102-116).
-    const results: ParticipantOperationResult[] = Object.entries(raw ?? {}).map(([id, r]) => ({
-      id,
-      success: r.code === 200,
-      status: r.code,
-      message: r.message || undefined,
-    }));
+    const results: ParticipantOperationResult[] = Object.entries(raw ?? {}).map(([id, r]) => {
+      // A 403 with isInviteV4Sent is not a failure: wwebjs already delivered the private group
+      // invite (GroupChat.js:203-240). Report it as success-with-invite — otherwise an all-invite
+      // batch throws "failed for all" (HTTP 403) even though every participant was reached.
+      const inviteSent = r.code === 403 && r.isInviteV4Sent === true;
+      return {
+        id,
+        success: r.code === 200 || inviteSent,
+        status: r.code,
+        message: inviteSent
+          ? 'the participant can only be added by private invitation — invite sent'
+          : r.message || undefined,
+      };
+    });
     return this.assertParticipantResults('addParticipants', groupId, results);
   }
 
@@ -1896,8 +1905,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   /**
    * whatsapp-web.js remove/promote/demote resolve `{status: 200}` for the whole batch and reject on
    * a page-side failure (GroupChat.js:267-298,305-340,343-374) — there is no per-participant
-   * breakdown to map. A non-200 status is a batch refusal; a 200 confirms the batch, so report one
-   * success entry per requested participant rather than discarding the outcome.
+   * breakdown to map: the page-side code even drops requested ids it can't find in the group and
+   * still resolves 200, so a 200 confirms the batch, not any individual. A non-200 status is a
+   * batch refusal. Within the per-participant shape the truthful report is one entry per requested
+   * participant carrying the batch status, annotated so a consumer can tell it apart from an
+   * individually-confirmed outcome (addParticipants); nothing per-participant exists to map.
    */
   private async runStatusOnlyParticipantOp(
     op: 'removeParticipants' | 'promoteParticipants' | 'demoteParticipants',
@@ -1914,7 +1926,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (res?.status !== 200) {
       throw new EngineRefusedError(`${op} refused for group ${groupId} (status ${res?.status ?? 'unknown'})`);
     }
-    return participantIds.map(id => ({ id, success: true, status: 200 }));
+    return participantIds.map(id => ({
+      id,
+      success: true,
+      status: 200,
+      message: 'confirmed with the batch — wwebjs reports no per-participant outcome',
+    }));
   }
 
   /**
@@ -2216,7 +2233,16 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // running total crosses the budget, later media messages get the declared-only `omitted` marker —
     // no download — while everything already inlined stays inline (a small history is byte-identical
     // to before). `signal` (client disconnect) stops the loop between messages; partials are returned.
-    let mediaBudget = includeMedia ? chatHistoryMediaBudgetBytes() : 0;
+    // The 25 MiB default is sized for ONE HTTP response and is too tight for a caller that ingests
+    // into a store instead (mediaMaxBytes — the status seed): two ~10 MiB videos are ~28 MiB of
+    // base64 and would strip every later status. Such a caller gets a budget derived from its own
+    // per-item cap rather than an exemption — unbounded here would mean a 50-item seed could stack
+    // ~650 MiB of base64 on the heap at connect time.
+    let mediaBudget = !includeMedia
+      ? Number.POSITIVE_INFINITY
+      : mediaMaxBytes === undefined
+        ? chatHistoryMediaBudgetBytes()
+        : ingestMediaBudgetBytes(mediaMaxBytes);
     for (const msg of messages) {
       if (signal?.aborted) {
         break;

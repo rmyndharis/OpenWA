@@ -83,7 +83,9 @@ export class StatsService {
    * 'messages:<period>', 'session:<id>'). The aggregates run GROUP BY scans over the whole
    * messages table — on the default SQLite backend synchronously on the event loop — so
    * dashboard polling would otherwise re-run them on every request. TTL-only invalidation:
-   * entries expire after stats.cacheTtlMs; there is no write-path hook. Key cardinality is
+   * entries expire after stats.cacheTtlMs; there is no write-path hook. Session-scoped entries
+   * are additionally re-validated on serve (getSessionStats), so a deleted session is not
+   * resurrected from the memo. Key cardinality is
    * bounded (4 global shapes + one per session), so no size eviction is needed.
    */
   private readonly memo = new Map<string, { expiresAt: number; value: unknown }>();
@@ -270,7 +272,16 @@ export class StatsService {
   }
 
   async getSessionStats(sessionId: string): Promise<SessionStats> {
-    return this.memoized(`session:${sessionId}`, () => this.loadSessionStats(sessionId));
+    // The memo has no write-path hook, so a `session:<id>` entry can outlive its session row and
+    // would keep serving a deleted session's stats until the TTL expires. Re-check existence on
+    // every call — a cheap primary-key lookup next to the aggregate scans the memo exists to
+    // avoid — and drop the stale entry instead of serving it.
+    const key = `session:${sessionId}`;
+    if ((await this.sessionRepo.count({ where: { id: sessionId } })) === 0) {
+      this.memo.delete(key);
+      throw new NotFoundException('Session not found');
+    }
+    return this.memoized(key, () => this.loadSessionStats(sessionId));
   }
 
   private async loadSessionStats(sessionId: string): Promise<SessionStats> {

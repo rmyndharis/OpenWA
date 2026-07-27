@@ -377,6 +377,50 @@ export function Infrastructure() {
     }
   };
 
+  // POST the replace-all restore and fold the backend's orphan-engine contract into the UI. A 409
+  // means live engines exist for sessions the backup would remove (the server message lists them);
+  // the contract's preferred retry is stopOrphans=true, which stops those engines inside the
+  // request, so offer it as a confirm. force=true is deliberately not offered (the api client does
+  // not even send it): it leaves the engines running until a restart.
+  const runImport = async (tables: Record<string, unknown[]>, stopOrphans = false): Promise<void> => {
+    try {
+      const res = await infraApi.importData(tables, stopOrphans ? { stopOrphans: true } : undefined);
+      if (res.imported) {
+        // notices carry non-fatal operator messages (orphan teardown details); restartRequired
+        // means a teardown failed and only a restart guarantees cleanup — surface both on success.
+        if (res.restartRequired || (res.notices && res.notices.length > 0)) {
+          toast.warning(t('infrastructure.migration.importOk'), (res.notices ?? []).join('; ') || undefined);
+        } else {
+          toast.success(t('infrastructure.migration.importOk'));
+        }
+      } else {
+        toast.error(
+          t('infrastructure.migration.importFailed'),
+          (res.warnings || []).slice(0, 3).join('; ') || res.message,
+        );
+      }
+    } catch (err) {
+      const status = (err as { status?: number } | null)?.status;
+      if (status === 409 && !stopOrphans && err instanceof Error) {
+        // The confirm doubles as the refusal display: OK retries with stopOrphans=true, Cancel
+        // leaves the engines (and the current data) untouched. A 409 on the retry itself (an
+        // engine started mid-import) falls through to the plain error toast — no confirm loop.
+        if (window.confirm(err.message)) await runImport(tables, true);
+        else toast.error(t('infrastructure.migration.importFailed'), err.message);
+        return;
+      }
+      // A large backup can exceed the request body cap (default 25mb) — give an actionable message
+      // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
+      const detail =
+        status === 413
+          ? t('infrastructure.migration.importTooLarge')
+          : err instanceof Error
+            ? err.message
+            : t('common.unknownError');
+      toast.error(t('infrastructure.migration.importFailed'), detail);
+    }
+  };
+
   // Restore a previously-exported backup into the CURRENT database (use after switching + restart).
   // Import REPLACES all current data, so validate + confirm (showing the row count) before any call.
   const handleImportBackup = async (file: File) => {
@@ -395,24 +439,7 @@ export function Infrastructure() {
     if (!window.confirm(t('infrastructure.migration.importConfirm', { rows }))) return;
     setMigrating(true);
     try {
-      const res = await infraApi.importData(parsed.tables);
-      if (res.imported) toast.success(t('infrastructure.migration.importOk'));
-      else
-        toast.error(
-          t('infrastructure.migration.importFailed'),
-          (res.warnings || []).slice(0, 3).join('; ') || res.message,
-        );
-    } catch (err) {
-      // A large backup can exceed the request body cap (default 25mb) — give an actionable message
-      // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
-      const status = (err as { status?: number } | null)?.status;
-      const detail =
-        status === 413
-          ? t('infrastructure.migration.importTooLarge')
-          : err instanceof Error
-            ? err.message
-            : t('common.unknownError');
-      toast.error(t('infrastructure.migration.importFailed'), detail);
+      await runImport(parsed.tables);
     } finally {
       setMigrating(false);
     }

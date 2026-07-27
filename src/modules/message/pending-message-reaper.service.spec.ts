@@ -159,10 +159,10 @@ describe('PendingMessageReaperService.sweep', () => {
     expect((payload.message.metadata as { media: { data?: string } }).media.data).toBeUndefined();
   });
 
-  it('keeps the batch alive when one row fails to save', async () => {
+  it('keeps the batch alive when one row fails to persist', async () => {
     const first = await insertMessage();
     const second = await insertMessage();
-    const saveSpy = jest.spyOn(messages, 'save').mockRejectedValueOnce(new Error('db hiccup'));
+    const updateSpy = jest.spyOn(messages, 'update').mockRejectedValueOnce(new Error('db hiccup'));
 
     const stats = await service.sweep(OPTS);
 
@@ -170,7 +170,26 @@ describe('PendingMessageReaperService.sweep', () => {
     expect((await stored(first)).status).toBe(MessageStatus.PENDING);
     expect((await stored(second)).status).toBe(MessageStatus.FAILED);
     expect(persistedCalls()).toHaveLength(1);
-    saveSpy.mockRestore();
+    updateSpy.mockRestore();
+  });
+
+  it('does not overwrite a row whose send resolved between the sweep read and the reap write', async () => {
+    const id = await insertMessage();
+    const realUpdate = messages.update.bind(messages);
+    // The live send path persists its own SENT + waMessageId outcome just before the reap write
+    // lands; the guarded UPDATE must then match nothing instead of clobbering it back to FAILED.
+    jest.spyOn(messages, 'update').mockImplementationOnce(async (criteria, partial) => {
+      await realUpdate({ id }, { status: MessageStatus.SENT, waMessageId: 'wamid.race' });
+      return realUpdate(criteria, partial);
+    });
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toEqual({ scanned: 1, reaped: 0, failed: 0 });
+    const row = await stored(id);
+    expect(row.status).toBe(MessageStatus.SENT);
+    expect(row.waMessageId).toBe('wamid.race');
+    expect(persistedCalls()).toHaveLength(0);
   });
 });
 
@@ -199,6 +218,15 @@ describe('resolvePendingMessageReaperOptions', () => {
         MESSAGE_REAPER_INTERVAL_MS: 'abc',
         MESSAGE_REAPER_GRACE_MS: '-5',
         MESSAGE_REAPER_BATCH_SIZE: '0',
+      }),
+    ).toEqual({ intervalMs: 600_000, graceMs: 3_600_000, batchSize: 50 });
+  });
+
+  it('treats blank values as unset, not as 0 (which would disable the reaper)', () => {
+    expect(
+      resolvePendingMessageReaperOptions({
+        MESSAGE_REAPER_INTERVAL_MS: '',
+        MESSAGE_REAPER_GRACE_MS: '   ',
       }),
     ).toEqual({ intervalMs: 600_000, graceMs: 3_600_000, batchSize: 50 });
   });

@@ -136,3 +136,34 @@ describe('SlidingWindowLimiter (pre-auth per-IP handshake budget)', () => {
     expect((limiter as unknown as { hits: Map<string, unknown> }).hits.size).toBeLessThanOrEqual(100);
   });
 });
+
+describe('SlidingWindowLimiter.refund', () => {
+  it('returns a consumed slot so an authenticated handshake does not spend the pre-auth budget', () => {
+    const now = 0;
+    const limiter = new SlidingWindowLimiter(2, 1000, () => now);
+    expect(limiter.allow('ip')).toBe(true);
+    limiter.refund('ip'); // handshake turned out to be authentic
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(true);
+    // Only the two un-refunded attempts count, so the third is shed.
+    expect(limiter.allow('ip')).toBe(false);
+  });
+
+  it('still sheds a flood of FAILED handshakes (nothing is refunded for those)', () => {
+    const now = 0;
+    const limiter = new SlidingWindowLimiter(3, 1000, () => now);
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(true);
+    expect(limiter.allow('ip')).toBe(false);
+  });
+
+  it('is a no-op for an unknown or already-empty subject', () => {
+    const limiter = new SlidingWindowLimiter(1, 1000, () => 0);
+    expect(() => limiter.refund('never-seen')).not.toThrow();
+    expect(limiter.allow('never-seen')).toBe(true);
+    limiter.refund('never-seen');
+    limiter.refund('never-seen');
+    expect(limiter.allow('never-seen')).toBe(true);
+  });
+});

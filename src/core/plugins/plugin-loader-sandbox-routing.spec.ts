@@ -20,14 +20,19 @@ class TestableLoader extends PluginLoaderService {
   readonly hosts: FakeHost[] = [];
   capturedOnHookSubscribe?: (event: string, priority?: number) => void;
   capturedOnLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void;
+  capturedOnWorkerExit?: (code: number, intentional: boolean) => void;
   protected createSandboxHost(
     _capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
     onHookSubscribe?: (event: string, priority?: number) => void,
     _onWebhookSubscribe?: (route: string) => void,
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
+    _runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
+    _onSearchProviderRegister?: () => void,
+    onWorkerExit?: (code: number, intentional: boolean) => void,
   ): PluginWorkerHost {
     this.capturedOnHookSubscribe = onHookSubscribe;
     this.capturedOnLog = onLog;
+    this.capturedOnWorkerExit = onWorkerExit;
     const host: FakeHost = {
       load: jest.fn().mockResolvedValue(undefined),
       runLifecycle: jest.fn().mockResolvedValue(undefined),
@@ -265,6 +270,30 @@ describe('PluginLoaderService — sandbox log relay bounds', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('flushes the pending drop count on worker exit, so a quiet plugin loses nothing', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    const logSpy = jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+    const warnSpy = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+
+    const onLog = loader.capturedOnLog!;
+    for (let i = 0; i < 250; i++) onLog('log', `line ${i}`);
+    expect(logSpy).toHaveBeenCalledTimes(200);
+    expect(warnSpy).not.toHaveBeenCalled(); // the plugin went quiet before any window rollover
+
+    // Disable/crash tears the worker down first: the pending count surfaces as a final burst.
+    loader.capturedOnWorkerExit!(0, true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Dropped 50 log messages from sandboxed plugin p1'),
+      expect.objectContaining({ action: 'sandbox_log_relay_dropped', pluginId: 'p1', dropped: 50 }),
+    );
+
+    // The flush is one-shot: a repeated exit callback must not re-report the same count.
+    loader.capturedOnWorkerExit!(0, true);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
   it('truncates an oversized worker log line before relaying it', async () => {

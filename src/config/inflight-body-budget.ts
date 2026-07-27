@@ -9,11 +9,13 @@
  * push a 2 GiB container out of memory.
  *
  * This middleware closes the gap. It tracks the aggregate body bytes currently in flight across
- * ALL connections — the declared Content-Length where present, the actual received bytes
- * otherwise — and refuses NEW requests with 503 + Retry-After once the budget is exhausted,
- * without reading a single byte of the rejected body. Requests with no Content-Length (chunked /
- * close-delimited) are admitted, counted as their bytes actually arrive, and aborted mid-stream
- * if they push the aggregate over the budget, so un-declared tricklers cannot bypass the cap.
+ * ALL connections — the declared Content-Length where present, one budget slot otherwise — and
+ * refuses NEW requests with 503 + Retry-After once the budget is exhausted, without reading a
+ * single byte of the rejected body. A stalled sender (headers, then silence) holds its
+ * reservation only until the stall reaper drops the socket after STALL_TIMEOUT_MS without any
+ * new body bytes, so a handful of silent connections cannot pin the whole budget. The request
+ * stream itself is never tapped — no 'data' listener — so downstream consumers (the body
+ * parser, busboy) see every chunk exactly as it arrives, even when they attach late.
  *
  * Extracted from main.ts so the accounting — notably the exactly-once release across every
  * terminal path — is unit-tested without booting the app.
@@ -39,6 +41,26 @@ const UNIT_BYTES: Record<string, number> = {
 };
 
 const FALLBACK_LIMIT_BYTES = 25 * UNIT_BYTES.mb;
+
+/**
+ * Stall reaper. A reservation is normally released when the response finishes or the connection
+ * dies — but a socket that sends headers and then goes silent fires NEITHER, so without a reaper
+ * it would hold its declared bytes until Node's requestTimeout (5 minutes by default), and four
+ * such connections at the per-request cap would pin the entire default budget, renewable forever.
+ * Any admitted request expecting a body is therefore polled: if no new body bytes arrive for
+ * STALL_TIMEOUT_MS the socket is destroyed and the reservation released. Polling (rather than one
+ * fixed deadline) lets any progress reset the clock, so slow-but-moving uploads are untouched.
+ */
+const STALL_TIMEOUT_MS = 15_000;
+const STALL_POLL_MS = 5_000;
+
+/**
+ * What a chunked (undeclared-length) body reserves before any of it has arrived. The same poll that
+ * watches for a stall also reconciles this against `socket.bytesRead`, so the reservation converges
+ * on the real size within one interval — this only has to be big enough that admission control is
+ * not a free-for-all, not big enough to price a small upload out of the budget.
+ */
+const UNDECLARED_OPENING_RESERVATION_BYTES = 1024 * 1024;
 
 /**
  * Parse a body-limit string ('25mb', '1024', '1.5gb') into bytes. Only the formats
@@ -80,11 +102,24 @@ export interface InflightBodyBudget {
 export function createInflightBodyBudget(budgetBytes: number, options?: InflightBodyBudgetOptions): InflightBodyBudget {
   let inFlightBytes = 0;
   const retryAfter = String(options?.retryAfterSeconds ?? 1);
+  // Opening reservation for a body with no declared length (chunked). It is only a placeholder:
+  // the poller below reconciles it against the bytes that actually arrive, so a small chunked
+  // request ends up costing what it really weighs. Reserving a whole per-request cap up front
+  // instead would make the budget a concurrency limit of DEFAULT_BUDGET_MULTIPLIER for chunked
+  // senders — four 6-byte uploads would refuse every further body-carrying request.
+  const undeclaredReservation = Math.max(1, Math.min(UNDECLARED_OPENING_RESERVATION_BYTES, budgetBytes));
 
   // The rejected request's body is deliberately NEVER read. 'Connection: close' tells the client
   // (and Node) this socket dies with the response, so the unread bytes are discarded with the
   // socket instead of being misread as the next pipelined request on a keep-alive connection.
-  const rejectBusy = (res: Response): void => {
+  const rejectBusy = (req: Request, res: Response): void => {
+    // Another listener may already have started an early response (e.g. a guard's 401 flushing
+    // while the body still streams in); writing the 503 then throws ERR_HTTP_HEADERS_SENT from
+    // inside a raw listener. Dropping the socket is the only safe rejection left.
+    if (res.headersSent || res.writableEnded) {
+      req.destroy();
+      return;
+    }
     res
       .status(503)
       .set('Retry-After', retryAfter)
@@ -94,25 +129,36 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
 
   const middleware = (req: Request, res: Response, next: NextFunction): void => {
     const declared = parseDeclaredLength(req.headers['content-length']);
+    // A body with no declared length is expected only when the request is chunk-encoded (Node
+    // ignores close-delimited request bodies on keep-alive HTTP/1.1). Anything else — GETs,
+    // health checks, Content-Length: 0 — reserves nothing and is never reaped.
+    let reserved = declared ?? (req.headers['transfer-encoding'] !== undefined ? undeclaredReservation : 0);
 
-    // Admission control on the DECLARED size: a request that would push the aggregate past the
+    // Admission control on the RESERVED size: a request that would push the aggregate past the
     // budget is refused before a single byte of its body is buffered.
-    if (declared !== undefined && inFlightBytes + declared > budgetBytes) {
-      rejectBusy(res);
+    if (inFlightBytes + reserved > budgetBytes) {
+      rejectBusy(req, res);
       return;
     }
 
-    let counted = declared ?? 0;
-    inFlightBytes += counted;
+    inFlightBytes += reserved;
+
+    let released = false;
+    let stallTimer: ReturnType<typeof setInterval> | undefined;
+    const disarmStallReaper = (): void => {
+      if (stallTimer === undefined) return;
+      clearInterval(stallTimer);
+      stallTimer = undefined;
+    };
 
     // Exactly-once release: the first terminal event wins — normal completion (res 'finish'),
     // client/socket abort (req/res 'close'), stream failure (req/res 'error'). An aborted upload
     // typically fires several of these; the flag guarantees the aggregate is decremented once.
-    let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
-      inFlightBytes -= counted;
+      disarmStallReaper();
+      inFlightBytes -= reserved;
     };
     res.on('finish', release);
     res.on('close', release);
@@ -120,20 +166,57 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     req.on('close', release);
     req.on('error', release);
 
-    if (declared === undefined) {
-      // No Content-Length (chunked / close-delimited): nothing to reserve up front, so count
-      // bytes as they actually arrive. The mid-stream abort keeps the aggregate bounded even
-      // when every sender avoids declaring a length. The stream stays intact for the downstream
-      // body parser — 'data' listeners observe the same chunks, they do not consume them away.
-      req.on('data', (chunk: Buffer) => {
-        if (released) return; // already aborted below — stop counting, the 503 is on its way
-        counted += chunk.length;
-        inFlightBytes += chunk.length;
+    if (reserved > 0) {
+      // Stall reaper (see STALL_TIMEOUT_MS above). Progress is measured on the SOCKET byte
+      // counter, never on the request stream: attaching a 'data' listener would switch the
+      // stream to flowing mode and eat chunks before a late consumer (the async guards run
+      // before busboy/body-parser attach) ever sees them. 'end' is safe to observe — it does
+      // not start the flow — and disarms the reaper once the real consumer finished reading.
+      const socket = req.socket;
+      const startBytes = socket.bytesRead;
+      let lastBytes = startBytes;
+      let lastProgress = Date.now();
+
+      // Undeclared length: replace the opening placeholder with what has actually arrived, so a
+      // small chunked upload stops holding a big reservation and a large one is accounted honestly.
+      // Crossing the budget mid-stream aborts the request — the same bound a declared length gets
+      // at admission, applied to a sender that declined to declare one.
+      const reconcileUndeclared = (readNow: number): void => {
+        const actual = Math.max(undeclaredReservation, readNow - startBytes);
+        if (actual === reserved) return;
+        inFlightBytes += actual - reserved;
+        reserved = actual;
         if (inFlightBytes > budgetBytes) {
           release();
-          rejectBusy(res);
+          req.destroy();
         }
-      });
+      };
+
+      stallTimer = setInterval(() => {
+        // The whole message is in (Node parsed it to the end) — there is nothing left to stall on,
+        // whether or not any consumer has read it. Without this a body that arrived in one segment
+        // before this middleware ran would keep the reaper armed on a byte counter that can no
+        // longer move, and a handler slower than STALL_TIMEOUT_MS would be killed mid-work.
+        if (req.complete) {
+          disarmStallReaper();
+          return;
+        }
+        const readNow = socket.bytesRead;
+        if (readNow !== lastBytes) {
+          if (declared === undefined) reconcileUndeclared(readNow);
+          lastBytes = readNow;
+          lastProgress = Date.now();
+          // The whole declared body has arrived; nothing left to stall on.
+          if (declared !== undefined && readNow - startBytes >= declared) disarmStallReaper();
+          return;
+        }
+        if (Date.now() - lastProgress >= STALL_TIMEOUT_MS) {
+          release();
+          req.destroy();
+        }
+      }, STALL_POLL_MS);
+      stallTimer.unref();
+      req.on('end', disarmStallReaper);
     }
 
     next();
@@ -142,7 +225,7 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
   return { middleware, currentBytes: () => inFlightBytes };
 }
 
-/** A well-formed Content-Length, or undefined when absent/unusable (then count actual bytes). */
+/** A well-formed Content-Length, or undefined when absent/unusable (then reserve one slot if chunk-encoded). */
 function parseDeclaredLength(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   const n = Number(raw.trim());

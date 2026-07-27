@@ -367,10 +367,12 @@ describe('SessionService', () => {
       expect(stoppingOf().has('g-init')).toBe(true); // still marked so start() aborts
     });
 
-    it('isolates a failing destroy(): teardown is best-effort so both engines are reconciled from the map', async () => {
+    it('surfaces a failing destroy() in the failed bucket while still reconciling both engines from the map', async () => {
       // destroyEngineSafely delegates to teardownEngineSafely, which isolates + time-bounds failures and
       // never throws — a stuck destroy() therefore cannot stall the batch or poison other orphans. The
-      // engine is removed from the Map regardless of teardown outcome (it stops holding a slot).
+      // engine is removed from the Map regardless of teardown outcome (it stops holding a slot), but a
+      // teardown that threw/timed out must land in `failed` (its Chromium/socket may still be alive),
+      // not be misreported as cleanly stopped — the infra import turns `failed` into restartRequired.
       const good = { destroy: jest.fn().mockResolvedValue(undefined) };
       const bad = { destroy: jest.fn().mockRejectedValue(new Error('stuck chromium')) };
       enginesOf().set('good', good);
@@ -383,8 +385,9 @@ describe('SessionService', () => {
       // Map reconciled for both regardless of teardown outcome — neither holds a concurrency slot.
       expect(enginesOf().has('good')).toBe(false);
       expect(enginesOf().has('bad')).toBe(false);
-      expect(result.failed).toEqual([]); // teardown failures are isolated, not surfaced as failed
-      expect(result.stopped.sort()).toEqual(['bad', 'good']);
+      expect(result.stopped).toEqual(['good']);
+      expect(result.failed).toEqual(['bad']);
+      expect(result.notRunning).toEqual([]);
     });
 
     it('is a bounded no-op for an empty id list', async () => {
@@ -529,6 +532,34 @@ describe('SessionService', () => {
       expect(rejected[0].reason).toBeInstanceOf(BadRequestException);
       // The decisive assertion: exactly ONE engine was ever created — no orphaned second engine.
       expect(engineFactory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('registers an in-flight start before the findOne await so the import pre-flight sees it', async () => {
+      // The infra import pre-flight (getActiveSessionIds) must not miss a start that is still inside
+      // its initial findOne round-trip: an import with stopOrphans could otherwise DELETE the session
+      // row while an engine for it is being created, orphaning that engine until process restart.
+      let releaseFindOne: (session: unknown) => void = () => undefined;
+      (repository.findOne as jest.Mock)
+        .mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              releaseFindOne = resolve;
+            }),
+        )
+        .mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      (engineFactory.create as jest.Mock).mockClear().mockReturnValue(mockEngine);
+
+      const started = service.start('sess-uuid-1');
+      // findOne has not resolved, so no engine exists yet — but the reservation must already be visible.
+      expect(service.getActiveSessionIds()).toContain('sess-uuid-1');
+
+      releaseFindOne(createMockSession());
+      await started;
+      // The reservation is cleared once start() settles; the registered engine keeps the id active.
+      const initializing = (service as unknown as { initializingSessions: Set<string> }).initializingSessions;
+      expect(initializing.has('sess-uuid-1')).toBe(false);
+      expect(service.getActiveSessionIds()).toContain('sess-uuid-1');
     });
 
     it('evicts and tears down the engine when engine.initialize() fails (no orphan wedging the session)', async () => {

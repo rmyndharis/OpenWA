@@ -8,6 +8,20 @@ import {
 import type { SearchQuery, SearchResults } from '../../../modules/search/search.types';
 
 /**
+ * Capability verbs whose host-side work IS an outbound message send. A media send (the URL
+ * download — itself bounded at 30s by MEDIA_DOWNLOAD_TIMEOUT_MS — then the WhatsApp upload) can
+ * legitimately outrun the lookup-oriented capTimeoutMs, and a cap timeout does NOT cancel the
+ * underlying work: the worker would record a failure while the message still lands, and a plugin
+ * retrying on that error would deliver a duplicate. These verbs therefore get
+ * SEND_CAP_TIMEOUT_FACTOR × the base budget (see withCapTimeout), so the timeout stays a "wedged
+ * call" signal instead of firing inside normal execution. The in-flight bound is unchanged.
+ */
+const SEND_CAP_VERBS: ReadonlySet<string> = new Set(['messages.sendText', 'messages.reply', 'conversation.send']);
+
+/** Send-verb budget as a multiple of capTimeoutMs (default 30s → 120s: the 30s media download + upload headroom). */
+const SEND_CAP_TIMEOUT_FACTOR = 4;
+
+/**
  * Host-side driver for a single untrusted plugin running in a worker. Owns the request/response
  * correlation over a {@link PluginWorkerChannel}: it posts `load`/`lifecycle` messages and resolves
  * the matching promise when the worker replies, and fails every outstanding call if the worker dies.
@@ -448,11 +462,12 @@ export class PluginWorkerHost {
    * token — so when it eventually settles the outcome is only logged as a WARN and its result is
    * discarded (never a second cap-result). This is a robustness bound, not an atomicity guarantee: a
    * timed-out call may still complete its side effect late (e.g. a message send that lands after the
-   * caller already saw the timeout error).
+   * caller already saw the timeout error). To keep that late-settle window small where a duplicate is
+   * user-visible, send verbs (SEND_CAP_VERBS) run on a wider budget that covers normal execution.
    */
   private withCapTimeout(verb: string, work: Promise<unknown>): Promise<unknown> {
     if (this.capTimeoutMs === undefined) return work;
-    const timeoutMs = this.capTimeoutMs;
+    const timeoutMs = SEND_CAP_VERBS.has(verb) ? this.capTimeoutMs * SEND_CAP_TIMEOUT_FACTOR : this.capTimeoutMs;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         // Late settle: warn exactly once, whichever way the work ends. These handlers also keep a

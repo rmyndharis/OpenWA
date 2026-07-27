@@ -134,6 +134,17 @@ describe('IngressEnqueueService', () => {
         else process.env.INGRESS_RETRY_DELAY_MS = prevD;
       }
     });
+
+    it('treats a blank INGRESS_RETRY_DELAY_MS as unset, not as 0', () => {
+      const prevD = process.env.INGRESS_RETRY_DELAY_MS;
+      try {
+        process.env.INGRESS_RETRY_DELAY_MS = '';
+        expect(resolveIngressJobOptions()).toEqual({ attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+      } finally {
+        if (prevD === undefined) delete process.env.INGRESS_RETRY_DELAY_MS;
+        else process.env.INGRESS_RETRY_DELAY_MS = prevD;
+      }
+    });
   });
 
   describe('buildIngressDeadLetterRow', () => {

@@ -7,6 +7,7 @@ import { IngressJobData } from '../queue/processors/ingress.processor';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { QUEUE_NAMES } from '../queue/queue-names';
 import { createLogger } from '../../common/services/logger.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 /**
  * Outcome of an enqueue attempt. 'queued' = handed to BullMQ; 'dispatched' = delivered inline; 'failed'
@@ -28,10 +29,9 @@ export type EnqueueOutcome = { outcome: 'queued' | 'dispatched' | 'failed'; erro
  */
 export function resolveIngressJobOptions(): { attempts: number; backoff: { type: 'exponential'; delay: number } } {
   const attempts = Number(process.env.INGRESS_MAX_ATTEMPTS);
-  const delay = Number(process.env.INGRESS_RETRY_DELAY_MS);
   return {
     attempts: Number.isInteger(attempts) && attempts >= 1 ? attempts : 3,
-    backoff: { type: 'exponential', delay: Number.isInteger(delay) && delay >= 0 ? delay : 5000 },
+    backoff: { type: 'exponential', delay: resolveNonNegativeIntEnv(process.env.INGRESS_RETRY_DELAY_MS, 5000) },
   };
 }
 

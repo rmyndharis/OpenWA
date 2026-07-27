@@ -459,6 +459,20 @@ describe('WhatsAppWebJsAdapter.getChatHistory enrichment (parity with the live p
       expect(m3.downloadMedia).not.toHaveBeenCalled();
     });
 
+    it('does not spend the aggregate budget when the caller passes its own per-item cap (status seed)', async () => {
+      process.env[ENV] = '4'; // would omit everything after the first payload on the response path
+      const m1 = mediaMsg('M14', 'QUJD');
+      const m2 = mediaMsg('M15', 'QUJD');
+
+      const out = await readyAdapter(clientFor(m1, m2)).getChatHistory('status@broadcast', 50, true, 10 * 1024 * 1024);
+
+      // The seed ingests items into the store instead of serialising one HTTP response — its own
+      // per-item cap is the accounting, so the aggregate response budget must not strip later items.
+      expect(out[0].media).toEqual({ mimetype: 'image/jpeg', data: 'QUJD' });
+      expect(out[1].media).toEqual({ mimetype: 'image/jpeg', data: 'QUJD' });
+      expect(m2.downloadMedia).toHaveBeenCalled();
+    });
+
     it('stops the read loop when the abort signal fires (client disconnect)', async () => {
       const controller = new AbortController();
       const m1 = mediaMsg('M11', 'QUJD');
@@ -3825,12 +3839,61 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         { id: '628111@c.us', success: true, status: 200, message: 'The participant was added successfully' },
         {
           id: '628222@c.us',
-          success: false,
+          success: true,
           status: 403,
-          message: 'The participant can be added by sending private invitation only',
+          message: 'the participant can only be added by private invitation — invite sent',
         },
         { id: '628333@c.us', success: false, status: 409, message: 'The participant is already a group member' },
       ]);
+    });
+
+    it('honors isInviteV4Sent: an all-invite batch resolves instead of throwing "failed for all"', async () => {
+      // wwebjs delivers an inviteV4 and reports 403 + isInviteV4Sent: true for each participant —
+      // every participant was reached, so the batch is a success-with-invite, not a refusal.
+      const addParticipants = jest.fn().mockResolvedValue({
+        '628111@c.us': {
+          code: 403,
+          message: 'The participant can be added by sending private invitation only',
+          isInviteV4Sent: true,
+        },
+        '628222@c.us': {
+          code: 403,
+          message: 'The participant can be added by sending private invitation only',
+          isInviteV4Sent: true,
+        },
+      });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+
+      const results = await adapter.addParticipants(GROUP, ['628111', '628222']);
+
+      expect(results).toEqual([
+        {
+          id: '628111@c.us',
+          success: true,
+          status: 403,
+          message: 'the participant can only be added by private invitation — invite sent',
+        },
+        {
+          id: '628222@c.us',
+          success: true,
+          status: 403,
+          message: 'the participant can only be added by private invitation — invite sent',
+        },
+      ]);
+    });
+
+    it('still throws when a 403 came with NO invite sent (the invite could not be delivered)', async () => {
+      const addParticipants = jest.fn().mockResolvedValue({
+        '628111@c.us': {
+          code: 403,
+          message: 'The participant can be added by sending private invitation only',
+          isInviteV4Sent: false,
+        },
+      });
+      const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(groupChat({ addParticipants })) });
+      const err = await adapter.addParticipants(GROUP, ['628111']).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineRefusedError);
+      expect((err as Error).message).toMatch(/failed for all 1 participant/);
     });
 
     it('throws EngineRefusedError (403) when the library resolves a batch-refusal STRING (e.g. not admin)', async () => {
@@ -3858,16 +3921,28 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
   describe.each([['removeParticipants'], ['promoteParticipants'], ['demoteParticipants']])(
     '%s (batch {status} is honored)',
     op => {
-      it('resolves one success entry per requested participant on {status: 200}', async () => {
+      it('resolves one batch-confirmed entry per requested participant on {status: 200}', async () => {
         const chat = groupChat({ [op]: jest.fn().mockResolvedValue({ status: 200 }) });
         const adapter = readyAdapter({ getChatById: jest.fn().mockResolvedValue(chat) });
         const results = await (adapter as unknown as Record<string, (g: string, p: string[]) => Promise<unknown>>)[op](
           GROUP,
           ['628111', '628222@c.us'],
         );
+        // wwebjs confirms the batch only — the entries must say so rather than claim an
+        // individually-confirmed outcome the engine never reported.
         expect(results).toEqual([
-          { id: '628111@c.us', success: true, status: 200 },
-          { id: '628222@c.us', success: true, status: 200 },
+          {
+            id: '628111@c.us',
+            success: true,
+            status: 200,
+            message: 'confirmed with the batch — wwebjs reports no per-participant outcome',
+          },
+          {
+            id: '628222@c.us',
+            success: true,
+            status: 200,
+            message: 'confirmed with the batch — wwebjs reports no per-participant outcome',
+          },
         ]);
       });
 

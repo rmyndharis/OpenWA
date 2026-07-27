@@ -1,4 +1,11 @@
-import { Injectable, OnApplicationBootstrap, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  OnApplicationBootstrap,
+  OnModuleInit,
+  OnModuleDestroy,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { toNeutralJid, userPart } from '../../engine/identity/wa-id';
@@ -45,7 +52,10 @@ import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integrati
 import type { MessageService } from '../../modules/message/message.service';
 import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
-import type { ConversationMappingService } from '../../modules/integration/conversation-mapping.service';
+import {
+  ConversationMappingConflict,
+  type ConversationMappingService,
+} from '../../modules/integration/conversation-mapping.service';
 import type { PluginInstanceService } from '../../modules/integration/plugin-instance.service';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 import type { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
@@ -351,6 +361,13 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           error instanceof Error ? error.message : String(error),
           { pluginPath, action: 'plugin_load_failed' },
         );
+        // The runtime just dropped this plugin, but a registry entry from a previous successful
+        // load still claims it installed/enabled — reconcile the persisted state to ERROR so the
+        // mismatch surfaces instead of silently persisting. The entry itself (operator config,
+        // enabledByOperator) is preserved: fix the manifest/main and the next boot loads and
+        // re-enables it (ensureRegistryEntry resets the status on a successful load). No-op when
+        // no entry exists (a hand-placed dir that never loaded).
+        this.pluginStorage.setPluginStatus(entry.name, PluginStatus.ERROR);
       }
     }
   }
@@ -1062,6 +1079,22 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   }
 
   /**
+   * Definitive "this session row no longer exists" probe for the stale-mapping repair paths below.
+   * True ONLY on a clean not-found from the sessions table; any other failure (service unresolvable,
+   * DB error) returns false, so the cross-session fences stay fail-CLOSED when the answer is
+   * indeterminate. The runtime engine map can't answer this — a stopped session has no engine but
+   * still owns its mappings.
+   */
+  private async isSessionGone(sessionId: string): Promise<boolean> {
+    try {
+      await this.getSessionService().findOne(sessionId);
+      return false;
+    } catch (error) {
+      return error instanceof NotFoundException;
+    }
+  }
+
+  /**
    * Build a worker host for a sandboxed (untrusted) plugin. Overridable so tests can inject a fake
    * instead of spawning a real OS thread. Production loads the compiled worker bootstrap from dist.
    */
@@ -1246,8 +1279,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // uses, so sandboxed plugins log identically (prefixed + structured) instead of bare stdout. The
     // relay is bounded: oversized lines are truncated and throughput is capped per window — a chatty
     // or buggy plugin must not flood the host log. Dropped lines are counted and surfaced as one warn
-    // per window (never one line per drop, or the bound itself would be a flood vector). State is local
-    // to this enable call, so it resets on disable.
+    // per window (never one line per drop, or the bound itself would be a flood vector), plus a final
+    // flush on worker exit so a plugin that goes quiet first doesn't silently lose the count. State is
+    // local to this enable call, so it resets on disable.
     let logWindowStart = Date.now();
     let logCount = 0;
     let logDropped = 0;
@@ -1300,6 +1334,16 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // provider ACTIVE). Mirrors the enable-failure cleanup. Broader crash-lifecycle cleanup (status, hooks)
     // is a pre-existing gap for all bridges and out of scope here.
     const onWorkerExit = (code: number, intentional: boolean): void => {
+      // Final log-relay flush: the per-window drop warn above only fires when a new line arrives in a
+      // later window, so without this a plugin that goes quiet (or is disabled) before the rollover
+      // silently discards its pending count. The worker is gone, so no further lines can arrive.
+      if (logDropped > 0) {
+        this.logger.warn(
+          `Dropped ${logDropped} log messages from sandboxed plugin ${pluginId} (log relay rate limit)`,
+          { pluginId, action: 'sandbox_log_relay_dropped', dropped: logDropped },
+        );
+        logDropped = 0;
+      }
       // Always release the search-provider slot so the registry can fall back to builtin-fts. On a crash
       // this is the only cleanup; on a deliberate disable/enable-failure the explicit unregister already
       // ran, making this a harmless no-op.
@@ -1495,8 +1539,23 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           // providerConversationId) only, so a stale row can resolve to a chat owned by a DIFFERENT
           // session than the envelope's. Parity with the assertSessionActive(m.sessionId) check on
           // mappings.getByProvider below — never send through a session the mapping does not belong to.
-          // (mapping.sessionId is NOT NULL in the entity, so a plain inequality check suffices.)
-          if (mapping.sessionId !== env.sessionId) {
+          // (mapping.sessionId is NOT NULL in the entity, so a plain inequality check suffices. The
+          // env.sessionId guard is for the type only — the facade rejects a missing sessionId first.)
+          if (env.sessionId && mapping.sessionId !== env.sessionId) {
+            // Repair path: the mapping's session was DELETED (operator re-paired under a new id), so
+            // the row is stale rather than cross-session. Rebind it to the envelope's session —
+            // already activation-gated by the facade — and let the send proceed; without this the
+            // dead session's rows bricked conversation.send permanently. A mapping owned by another
+            // EXISTING session is a genuine cross-session violation and still throws.
+            if (await this.isSessionGone(mapping.sessionId)) {
+              await this.getConversationMappingService().rebindSession(mapping.id, env.sessionId);
+              this.logger.warn(
+                `Rebound conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId} ` +
+                  `from deleted session ${mapping.sessionId} to ${env.sessionId}`,
+                { pluginId: plugin.manifest.id, action: 'conversation_mapping_rebound' },
+              );
+              return mapping.chatId;
+            }
             throw new PluginCapabilityError(
               `Plugin ${plugin.manifest.id}: conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId} belongs to session ${mapping.sessionId}, not ${env.sessionId}`,
             );
@@ -1541,10 +1600,30 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         upsert: async (key, providerConversationId) => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
           this.assertSessionActive(plugin, key.sessionId);
-          await this.getConversationMappingService().upsert(
-            { sessionId: key.sessionId, chatId: key.chatId, pluginId: plugin.manifest.id, instanceId: key.instanceId },
-            providerConversationId,
-          );
+          const mappingKey = {
+            sessionId: key.sessionId,
+            chatId: key.chatId,
+            pluginId: plugin.manifest.id,
+            instanceId: key.instanceId,
+          };
+          try {
+            await this.getConversationMappingService().upsert(mappingKey, providerConversationId);
+          } catch (error) {
+            if (!(error instanceof ConversationMappingConflict)) throw error;
+            // The reverse unique key is held by another row. If that row's session was DELETED
+            // (operator re-paired under a new id), the adapter can never converge — the forward key
+            // carries the new sessionId, so every upsert bricks on the dead session's row. Supersede
+            // the stale row and retry once. A row owned by an EXISTING session is a genuine conflict
+            // and rethrows.
+            const stale = await this.getConversationMappingService().getByProvider(
+              plugin.manifest.id,
+              key.instanceId,
+              providerConversationId,
+            );
+            if (!stale || !(await this.isSessionGone(stale.sessionId))) throw error;
+            await this.getConversationMappingService().delete(stale.id);
+            await this.getConversationMappingService().upsert(mappingKey, providerConversationId);
+          }
         },
         get: async key => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);

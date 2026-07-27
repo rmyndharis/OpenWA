@@ -1,12 +1,15 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { LessThan, Repository } from 'typeorm';
+import { LessThan, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { HookManager } from '../../core/hooks';
 import { createLogger } from '../../common/services/logger.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 export interface PendingMessageReaperOptions {
-  // Sweep cadence. <= 0 disables the reaper (mirrors INGRESS_RECONCILE_INTERVAL_MS <= 0).
+  // Sweep cadence. 0 disables the reaper (mirrors INGRESS_RECONCILE_INTERVAL_MS). A blank or
+  // otherwise unparseable value falls back to the default rather than disabling the sweep, so a
+  // mis-set variable can never silently turn the reaper off.
   intervalMs: number;
   // An outgoing PENDING row only becomes reap-eligible once it is older than this — the live send
   // path gets the whole window to persist its own SENT/FAILED outcome first.
@@ -15,12 +18,10 @@ export interface PendingMessageReaperOptions {
 }
 
 export function resolvePendingMessageReaperOptions(env: NodeJS.ProcessEnv = process.env): PendingMessageReaperOptions {
-  const interval = Number(env.MESSAGE_REAPER_INTERVAL_MS);
-  const grace = Number(env.MESSAGE_REAPER_GRACE_MS);
   const batch = Number(env.MESSAGE_REAPER_BATCH_SIZE);
   return {
-    intervalMs: Number.isInteger(interval) ? interval : 10 * 60_000,
-    graceMs: Number.isInteger(grace) && grace >= 0 ? grace : 60 * 60_000,
+    intervalMs: resolveNonNegativeIntEnv(env.MESSAGE_REAPER_INTERVAL_MS, 10 * 60_000),
+    graceMs: resolveNonNegativeIntEnv(env.MESSAGE_REAPER_GRACE_MS, 60 * 60_000),
     batchSize: Number.isInteger(batch) && batch >= 1 ? batch : 50,
   };
 }
@@ -79,7 +80,8 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
 
   /**
    * One bounded pass over the stale outgoing-PENDING backlog. Overlap-guarded: a slow sweep never
-   * stacks a second pass on top of itself.
+   * stacks a second pass on top of itself. Each reap write is guarded on the row still being
+   * PENDING, so a send that resolves between the find and the write keeps its own outcome.
    */
   async sweep(opts: PendingMessageReaperOptions, now: Date = new Date()): Promise<PendingMessageReaperStats> {
     const stats: PendingMessageReaperStats = { scanned: 0, reaped: 0, failed: 0 };
@@ -99,10 +101,11 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
       for (const row of rows) {
         stats.scanned++;
         try {
-          await this.reapRow(row, now);
-          stats.reaped++;
+          if (await this.reapRow(row, now)) {
+            stats.reaped++;
+          }
         } catch (err) {
-          // A bookkeeping failure (repo save) must not abort the batch; the row stays PENDING and
+          // A bookkeeping failure (repo update) must not abort the batch; the row stays PENDING and
           // is retried next sweep.
           this.logger.error(
             'Reaping a stuck pending message failed',
@@ -123,7 +126,7 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
     }
   }
 
-  private async reapRow(row: Message, now: Date): Promise<void> {
+  private async reapRow(row: Message, now: Date): Promise<boolean> {
     // A reaped row is terminal: it is never retried and its media is never rendered, so drop the
     // base64 payload exactly as MessageService.saveFailedMessage does for a genuine send failure —
     // keeping a multi-MB payload in a terminal row only bloats the messages table. The reapedAt
@@ -134,7 +137,17 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
     }
     row.metadata = { ...(row.metadata ?? {}), reapedAt: now.toISOString() };
     row.status = MessageStatus.FAILED;
-    await this.messages.save(row);
+    // The guard lives IN the UPDATE: a send that resolved between this sweep's find() and this
+    // write has already persisted its own SENT + waMessageId, and a blind save would clobber that
+    // terminal outcome back to FAILED/null. Zero affected rows = the live path won the race —
+    // leave the row alone and skip the emission below.
+    const reaped = await this.messages.update({ id: row.id, status: MessageStatus.PENDING }, {
+      status: row.status,
+      metadata: row.metadata,
+    } as QueryDeepPartialEntity<Message>);
+    if (!reaped.affected) {
+      return false;
+    }
     // Reconcile provider copies of the earlier PENDING emission: fire-and-forget with a shallow
     // snapshot, the exact shape of MessageService.emitPersisted — a plugin handler must never
     // break the sweep.
@@ -145,5 +158,6 @@ export class PendingMessageReaperService implements OnModuleInit, OnModuleDestro
         { sessionId: row.sessionId, source: 'PendingMessageReaperService' },
       )
       .catch(() => undefined);
+    return true;
   }
 }

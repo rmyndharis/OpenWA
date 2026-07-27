@@ -10,7 +10,7 @@ import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { applyGlobalValidation } from './../src/config/app-validation';
 import { AuthService } from './../src/modules/auth/auth.service';
-import { ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
+import { ApiKey, ApiKeyRole } from './../src/modules/auth/entities/api-key.entity';
 import { Session } from './../src/modules/session/entities/session.entity';
 import { AuditLog, AuditAction, AuditSeverity } from './../src/modules/audit/entities/audit-log.entity';
 import { WebhookDeliveryFailure } from './../src/modules/webhook/entities/webhook-delivery-failure.entity';
@@ -216,6 +216,84 @@ describe('Session-scoped query endpoints (e2e)', () => {
         if (!row) await new Promise(r => setTimeout(r, 100));
       }
       expect(row).not.toBeNull();
+    });
+  });
+
+  /**
+   * The last-admin invariant must match the @RequireUnscopedKey fence: a session-scoped admin can
+   * never manage keys, so it must not count as a surviving admin. Stripping the last UNSCOPED
+   * admin — delete, revoke, demote, or scoping it — must 409; before the fix these returned
+   * 204/200 while a scoped admin existed, permanently locking the deployment out of key
+   * management (the boot seed only fires on an EMPTY api_keys table, not on zero unscoped admins).
+   */
+  describe('last-admin invariant vs session-scoped admins', () => {
+    let soleAdminKey: string; // raw key of the only remaining UNSCOPED admin
+    let soleAdminId: string;
+
+    beforeEach(async () => {
+      const authService = app.get(AuthService);
+      const created = await authService.createApiKey({ name: 'e2e-sole-admin', role: ApiKeyRole.ADMIN });
+      soleAdminKey = created.rawKey;
+      soleAdminId = created.apiKey.id;
+
+      // Revoke every OTHER unscoped admin directly in the DB (bypassing the service leaves the
+      // bootstrap key file alone), so soleAdmin is the last key that can manage keys — the
+      // session-scoped admin from the outer fixture must not count.
+      const apiKeyRepo: Repository<ApiKey> = app.get(getRepositoryToken(ApiKey, 'main'));
+      const others = (await apiKeyRepo.find()).filter(
+        k => k.id !== soleAdminId && k.role === ApiKeyRole.ADMIN && k.isActive && !k.allowedSessions?.length,
+      );
+      for (const k of others) {
+        k.isActive = false;
+        await apiKeyRepo.save(k);
+      }
+    });
+
+    it('rejects DELETE of the last unscoped admin (a scoped admin does not count)', async () => {
+      await request(app.getHttpServer())
+        .delete(`/api/auth/api-keys/${soleAdminId}`)
+        .set('X-API-Key', soleAdminKey)
+        .expect(409);
+    });
+
+    it('rejects revoking the last unscoped admin', async () => {
+      await request(app.getHttpServer())
+        .post(`/api/auth/api-keys/${soleAdminId}/revoke`)
+        .set('X-API-Key', soleAdminKey)
+        .expect(409);
+    });
+
+    it('rejects demoting the last unscoped admin', async () => {
+      await request(app.getHttpServer())
+        .put(`/api/auth/api-keys/${soleAdminId}`)
+        .set('X-API-Key', soleAdminKey)
+        .send({ role: 'operator' })
+        .expect(409);
+    });
+
+    it('rejects scoping the last unscoped admin (would strip key-management capability)', async () => {
+      await request(app.getHttpServer())
+        .put(`/api/auth/api-keys/${soleAdminId}`)
+        .set('X-API-Key', soleAdminKey)
+        .send({ allowedSessions: [sessA] })
+        .expect(409);
+    });
+
+    it('still allows the mutation once another unscoped admin exists', async () => {
+      const authService = app.get(AuthService);
+      const second = await authService.createApiKey({ name: 'e2e-second-admin', role: ApiKeyRole.ADMIN });
+
+      await request(app.getHttpServer())
+        .put(`/api/auth/api-keys/${soleAdminId}`)
+        .set('X-API-Key', soleAdminKey)
+        .send({ allowedSessions: [sessA] })
+        .expect(200);
+      // soleAdminKey is now session-scoped itself (the fence would 403 it) — the surviving
+      // unscoped admin carries the delete.
+      await request(app.getHttpServer())
+        .delete(`/api/auth/api-keys/${soleAdminId}`)
+        .set('X-API-Key', second.rawKey)
+        .expect(204);
     });
   });
 });

@@ -3,7 +3,9 @@ import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressReconcilerService, IngressReconcilerOptions } from './ingress-reconciler.service';
 import { IngressEnqueueService } from './ingress-enqueue.service';
+import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { RedriveService } from './redrive.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 
 const OPTS: IngressReconcilerOptions = { intervalMs: 60_000, graceMs: 60_000, batchSize: 50, maxAttempts: 5 };
@@ -17,6 +19,7 @@ describe('IngressReconcilerService.sweep', () => {
   let failures: Repository<IntegrationDeliveryFailure>;
   let enqueue: jest.Mock;
   let getPlugin: jest.Mock;
+  let resolveInstance: jest.Mock;
   let service: IngressReconcilerService;
   let seq: number;
 
@@ -33,11 +36,13 @@ describe('IngressReconcilerService.sweep', () => {
     failures = ds.getRepository(IntegrationDeliveryFailure);
     enqueue = jest.fn().mockResolvedValue({ outcome: 'queued' });
     getPlugin = jest.fn().mockReturnValue(undefined);
+    resolveInstance = jest.fn().mockResolvedValue({ enabled: true });
     service = new IngressReconcilerService(
       events,
       failures,
       { enqueue } as unknown as IngressEnqueueService,
       { getPlugin } as unknown as PluginLoaderService,
+      { resolve: resolveInstance } as unknown as PluginInstanceService,
     );
   });
 
@@ -270,6 +275,66 @@ describe('IngressReconcilerService.sweep', () => {
     expect((await failures.findOneByOrFail({ id: dlq.id })).redriven).toBe(true);
   });
 
+  it('does not replay an event a manual redrive already delivered', async () => {
+    // Live-path shape after a swallowed inline failure: the event row is still 'pending' and a DLQ
+    // row carries the payload. A successful manual redrive must close the event row too, or this
+    // sweep replays the same delivery a second time.
+    const id = await insertEvent();
+    await failures.save(
+      failures.create({
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        sessionId: 'sess-1',
+        deliveryId: 'd-1',
+        attempts: 1,
+        lastError: 'inline dispatch failed',
+        payload: { route: 'chatwoot', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+        redriven: false,
+      }),
+    );
+    const redrive = new RedriveService(failures, events, { enqueue } as unknown as IngressEnqueueService);
+
+    const res = await redrive.redriveInstance('plug', 'inst');
+
+    expect(res.redriven).toBe(1);
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+    enqueue.mockClear();
+    const stats = await service.sweep(OPTS);
+    expect(stats.scanned).toBe(0);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('skips a row whose instance was disabled after persist, and replays it once re-enabled', async () => {
+    const id = await insertEvent();
+    resolveInstance.mockResolvedValue({ enabled: false });
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toMatchObject({ scanned: 0, skipped: 1 });
+    expect(enqueue).not.toHaveBeenCalled();
+    const event = await stored(id);
+    expect(event.dispatchState).toBe('pending');
+    expect(event.dispatchAttempts).toBe(0); // an ineligible row does not burn its replay budget
+
+    // The row is not terminal: a re-enabled instance receives the event on a later sweep.
+    resolveInstance.mockResolvedValue({ enabled: true });
+    const stats2 = await service.sweep(OPTS);
+    expect(stats2.replayed).toBe(1);
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+  });
+
+  it('skips a row whose instance was deleted after persist', async () => {
+    await insertEvent();
+    resolveInstance.mockResolvedValue(null);
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toMatchObject({ scanned: 0, skipped: 1 });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(await failures.count()).toBe(0);
+  });
+
   it('keeps the batch alive when one row throws during bookkeeping', async () => {
     await insertEvent();
     await insertEvent();
@@ -303,7 +368,13 @@ describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
   it('does not schedule a timer when INGRESS_RECONCILE_INTERVAL_MS <= 0', () => {
     process.env.INGRESS_RECONCILE_INTERVAL_MS = '0';
     const [events, failures] = repos();
-    const svc = new IngressReconcilerService(events, failures, {} as IngressEnqueueService, {} as PluginLoaderService);
+    const svc = new IngressReconcilerService(
+      events,
+      failures,
+      {} as IngressEnqueueService,
+      {} as PluginLoaderService,
+      {} as PluginInstanceService,
+    );
 
     jest.useFakeTimers();
     try {
@@ -317,10 +388,39 @@ describe('IngressReconcilerService.onModuleInit (scheduling)', () => {
     }
   });
 
+  it('treats a blank INGRESS_RECONCILE_INTERVAL_MS as unset and sweeps on the default interval', () => {
+    process.env.INGRESS_RECONCILE_INTERVAL_MS = '';
+    const [events, failures] = repos();
+    const svc = new IngressReconcilerService(
+      events,
+      failures,
+      {} as IngressEnqueueService,
+      {} as PluginLoaderService,
+      {} as PluginInstanceService,
+    );
+
+    jest.useFakeTimers();
+    try {
+      const sweepSpy = jest.spyOn(svc, 'sweep').mockResolvedValue({ scanned: 0, replayed: 0, failed: 0, skipped: 0 });
+      svc.onModuleInit();
+      jest.advanceTimersByTime(60_000);
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
+      svc.onModuleDestroy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('sweeps on the configured interval and stops after onModuleDestroy', () => {
     delete process.env.INGRESS_RECONCILE_INTERVAL_MS;
     const [events, failures] = repos();
-    const svc = new IngressReconcilerService(events, failures, {} as IngressEnqueueService, {} as PluginLoaderService);
+    const svc = new IngressReconcilerService(
+      events,
+      failures,
+      {} as IngressEnqueueService,
+      {} as PluginLoaderService,
+      {} as PluginInstanceService,
+    );
 
     jest.useFakeTimers();
     try {

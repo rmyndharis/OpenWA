@@ -17,8 +17,10 @@ import {
   CreateGroupDto,
   GROUP_DESCRIPTION_MAX_LENGTH,
   GROUP_NAME_MAX_LENGTH,
+  GROUP_PARTICIPANTS_MAX,
   GroupDescriptionDto,
   GroupSubjectDto,
+  ParticipantsDto,
 } from '../../../modules/group/dto/group.dto';
 import type { ToolDescriptor } from '../tool-descriptor';
 import { messageTools } from './message.tools';
@@ -133,7 +135,30 @@ const CASES: CapCase[] = [
   },
 ];
 
-async function dtoFieldErrors(c: CapCase, value: string): Promise<boolean> {
+// Same parity idea as the string caps above, for the participants arrays: the Zod schemas had
+// min(1) but no max while the REST DTOs enforce ArrayMaxSize(GROUP_PARTICIPANTS_MAX).
+const PARTICIPANT_CASES: CapCase[] = [
+  {
+    label: 'GroupCreate.participants ↔ CreateGroupDto.participants',
+    toolName: 'GroupCreate',
+    field: 'participants',
+    cap: GROUP_PARTICIPANTS_MAX,
+    toolInput: { sessionId: 's1', name: 'weekend' },
+    dtoClass: CreateGroupDto,
+    dtoPayload: { name: 'weekend' },
+  },
+  {
+    label: 'GroupAddParticipants.participants ↔ ParticipantsDto.participants',
+    toolName: 'GroupAddParticipants',
+    field: 'participants',
+    cap: GROUP_PARTICIPANTS_MAX,
+    toolInput: { sessionId: 's1', groupId: '120363@g.us' },
+    dtoClass: ParticipantsDto,
+    dtoPayload: {},
+  },
+];
+
+async function dtoFieldErrors(c: CapCase, value: unknown): Promise<boolean> {
   const instance = plainToInstance(c.dtoClass, { ...c.dtoPayload, [c.field]: value }, PIPE_TRANSFORM_OPTS);
   const errors = await validate(instance);
   return errors.some(e => e.property === c.field);
@@ -149,6 +174,23 @@ describe('agent-tool input caps (parity with the REST DTOs)', () => {
 
   it.each(CASES)('$label: rejects a value above the cap in both MCP and REST', async c => {
     const overCap = 'x'.repeat(c.cap + 1);
+    const parsed = tool(c.toolName).inputSchema.safeParse({ ...c.toolInput, [c.field]: overCap });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some(i => i.path.includes(c.field) && i.code === 'too_big')).toBe(true);
+    }
+    expect(await dtoFieldErrors(c, overCap)).toBe(true);
+  });
+
+  it.each(PARTICIPANT_CASES)('$label: accepts a list at the cap in both MCP and REST', async c => {
+    const atCap = Array.from({ length: c.cap }, () => '628123456789@c.us');
+    const parsed = tool(c.toolName).inputSchema.safeParse({ ...c.toolInput, [c.field]: atCap });
+    expect(parsed.success).toBe(true);
+    expect(await dtoFieldErrors(c, atCap)).toBe(false);
+  });
+
+  it.each(PARTICIPANT_CASES)('$label: rejects a list above the cap in both MCP and REST', async c => {
+    const overCap = Array.from({ length: c.cap + 1 }, () => '628123456789@c.us');
     const parsed = tool(c.toolName).inputSchema.safeParse({ ...c.toolInput, [c.field]: overCap });
     expect(parsed.success).toBe(false);
     if (!parsed.success) {

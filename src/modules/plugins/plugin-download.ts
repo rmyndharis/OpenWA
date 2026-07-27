@@ -12,12 +12,15 @@ const SHA256_HEX = /^[0-9a-f]{64}$/i;
  * Optional content integrity for a plugin download, carried IN the URL so it works over any
  * transport (a catalog `download` link, a dashboard paste, a raw API call):
  *   - URL fragment:  https://host/pkg.zip#sha256=<64 hex>   — never sent to the server
- *   - query param:    https://host/pkg.zip?sha256=<64 hex>  — `checksum=` is accepted too
+ * The fragment is the only honored marker: unlike a query param it is not part of the request, so
+ * it cannot collide with a param the download host itself uses — a `?sha256=`/`?checksum=` on a
+ * CDN or artifact URL means something to THAT host, and seizing it as an integrity pin would
+ * fail or mis-verify an unrelated download.
  * Returns the lowercase expected digest, or null when the URL carries no integrity marker.
  *
- * Throws when a marker is present but malformed (not 64 hex chars) or when fragment and query
- * disagree: the caller explicitly asked for integrity, so an unusable marker fails closed rather
- * than silently degrading to no verification.
+ * Throws when the marker is present but malformed (not 64 hex chars): the caller explicitly asked
+ * for integrity, so an unusable marker fails closed rather than silently degrading to no
+ * verification.
  */
 export function expectedSha256FromUrl(url: string): string | null {
   let parsed: URL;
@@ -26,23 +29,12 @@ export function expectedSha256FromUrl(url: string): string | null {
   } catch {
     return null; // not a parseable URL — the SSRF guard / fetch rejects it downstream
   }
-  const markers: string[] = [];
-  if (parsed.hash.startsWith('#sha256=')) {
-    markers.push(parsed.hash.slice('#sha256='.length));
-  }
-  for (const key of ['sha256', 'checksum']) {
-    const value = parsed.searchParams.get(key);
-    if (value !== null) markers.push(value);
-  }
-  if (markers.length === 0) return null;
-  const digests = markers.map(marker => marker.trim().toLowerCase());
-  if (digests.some(digest => !SHA256_HEX.test(digest))) {
+  if (!parsed.hash.startsWith('#sha256=')) return null;
+  const digest = parsed.hash.slice('#sha256='.length).trim().toLowerCase();
+  if (!SHA256_HEX.test(digest)) {
     throw new Error('the URL carries a sha256 integrity marker that is not a 64-character hex digest');
   }
-  if (new Set(digests).size > 1) {
-    throw new Error('the URL carries conflicting sha256 integrity markers');
-  }
-  return digests[0];
+  return digest;
 }
 
 /**

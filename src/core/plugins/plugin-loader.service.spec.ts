@@ -466,6 +466,76 @@ describe('PluginLoaderService — prunes registry ghosts of removed built-ins', 
   });
 });
 
+describe('PluginLoaderService — boot reconciles the registry entry of a plugin it drops', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let storage: PluginStorageService;
+
+  const config = () =>
+    ({
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    }) as unknown as ConfigService;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-drop-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    storage = new PluginStorageService(config());
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const makeLoader = (): PluginLoaderService =>
+    new PluginLoaderService(config(), new HookManager(), storage, {} as unknown as ModuleRef);
+
+  const writePlugin = (id: string, manifest: Record<string, unknown>): void => {
+    const dir = path.join(pluginsDir, id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(dir, 'index.js'), 'module.exports = class {};');
+  };
+
+  it('marks the persisted entry ERROR when boot-time manifest validation drops a previously-installed plugin', () => {
+    // Boot 1: a valid hand-placed plugin loads and gets its registry entry.
+    writePlugin('hand-placed', {
+      id: 'hand-placed',
+      name: 'Hand',
+      version: '1.0.0',
+      type: 'extension',
+      main: 'index.js',
+    });
+    makeLoader().onModuleInit();
+    expect(storage.getPluginEntry('hand-placed')?.status).toBe(PluginStatus.INSTALLED);
+    // The operator's config + standing enable decision live in that entry.
+    storage.setPluginConfig('hand-placed', { apiKey: 'keep-me' });
+    storage.setPluginEnabledByOperator('hand-placed', true);
+
+    // Boot 2: the manifest was hand-edited into something the installer would have rejected
+    // (missing required field) — the plugin is dropped from the runtime...
+    writePlugin('hand-placed', { id: 'hand-placed', name: 'Hand', type: 'extension', main: 'index.js' });
+    const loader2 = makeLoader();
+    loader2.onModuleInit();
+    expect(loader2.getPlugin('hand-placed')).toBeUndefined();
+
+    // ...and the registry no longer claims it installed. The entry itself (config,
+    // enabledByOperator) survives, so fixing the manifest and rebooting re-enables it.
+    const entry = storage.getPluginEntry('hand-placed');
+    expect(entry?.status).toBe(PluginStatus.ERROR);
+    expect(entry?.config).toEqual({ apiKey: 'keep-me' });
+    expect(entry?.enabledByOperator).toBe(true);
+  });
+
+  it('a hand-placed plugin that fails validation without a registry entry simply does not load', () => {
+    writePlugin('never-installed', { id: 'never-installed', name: 'Nope', type: 'extension', main: 'index.js' });
+
+    const loader = makeLoader();
+    loader.onModuleInit();
+
+    expect(loader.getPlugin('never-installed')).toBeUndefined();
+    // No entry existed, so the ERROR reconciliation is a no-op — none is invented either.
+    expect(storage.getPluginEntry('never-installed')).toBeUndefined();
+  });
+});
+
 describe('PluginLoaderService — loadPlugin seeds configSchema defaults', () => {
   let tmpDir: string;
   let pluginsDir: string;

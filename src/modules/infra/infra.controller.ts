@@ -39,6 +39,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { ImportStorageDto } from './dto/import-storage.dto';
 import { SaveConfigDto } from './dto/save-config.dto';
 import { assertNoDefaultSecretsInProduction } from '../../config/bootstrap-security';
+import { BLANK_SHADOWED_ENV_KEYS, isOsProvidedEnv } from '../../config/env-precedence';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -228,6 +229,12 @@ interface IngressEventRow {
   // Retired to NULL once the dispatch outcome is recorded; only 'pending' rows still carry one.
   payload: string | Record<string, unknown> | null;
   payloadHash?: string | null;
+  // Dispatch lifecycle (the AddIngressEventDispatchState migration). A restored 'pending' row must
+  // keep these or the reconciler never replays it while the dedup row still blocks the provider's
+  // retry. Optional because backups exported before the columns existed don't carry them.
+  dispatchState?: 'pending' | 'dispatched' | 'failed' | null;
+  dispatchAttempts?: number;
+  lastDispatchAt?: string | null;
   sessionId: string | null;
   createdAt: string;
 }
@@ -693,7 +700,15 @@ export class InfraController implements OnApplicationBootstrap {
             updates.DATABASE_HOST = 'postgres';
             updates.DATABASE_PORT = '5432';
             updates.DATABASE_USERNAME = 'openwa';
-            updates.DATABASE_PASSWORD = 'openwa';
+            // The bundled credential is only the DEFAULT. Secrets are never echoed back to the form,
+            // so an absent password field means "unchanged", not "reset to 'openwa'" — and the
+            // dashboard ALWAYS sends builtIn, so keying the reset on "explicit builtIn:true" reset a
+            // re-keyed container on every save from the Infrastructure page.
+            // What decides it is whether the stored password belongs to this same bundled container:
+            // it does when the previous mode was already built-in. Coming from external, the stored
+            // value is the external DB's credential and must not be carried into the container.
+            const storedPassword = existing.POSTGRES_BUILTIN === 'true' ? existing.DATABASE_PASSWORD : undefined;
+            updates.DATABASE_PASSWORD = config.database.password || storedPassword || 'openwa';
             updates.DATABASE_NAME = 'openwa';
             // Built-in Postgres is initialized with the default 'public' schema (see
             // scripts/postgres-init-schema.sh). Pin it so a later switch from a custom-schema
@@ -886,19 +901,39 @@ export class InfraController implements OnApplicationBootstrap {
       // result with the very same boot guard (as production) and refuse the save when that boot
       // would refuse to start. This is what stops a built-in->external flip with no fresh
       // credentials from persisting a config that crash-loops the next production boot.
+      // Evaluate what that boot would actually SEE, not just what the file holds: load-env.ts
+      // loads with dotenv override:false, so a value supplied via the container environment
+      // (compose `environment:`) wins over this file — the precedence the file header documents.
+      // Without that, a deployment providing DATABASE_PASSWORD & co. through the environment is
+      // refused on EVERY save even though its boot passes the guard. A blank compose-forwarded
+      // value counts as unset exactly like clearBlankEnv treats it at boot.
+      //
+      // Only a HOST-supplied key may win. load-env also merges .env and data/.env.generated into
+      // process.env, so reading process.env alone would hand back the very file this save is
+      // replacing — the guard would then bless a flip by validating the OLD config (a built-in ->
+      // external switch keeping the bundled 'openwa' password would save cleanly and crash-loop the
+      // next production boot, the exact case this guard exists for). isOsProvidedEnv separates the
+      // two using the snapshot load-env takes before either file is loaded.
+      const bootValue = (key: string): string | undefined => {
+        const envValue = isOsProvidedEnv(key) ? process.env[key] : undefined;
+        if (envValue !== undefined && (envValue.trim() !== '' || !BLANK_SHADOWED_ENV_KEYS.includes(key))) {
+          return envValue;
+        }
+        return merged[key];
+      };
       try {
         assertNoDefaultSecretsInProduction({
           nodeEnv: 'production',
-          databaseType: merged.DATABASE_TYPE,
-          databasePassword: merged.DATABASE_PASSWORD,
-          postgresBuiltIn: merged.POSTGRES_BUILTIN,
-          databaseHost: merged.DATABASE_HOST,
-          storageType: merged.STORAGE_TYPE,
-          s3AccessKey: merged.S3_ACCESS_KEY_ID,
-          s3SecretKey: merged.S3_SECRET_ACCESS_KEY,
-          s3Endpoint: merged.S3_ENDPOINT,
-          minioBuiltIn: merged.MINIO_BUILTIN,
-          redisPassword: merged.REDIS_PASSWORD,
+          databaseType: bootValue('DATABASE_TYPE'),
+          databasePassword: bootValue('DATABASE_PASSWORD'),
+          postgresBuiltIn: bootValue('POSTGRES_BUILTIN'),
+          databaseHost: bootValue('DATABASE_HOST'),
+          storageType: bootValue('STORAGE_TYPE'),
+          s3AccessKey: bootValue('S3_ACCESS_KEY_ID'),
+          s3SecretKey: bootValue('S3_SECRET_ACCESS_KEY'),
+          s3Endpoint: bootValue('S3_ENDPOINT'),
+          minioBuiltIn: bootValue('MINIO_BUILTIN'),
+          redisPassword: bootValue('REDIS_PASSWORD'),
         });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -1674,22 +1709,32 @@ export class InfraController implements OnApplicationBootstrap {
         }
       }
 
-      // Import ingress events (durable inbound dedup oracle; payload is JSON)
+      // Import ingress events (durable inbound dedup oracle; payload is JSON). The dispatch-lifecycle
+      // columns ride along: dropping them would strand a restored 'pending' row (NULL dispatchState is
+      // never swept by the reconciler) while its dedup key still blocks the provider's retry. Columns
+      // absent from a pre-lifecycle backup import as NULL/0 — the same "not watched" reading legacy
+      // rows have by design. dispatchAttempts is NOT NULL, so it coalesces to 0 rather than NULL.
       let ingressEventsCount = 0;
       if (data.tables.ingressEvents?.length) {
         for (const ie of data.tables.ingressEvents) {
           try {
             await insert(
-              `INSERT INTO ingress_events (id, "instanceId", "pluginId", "providerDeliveryId", route, payload, "sessionId", "createdAt")
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              `INSERT INTO ingress_events (id, "instanceId", "pluginId", "providerDeliveryId", route, payload, "payloadHash", "sessionId", "dispatchState", "dispatchAttempts", "lastDispatchAt", "createdAt")
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
               [
                 ie.id,
                 ie.instanceId,
                 ie.pluginId,
                 ie.providerDeliveryId,
                 ie.route,
-                typeof ie.payload === 'string' ? ie.payload : JSON.stringify(ie.payload ?? {}),
+                // A retired (NULL) payload must stay NULL — re-materializing it as '{}' would make a
+                // slimmed dedup row read as a pending event with an empty body.
+                ie.payload == null ? null : typeof ie.payload === 'string' ? ie.payload : JSON.stringify(ie.payload),
+                ie.payloadHash ?? null,
                 ie.sessionId,
+                ie.dispatchState ?? null,
+                ie.dispatchAttempts ?? 0,
+                ie.lastDispatchAt ?? null,
                 ie.createdAt,
               ],
             );

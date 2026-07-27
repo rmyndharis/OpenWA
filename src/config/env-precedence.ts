@@ -68,3 +68,29 @@ export function clearBlankEnv(env: NodeJS.ProcessEnv, keys: string[]): void {
     }
   }
 }
+
+/**
+ * Keys that were already in `process.env` before load-env merged `.env` and `data/.env.generated`
+ * into it — i.e. genuinely supplied by the host/orchestrator.
+ *
+ * Needed because after boot the two file layers are indistinguishable from a real host override:
+ * both simply sit in `process.env`. Any check that asks "what will the next boot see for this key?"
+ * must not read a file value back out of `process.env` and mistake it for an override — for the
+ * save-config guard that would mean validating the config being REPLACED instead of the one being
+ * written.
+ */
+let osEnvKeys: Set<string> | null = null;
+
+/** Snapshot the host-supplied keys. Called by load-env after blank-clearing, before any dotenv load. */
+export function recordOsEnvKeys(env: NodeJS.ProcessEnv = process.env): void {
+  osEnvKeys = new Set(Object.keys(env));
+}
+
+/**
+ * True when `key` came from the host rather than a loaded env file. With no snapshot taken (a unit
+ * test that never boots), every key counts as host-supplied — the caller's own `process.env` is then
+ * the only source there is.
+ */
+export function isOsProvidedEnv(key: string): boolean {
+  return osEnvKeys === null || osEnvKeys.has(key);
+}

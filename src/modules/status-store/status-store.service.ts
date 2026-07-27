@@ -21,11 +21,14 @@ const PURGE_INTERVAL_MS = 15 * 60 * 1000;
  * pre-gates history downloads at the same cap so over-cap blobs are never fetched. */
 export const DEFAULT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 /** Default cadence of the orphaned-media reconciliation sweep (overridable via
- * STATUS_ORPHAN_SWEEP_INTERVAL_MS). Lighter-than-it-sounds: one listFiles + one indexed query. */
+ * STATUS_ORPHAN_SWEEP_INTERVAL_MS). Lighter-than-it-sounds: one streamed enumeration + one indexed query. */
 const DEFAULT_ORPHAN_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 /** Default grace window before an unreferenced status media file is deleted (overridable via
  * STATUS_ORPHAN_GRACE_MS), so a file mid-ingest is never reaped. */
 const DEFAULT_ORPHAN_GRACE_MS = 60 * 60 * 1000;
+
+/** Storage key prefix owned by the status store; the media bucket is shared with chat media. */
+const STATUS_MEDIA_PREFIX = 'statuses/';
 
 /** Subtypes whose registered mimetype name differs from the conventional file extension. */
 const MIME_SUBTYPE_EXT_OVERRIDES: Record<string, string> = { jpeg: 'jpg', quicktime: 'mov' };
@@ -183,7 +186,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     const media = s.media;
     if (!media?.data) return;
 
-    const key = `statuses/${sessionId}/${randomUUID()}.${extFromMimetype(media.mimetype)}`;
+    const key = `${STATUS_MEDIA_PREFIX}${sessionId}/${randomUUID()}.${extFromMimetype(media.mimetype)}`;
     try {
       await this.storageService.putFile(key, Buffer.from(media.data, 'base64'));
     } catch (error) {
@@ -215,6 +218,11 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
       row.mediaPath = undefined;
       row.mediaMimetype = undefined;
       row.mediaOmitted = true;
+      // This same object is what the status.received webhook carries, and every other omission path
+      // names its reason ('engine_omitted' / 'over_cap' / 'write_failed'). Leaving it unset here
+      // would hand a consumer a media-less status it cannot tell apart from an unexplained
+      // omission — the media really is gone (nothing retries), so say so.
+      row.omitReason = 'write_failed';
     }
   }
 
@@ -319,6 +327,8 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
       }),
     );
 
+    // Every media delete may have failed — delete([]) throws TypeORM's empty-criteria error.
+    if (deletableIds.length === 0) return 0;
     const result = await this.repository.delete(deletableIds);
     return result.affected ?? deletableIds.length;
   }
@@ -335,7 +345,14 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    */
   async sweepOrphanedMedia(now: number = Date.now()): Promise<number> {
     const graceMs = this.configService.get<number>('status.orphanGraceMs', DEFAULT_ORPHAN_GRACE_MS);
-    const files = (await this.storageService.listFiles()).filter(file => file.startsWith('statuses/'));
+    // Stream via iterateFiles: listFiles() truncates at STORAGE_LIST_MAX_FILES (a per-call DoS
+    // guard, not a completeness contract), which would strand every orphan past the cap. Scope the
+    // walk to the statuses/ prefix so dropping that cap does not pull the whole media store — chat
+    // media shares this bucket — through the iterator and its dedupe set.
+    const files: string[] = [];
+    for await (const file of this.storageService.iterateFiles(STATUS_MEDIA_PREFIX)) {
+      if (file.startsWith(STATUS_MEDIA_PREFIX)) files.push(file);
+    }
     const rows = await this.repository.find({
       where: { mediaPath: Not(IsNull()) },
       select: { mediaPath: true },

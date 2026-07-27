@@ -5,12 +5,15 @@ import { IngressEvent } from './entities/ingress-event.entity';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEnqueueService, buildIngressDeadLetterRow } from './ingress-enqueue.service';
 import { extractConversationId } from './ingress.service';
+import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import { createLogger } from '../../common/services/logger.service';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 export interface IngressReconcilerOptions {
-  // Sweep cadence. <= 0 disables the reconciler (mirrors INGRESS_RETENTION_DAYS <= 0).
+  // Sweep cadence. 0 disables the reconciler. A blank or otherwise unparseable value falls back to
+  // the default rather than disabling the sweep, so a mis-set variable can never silently turn it off.
   intervalMs: number;
   // A 'pending' row only becomes sweep-eligible once its last activity (creation or latest attempt)
   // is older than this — the live path gets the whole window to record its own outcome first.
@@ -22,13 +25,11 @@ export interface IngressReconcilerOptions {
 }
 
 export function resolveIngressReconcilerOptions(env: NodeJS.ProcessEnv = process.env): IngressReconcilerOptions {
-  const interval = Number(env.INGRESS_RECONCILE_INTERVAL_MS);
-  const grace = Number(env.INGRESS_RECONCILE_GRACE_MS);
   const batch = Number(env.INGRESS_RECONCILE_BATCH_SIZE);
   const maxAttempts = Number(env.INGRESS_RECONCILE_MAX_ATTEMPTS);
   return {
-    intervalMs: Number.isInteger(interval) ? interval : 60_000,
-    graceMs: Number.isInteger(grace) && grace >= 0 ? grace : 60_000,
+    intervalMs: resolveNonNegativeIntEnv(env.INGRESS_RECONCILE_INTERVAL_MS, 60_000),
+    graceMs: resolveNonNegativeIntEnv(env.INGRESS_RECONCILE_GRACE_MS, 60_000),
     batchSize: Number.isInteger(batch) && batch >= 1 ? batch : 50,
     maxAttempts: Number.isInteger(maxAttempts) && maxAttempts >= 1 ? maxAttempts : 5,
   };
@@ -72,6 +73,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     private readonly failures: Repository<IntegrationDeliveryFailure>,
     private readonly ingressEnqueue: IngressEnqueueService,
     private readonly loader: PluginLoaderService,
+    private readonly instances: PluginInstanceService,
   ) {}
 
   onModuleInit(): void {
@@ -127,8 +129,23 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
           continue;
         }
-        stats.scanned++;
         try {
+          // Re-apply the eligibility oracle the live path checks at the door (IngressService.handle
+          // 404s an unknown/disabled instance): an instance disabled or deleted AFTER persist must
+          // not receive the replay. The row stays 'pending' — a re-enabled instance is replayed by a
+          // later sweep; a deleted one ages out via INGRESS_DEDUP_RETENTION_DAYS pruning.
+          const instance = await this.instances.resolve(row.pluginId, row.instanceId);
+          if (!instance || !instance.enabled) {
+            this.logger.log('Skipping ingress event for a disabled or deleted instance', {
+              pluginId: row.pluginId,
+              instanceId: row.instanceId,
+              deliveryId: row.providerDeliveryId,
+              action: 'ingress_reconcile_instance_ineligible',
+            });
+            stats.skipped++;
+            continue;
+          }
+          stats.scanned++;
           const outcome = await this.reconcileRow(row, opts.maxAttempts, now);
           if (outcome === 'replayed') stats.replayed++;
           else stats.failed++;

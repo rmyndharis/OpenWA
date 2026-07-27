@@ -130,6 +130,13 @@ export function Sessions() {
     }
   }, [isConnected, subscribe]);
 
+  // Rooms are per-socket on the backend: a reconnect lands on a fresh socket with no
+  // subscriptions, so the per-session dedup set must be forgotten or the join effect
+  // above would skip every already-listed id and no feed frame would arrive again.
+  useEffect(() => {
+    if (!isConnected) feedStateRef.current.subscribedIds.clear();
+  }, [isConnected]);
+
   // In per-session mode, sessions loaded/created after the fallback still need their rooms.
   useEffect(() => {
     if (isConnected && feedStateRef.current.scope === 'per-session') {

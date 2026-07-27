@@ -89,6 +89,26 @@ export function chatHistoryMediaBudgetBytes(): number {
 }
 
 /**
+ * How many per-item caps an ingest pass (a caller that supplies its own `mediaMaxBytes`, i.e. the
+ * status seed) may accumulate before later items fall back to the omitted marker.
+ *
+ * The response budget above is sized for ONE HTTP response and is too tight here: two ~10 MiB videos
+ * are ~28 MiB of base64 and would strip every later status. But "exempt" must not mean unbounded —
+ * a 50-item seed at a 10 MiB per-item cap would be ~650 MiB of base64 on the heap at connect time.
+ * Four full-size items is roomy enough for a realistic story feed while keeping the bound.
+ */
+const INGEST_MEDIA_BUDGET_ITEMS = 4;
+
+/**
+ * Aggregate budget for a pass whose caller supplies its own per-item cap. Derived from that cap so
+ * the two always move together; falls back to the response budget when the cap is absent/unusable.
+ */
+export function ingestMediaBudgetBytes(perItemMaxBytes: number): number {
+  if (!Number.isFinite(perItemMaxBytes) || perItemMaxBytes <= 0) return chatHistoryMediaBudgetBytes();
+  return Math.max(chatHistoryMediaBudgetBytes(), Math.ceil(perItemMaxBytes * INGEST_MEDIA_BUDGET_ITEMS * 1.37));
+}
+
+/**
  * Coerce a sender-declared media size (a protobuf `fileLength`, which may be a number, a Long-like
  * `{ toNumber() }`, a numeric string, or absent) to a finite byte count. Unknown/garbage → 0, i.e.
  * "don't pre-gate" (the streaming abort is the backstop), never NaN.

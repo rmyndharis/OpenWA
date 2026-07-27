@@ -282,13 +282,19 @@ describe('PluginsService — download integrity (optional #sha256 pinning)', () 
     expect(loader.getPlugin('svc-plg')).toBeDefined();
   });
 
-  it('also accepts the digest as a ?sha256= query parameter', async () => {
+  it('ignores a ?sha256= query parameter — only the #sha256= fragment pins the digest', async () => {
     const buf = pkg();
     serveOnce(buf);
+    const wrong = '0'.repeat(64);
 
-    const dto = await service.installFromUrl(`https://plugins.example/svc-plg.zip?sha256=${sha256(buf)}`);
+    // The query digest does not match the bytes, yet the install still succeeds on the fragment's
+    // verdict: a query param is never an integrity marker (it belongs to the download host).
+    const dto = await service.installFromUrl(
+      `https://plugins.example/svc-plg.zip?sha256=${wrong}#sha256=${sha256(buf)}`,
+    );
 
     expect(dto.id).toBe('svc-plg');
+    expect(loader.getPlugin('svc-plg')).toBeDefined();
   });
 
   it('fails closed when the pinned digest does not match (package substituted in transit)', async () => {

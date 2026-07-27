@@ -344,9 +344,9 @@ export class PluginsService {
    * Install a plugin from an HTTPS URL: download the .zip through the SSRF guard (host validated,
    * connection pinned, redirects refused, size-capped), then run the exact same validate-write-load
    * pipeline as an uploaded package. The downloaded buffer is treated as untrusted, identical to an
-   * upload. When the URL pins a digest (`#sha256=<hex>` fragment or `?sha256=` query — see
-   * plugin-download.ts), the bytes MUST match it: a mismatch means the package was substituted in
-   * transit and the install fails closed.
+   * upload. When the URL pins a digest (`#sha256=<hex>` fragment — the only honored marker; query
+   * params are deliberately ignored, see plugin-download.ts), the bytes MUST match it: a mismatch
+   * means the package was substituted in transit and the install fails closed.
    */
   async installFromUrl(url: string): Promise<PluginDto> {
     const maxBytes = this.configService.get<number>('plugins.downloadMaxBytes') ?? 5 * 1024 * 1024;

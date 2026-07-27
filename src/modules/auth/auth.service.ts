@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { Equal, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -191,6 +191,21 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const stored = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(rawKey) } });
     const live = Boolean(stored && stored.isActive && (!stored.expiresAt || stored.expiresAt > new Date()));
     if (live) return rawKey;
+    if (!stored) {
+      // A hash miss alone does not prove the key is gone: the same raw key hashes differently under
+      // a changed API_KEY_PEPPER. The prefix is seeded unhashed alongside the key, so it still finds
+      // the row — when it resolves, the file holds the only copy of a still-live key and must
+      // survive. Delete only when nothing carries the prefix either (e.g. a backup restore that
+      // lost the key row), preserving the documented self-heal.
+      const byPrefix = await this.apiKeyRepository.findOne({ where: { keyPrefix: rawKey.substring(0, 12) } });
+      if (byPrefix) {
+        this.logger.warn(
+          'Bootstrap API key file does not match any stored key hash — API_KEY_PEPPER changed since the key was seeded? The key itself is still live, so the file is kept; restore the original pepper or rotate the key to repair.',
+          { keyPrefix: byPrefix.keyPrefix, action: 'bootstrap_key_pepper_mismatch' },
+        );
+        return null;
+      }
+    }
     this.removeBootstrapKeyFile('it no longer resolves to an active key');
     return null;
   }
@@ -279,13 +294,20 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async update(id: string, dto: UpdateApiKeyDto): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
 
+    // Scoping the last unscoped admin (non-empty allowedSessions) strips key-management just as
+    // surely as demoting or expiring it: @RequireUnscopedKey would then 403 every lifecycle route.
     const removesOrSchedulesLastAdmin =
       (dto.role !== undefined && dto.role !== ApiKeyRole.ADMIN) ||
-      (dto.expiresAt !== undefined && dto.expiresAt !== null);
+      (dto.expiresAt !== undefined && dto.expiresAt !== null) ||
+      (dto.allowedSessions !== undefined && dto.allowedSessions.length > 0);
 
     const applyAndSave = async (): Promise<ApiKey> => {
+      // Re-read the target inside the critical section: the pre-lock snapshot can be stale — a
+      // concurrent serialized mutation may already have changed this key's usability — so the
+      // last-admin check and the write both run against fresh state.
+      const target = await this.findOne(id);
       if (removesOrSchedulesLastAdmin) {
-        await this.assertNotLastUsableAdmin(apiKey);
+        await this.assertNotLastUsableAdmin(target);
       }
 
       // Capture the authorization-relevant fields BEFORE applying the change. Only a change to role,
@@ -294,19 +316,19 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       // NOT disconnect clients. REST enforces the new state immediately; without eviction a live socket
       // keeps streaming events for sessions/IPs the key just lost until it resubscribes or drops.
       const before = {
-        role: apiKey.role,
-        allowedIps: apiKey.allowedIps,
-        allowedSessions: apiKey.allowedSessions,
-        expiresAt: apiKey.expiresAt,
+        role: target.role,
+        allowedIps: target.allowedIps,
+        allowedSessions: target.allowedSessions,
+        expiresAt: target.expiresAt,
       };
 
-      if (dto.name) apiKey.name = dto.name;
-      if (dto.role) apiKey.role = dto.role;
-      if (dto.allowedIps !== undefined) apiKey.allowedIps = dto.allowedIps;
-      if (dto.allowedSessions !== undefined) apiKey.allowedSessions = dto.allowedSessions;
-      if (dto.expiresAt !== undefined) apiKey.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
+      if (dto.name) target.name = dto.name;
+      if (dto.role) target.role = dto.role;
+      if (dto.allowedIps !== undefined) target.allowedIps = dto.allowedIps;
+      if (dto.allowedSessions !== undefined) target.allowedSessions = dto.allowedSessions;
+      if (dto.expiresAt !== undefined) target.expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
-      const saved = await this.apiKeyRepository.save(apiKey);
+      const saved = await this.apiKeyRepository.save(target);
 
       // Compare membership, not order: a pure reorder of allowedIps/allowedSessions is a no-op for the
       // .includes()-based enforcement, so sort before stringify to avoid a spurious eviction on a reorder.
@@ -324,7 +346,12 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
     // Run check+write inside the shared critical section ONLY when this update can strip the last
     // usable admin; every other update (rename, promotion, non-admin keys) stays lock-free.
-    return removesOrSchedulesLastAdmin && AuthService.isUsableAdmin(apiKey)
+    // The predicate is the target's ROLE, not its usability: usability also depends on isActive,
+    // expiry and scope, any of which a concurrent serialized mutation may have just changed. Reading
+    // that from the pre-lock snapshot would let a target that only LOOKS unusable skip the lock and
+    // run its check unserialized — the very race the lock exists to close. Role is the stable,
+    // conservative key: it over-locks a little (an already-revoked admin) and never under-locks.
+    return removesOrSchedulesLastAdmin && apiKey.role === ApiKeyRole.ADMIN
       ? this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, applyAndSave)
       : applyAndSave();
   }
@@ -332,15 +359,19 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async delete(id: string): Promise<void> {
     const apiKey = await this.findOne(id);
     const removeKey = async (): Promise<void> => {
-      await this.assertNotLastUsableAdmin(apiKey);
+      // Re-read inside the critical section (same staleness hazard as update()): never run the
+      // last-admin check against the pre-lock snapshot.
+      const target = await this.findOne(id);
+      await this.assertNotLastUsableAdmin(target);
       // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
       this.pendingUsage.delete(id);
-      await this.apiKeyRepository.remove(apiKey);
-      this.removeBootstrapKeyFileIfMatching(apiKey);
+      await this.apiKeyRepository.remove(target);
+      this.removeBootstrapKeyFileIfMatching(target);
     };
-    // A target that is not a usable admin can skip the lock: it is not counted as one, so removing
-    // it cannot strand the system — some other usable admin (or none at all) exists independently.
-    if (AuthService.isUsableAdmin(apiKey)) {
+    // Lock on the ROLE, not on the pre-lock usability snapshot: isActive/expiry/scope can change
+    // under a concurrent serialized mutation, so a target that merely looks unusable here must not
+    // skip the critical section. A non-admin target genuinely cannot strand the system.
+    if (apiKey.role === ApiKeyRole.ADMIN) {
       await this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, removeKey);
     } else {
       await removeKey();
@@ -355,36 +386,70 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async revoke(id: string): Promise<ApiKey> {
     const apiKey = await this.findOne(id);
     const revokeKey = async (): Promise<ApiKey> => {
-      await this.assertNotLastUsableAdmin(apiKey);
+      // Re-read inside the critical section (same staleness hazard as update()).
+      const target = await this.findOne(id);
+      await this.assertNotLastUsableAdmin(target);
       // A revoked key fails validation before its next flush, so its accumulator would orphan —
       // drop it here.
       this.pendingUsage.delete(id);
-      apiKey.isActive = false;
-      const saved = await this.apiKeyRepository.save(apiKey);
-      this.removeBootstrapKeyFileIfMatching(apiKey);
+      target.isActive = false;
+      const saved = await this.apiKeyRepository.save(target);
+      this.removeBootstrapKeyFileIfMatching(target);
       return saved;
     };
-    const saved = AuthService.isUsableAdmin(apiKey)
-      ? await this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, revokeKey)
-      : await revokeKey();
+    // Same reasoning as delete(): the lock predicate is the stable role, not a snapshot of usability.
+    const saved =
+      apiKey.role === ApiKeyRole.ADMIN
+        ? await this.adminCapabilityLock.run(AuthService.ADMIN_CAPABILITY_LOCK_KEY, revokeKey)
+        : await revokeKey();
     // Kick any WebSocket connections already authenticated with this key: without this, a revoked
     // key keeps receiving events on already-subscribed sockets until they happen to disconnect.
     this.evictActiveSockets(id, 'revoked');
     return saved;
   }
 
+  /**
+   * "Usable admin" for the last-admin invariant: an active, unexpired ADMIN key with NO session
+   * scope. The key-lifecycle routes are fenced behind @RequireUnscopedKey (AuthController), so a
+   * session-scoped admin can authenticate but can never manage keys — counting it as a surviving
+   * admin would bless the removal of the last key that actually can, a permanent management
+   * lockout with no in-band recovery (the boot seed only fires on an EMPTY table, not on zero
+   * unscoped admins).
+   */
   private static isUsableAdmin(key: ApiKey, now = new Date()): boolean {
-    return key.role === ApiKeyRole.ADMIN && key.isActive && (!key.expiresAt || key.expiresAt > now);
+    return (
+      key.role === ApiKeyRole.ADMIN &&
+      key.isActive &&
+      (!key.expiresAt || key.expiresAt > now) &&
+      (!key.allowedSessions || key.allowedSessions.length === 0)
+    );
   }
 
   private async assertNotLastUsableAdmin(target: ApiKey): Promise<void> {
     const now = new Date();
     if (!AuthService.isUsableAdmin(target, now)) return;
 
+    // Match isUsableAdmin at the SQL level: only UNSCOPED admins count. The simple-array column
+    // stores an empty array as '' (rows updated with allowedSessions: [] hold exactly that), so
+    // "no session scope" is NULL or '' — IsNull() alone would miss the '' rows.
     const otherUsableAdmins = await this.apiKeyRepository.count({
       where: [
-        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: IsNull() },
-        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: MoreThan(now) },
+        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: IsNull(), allowedSessions: IsNull() },
+        { id: Not(target.id), role: ApiKeyRole.ADMIN, isActive: true, expiresAt: IsNull(), allowedSessions: Equal('') },
+        {
+          id: Not(target.id),
+          role: ApiKeyRole.ADMIN,
+          isActive: true,
+          expiresAt: MoreThan(now),
+          allowedSessions: IsNull(),
+        },
+        {
+          id: Not(target.id),
+          role: ApiKeyRole.ADMIN,
+          isActive: true,
+          expiresAt: MoreThan(now),
+          allowedSessions: Equal(''),
+        },
       ],
     });
     if (otherUsableAdmins === 0) {

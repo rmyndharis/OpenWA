@@ -330,6 +330,13 @@ test('capMediaPayloads: under the limit the list is returned untouched (stable r
   assert.equal(capMediaPayloads(list), list);
 });
 
+test('the media cap covers the whole fetch window (no dead-end placeholder inside it)', () => {
+  // useChatMessages fetches a 100-message slice WITH media and caches it at staleTime: Infinity.
+  // A cap below the window strips payloads the user can scroll to, with no refetch path — the
+  // stripped rows render the 📎 placeholder forever even though the payload was fetched.
+  assert.ok(MEDIA_PAYLOAD_CACHE_LIMIT >= 100);
+});
+
 test('capMediaPayloads: past the limit the OLDEST payloads strip to the omitted marker, newest stay', () => {
   // One over the cap, so exactly the oldest payload must go.
   const list = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT + 1 }, (_, i) => mediaMsg(`m-${i}`, `PAYLOAD_${i}`));

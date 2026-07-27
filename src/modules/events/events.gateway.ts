@@ -284,6 +284,12 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       (client.data as { apiKey: unknown; rawApiKey: string }).apiKey = validKey;
       (client.data as { rawApiKey: string }).rawApiKey = apiKey;
       this.trackSocket(validKey.id, client);
+      // The handshake window is charged pre-auth to keep an unauthenticated flood off the DB. This
+      // one turned out to be authentic, so give the slot back: the window then bounds FAILED
+      // handshakes, and authenticated connections stay bounded by maxSocketsPerKey above. Without
+      // this, every client behind one NAT/proxy IP shares a 10/min budget and normal dashboard
+      // re-mounts lock each other out.
+      this.handshakeLimiter.refund(clientIp);
       this.logger.log(`Client connected: ${client.id} (key: ${validKey.name})`);
     } catch (error) {
       this.logger.warn(`Client ${client.id} rejected: Auth error`, {

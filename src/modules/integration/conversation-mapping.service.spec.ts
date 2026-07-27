@@ -86,4 +86,51 @@ describe('ConversationMappingService', () => {
     });
     expect(await service.findHandoverForChat('sess-1', 'other-chat')).toBeNull();
   });
+
+  it('delete removes the row so a later reverse-key insert no longer conflicts', async () => {
+    await service.upsert(key, 'conv-1');
+    const row = await service.get(key);
+    if (!row) throw new Error('expected a mapping row');
+
+    await service.delete(row.id);
+
+    expect(await service.get(key)).toBeNull();
+    // The reverse key is free again: binding conv-1 to a different chat now succeeds.
+    await expect(
+      service.upsert({ sessionId: 'sess-2', chatId: 'chat-2', pluginId: 'chatwoot', instanceId: 'acct1' }, 'conv-1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rebindSession moves a stale row onto the current session (forward key moves with it)', async () => {
+    await service.upsert(key, 'conv-1');
+    const row = await service.get(key);
+    if (!row) throw new Error('expected a mapping row');
+
+    await service.rebindSession(row.id, 'sess-2');
+
+    expect(await service.get(key)).toBeNull();
+    const rebound = await service.getByProvider(key.pluginId, key.instanceId, 'conv-1');
+    expect(rebound?.sessionId).toBe('sess-2');
+    expect(
+      await service.get({ sessionId: 'sess-2', chatId: 'chat-1', pluginId: 'chatwoot', instanceId: 'acct1' }),
+    ).not.toBeNull();
+  });
+
+  it('rebindSession supersedes (deletes) the stale row when the current session already owns the chat', async () => {
+    // sess-1's row and sess-2's row bind the SAME chat for the same plugin+instance under different
+    // provider conversations (e.g. the provider opened a fresh conversation after the re-pair).
+    await service.upsert(key, 'conv-1');
+    await service.upsert(
+      { sessionId: 'sess-2', chatId: 'chat-1', pluginId: 'chatwoot', instanceId: 'acct1' },
+      'conv-2',
+    );
+    const stale = await service.get(key);
+    if (!stale) throw new Error('expected a stale mapping row');
+
+    await service.rebindSession(stale.id, 'sess-2');
+
+    // The forward-key collision is resolved in favor of sess-2's own (fresher) row; the stale one is gone.
+    expect(await service.getByProvider('chatwoot', 'acct1', 'conv-1')).toBeNull();
+    expect((await service.getByProvider('chatwoot', 'acct1', 'conv-2'))?.sessionId).toBe('sess-2');
+  });
 });

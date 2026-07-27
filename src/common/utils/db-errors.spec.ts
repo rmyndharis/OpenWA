@@ -31,6 +31,24 @@ describe('isMissingTableError', () => {
     expect(isMissingTableError(raw)).toBe(true);
   });
 
+  it('classifies a cross-realm-shaped error by name + message (NOT an Error instance)', () => {
+    // better-sqlite3's native addon is cached process-wide, so under a multi-registry jest run a genuine
+    // SqliteError can arrive rooted in another realm's Error — `instanceof` must not decide this. A plain
+    // object with the right shape classifies exactly like the real thing, and so does a QueryFailedError
+    // from a second copy of typeorm.
+    const rawSqlite = { name: 'SqliteError', message: 'no such table: templates', code: 'SQLITE_ERROR' };
+    expect(isMissingTableError(rawSqlite)).toBe(true);
+    const wrappedPg = {
+      name: 'QueryFailedError',
+      message: 'relation "templates" does not exist',
+      driverError: { code: '42P01', message: 'relation "templates" does not exist' },
+    };
+    expect(isMissingTableError(wrappedPg)).toBe(true);
+    expect(
+      isUniqueViolation({ name: 'QueryFailedError', message: 'duplicate key', driverError: { code: '23505' } }),
+    ).toBe(true);
+  });
+
   it('does NOT treat a genuine SQLite failure as missing-table (it must surface)', () => {
     // A lock/IO error and a syntax error both need to propagate — swallowing them is the very bug this
     // classifier exists to prevent. Note the syntax error shares the generic SQLITE_ERROR code.

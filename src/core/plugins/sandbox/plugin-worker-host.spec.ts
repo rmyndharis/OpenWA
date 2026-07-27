@@ -213,7 +213,7 @@ describe('PluginWorkerHost', () => {
         // maxInFlightCaps = 1 (7th arg) so the freed slot is observable; capTimeoutMs = 100 (10th arg).
         new PluginWorkerHost(ch, dispatcher, undefined, undefined, onLog, undefined, 1, undefined, undefined, 100);
 
-        ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: [] });
+        ch.reply({ kind: 'cap', id: 1, verb: 'engine.getContacts', args: [] });
         await microFlush();
         expect(dispatcher).toHaveBeenCalledTimes(1);
 
@@ -227,7 +227,7 @@ describe('PluginWorkerHost', () => {
         expect(timedOut?.error).toMatch(/timed out after 100ms/);
 
         // The slot is freed: a fresh call dispatches immediately and resolves normally.
-        ch.reply({ kind: 'cap', id: 2, verb: 'messages.sendText', args: [] });
+        ch.reply({ kind: 'cap', id: 2, verb: 'engine.getContacts', args: [] });
         await microFlush();
         expect(dispatcher).toHaveBeenCalledTimes(2);
         expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 2)).toMatchObject({ ok: true });
@@ -240,8 +240,81 @@ describe('PluginWorkerHost', () => {
         expect(onLog).toHaveBeenCalledWith(
           'warn',
           expect.stringMatching(/late result was discarded/),
-          expect.objectContaining({ action: 'sandbox_cap_late_settle', verb: 'messages.sendText' }),
+          expect.objectContaining({ action: 'sandbox_cap_late_settle', verb: 'engine.getContacts' }),
         );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('gives a send verb a wider budget: a send outrunning the base budget still reports success', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        // A send that runs longer than the base budget but inside the send budget must NOT be
+        // reported as failed to the worker (the send would still land → a retry would duplicate it).
+        let settleSend: (v: unknown) => void = () => undefined;
+        const dispatcher = jest.fn().mockImplementation(() => new Promise(r => (settleSend = r)));
+        const onLog = jest.fn();
+        // capTimeoutMs = 100 (10th arg) → send budget 400.
+        new PluginWorkerHost(
+          ch,
+          dispatcher,
+          undefined,
+          undefined,
+          onLog,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          100,
+        );
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'conversation.send', args: [{ type: 'image' }] });
+        await microFlush();
+        jest.advanceTimersByTime(100); // a lookup would be timed out here
+        await microFlush();
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toBeUndefined();
+
+        settleSend({ messageId: 'wamid' }); // lands at ~100ms, inside the send budget
+        await microFlush();
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toMatchObject({
+          ok: true,
+          result: { messageId: 'wamid' },
+        });
+        jest.advanceTimersByTime(1000); // the timer was cleared — no late timeout, no warn
+        await microFlush();
+        expect(onLog).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('still bounds a wedged send — it times out at the send budget and frees the slot', async () => {
+      jest.useFakeTimers();
+      try {
+        const ch = new FakeChannel();
+        const dispatcher = jest.fn().mockImplementation(() => new Promise(() => undefined)); // never settles
+        const onLog = jest.fn();
+        // maxInFlightCaps = 1 (7th arg) so the freed slot is observable; capTimeoutMs = 100 → send budget 400.
+        new PluginWorkerHost(ch, dispatcher, undefined, undefined, onLog, undefined, 1, undefined, undefined, 100);
+
+        ch.reply({ kind: 'cap', id: 1, verb: 'messages.sendText', args: ['s1', 'c1', 'hi'] });
+        await microFlush();
+        jest.advanceTimersByTime(399);
+        await microFlush();
+        expect(ch.sent.find(m => m.kind === 'cap-result' && m.id === 1)).toBeUndefined();
+
+        jest.advanceTimersByTime(1); // 400: the send budget elapses
+        await microFlush();
+        const timedOut = ch.sent.find(m => m.kind === 'cap-result' && m.id === 1) as
+          { ok: boolean; error?: string } | undefined;
+        expect(timedOut?.ok).toBe(false);
+        expect(timedOut?.error).toMatch(/timed out after 400ms/);
+
+        ch.reply({ kind: 'cap', id: 2, verb: 'engine.getContacts', args: [] });
+        await microFlush();
+        expect(dispatcher).toHaveBeenCalledTimes(2); // slot freed at the send timeout
       } finally {
         jest.useRealTimers();
       }

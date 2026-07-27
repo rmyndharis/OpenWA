@@ -211,9 +211,41 @@ export class StorageService implements OnModuleDestroy {
 
   async listFiles(): Promise<string[]> {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      return this.listS3Files();
+      // Union with the local fallback dir: media written locally while S3 was down is otherwise
+      // invisible to enumeration — getFile reads through to it, so a listing that omits it
+      // contradicts what reads serve, and a sweep reconciling against this listing could never
+      // reclaim it.
+      const files = new Set(await this.listS3Files());
+      for (const file of await this.listLocalFiles()) files.add(file);
+      return [...files];
     }
     return this.listLocalFiles();
+  }
+
+  /**
+   * Enumerate every file in the store (all S3 pages unioned with the local fallback dir, each key
+   * once) as a stream — unlike listFiles(), whose STORAGE_LIST_MAX_FILES truncation is a per-call
+   * DoS guard, not a completeness contract. Callers that must reconcile against the full store
+   * (e.g. the status-media orphan sweep) should iterate this instead of a single capped listing.
+   *
+   * `prefix` narrows the walk at the source — the S3 ListObjectsV2 prefix and the local traversal
+   * root — so a caller reconciling one subtree neither pages the whole store nor holds every key
+   * of it in the dedupe Set. Removing the per-call cap must not trade one unbounded read for
+   * another.
+   */
+  async *iterateFiles(prefix = ''): AsyncGenerator<string> {
+    if (this.storageType === 's3' && this.s3Client && this.s3Available) {
+      const seen = new Set<string>();
+      for await (const file of this.iterateS3Files(prefix)) {
+        seen.add(file);
+        yield file;
+      }
+      for await (const file of this.iterateLocalFiles(prefix)) {
+        if (!seen.has(file)) yield file;
+      }
+      return;
+    }
+    yield* this.iterateLocalFiles(prefix);
   }
 
   async getFile(filePath: string): Promise<Buffer> {
@@ -242,16 +274,19 @@ export class StorageService implements OnModuleDestroy {
 
   /**
    * Delete a file previously written via `putFile`. Same unsafe-key guard as `getFile`/`putFile` (both
-   * backends key off it, S3's has no host filesystem to check `isPathWithin` against). Missing-file is
-   * treated as success on both backends (local: ENOENT is swallowed; S3 DeleteObject is idempotent by
-   * design) so a caller doesn't have to special-case "already gone".
+   * backends key off it, S3's has no host filesystem to check `isPathWithin` against). When S3 is
+   * active the key is deleted from BOTH backends — delete-through, symmetric with getFile's
+   * read-through: the key may exist only in the local fallback dir (written during an S3 outage),
+   * and deleting just the S3 object would orphan those bytes permanently once the caller drops its
+   * DB reference. Missing-file is treated as success on both backends (local: ENOENT is swallowed;
+   * S3 DeleteObject is idempotent by design) so a caller doesn't have to special-case "already gone".
    */
   async deleteFile(filePath: string): Promise<void> {
     if (!isSafeStorageKey(filePath)) {
       throw new Error(`Refusing to delete an unsafe storage key: ${filePath}`);
     }
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      return this.deleteS3File(filePath);
+      await this.deleteS3File(filePath);
     }
     return this.deleteLocalFile(filePath);
   }
@@ -260,7 +295,21 @@ export class StorageService implements OnModuleDestroy {
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
       // ListObjectsV2 already returns each object's Size, so report the real total instead of a
       // 100KB-per-file estimate — no extra API calls beyond the listing we'd do anyway.
-      return this.getS3CountAndSize();
+      const s3 = await this.getS3CountAndSize();
+      // Union with the local fallback dir (same split-brain gap as listFiles): a local-only file
+      // counts with its real on-disk size; for a key present in both, the S3 copy is authoritative.
+      const s3Keys = new Set(s3.keys);
+      let { count, sizeBytes } = s3;
+      for await (const file of this.iterateLocalFiles()) {
+        if (s3Keys.has(file)) continue;
+        count += 1;
+        try {
+          sizeBytes += fs.statSync(path.join(this.localPath, file)).size;
+        } catch (error) {
+          this.logger.debug(`Failed to stat file: ${file}`, { error: String(error) });
+        }
+      }
+      return { count, sizeBytes };
     }
 
     const files = await this.listFiles();
@@ -278,9 +327,12 @@ export class StorageService implements OnModuleDestroy {
     return { count: files.length, sizeBytes };
   }
 
-  private async getS3CountAndSize(): Promise<{ count: number; sizeBytes: number }> {
+  private async getS3CountAndSize(): Promise<{ count: number; sizeBytes: number; keys: string[] }> {
     let count = 0;
     let sizeBytes = 0;
+    // Keys (prefix-stripped) are kept so getFileCount can union the local fallback dir without a
+    // second listing.
+    const keys: string[] = [];
     let continuationToken: string | undefined;
 
     do {
@@ -295,12 +347,13 @@ export class StorageService implements OnModuleDestroy {
       for (const obj of response.Contents ?? []) {
         count += 1;
         sizeBytes += obj.Size ?? 0;
+        if (obj.Key) keys.push(obj.Key.replace(/^media\//, ''));
       }
 
       continuationToken = response.NextContinuationToken;
     } while (continuationToken);
 
-    return { count, sizeBytes };
+    return { count, sizeBytes, keys };
   }
 
   // ============================================================================
@@ -449,16 +502,31 @@ export class StorageService implements OnModuleDestroy {
   // ============================================================================
 
   /**
-   * Enumerate local files under the storage root. Async + iterative (a work queue, not recursion)
-   * so a deep/wide media tree can't block the event loop or stack-overflow. Bounded by a max file
-   * count and a max directory depth; a tree exceeding either is truncated rather than enumerated in
-   * full (these are defense-in-depth caps — a healthy media store stays well under both).
+   * Enumerate local files under the storage root, capped at STORAGE_LIST_MAX_FILES — a per-call
+   * DoS guard (a healthy media store stays well under it), NOT a completeness contract. Callers
+   * that must see the whole tree use iterateFiles().
    */
   private async listLocalFiles(): Promise<string[]> {
     const maxFiles = positiveIntFromEnv('STORAGE_LIST_MAX_FILES', DEFAULT_LIST_MAX_FILES);
     const files: string[] = [];
-    // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth.
-    const queue: Array<{ dir: string; depth: number }> = [{ dir: '', depth: 0 }];
+    for await (const file of this.iterateLocalFiles()) {
+      files.push(file);
+      if (files.length >= maxFiles) break; // cap reached — stop early
+    }
+    return files;
+  }
+
+  /**
+   * Full local enumeration as a stream — no count cap. Async + iterative (a work queue, not
+   * recursion) so a deep/wide media tree can't block the event loop or stack-overflow; still
+   * bounded by the max directory depth so a pathological tree can't descend unbounded.
+   */
+  private async *iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
+    // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth. A prefix
+    // ending in '/' names a subtree, so start the walk there instead of filtering afterwards.
+    const root = prefix.endsWith('/') ? prefix.slice(0, -1) : '';
+    if (root && !isPathWithin(this.localPath, root)) return;
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
 
     while (queue.length > 0) {
       const { dir, depth } = queue.shift()!;
@@ -477,13 +545,10 @@ export class StorageService implements OnModuleDestroy {
         if (entry.isDirectory()) {
           queue.push({ dir: relativePath, depth: depth + 1 });
         } else if (entry.isFile()) {
-          files.push(relativePath);
-          if (files.length >= maxFiles) return files; // cap reached — stop early
+          yield relativePath;
         }
       }
     }
-
-    return files;
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {
@@ -525,33 +590,35 @@ export class StorageService implements OnModuleDestroy {
   // ============================================================================
 
   private async listS3Files(): Promise<string[]> {
-    if (!this.s3Client) return [];
-
     const files: string[] = [];
+    for await (const file of this.iterateS3Files()) files.push(file);
+    return files;
+  }
+
+  /** Stream every S3 object key (prefix-stripped), following the ListObjectsV2 pagination token. */
+  private async *iterateS3Files(prefix = ''): AsyncGenerator<string> {
+    if (!this.s3Client) return;
+
     let continuationToken: string | undefined;
 
     do {
       const response = await this.s3Client.send(
         new ListObjectsV2Command({
           Bucket: this.s3Bucket,
-          Prefix: 'media/',
+          Prefix: `media/${prefix}`,
           ContinuationToken: continuationToken,
         }),
       );
 
-      if (response.Contents) {
-        for (const obj of response.Contents) {
-          if (obj.Key) {
-            // Remove 'media/' prefix
-            files.push(obj.Key.replace(/^media\//, ''));
-          }
+      for (const obj of response.Contents ?? []) {
+        if (obj.Key) {
+          // Remove 'media/' prefix
+          yield obj.Key.replace(/^media\//, '');
         }
       }
 
       continuationToken = response.NextContinuationToken;
     } while (continuationToken);
-
-    return files;
   }
 
   private async getS3File(filePath: string): Promise<Buffer> {

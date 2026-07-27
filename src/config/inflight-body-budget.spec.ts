@@ -13,6 +13,8 @@ const MB = 1024 * 1024;
 const makeReq = (headers: Record<string, string> = {}): Request & EventEmitter => {
   const req = new EventEmitter() as unknown as Request & EventEmitter;
   (req as unknown as { headers: Record<string, string> }).headers = headers;
+  (req as unknown as { socket: { bytesRead: number } }).socket = { bytesRead: 0 };
+  (req as unknown as { destroy: jest.Mock }).destroy = jest.fn();
   return req;
 };
 
@@ -20,6 +22,8 @@ const makeRes = () => {
   const state = { code: 0, payload: undefined as unknown };
   const headers: Record<string, string> = {};
   const res = Object.assign(new EventEmitter(), {
+    headersSent: false,
+    writableEnded: false,
     status(code: number) {
       state.code = code;
       return res;
@@ -180,48 +184,69 @@ describe('createInflightBodyBudget middleware', () => {
     expect(budget.currentBytes()).toBe(0);
   });
 
-  it('counts actual bytes for requests without a Content-Length and releases on completion', () => {
+  it('takes only an opening placeholder for chunk-encoded bodies and releases it on completion', () => {
     const budget = createInflightBodyBudget(1000);
-    const req = makeReq(); // chunked / close-delimited: nothing declared
+    const req = makeReq({ 'transfer-encoding': 'chunked' });
     const { res, next } = run(budget, req);
 
     expect(next).toHaveBeenCalledTimes(1);
-    expect(budget.currentBytes()).toBe(0);
-
-    req.emit('data', Buffer.alloc(300));
-    expect(budget.currentBytes()).toBe(300);
-    req.emit('data', Buffer.alloc(300));
-    expect(budget.currentBytes()).toBe(600);
+    // Capped by the budget here (1 MiB placeholder > the 1000-byte test budget); the poller
+    // reconciles it against real bytes, so a chunked body is never priced at a full slot.
+    expect(budget.currentBytes()).toBe(1000);
+    // The middleware must never tap the stream: a 'data' listener would switch it to flowing
+    // mode and eat chunks before a late consumer (busboy attaches only after async guards).
+    expect(req.listenerCount('data')).toBe(0);
 
     res.emit('finish');
     expect(budget.currentBytes()).toBe(0);
   });
 
-  it('aborts an un-declared upload mid-stream when it pushes the aggregate over budget', () => {
+  it('does not price a small chunked body at a whole per-request slot', () => {
+    // Regression: reserving budget/4 up front turned the byte budget into a concurrency limit of 4
+    // for chunked senders — four 6-byte uploads refused every further body-carrying request.
+    const budget = createInflightBodyBudget(64 * 1024 * 1024);
+    for (let i = 0; i < 8; i++) {
+      const { next } = run(budget, makeReq({ 'transfer-encoding': 'chunked' }));
+      expect(next).toHaveBeenCalledTimes(1);
+    }
+    expect(budget.currentBytes()).toBe(8 * 1024 * 1024); // 8 × the 1 MiB placeholder, not 8 × 16 MiB
+  });
+
+  it('still refuses an un-declared body once the aggregate is exhausted', () => {
+    const budget = createInflightBodyBudget(2 * 1024 * 1024);
+    for (let i = 0; i < 2; i++) {
+      expect(run(budget, makeReq({ 'transfer-encoding': 'chunked' })).next).toHaveBeenCalledTimes(1);
+    }
+    const third = run(budget, makeReq({ 'transfer-encoding': 'chunked' }));
+    expect(third.next).not.toHaveBeenCalled();
+    expect(third.state.code).toBe(503);
+  });
+
+  it('reserves nothing for requests with neither Content-Length nor Transfer-Encoding', () => {
     const budget = createInflightBodyBudget(1000);
+    run(budget, makeReq({ 'content-length': '1000' }));
+    // No body expected (health checks, GETs): admitted even with the budget fully reserved.
+    const req = makeReq();
+    const { next } = run(budget, req);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(1000);
+    expect(req.listenerCount('data')).toBe(0);
+  });
 
-    const reqA = makeReq();
-    const { res: resA } = run(budget, reqA);
-    reqA.emit('data', Buffer.alloc(600));
-    expect(budget.currentBytes()).toBe(600);
+  it('drops the socket instead of writing a 503 when the response is already flushing', () => {
+    const budget = createInflightBodyBudget(1000);
+    run(budget, makeReq({ 'content-length': '800' }));
 
-    const reqB = makeReq();
-    const { res: resB, headers: headersB, state: stateB } = run(budget, reqB);
-    reqB.emit('data', Buffer.alloc(500)); // 600 + 500 > 1000 → abort B, keep A's accounting
+    const req = makeReq({ 'content-length': '300' });
+    const mock = makeRes();
+    (mock.res as unknown as { headersSent: boolean }).headersSent = true;
+    const next = jest.fn();
 
-    expect(stateB.code).toBe(503);
-    expect(headersB['retry-after']).toBe('1');
-    expect(budget.currentBytes()).toBe(600);
-
-    // After the abort, B is fully released: more incoming bytes are not counted and B's later
-    // terminal events cannot decrement a second time.
-    reqB.emit('data', Buffer.alloc(100));
-    resB.emit('finish');
-    reqB.emit('close');
-    expect(budget.currentBytes()).toBe(600);
-
-    resA.emit('finish');
-    expect(budget.currentBytes()).toBe(0);
+    expect(() => budget.middleware(req, mock.res, next)).not.toThrow();
+    expect(next).not.toHaveBeenCalled();
+    expect((req as unknown as { destroy: jest.Mock }).destroy).toHaveBeenCalledTimes(1);
+    expect(mock.state.code).toBe(0); // no second response attempted
+    expect(budget.currentBytes()).toBe(800); // nothing reserved for the rejected request
   });
 
   it('reuses freed budget for the next request (no leak across a full lifecycle)', () => {
@@ -233,5 +258,135 @@ describe('createInflightBodyBudget middleware', () => {
       res.emit('finish');
       expect(budget.currentBytes()).toBe(0);
     }
+  });
+});
+
+describe('stall reaper', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const destroyMock = (req: Request): jest.Mock => (req as unknown as { destroy: jest.Mock }).destroy;
+
+  it('reaps a stalled declared-length connection and releases its reservation', () => {
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'content-length': '400' });
+    run(budget, req);
+    expect(budget.currentBytes()).toBe(400);
+
+    // Headers sent, then silence: the reservation must not survive the stall timeout.
+    jest.advanceTimersByTime(60_000);
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(0);
+
+    // The freed budget is immediately usable again.
+    const { next } = run(budget, makeReq({ 'content-length': '400' }));
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(400);
+  });
+
+  it('reaps a stalled chunk-encoded connection the same way', () => {
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'transfer-encoding': 'chunked' });
+    run(budget, req);
+    expect(budget.currentBytes()).toBe(1000);
+
+    jest.advanceTimersByTime(60_000);
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('does not reap a connection that keeps making progress, however slow', () => {
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'content-length': '400' });
+    run(budget, req);
+    const socket = (req as unknown as { socket: { bytesRead: number } }).socket;
+
+    // Well past the stall timeout in total, but never idle for a whole timeout window.
+    for (let i = 0; i < 20; i++) {
+      jest.advanceTimersByTime(4_000);
+      socket.bytesRead += 10; // stays below the declared 400, so only progress keeps it alive
+    }
+    expect(destroyMock(req)).not.toHaveBeenCalled();
+    expect(budget.currentBytes()).toBe(400);
+  });
+
+  it('stops reaping once the declared body has fully arrived', () => {
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'content-length': '400' });
+    const { res } = run(budget, req);
+    (req as unknown as { socket: { bytesRead: number } }).socket.bytesRead = 400;
+
+    jest.advanceTimersByTime(120_000); // body arrived; a slow handler is not a stalled sender
+    expect(destroyMock(req)).not.toHaveBeenCalled();
+    expect(budget.currentBytes()).toBe(400);
+
+    res.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('stops reaping once the downstream consumer finished reading (end)', () => {
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'transfer-encoding': 'chunked' });
+    const { res } = run(budget, req);
+
+    req.emit('end');
+    jest.advanceTimersByTime(120_000);
+    expect(destroyMock(req)).not.toHaveBeenCalled();
+    expect(budget.currentBytes()).toBe(1000);
+
+    res.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('reconciles a chunked reservation with the bytes that actually arrive', () => {
+    const budget = createInflightBodyBudget(64 * 1024 * 1024);
+    const req = makeReq({ 'transfer-encoding': 'chunked' });
+    run(budget, req);
+    expect(budget.currentBytes()).toBe(1024 * 1024); // opening placeholder
+
+    const socket = (req as unknown as { socket: { bytesRead: number } }).socket;
+    socket.bytesRead = 5 * 1024 * 1024;
+    jest.advanceTimersByTime(5_000);
+    expect(budget.currentBytes()).toBe(5 * 1024 * 1024); // now priced at its real weight
+  });
+
+  it('aborts an un-declared body that streams past the aggregate budget', () => {
+    const budget = createInflightBodyBudget(2 * 1024 * 1024);
+    const req = makeReq({ 'transfer-encoding': 'chunked' });
+    run(budget, req);
+
+    (req as unknown as { socket: { bytesRead: number } }).socket.bytesRead = 3 * 1024 * 1024;
+    jest.advanceTimersByTime(5_000);
+    expect(destroyMock(req)).toHaveBeenCalledTimes(1);
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('does not reap a fully-received request whose body no parser consumed', () => {
+    // The body can arrive in the same segment as the headers, so socket.bytesRead never moves again
+    // and 'end' never fires when no parser reads the stream. Killing that request at the stall
+    // timeout would drop a healthy connection mid-handler.
+    const budget = createInflightBodyBudget(1000);
+    const req = makeReq({ 'content-length': '400' });
+    const { res } = run(budget, req);
+    (req as unknown as { complete: boolean }).complete = true;
+
+    jest.advanceTimersByTime(120_000);
+    expect(destroyMock(req)).not.toHaveBeenCalled();
+    expect(budget.currentBytes()).toBe(400);
+
+    res.emit('finish');
+    expect(budget.currentBytes()).toBe(0);
+  });
+
+  it('never arms the reaper for requests without a body', () => {
+    const budget = createInflightBodyBudget(1000);
+    const getReq = makeReq();
+    const emptyReq = makeReq({ 'content-length': '0' });
+    run(budget, getReq);
+    run(budget, emptyReq);
+
+    jest.advanceTimersByTime(120_000);
+    expect(destroyMock(getReq)).not.toHaveBeenCalled();
+    expect(destroyMock(emptyReq)).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import configuration from './configuration';
+import configuration, { resolveNonNegativeIntEnv } from './configuration';
 
 describe('configuration — main DB synchronize', () => {
   const orig = process.env.MAIN_DATABASE_SYNCHRONIZE;
@@ -236,5 +236,74 @@ describe('configuration stats namespace', () => {
     expect(configuration().stats.cacheTtlMs).toBe(0);
     process.env.STATS_CACHE_TTL_MS = '60000';
     expect(configuration().stats.cacheTtlMs).toBe(60000);
+  });
+});
+
+describe('configuration — webhook payload cap is fail-safe', () => {
+  const orig = process.env.WEBHOOK_MAX_PAYLOAD_BYTES;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WEBHOOK_MAX_PAYLOAD_BYTES;
+    else process.env.WEBHOOK_MAX_PAYLOAD_BYTES = orig;
+  });
+
+  it('defaults to 1 MiB and honors a valid positive override', () => {
+    delete process.env.WEBHOOK_MAX_PAYLOAD_BYTES;
+    expect(configuration().webhook.maxPayloadBytes).toBe(1024 * 1024);
+    process.env.WEBHOOK_MAX_PAYLOAD_BYTES = '2097152';
+    expect(configuration().webhook.maxPayloadBytes).toBe(2097152);
+  });
+
+  it('falls back to the default on empty, garbage, zero, or negative values', () => {
+    // 0 is NOT an opt-out here (a 0-byte cap rejects every dispatch — a total webhook outage),
+    // and a NaN would silently disable the cap (`payloadBytes > NaN` is always false).
+    for (const bad of ['', 'abc', '0', '-1']) {
+      process.env.WEBHOOK_MAX_PAYLOAD_BYTES = bad;
+      expect(configuration().webhook.maxPayloadBytes).toBe(1024 * 1024);
+    }
+  });
+});
+
+describe('configuration — webhook shutdown drain is fail-safe', () => {
+  const orig = process.env.WEBHOOK_SHUTDOWN_DRAIN_MS;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WEBHOOK_SHUTDOWN_DRAIN_MS;
+    else process.env.WEBHOOK_SHUTDOWN_DRAIN_MS = orig;
+  });
+
+  it('defaults to 5000 and honors a valid override, incl. an explicit 0 (no wait)', () => {
+    delete process.env.WEBHOOK_SHUTDOWN_DRAIN_MS;
+    expect(configuration().webhook.shutdownDrainMs).toBe(5000);
+    process.env.WEBHOOK_SHUTDOWN_DRAIN_MS = '10000';
+    expect(configuration().webhook.shutdownDrainMs).toBe(10000);
+    process.env.WEBHOOK_SHUTDOWN_DRAIN_MS = '0';
+    expect(configuration().webhook.shutdownDrainMs).toBe(0);
+  });
+
+  it('falls back to the default on blank or garbage (a NaN would remove the drain deadline)', () => {
+    for (const bad of ['', '   ', 'abc', '1e4']) {
+      process.env.WEBHOOK_SHUTDOWN_DRAIN_MS = bad;
+      expect(configuration().webhook.shutdownDrainMs).toBe(5000);
+    }
+  });
+});
+
+describe('resolveNonNegativeIntEnv', () => {
+  it('treats blank/whitespace as unset and falls back (never the 0 opt-out sentinel)', () => {
+    // Number('') is 0, which would otherwise pass a finite && >= 0 guard and silently land on
+    // the documented 0 = unlimited/disabled sentinel.
+    expect(resolveNonNegativeIntEnv(undefined, 5000)).toBe(5000);
+    expect(resolveNonNegativeIntEnv('', 5000)).toBe(5000);
+    expect(resolveNonNegativeIntEnv('   ', 5000)).toBe(5000);
+  });
+
+  it('reserves 0 for an explicit opt-out and honors valid values', () => {
+    expect(resolveNonNegativeIntEnv('0', 5000)).toBe(0);
+    expect(resolveNonNegativeIntEnv('250', 5000)).toBe(250);
+  });
+
+  it('falls back on garbage and non-decimal spellings (matching the boot validator)', () => {
+    for (const bad of ['abc', '-1', '1.5', '1e6', '0x100']) {
+      expect(resolveNonNegativeIntEnv(bad, 5000)).toBe(5000);
+    }
   });
 });

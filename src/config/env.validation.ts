@@ -127,10 +127,16 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     }
   }
 
+  // Plain decimal digits only: these numeric knobs are read downstream with parseInt(raw, 10),
+  // which silently truncates spellings Number() would accept (`1e6` → 1, `0x100` → 0) — the boot
+  // would validate one value and then configure another. Requiring digits keeps the validated
+  // value identical to the parsed one.
+  const DECIMAL_INTEGER = /^\d+$/;
+
   const checkPort = (key: string): void => {
     const raw = str(key);
     if (raw === undefined) return;
-    const n = Number(raw);
+    const n = DECIMAL_INTEGER.test(raw) ? Number(raw) : NaN;
     if (!Number.isInteger(n) || n < 1 || n > 65535) {
       errors.push(`${key} must be an integer port in [1, 65535] (got "${raw}")`);
     }
@@ -144,7 +150,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   const checkNonNegativeInt = (key: string): void => {
     const raw = str(key);
     if (raw === undefined) return;
-    const n = Number(raw);
+    const n = DECIMAL_INTEGER.test(raw) ? Number(raw) : NaN;
     if (!Number.isInteger(n) || n < 0) {
       errors.push(`${key} must be a non-negative integer (got "${raw}")`);
     }
@@ -175,7 +181,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
   const checkPositiveInt = (key: string): void => {
     const raw = str(key);
     if (raw === undefined) return;
-    const n = Number(raw);
+    const n = DECIMAL_INTEGER.test(raw) ? Number(raw) : NaN;
     if (!Number.isInteger(n) || n < 1) {
       errors.push(`${key} must be a positive integer (got "${raw}")`);
     }
@@ -196,6 +202,8 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'HEADERS_TIMEOUT_MS',
     'KEEPALIVE_TIMEOUT_MS',
     'WEBHOOK_DISPATCH_CONCURRENCY',
+    // 0 would reject every webhook dispatch (a total, silent webhook outage).
+    'WEBHOOK_MAX_PAYLOAD_BYTES',
     // 0 would refuse every request carrying a body (a self-DoS), so the budget is positive-only.
     'INFLIGHT_BODY_BUDGET_BYTES',
   ]) {

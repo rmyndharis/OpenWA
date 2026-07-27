@@ -7141,7 +7141,7 @@
             "description": "Custom batch ID (auto-generated if not provided)"
           },
           "messages": {
-            "description": "Array of messages (max 100 per request; duplicate chatIds are collapsed — first occurrence wins)",
+            "description": "Array of messages (max 100 per request; exact duplicate entries are collapsed — first occurrence wins)",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BulkMessageItemDto"
@@ -7766,7 +7766,7 @@
         "properties": {
           "url": {
             "type": "string",
-            "description": "HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is executable code, so it must be integrity-protected in transit (hosts on private networks remain subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never sent to the server) or `?sha256=<64 hex>` to require the downloaded archive to match that digest; a mismatch fails the install."
+            "description": "HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is executable code, so it must be integrity-protected in transit (hosts on private networks remain subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never sent to the server; query params are ignored) to require the downloaded archive to match that digest; a mismatch fails the install."
           }
         },
         "required": [

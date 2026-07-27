@@ -2,6 +2,21 @@ import { computeFeatureFlags } from './feature-flags';
 import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
 import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 
+/**
+ * Shared parser for numeric env knobs whose 0 is a documented opt-out (unlimited / disabled).
+ * `Number('')` is 0, so a blank or whitespace-only value — exactly what a compose `${KEY:-}`
+ * forward renders — would otherwise pass every `Number.isFinite(x) && x >= 0` guard and land
+ * silently on the opt-out sentinel (disabling a memory cap, a reaper, a retry backoff). Blank
+ * means "unset": fall back to the default; 0 stays reserved for an explicit opt-out. The value
+ * must be a plain decimal integer — the same rule env.validation.ts enforces — so the validated
+ * and the parsed value always agree (`parseInt('1e6', 10)` would silently read 1).
+ */
+export function resolveNonNegativeIntEnv(raw: string | undefined, fallback: number): number {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return fallback;
+  return Number(trimmed);
+}
+
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
 
@@ -156,8 +171,15 @@ export default () => ({
     // webhook_delivery_failures instead of retaining payload closures without limit.
     dispatchMaxQueued: parseInt(process.env.WEBHOOK_DISPATCH_MAX_QUEUED || '1000', 10),
     // Upper bound on the serialized webhook body after webhook:before hooks ran; oversize payloads
-    // are recorded as undelivered instead of being sent/persisted. Default 1 MiB.
-    maxPayloadBytes: parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES || '1048576', 10),
+    // are recorded as undelivered instead of being sent/persisted. Default 1 MiB. Fail-safe like the
+    // other byte caps: a non-numeric or non-positive value falls back to the default. 0 is NOT an
+    // opt-out here — a 0-byte cap rejects every dispatch (a total webhook outage), and a NaN would
+    // silently disable the cap (`payloadBytes > NaN` is always false). env.validation rejects
+    // non-decimal / non-positive values at boot.
+    maxPayloadBytes: (() => {
+      const n = parseInt(process.env.WEBHOOK_MAX_PAYLOAD_BYTES ?? '', 10);
+      return Number.isFinite(n) && n > 0 ? n : 1024 * 1024;
+    })(),
     // Max webhooks registered per session. One inbound event fans out to every registered webhook
     // of the session, so an unbounded count multiplies per-event copies of the payload. Creating a
     // NEW webhook above the cap is rejected with 400; existing ones are grandfathered (never
@@ -176,7 +198,9 @@ export default () => ({
       return Number.isFinite(n) && n >= 0 ? n : 1024 * 1024;
     })(),
     // How long shutdown waits for in-flight direct deliveries to finish before abandoning them.
-    shutdownDrainMs: parseInt(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS || '5000', 10),
+    // 0 = don't wait (explicit opt-out); blank/garbage falls back to the default — a NaN here would
+    // silently remove the drain deadline downstream (Math.max(0, NaN) is NaN).
+    shutdownDrainMs: resolveNonNegativeIntEnv(process.env.WEBHOOK_SHUTDOWN_DRAIN_MS, 5000),
   },
 
   // API configuration

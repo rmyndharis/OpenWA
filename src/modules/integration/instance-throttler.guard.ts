@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ProxyAwareThrottlerGuard } from '../../common/security/proxy-aware-throttler.guard';
+import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 /**
  * Rate-limit bucket keyed on the ingress route's (pluginId, instanceId) instead of the client IP.
@@ -24,11 +25,16 @@ import { ProxyAwareThrottlerGuard } from '../../common/security/proxy-aware-thro
 export class InstanceThrottlerGuard extends ProxyAwareThrottlerGuard {
   async onModuleInit(): Promise<void> {
     await super.onModuleInit();
+    // `??` only defaults on undefined, so a blank compose `${KEY:-}` forward used to reach
+    // `Number('')` === 0 — a limit of 0 rejects the very first hit, silently 429ing EVERY inbound
+    // webhook. Boot validation cannot catch it either (env.validation treats a blank value as
+    // unset). resolveNonNegativeIntEnv treats blank as unset and only accepts plain decimals; an
+    // explicit 0 is still rejected at boot by the positive-int check on INGRESS_INSTANCE_LIMIT.
     this.throttlers = [
       {
         name: 'instance',
-        limit: Number(process.env.INGRESS_INSTANCE_LIMIT ?? 120),
-        ttl: Number(process.env.INGRESS_INSTANCE_TTL ?? 60000),
+        limit: resolveNonNegativeIntEnv(process.env.INGRESS_INSTANCE_LIMIT, 120),
+        ttl: resolveNonNegativeIntEnv(process.env.INGRESS_INSTANCE_TTL, 60000),
       },
     ];
   }

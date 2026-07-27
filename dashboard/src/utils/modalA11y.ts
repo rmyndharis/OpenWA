@@ -9,6 +9,12 @@
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// Stack of currently-open dialogs, most recently opened last. Every binder listens for keydown on
+// the same document in the capture phase, and stopPropagation() does NOT stop same-target
+// listeners — so without this stack, Escape inside a nested dialog also closes the parent and
+// loses its form input. Only the topmost entry owns Escape.
+const modalStack: object[] = [];
+
 function visibleFocusables(card: HTMLElement): HTMLElement[] {
   return Array.from(card.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null);
 }
@@ -28,8 +34,13 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
   const previouslyFocused =
     active && typeof (active as HTMLElement).focus === 'function' ? (active as HTMLElement) : null;
 
+  const stackEntry = {};
+  modalStack.push(stackEntry);
+
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
+      // A nested dialog is open above this one — it owns Escape (see modalStack).
+      if (modalStack[modalStack.length - 1] !== stackEntry) return;
       // Capture phase: nested widgets (selects, menus) may also listen for Escape — the dialog
       // owns dismissal while it is open.
       event.stopPropagation();
@@ -57,6 +68,8 @@ export function bindModalA11y(doc: Document, card: HTMLElement, onClose: () => v
   (visibleFocusables(card)[0] ?? card).focus();
 
   return () => {
+    const stackIndex = modalStack.indexOf(stackEntry);
+    if (stackIndex !== -1) modalStack.splice(stackIndex, 1);
     doc.removeEventListener('keydown', onKeyDown, true);
     doc.body.style.overflow = previousOverflow;
     // Restore focus to the trigger — unless it left the document while the dialog was open

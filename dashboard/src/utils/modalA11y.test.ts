@@ -168,3 +168,39 @@ test('cleanup removes the keydown listener (no stray closes after unmount)', () 
   doc.dispatchKey(makeKeyEvent('Escape'));
   assert.equal(closed, 0);
 });
+
+test('nested dialogs: Escape closes only the topmost; the parent closes once it is topmost again', () => {
+  const { doc, card } = makeWorld();
+  let parentClosed = 0;
+  let nestedClosed = 0;
+  const unbindParent = bindModalA11y(doc as never, card as never, () => parentClosed++);
+  const unbindNested = bindModalA11y(doc as never, card as never, () => nestedClosed++);
+
+  const first = makeKeyEvent('Escape');
+  doc.dispatchKey(first);
+  assert.equal(nestedClosed, 1);
+  assert.equal(parentClosed, 0); // the parent's form input survives the nested Escape
+  assert.equal(first.propagationStopped, true);
+
+  // React unmounts the closed nested dialog (running its cleanup) — now the parent owns Escape.
+  unbindNested();
+  doc.dispatchKey(makeKeyEvent('Escape'));
+  assert.equal(parentClosed, 1);
+  unbindParent();
+});
+
+test('a nested dialog still owns Escape when the parent unmounts first', () => {
+  const { doc, card } = makeWorld();
+  let parentClosed = 0;
+  let nestedClosed = 0;
+  const unbindParent = bindModalA11y(doc as never, card as never, () => parentClosed++);
+  const unbindNested = bindModalA11y(doc as never, card as never, () => nestedClosed++);
+
+  // The parent was closed by an overlay click, unmounting its subtree — including this nested
+  // dialog's container in the real DOM; its binder may outlive the parent's.
+  unbindParent();
+  doc.dispatchKey(makeKeyEvent('Escape'));
+  assert.equal(nestedClosed, 1);
+  assert.equal(parentClosed, 0);
+  unbindNested();
+});

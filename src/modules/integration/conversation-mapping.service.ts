@@ -106,4 +106,26 @@ export class ConversationMappingService {
   async setHandover(id: string, state: HandoverState): Promise<void> {
     await this.repo.update({ id }, { handoverState: state });
   }
+
+  /**
+   * Rebind a mapping whose session was deleted (and re-paired under a new id) onto the caller's
+   * current session, so the stale row stops failing every reverse-key resolution. If the current
+   * session ALREADY holds a forward-key row for the same chat+plugin+instance, the update hits
+   * UQ_conversation_mappings_forward — the only index a sessionId-only update can collide with (the
+   * row already owns its reverse key). That existing row is the fresher binding for the same chat,
+   * so the stale row is superseded by deleting it instead.
+   */
+  /** Remove a mapping row by id — the supersede half of the stale-session repair path. */
+  async delete(id: string): Promise<void> {
+    await this.repo.delete({ id });
+  }
+
+  async rebindSession(id: string, sessionId: string): Promise<void> {
+    try {
+      await this.repo.update({ id }, { sessionId });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      await this.repo.delete({ id });
+    }
+  }
 }

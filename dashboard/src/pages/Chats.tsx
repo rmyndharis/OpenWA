@@ -602,9 +602,12 @@ export function Chats() {
     [selectedSessionId, t, showWarningToast],
   );
 
-  // Drop pending trailing calls on unmount / session switch so a late fire never targets an
-  // unmounted component or the previous session.
-  useEffect(() => () => markReadCoalescer.cancel(), [markReadCoalescer]);
+  // Flush pending trailing calls on unmount / session switch: the mark-as-read POST is
+  // fire-and-forget (a failure only raises a warning toast), so firing on the way out is safe —
+  // and dropping the pending call would leave the last messages of a quickly-exited chat unread.
+  // The flush closure still references the PREVIOUS session on a session switch, which is exactly
+  // where those queued reads belong.
+  useEffect(() => () => markReadCoalescer.flush(), [markReadCoalescer]);
 
   const markChatRead = useCallback(
     (chatId: string) => {

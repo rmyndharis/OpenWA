@@ -4,7 +4,7 @@ jest.mock('fs', () => ({ __esModule: true, ...jest.requireActual<typeof import('
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOperator, Repository } from 'typeorm';
 import { UnauthorizedException, NotFoundException, ConflictException } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
 import * as fs from 'fs';
@@ -113,6 +113,73 @@ describe('AuthService', () => {
 
     service = module.get<AuthService>(AuthService);
   });
+
+  // ── last-admin guard test double ──────────────────────────────────
+
+  /**
+   * In-memory stand-in for the api_keys table: findOne()/count()/save()/remove() backed by a Map.
+   * count() HONORS the where-clause — the last-admin guard's query filters on role/isActive/
+   * expiresAt AND session scope, so a mock that ignores the predicate (e.g. reporting a fixed
+   * set size) would let a session-scoped admin count as a surviving key manager and the
+   * allowedSessions filter would never actually be exercised. Interleaving is driven purely by
+   * promise resolution order, so concurrency scenarios stay deterministic regardless of which
+   * request runs its critical section first.
+   */
+  function setupKeys(seed: ApiKey[]): void {
+    const keys = new Map(seed.map(k => [k.id, k]));
+    (repository.findOne as jest.Mock).mockImplementation((options: { where: { id: string } }) =>
+      Promise.resolve(keys.get(options.where.id) ?? null),
+    );
+    (repository.count as jest.Mock).mockImplementation((options?: { where?: Array<Record<string, unknown>> }) =>
+      Promise.resolve(
+        [...keys.values()].filter(k => (options?.where ?? []).some(branch => matchesWhere(k, branch))).length,
+      ),
+    );
+    (repository.remove as jest.Mock).mockImplementation((key: ApiKey) => {
+      keys.delete(key.id);
+      return Promise.resolve(key);
+    });
+    (repository.save as jest.Mock).mockImplementation((key: ApiKey) => {
+      keys.set(key.id, key);
+      return Promise.resolve(key);
+    });
+  }
+
+  function setupLiveAdmins(...ids: string[]): void {
+    setupKeys(ids.map(id => createMockApiKey({ id, role: ApiKeyRole.ADMIN })));
+  }
+
+  /** OR semantics across the where array; AND across the fields of a single branch. */
+  function matchesWhere(key: ApiKey, branch: Record<string, unknown>): boolean {
+    return Object.entries(branch).every(([field, condition]) => matchesCondition(dbColumnValue(key, field), condition));
+  }
+
+  /** Mirror the simple-array columns' stored shape: null stays null, an array is stored as a CSV. */
+  function dbColumnValue(key: ApiKey, field: string): unknown {
+    const value = (key as unknown as Record<string, unknown>)[field];
+    if ((field === 'allowedSessions' || field === 'allowedIps') && Array.isArray(value)) return value.join(',');
+    return value;
+  }
+
+  function matchesCondition(value: unknown, condition: unknown): boolean {
+    if (condition instanceof FindOperator) {
+      switch (condition.type) {
+        case 'not':
+          return !matchesCondition(value, condition.value);
+        case 'isNull':
+          return value === null || value === undefined;
+        case 'moreThan':
+          return (
+            value instanceof Date && condition.value instanceof Date && value.getTime() > condition.value.getTime()
+          );
+        case 'equal':
+          return value === condition.value;
+        default:
+          throw new Error(`unsupported FindOperator in count mock: ${String(condition.type)}`);
+      }
+    }
+    return value === condition;
+  }
 
   // ── createApiKey ──────────────────────────────────────────────────
 
@@ -359,34 +426,6 @@ describe('AuthService', () => {
   // ── last-admin guard under concurrency ─────────────────────────────
 
   describe('last-admin guard under concurrency', () => {
-    /**
-     * In-memory stand-in for the DB: the set of currently usable admin key ids. count() reports
-     * OTHER usable admins (the guard's query always excludes the target, itself a live usable
-     * admin at check time); save()/remove() apply the capability change synchronously at call
-     * time. Interleaving is then driven purely by promise resolution order, so each scenario
-     * below has a deterministic outcome regardless of which request runs its section first.
-     */
-    function setupLiveAdmins(...ids: string[]): void {
-      const liveAdmins = new Set(ids);
-      const keys = new Map(ids.map(id => [id, createMockApiKey({ id, role: ApiKeyRole.ADMIN })]));
-      (repository.findOne as jest.Mock).mockImplementation((options: { where: { id: string } }) =>
-        Promise.resolve(keys.get(options.where.id) ?? null),
-      );
-      (repository.count as jest.Mock).mockImplementation(() => Promise.resolve(liveAdmins.size - 1));
-      (repository.remove as jest.Mock).mockImplementation((key: ApiKey) => {
-        liveAdmins.delete(key.id);
-        return Promise.resolve(key);
-      });
-      (repository.save as jest.Mock).mockImplementation((key: ApiKey) => {
-        if (key.role === ApiKeyRole.ADMIN && key.isActive) {
-          liveAdmins.add(key.id);
-        } else {
-          liveAdmins.delete(key.id);
-        }
-        return Promise.resolve(key);
-      });
-    }
-
     const outcomes = (results: PromiseSettledResult<unknown>[]) => ({
       succeeded: results.filter(r => r.status === 'fulfilled'),
       conflicts: results.filter(r => r.status === 'rejected' && r.reason instanceof ConflictException),
@@ -452,6 +491,75 @@ describe('AuthService', () => {
       await service.update('adm-1', { name: 'renamed' }); // benign update of an admin
 
       expect(lockRun).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── last-admin invariant vs session-scoped admins ─────────────────
+
+  describe('last-admin invariant vs session-scoped admins', () => {
+    // Key-lifecycle routes are fenced behind @RequireUnscopedKey, so a session-scoped admin can
+    // never manage keys: it must NOT count as a surviving admin, and scoping the last unscoped
+    // admin must be rejected like a demotion — otherwise the system locks itself out for good.
+    const unscopedAdmin = (id: string) => createMockApiKey({ id, role: ApiKeyRole.ADMIN });
+    const scopedAdmin = (id: string) => createMockApiKey({ id, role: ApiKeyRole.ADMIN, allowedSessions: ['sess-1'] });
+
+    it('rejects deleting the last unscoped admin even while a session-scoped admin survives', async () => {
+      setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.delete('admin-a')).rejects.toThrow(/last active admin/i);
+      expect(repository.remove).not.toHaveBeenCalled();
+    });
+
+    it('rejects revoking the last unscoped admin even while a session-scoped admin survives', async () => {
+      setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.revoke('admin-a')).rejects.toThrow(/last active admin/i);
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects demoting the last unscoped admin even while a session-scoped admin survives', async () => {
+      setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.update('admin-a', { role: ApiKeyRole.OPERATOR })).rejects.toThrow(/last active admin/i);
+    });
+
+    it('rejects scoping the last unscoped admin — the same capability-stripping as a demotion', async () => {
+      setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.update('admin-a', { allowedSessions: ['sess-9'] })).rejects.toThrow(/last active admin/i);
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('treats an empty allowedSessions write as unscoped — not capability-stripping', async () => {
+      setupKeys([unscopedAdmin('admin-a')]);
+
+      await expect(service.update('admin-a', { allowedSessions: [] })).resolves.toBeDefined();
+    });
+
+    it('lets a session-scoped admin be deleted — it never counted toward the invariant', async () => {
+      setupKeys([unscopedAdmin('admin-a'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.delete('admin-scoped')).resolves.toBeUndefined();
+      expect(repository.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows stripping an unscoped admin when another unscoped admin remains', async () => {
+      setupKeys([unscopedAdmin('admin-a'), unscopedAdmin('admin-b'), scopedAdmin('admin-scoped')]);
+
+      await expect(service.update('admin-a', { allowedSessions: ['sess-9'] })).resolves.toBeDefined();
+    });
+
+    it('re-reads the target inside the critical section instead of trusting the pre-lock snapshot', async () => {
+      // The pre-lock read sees a usable admin; a concurrent (already serialized) mutation demoted
+      // it before this request's section ran. The fresh read must win — no spurious conflict.
+      const stale = createMockApiKey({ id: 'admin-a', role: ApiKeyRole.ADMIN });
+      const fresh = createMockApiKey({ id: 'admin-a', role: ApiKeyRole.OPERATOR });
+      (repository.findOne as jest.Mock).mockResolvedValueOnce(stale).mockResolvedValue(fresh);
+      (repository.count as jest.Mock).mockResolvedValue(0);
+      (repository.remove as jest.Mock).mockImplementation((key: ApiKey) => Promise.resolve(key));
+
+      await expect(service.delete('admin-a')).resolves.toBeUndefined();
+      expect(repository.remove).toHaveBeenCalledWith(fresh);
     });
   });
 
@@ -725,6 +833,39 @@ describe('AuthService', () => {
       expect(unlinkSpy).toHaveBeenCalledWith(expect.stringContaining('.api-key'));
       expect(bannerText()).toContain('(check dashboard for keys)');
       expect(bannerText()).not.toContain('owa_k1_d'); // no fingerprint of the dead key
+    });
+
+    it('boot keeps the bootstrap file when only the pepper changed (prefix matches, hash does not)', async () => {
+      const warnSpy = jest
+        .spyOn((service as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+        .mockImplementation(() => undefined);
+      (repository.count as jest.Mock).mockResolvedValue(1);
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('owa_k1_pepperchanged');
+      // The hash lookup misses (the current pepper hashes the same key differently), but the
+      // unhashed prefix still resolves to the live row → wrong pepper, not a stale file.
+      (repository.findOne as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(createMockApiKey({ keyPrefix: 'owa_k1_peppe', keyHash: 'hash-under-old-pepper' }));
+
+      await service.onModuleInit();
+
+      expect(repository.findOne).toHaveBeenCalledWith({ where: { keyPrefix: 'owa_k1_peppe' } });
+      expect(unlinkSpy).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('API_KEY_PEPPER'), expect.anything());
+      expect(bannerText()).toContain('(check dashboard for keys)'); // still not advertised as live
+    });
+
+    it('boot still deletes the file when no row carries the file key prefix (genuine staleness)', async () => {
+      (repository.count as jest.Mock).mockResolvedValue(1);
+      existsSpy.mockReturnValue(true);
+      readSpy.mockReturnValue('owa_k1_deaddeaddead');
+      (repository.findOne as jest.Mock).mockResolvedValue(null); // neither the hash nor the prefix resolves
+
+      await service.onModuleInit();
+
+      expect(repository.findOne).toHaveBeenCalledWith({ where: { keyPrefix: 'owa_k1_deadd' } });
+      expect(unlinkSpy).toHaveBeenCalledWith(expect.stringContaining('.api-key'));
     });
 
     it('boot treats a revoked bootstrap key as stale too', async () => {

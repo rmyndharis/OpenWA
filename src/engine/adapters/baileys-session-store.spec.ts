@@ -478,5 +478,11 @@ describe('BaileysSessionStore', () => {
       expect(s.findContact('62100000@s.whatsapp.net')).toBeNull(); // the oldest went first
       expect(s.findContact('62105000@s.whatsapp.net')).not.toBeNull();
     });
+
+    it('treats a blank override as unset, not as 0 (unbounded)', () => {
+      const s = storeWithCap('');
+      s.upsertContacts(Array.from({ length: 5001 }, (_, i) => ({ id: `62${100000 + i}@s.whatsapp.net` })));
+      expect(s.listContacts()).toHaveLength(5000);
+    });
   });
 });

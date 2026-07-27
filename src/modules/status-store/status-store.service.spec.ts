@@ -227,6 +227,33 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     expect(row.mediaPath).toBeFalsy();
   });
 
+  it('names the reason when the file lands but the row update fails (webhook must not see a bare omission)', async () => {
+    // The in-memory row returned here is exactly what dispatchStatusReceived sends. Every other
+    // omission path sets omitReason, so leaving it unset made a real media loss indistinguishable
+    // from an unexplained omission — and nothing retries it.
+    const saveSpy = jest.spyOn(repository, 'save');
+    let calls = 0;
+    saveSpy.mockImplementation((row: never) => {
+      calls += 1;
+      if (calls === 2) return Promise.reject(new Error('db blip')); // the post-write update
+      return Promise.resolve(row);
+    });
+    try {
+      const { row } = await service.ingest('sess', {
+        waStatusId: 'w-row-fail',
+        contactJid: '628111@c.us',
+        type: 'image',
+        media: { mimetype: 'image/jpeg', data: Buffer.from('q').toString('base64') },
+        postedAt: 9100,
+      });
+      expect(row.mediaOmitted).toBe(true);
+      expect(row.omitReason).toBe('write_failed');
+      expect(row.mediaPath).toBeFalsy();
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
   it('respects a configured status.mediaMaxBytes cap', async () => {
     const strictService = new StatusStoreService(
       repository,
@@ -537,6 +564,27 @@ describe('StatusStoreService.purgeExpired', () => {
     expect(await repository.count()).toBe(0);
     expect(fs.existsSync(mediaFile)).toBe(false);
   });
+
+  it('returns 0 without throwing when every expired row keeps its row (all media deletes fail)', async () => {
+    const a = await ingestWithMedia('expired-a', 1000);
+    const b = await ingestWithMedia('expired-b', 2000);
+
+    // Every expired row has a media file and every delete fails, so nothing is deletable — an
+    // unguarded delete([]) would throw TypeORM's empty-criteria error instead of returning 0.
+    const failingStorage = {
+      deleteFile: jest.fn().mockRejectedValue(new Error('backend down')),
+    } as unknown as StorageService;
+    const failingService = new StatusStoreService(repository, failingStorage, fakeConfigService());
+
+    const now = 2000 + 24 * 60 * 60 * 1000 + 1;
+    await expect(failingService.purgeExpired(now)).resolves.toBe(0);
+
+    // Rows and files all survive for the next sweep's retry.
+    const remaining = await repository.find();
+    expect(remaining.map(r => r.waStatusId).sort()).toEqual(['expired-a', 'expired-b']);
+    expect(fs.existsSync(path.join(baseDir, 'media', a.mediaPath!))).toBe(true);
+    expect(fs.existsSync(path.join(baseDir, 'media', b.mediaPath!))).toBe(true);
+  });
 });
 
 describe('StatusStoreService.sweepOrphanedMedia', () => {
@@ -635,13 +683,31 @@ describe('StatusStoreService.sweepOrphanedMedia', () => {
     expect(await shortGrace.sweepOrphanedMedia(t0 + 1001)).toBe(1);
     expect(fs.existsSync(path.join(baseDir, 'media', 'statuses', 'sess', 'orphan.jpg'))).toBe(false);
   });
+
+  it('enumerates past the listFiles() cap so orphans beyond it are still reaped', async () => {
+    // listFiles() truncates at STORAGE_LIST_MAX_FILES (a per-call DoS guard, not a completeness
+    // contract); the sweep reconciles against the FULL store, so it streams iterateFiles() instead.
+    process.env.STORAGE_LIST_MAX_FILES = '5';
+    try {
+      for (let i = 0; i < 8; i++) writeFile(`statuses/sess/orphan-${i}.jpg`, 'orphan');
+      // The capped call the sweep used to make would see only 5 of the 8 orphans.
+      expect((await storageService.listFiles()).filter(f => f.startsWith('statuses/'))).toHaveLength(5);
+
+      const t0 = Date.now();
+      expect(await service.sweepOrphanedMedia(t0)).toBe(0); // first sighting starts the grace clock
+      expect(await service.sweepOrphanedMedia(t0 + 61 * 60 * 1000)).toBe(8); // all 8, not the capped 5
+      expect(fs.readdirSync(path.join(baseDir, 'media', 'statuses', 'sess'))).toHaveLength(0);
+    } finally {
+      delete process.env.STORAGE_LIST_MAX_FILES;
+    }
+  });
 });
 
 describe('StatusStoreService onModuleInit/onModuleDestroy (sweep scheduling)', () => {
   const mockDeps = (): { repo: Repository<StatusUpdate>; storage: StorageService; find: jest.Mock } => {
     const find = jest.fn().mockResolvedValue([]);
     const repo = { find } as unknown as Repository<StatusUpdate>;
-    const storage = { listFiles: jest.fn().mockResolvedValue([]) } as unknown as StorageService;
+    const storage = { iterateFiles: jest.fn().mockReturnValue([]) } as unknown as StorageService;
     return { repo, storage, find };
   };
 

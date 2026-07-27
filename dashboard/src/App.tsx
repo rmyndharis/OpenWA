@@ -82,7 +82,7 @@ function AppContent() {
       headers: { 'X-API-Key': savedKey },
     })
       .then(async res => {
-        const decision = resolveStartupValidation(res.ok, await res.json().catch(() => null));
+        const decision = resolveStartupValidation(res.status, await res.json().catch(() => null));
         if (decision.action === 'logout') {
           handleLogout();
         } else if (decision.action === 'role') {
@@ -91,7 +91,7 @@ function AppContent() {
       })
       .catch(() => {
         // Network failure (API unreachable): keep the cached role so a transient outage at
-        // page load doesn't eject the user — an explicit non-ok answer above still logs out.
+        // page load doesn't eject the user — an explicit 401/403 above still logs out.
       });
   }, [savedKey, setRole, handleLogout]);
 

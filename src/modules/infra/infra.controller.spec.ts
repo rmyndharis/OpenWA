@@ -49,6 +49,7 @@ import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-fai
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import { recordOsEnvKeys } from '../../config/env-precedence';
 
 describe('InfraController access control (Vuln 2)', () => {
   const reflector = new Reflector();
@@ -1046,6 +1047,158 @@ describe('InfraController.saveConfig built-in/external mode flips and the save-t
     expect(env).toContain('S3_ACCESS_KEY_ID=minioadmin');
     expect(env).toContain('MINIO_BUILTIN=true');
   });
+
+  it('an absent builtIn field inherits built-in mode without clobbering a stored custom password', () => {
+    // Secrets are never echoed back to the form, so an absent password field means "unchanged".
+    // Merely inheriting the built-in mode must not re-stamp the bundled 'openwa' over a custom
+    // password (e.g. an operator who re-keyed the bundled container via POSTGRES_PASSWORD).
+    const env = written(
+      { database: { type: 'postgres', poolSize: 25 } },
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PORT=5432\nDATABASE_USERNAME=openwa\nDATABASE_PASSWORD=CustomPw123!\nDATABASE_NAME=openwa\nPOSTGRES_SCHEMA=public\n',
+    );
+    expect(env).toContain('POSTGRES_BUILTIN=true');
+    expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
+    expect(env).toContain('DATABASE_POOL_SIZE=25');
+  });
+
+  it('an explicit password wins while the built-in mode is only inherited', () => {
+    const env = written(
+      { database: { type: 'postgres', password: 'NewPw456!' } },
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=openwa\nDATABASE_NAME=openwa\n',
+    );
+    expect(env).toContain('DATABASE_PASSWORD=NewPw456!');
+    expect(env).not.toContain('DATABASE_PASSWORD=openwa');
+  });
+
+  it('an explicit builtIn:true keeps a re-keyed bundled password (the dashboard always sends builtIn)', () => {
+    // Infrastructure.tsx sends `database.builtIn` on every save and never echoes the password back,
+    // so treating "explicit builtIn:true + no password" as a reset re-wrote a re-keyed container's
+    // credential on each save, breaking the next boot's DB auth.
+    const env = written(
+      { database: { type: 'postgres', builtIn: true } },
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=CustomPw123!\nDATABASE_NAME=openwa\n',
+    );
+    expect(env).toContain('DATABASE_PASSWORD=CustomPw123!');
+  });
+
+  it('does not carry an EXTERNAL password into the bundled container when switching to built-in', () => {
+    // The stored secret belongs to the external DB; the bundled container is seeded with 'openwa'
+    // unless the operator re-keys it, so switching modes must reset rather than inherit.
+    const env = written(
+      { database: { type: 'postgres', builtIn: true } },
+      'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.example.com\nDATABASE_PASSWORD=ExternalPw!\nDATABASE_NAME=appdb\n',
+    );
+    expect(env).toContain('DATABASE_PASSWORD=openwa');
+    expect(env).not.toContain('ExternalPw!');
+  });
+
+  // The guard must evaluate what the next boot would SEE: load-env.ts loads with dotenv
+  // override:false, so a value in the container environment (compose `environment:`) wins over the
+  // saved file. Snapshot + clear every guard-relevant key so these tests are hermetic.
+  describe('process-environment precedence', () => {
+    const GUARD_ENV_KEYS = [
+      'DATABASE_TYPE',
+      'DATABASE_PASSWORD',
+      'POSTGRES_BUILTIN',
+      'DATABASE_HOST',
+      'STORAGE_TYPE',
+      'S3_ACCESS_KEY_ID',
+      'S3_SECRET_ACCESS_KEY',
+      'S3_ENDPOINT',
+      'MINIO_BUILTIN',
+      'REDIS_PASSWORD',
+    ];
+    let savedEnv: Array<[string, string | undefined]>;
+    beforeEach(() => {
+      savedEnv = GUARD_ENV_KEYS.map(k => [k, process.env[k]]);
+      for (const k of GUARD_ENV_KEYS) delete process.env[k];
+    });
+    afterEach(() => {
+      for (const [k, v] of savedEnv) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+
+    it('accepts an external Postgres whose strong password comes from the process environment', () => {
+      // The compose deployment the guard used to refuse on EVERY save: the file still holds the
+      // bundled built-in credentials, but boot would see the env password, not the file's.
+      process.env.DATABASE_PASSWORD = 'Sup3rSecret!';
+      const env = written(
+        {
+          database: { type: 'postgres', builtIn: false, host: 'db.example.com', username: 'app', database: 'appdb' },
+        },
+        BUILTIN_POSTGRES_ENV,
+      );
+      expect(env).toContain('POSTGRES_BUILTIN=false');
+      expect(env).toContain('DATABASE_HOST=db.example.com');
+      // The stale bundled password is still dropped from the file — the environment supplies it.
+      expect(env).not.toContain('DATABASE_PASSWORD');
+    });
+
+    it('a blank process-env forward counts as unset, so a weak merged config is still rejected', () => {
+      // Compose renders `- DATABASE_PASSWORD=${DATABASE_PASSWORD:-}` as an empty value when the
+      // operator sets nothing; boot clears that blank (clearBlankEnv) and falls to the file. The
+      // guard does the same — a blank forward can neither mask a weak file value nor supply one.
+      process.env.DATABASE_PASSWORD = '';
+      expectRejected(
+        {
+          database: { type: 'postgres', builtIn: false, host: 'db.example.com', username: 'app', database: 'appdb' },
+        },
+        BUILTIN_POSTGRES_ENV,
+        /DATABASE_PASSWORD/,
+      );
+    });
+
+    it('a weak process-env value wins over a strong saved one and is still rejected', () => {
+      // Precedence cuts both ways: boot would see the env value, so a weak env password must not be
+      // rescued by a strong one sitting in the file.
+      process.env.DATABASE_PASSWORD = 'password';
+      expectRejected(
+        { queue: { enabled: true } },
+        'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=false\nDATABASE_HOST=db.example.com\nDATABASE_PASSWORD=Str0ngSaved!\n',
+        /DATABASE_PASSWORD/,
+      );
+    });
+
+    // The cases above delete every guard key from process.env, which cannot happen in production:
+    // load-env merges data/.env.generated INTO process.env at boot, so the file's own values are
+    // sitting there while this save runs. Reading them back as if they were an orchestrator
+    // override makes the guard validate the config being REPLACED.
+    describe('saved-file values echoed in process.env are not mistaken for host overrides', () => {
+      afterEach(() => {
+        // Restore the permissive snapshot the rest of the file assumes.
+        recordOsEnvKeys(process.env);
+      });
+
+      it('refuses a built-in -> external flip that keeps the bundled password (boot would crash-loop)', () => {
+        recordOsEnvKeys({}); // the host supplied nothing; everything below came from the file
+        process.env.DATABASE_TYPE = 'postgres';
+        process.env.POSTGRES_BUILTIN = 'true';
+        process.env.DATABASE_HOST = 'postgres';
+        process.env.DATABASE_PASSWORD = 'openwa';
+        expectRejected(
+          {
+            database: { type: 'postgres', builtIn: false, host: 'db.example.com', username: 'app', database: 'appdb' },
+          },
+          BUILTIN_POSTGRES_ENV,
+          /DATABASE_PASSWORD/,
+        );
+      });
+
+      it('still honors a genuine host override of the same key', () => {
+        recordOsEnvKeys({ DATABASE_PASSWORD: 'Sup3rSecret!' });
+        process.env.DATABASE_PASSWORD = 'Sup3rSecret!';
+        const env = written(
+          {
+            database: { type: 'postgres', builtIn: false, host: 'db.example.com', username: 'app', database: 'appdb' },
+          },
+          BUILTIN_POSTGRES_ENV,
+        );
+        expect(env).toContain('DATABASE_HOST=db.example.com');
+      });
+    });
+  });
 });
 
 describe('InfraController.saveConfig persists strictly-coerced form booleans', () => {
@@ -1260,6 +1413,99 @@ describe('InfraController.importData round-trips export-data (no silent message/
     const dlf = await ds.getRepository(IntegrationDeliveryFailure).findOneByOrFail({ deliveryId: 'd1' });
     expect(dlf.lastError).toBe('boom');
     expect(dlf.payload).toEqual({ foo: 'bar' });
+  });
+
+  it('round-trips the ingress dispatch-lifecycle columns so a restored pending event still replays', async () => {
+    await seedSession('s1');
+    const ingressRepo = ds.getRepository(IngressEvent);
+    // A pending event (still carrying its payload, awaiting reconciler replay) and a retired one
+    // (dispatch outcome recorded, payload slimmed to NULL).
+    await ingressRepo.save(
+      ingressRepo.create({
+        id: 'ie-pending',
+        instanceId: 'acct1',
+        pluginId: 'chatwoot',
+        providerDeliveryId: 'dlv-1',
+        route: 'chatwoot/acct1',
+        payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+        payloadHash: 'abc123',
+        sessionId: 's1',
+        dispatchState: 'pending',
+        dispatchAttempts: 2,
+        lastDispatchAt: new Date('2026-01-02T03:04:05.000Z'),
+      }),
+    );
+    await ingressRepo.save(
+      ingressRepo.create({
+        id: 'ie-retired',
+        instanceId: 'acct1',
+        pluginId: 'chatwoot',
+        providerDeliveryId: 'dlv-2',
+        route: 'chatwoot/acct1',
+        payload: null,
+        payloadHash: 'def456',
+        sessionId: 's1',
+        dispatchState: 'dispatched',
+        dispatchAttempts: 1,
+        lastDispatchAt: new Date('2026-01-02T03:04:05.000Z'),
+      }),
+    );
+
+    const dump = await controller.exportData();
+    expect(dump.counts.ingressEvents).toBe(2);
+
+    await ingressRepo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.ingressEvents).toBe(2);
+
+    // A restored 'pending' row that lost its dispatchState would read as NULL ("not watched"): the
+    // reconciler would never replay it while the dedup key still blocked the provider's retry.
+    const pending = await ingressRepo.findOneByOrFail({ id: 'ie-pending' });
+    expect(pending.dispatchState).toBe('pending');
+    expect(pending.dispatchAttempts).toBe(2);
+    expect(pending.lastDispatchAt).toEqual(new Date('2026-01-02T03:04:05.000Z'));
+    expect(pending.payloadHash).toBe('abc123');
+    expect(pending.payload).toEqual({ headers: {}, query: {}, body: '{}', rawBody: '{}' });
+
+    const retired = await ingressRepo.findOneByOrFail({ id: 'ie-retired' });
+    expect(retired.dispatchState).toBe('dispatched');
+    expect(retired.payloadHash).toBe('def456');
+    // A retired payload must stay NULL — re-materializing it as '{}' would make the slimmed dedup
+    // row read as a pending event with an empty body.
+    expect(retired.payload).toBeNull();
+  });
+
+  it('imports a pre-lifecycle backup (no dispatch columns) as not-watched legacy rows', async () => {
+    await seedSession('s1');
+    const res = await controller.importData({
+      tables: {
+        ingressEvents: [
+          {
+            id: 'ie-legacy',
+            instanceId: 'acct1',
+            pluginId: 'chatwoot',
+            providerDeliveryId: 'dlv-9',
+            route: 'chatwoot/acct1',
+            payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+            sessionId: 's1',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ] as never,
+      },
+    });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    // Columns absent from an older backup import as NULL/0 — the same "not watched" reading legacy
+    // rows have by design (the reconciler never sweeps them, so an upgrade can't mass-replay history).
+    const legacy = await ds.getRepository(IngressEvent).findOneByOrFail({ id: 'ie-legacy' });
+    expect(legacy.dispatchState).toBeNull();
+    expect(legacy.dispatchAttempts).toBe(0);
+    expect(legacy.lastDispatchAt).toBeNull();
+    expect(legacy.payloadHash).toBeNull();
   });
 
   it('rolls back and reports imported:false when a row fails — existing data is preserved', async () => {

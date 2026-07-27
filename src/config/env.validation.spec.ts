@@ -107,6 +107,25 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ WEBHOOK_MAX_PER_SESSION: '0', WEBHOOK_MEDIA_INLINE_MAX_BYTES: '0' })).not.toThrow();
   });
 
+  it('rejects a non-positive / non-integer WEBHOOK_MAX_PAYLOAD_BYTES (0 would reject every dispatch)', () => {
+    expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: '0' })).toThrow(/WEBHOOK_MAX_PAYLOAD_BYTES/);
+    expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: 'abc' })).toThrow(/WEBHOOK_MAX_PAYLOAD_BYTES/);
+    expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: '-5' })).toThrow(/WEBHOOK_MAX_PAYLOAD_BYTES/);
+    expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: '1048576' })).not.toThrow();
+  });
+
+  it('rejects non-decimal integer spellings that parseInt would silently truncate', () => {
+    // Number('1e6') is a valid integer, but the config readers use parseInt(raw, 10) — which reads
+    // `1e6` as 1 and `0x100` as 0. Validation must reject these so the validated value and the
+    // parsed value can never disagree.
+    expect(() => validateEnv({ WEBHOOK_MEDIA_INLINE_MAX_BYTES: '1e6' })).toThrow(/WEBHOOK_MEDIA_INLINE_MAX_BYTES/);
+    expect(() => validateEnv({ WEBHOOK_MEDIA_INLINE_MAX_BYTES: '0x100' })).toThrow(/WEBHOOK_MEDIA_INLINE_MAX_BYTES/);
+    expect(() => validateEnv({ PORT: '0x50' })).toThrow(/PORT/);
+    expect(() => validateEnv({ RATE_LIMIT_SHORT_TTL: '1e3' })).toThrow(/RATE_LIMIT_SHORT_TTL/);
+    // Plain decimal integers still pass.
+    expect(() => validateEnv({ WEBHOOK_MEDIA_INLINE_MAX_BYTES: '1048576', PORT: '2785' })).not.toThrow();
+  });
+
   it('rejects a non-canonical boolean feature flag instead of silently disabling the feature', () => {
     // QUEUE_ENABLED / MCP_ENABLED / SERVE_DASHBOARD are read at module-eval with `=== 'true'` /
     // `!== 'false'`, so a typo silently (dis)ables the feature with zero diagnostics. Boot must reject it.

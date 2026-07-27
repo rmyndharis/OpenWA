@@ -48,7 +48,7 @@ test('different keys coalesce independently', t => {
   coalescer.cancel();
 });
 
-test('cancel() drops pending calls (unmount) so nothing fires late', t => {
+test('cancel() drops pending calls so nothing fires late', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sent: string[] = [];
   const coalescer = createTrailingCoalescer<string>(key => sent.push(key), 750);
@@ -57,6 +57,32 @@ test('cancel() drops pending calls (unmount) so nothing fires late', t => {
   coalescer.call('chat-B');
   coalescer.cancel();
 
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(sent, []);
+});
+
+test('flush() fires every pending key immediately (unmount/navigation does not lose the call)', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent: string[] = [];
+  const coalescer = createTrailingCoalescer<string>(key => sent.push(key), 750);
+
+  coalescer.call('chat-A');
+  coalescer.call('chat-B');
+  coalescer.flush();
+
+  assert.deepEqual(sent.sort(), ['chat-A', 'chat-B']);
+  // Nothing is left pending: a later tick must not re-fire, and cancel() is a no-op.
+  coalescer.cancel();
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(sent.sort(), ['chat-A', 'chat-B']);
+});
+
+test('flush() with nothing pending is a no-op', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sent: string[] = [];
+  const coalescer = createTrailingCoalescer<string>(key => sent.push(key), 750);
+
+  coalescer.flush();
   t.mock.timers.tick(10_000);
   assert.deepEqual(sent, []);
 });

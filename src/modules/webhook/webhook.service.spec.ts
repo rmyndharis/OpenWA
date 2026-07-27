@@ -1023,6 +1023,55 @@ describe('WebhookService', () => {
       loggerSpy.mockRestore();
     });
 
+    it('queued mode: parked enqueues drain to the queue on shutdown instead of dead-lettering', async () => {
+      (service as unknown as { queueEnabled: boolean }).queueEnabled = true;
+      const hooks = [
+        createMockWebhook({ id: 'wh-a', url: 'https://a.example/hook', events: ['message.received'] }),
+        createMockWebhook({ id: 'wh-b', url: 'https://b.example/hook', events: ['message.received'] }),
+        createMockWebhook({ id: 'wh-c', url: 'https://c.example/hook', events: ['message.received'] }),
+      ];
+      (repository.find as jest.Mock).mockResolvedValue(hooks);
+      (hookManager.execute as jest.Mock).mockImplementation((_event: string, data: unknown) =>
+        Promise.resolve({ continue: true, data }),
+      );
+      (configService.get as jest.Mock).mockImplementation(<T>(key: string, def?: T): T | boolean | number => {
+        if (key === 'queue.enabled') return true;
+        if (key === 'webhook.shutdownDrainMs') return 1000;
+        return def as T;
+      });
+      // One active slot, generous parked bound: B and C park behind A, whose enqueue hangs.
+      (service as unknown as { dispatchLimiter: ConcurrencyLimiter }).dispatchLimiter = new ConcurrencyLimiter(1, 1000);
+
+      let releaseActive: (value: unknown) => void = () => undefined;
+      let firstAdd = true;
+      (webhookQueue.add as jest.Mock).mockImplementation(
+        () =>
+          new Promise(resolve => {
+            if (firstAdd) {
+              firstAdd = false;
+              releaseActive = resolve;
+            } else {
+              resolve(undefined);
+            }
+          }),
+      );
+
+      const dispatchP = service.dispatch('sess-1', 'message.received', { from: 'x@c.us' });
+      for (let i = 0; i < 20 && webhookQueue.add.mock.calls.length === 0; i++) await new Promise(r => setImmediate(r));
+
+      // Shutdown starts while A holds the slot and B/C are parked. Queued mode must not close the
+      // limiter: a parked task is just webhookQueue.add() — durable in Redis once it runs — and it
+      // holds an activeCount slot via handoff, so the drain loop waits for the whole chain.
+      const destroyP = service.onModuleDestroy();
+      releaseActive(undefined);
+      await destroyP;
+      await dispatchP;
+
+      // All three reached the queue; none was dead-lettered as webhook_dispatch_shutdown.
+      expect(webhookQueue.add).toHaveBeenCalledTimes(3);
+      expect(failureRepository.insert).not.toHaveBeenCalled();
+    });
+
     it('records a dispatch that arrives after the limiter closed (no fetch, dead-letter row)', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

@@ -286,4 +286,15 @@ describe('StorageService local traversal (async + bounded)', () => {
     const files = await service.listFiles();
     expect(files.length).toBe(5); // capped, not 20
   });
+
+  it('iterateFiles enumerates the full tree, ignoring the STORAGE_LIST_MAX_FILES per-call cap', async () => {
+    process.env.STORAGE_LIST_MAX_FILES = '5';
+    for (let i = 0; i < 20; i++) {
+      await service.putFile(`file${i}.txt`, Buffer.from('x'));
+    }
+
+    const seen: string[] = [];
+    for await (const file of service.iterateFiles()) seen.push(file);
+    expect(seen.length).toBe(20); // complete where listFiles() above truncates at 5
+  });
 });

@@ -64,8 +64,12 @@ export function mergeChatMessages(db: ChatMessage[], history: ChatMessage[]): Ch
  * the same 📎 placeholder as a history row fetched without media; the newest `keep` stay
  * renderable (thread + lightbox). Count-based (not byte-based): payloads are bounded upstream
  * by the backend's media size cap.
+ *
+ * The cap must cover the fetch window: useChatMessages loads a 100-message slice with media, so a
+ * smaller cap strips payloads INSIDE the window the user can scroll to — and with staleTime:
+ * Infinity there is no refetch path, leaving a dead-end 📎 placeholder for media that was fetched.
  */
-export const MEDIA_PAYLOAD_CACHE_LIMIT = 25;
+export const MEDIA_PAYLOAD_CACHE_LIMIT = 100;
 
 /**
  * Enforce MEDIA_PAYLOAD_CACHE_LIMIT on an ascending message list, stripping the oldest payloads

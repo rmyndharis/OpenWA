@@ -88,8 +88,8 @@ export class InstallFromUrlDto {
       'HTTPS URL of the plugin .zip to download and install. Plain http:// is rejected: the package is ' +
       'executable code, so it must be integrity-protected in transit (hosts on private networks remain ' +
       'subject to the SSRF guard). Optional content pinning: append `#sha256=<64 hex>` (fragment — never ' +
-      'sent to the server) or `?sha256=<64 hex>` to require the downloaded archive to match that digest; ' +
-      'a mismatch fails the install.',
+      'sent to the server; query params are ignored) to require the downloaded archive to match that ' +
+      'digest; a mismatch fails the install.',
   })
   @IsString()
   @IsUrl(

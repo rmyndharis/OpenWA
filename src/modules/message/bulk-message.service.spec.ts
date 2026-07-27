@@ -2,7 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PayloadTooLargeException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In, Not } from 'typeorm';
-import { BulkMessageService, resolveFinalBatchStatus, sanitizeBatchError } from './bulk-message.service';
+import {
+  BulkMessageService,
+  resolveFinalBatchStatus,
+  sanitizeBatchError,
+  resolveMaxConcurrentBatches,
+} from './bulk-message.service';
 import { MessageBatch, BatchStatus, BatchMessageStatus, BatchMessageResult } from './entities/message-batch.entity';
 import { MessageStatus } from './entities/message.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
@@ -32,6 +37,19 @@ describe('resolveFinalBatchStatus', () => {
   it('some sent (with or without failures) → COMPLETED', () => {
     expect(resolveFinalBatchStatus(false, false, { sent: 4, failed: 0 })).toBe(BatchStatus.COMPLETED);
     expect(resolveFinalBatchStatus(false, false, { sent: 3, failed: 1 })).toBe(BatchStatus.COMPLETED);
+  });
+});
+
+describe('resolveMaxConcurrentBatches', () => {
+  const prev = process.env.BULK_MAX_CONCURRENT_BATCHES;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.BULK_MAX_CONCURRENT_BATCHES;
+    else process.env.BULK_MAX_CONCURRENT_BATCHES = prev;
+  });
+
+  it('treats a blank BULK_MAX_CONCURRENT_BATCHES as unset, not as 0 (unlimited)', () => {
+    process.env.BULK_MAX_CONCURRENT_BATCHES = '';
+    expect(resolveMaxConcurrentBatches()).toBe(50);
   });
 });
 
@@ -734,31 +752,47 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     expect(repo.findOne).toHaveBeenCalledWith({ where: { batchId: 'dup', sessionId: 's2' } });
   });
 
-  it('collapses duplicate chatIds before persisting (first occurrence wins, order preserved)', async () => {
+  it('collapses exact duplicate entries before persisting (first occurrence wins, order preserved)', async () => {
     const dto = {
       messages: [
         { chatId: 'a@c.us', type: 'text' as const, content: { text: 'first' } },
         { chatId: 'b@c.us', type: 'text' as const, content: { text: 'second' } },
-        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'duplicate — dropped' } },
+        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'first' } }, // exact duplicate — dropped
       ],
     } as unknown as SendBulkMessageDto;
 
     const batch = await service.createBatch('s1', dto);
 
     expect(batch.messages.map(m => m.chatId)).toEqual(['a@c.us', 'b@c.us']);
-    expect(batch.messages[0].content).toEqual({ text: 'first' }); // the first entry for an id wins
+    expect(batch.messages[0].content).toEqual({ text: 'first' }); // the first entry wins
     expect(batch.progress.total).toBe(2);
     expect(batch.progress.pending).toBe(2);
   });
 
-  it('runs the engine once per unique chatId across the full create→process path', async () => {
+  it('keeps distinct messages to the same chatId (different type/content/variables are not duplicates)', async () => {
+    const dto = {
+      messages: [
+        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'part 1' } },
+        { chatId: 'a@c.us', type: 'image' as const, content: { image: { url: 'https://example.com/pic.jpg' } } },
+        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'part 1' }, variables: { name: 'x' } },
+      ],
+    } as unknown as SendBulkMessageDto;
+
+    const batch = await service.createBatch('s1', dto);
+
+    expect(batch.messages.map(m => m.type)).toEqual(['text', 'image', 'text']);
+    expect(batch.progress.total).toBe(3);
+    expect(batch.progress.pending).toBe(3);
+  });
+
+  it('runs the engine once per exact duplicate entry across the full create→process path', async () => {
     const engine = { sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa', timestamp: 1 }) };
     sessionService.getEngine.mockReturnValue(engine);
     const dto = {
       messages: [
         { chatId: 'a@c.us', type: 'text' as const, content: { text: 'first' } },
         { chatId: 'b@c.us', type: 'text' as const, content: { text: 'second' } },
-        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'duplicate — dropped' } },
+        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'first' } }, // exact duplicate — dropped
       ],
       options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
     } as unknown as SendBulkMessageDto;
@@ -772,5 +806,31 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(2);
     expect(engine.sendTextMessage).toHaveBeenNthCalledWith(1, 'a@c.us', 'first');
     expect(engine.sendTextMessage).toHaveBeenNthCalledWith(2, 'b@c.us', 'second');
+  });
+
+  it('sends every distinct message to the same chatId across the full create→process path', async () => {
+    const engine = {
+      sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa-t', timestamp: 1 }),
+      sendImageMessage: jest.fn().mockResolvedValue({ id: 'wa-i', timestamp: 2 }),
+    };
+    sessionService.getEngine.mockReturnValue(engine);
+    const dto = {
+      messages: [
+        { chatId: 'a@c.us', type: 'text' as const, content: { text: 'part 1' } },
+        { chatId: 'a@c.us', type: 'image' as const, content: { image: { url: 'https://example.com/pic.jpg' } } },
+      ],
+      options: { delayBetweenMessages: 0, randomizeDelay: false, stopOnError: false },
+    } as unknown as SendBulkMessageDto;
+
+    const batch = await service.createBatch('s1', dto);
+    // Same fire-and-forget caveat as above — drive processing explicitly with the batch "in the DB".
+    repo.findOne.mockResolvedValue(batch);
+    await (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch(batch.id);
+
+    expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
+    expect(engine.sendTextMessage).toHaveBeenCalledWith('a@c.us', 'part 1');
+    expect(engine.sendImageMessage).toHaveBeenCalledTimes(1);
+    expect(batch.progress.sent).toBe(2);
+    expect(batch.results).toHaveLength(2);
   });
 });

@@ -21,30 +21,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **S3 storage no longer silently stays on the local fallback after a boot-time miss, the Baileys
-  engine no longer reports READY while its socket is in reconnect backoff, and the dashboard no
-  longer serves cached state across logout.** Four correctness fixes: if S3 was unreachable at boot,
-  `StorageService` fell back to local and never re-probed, so after S3 recovered writes kept landing
-  in `./data/media` while reads hit S3 `NoSuchKey` — a silent split-brain; it now re-probes on a
-  60s interval (`S3_REPROBE_INTERVAL_MS`), WARNs while degraded, self-clears the timer on recovery,
-  and the recovery is strictly one-way (false→true) so a transient flake cannot drop a healthy
-  deployment to local. When the Baileys socket entered reconnect backoff after a transient close,
-  the adapter kept reporting `READY` for up to the 60s backoff cap while the socket was dead, so
-  `probeLiveness()` returned true and `ensureReady()` let sends through against a dead socket — it
-  now sets `INITIALIZING` immediately on the transient close (matching the whatsapp-web.js engine)
-  and restores `READY` on the next `open`. The dashboard's React Query cache survived logout (a
-  re-login showed the previous user's sessions/messages), the startup re-validation did not check
-  `res.ok` (a 401/revoked key kept the cached role), the WebSocket client dropped `subscribed`/
-  `error` frames (a scoped-key `FORBIDDEN_SESSION` was invisible), and `markChatRead` fired per
-  call without a debounce; all four are fixed (`queryClient.clear()` on logout, state-machine
+- **S3 storage no longer silently stays on the local fallback after a boot-time miss, the Baileys engine no
+  longer reports READY while its socket is in reconnect backoff, and the dashboard no longer serves cached
+  state across logout.** Four correctness fixes: if S3 was unreachable at boot, `StorageService` fell back
+  to local and never re-probed, so after S3 recovered writes kept landing in `./data/media` while reads hit
+  S3 `NoSuchKey` — a silent split-brain; it now re-probes on a 60s interval (`S3_REPROBE_INTERVAL_MS`),
+  WARNs while degraded, self-clears the timer on recovery, and the recovery is strictly one-way (false→true)
+  so a transient flake cannot drop a healthy deployment to local; while S3 is active, enumeration and the
+  storage totals also cover the local fallback directory and deletes go to both backends, so bytes written
+  during an outage stay visible to listings and reclaimable instead of being stranded. When the Baileys
+  socket entered reconnect backoff after a transient close, the adapter kept reporting `READY` for up to the
+  60s backoff cap while the socket was dead, so `probeLiveness()` returned true and `ensureReady()` let
+  sends through against a dead socket — it now sets `INITIALIZING` immediately on the transient close
+  (matching the whatsapp-web.js engine) and restores `READY` on the next `open`. The dashboard's React Query
+  cache survived logout (a re-login showed the previous user's sessions/messages), the startup re-validation
+  did not check `res.ok` (a 401/revoked key kept the cached role), the WebSocket client dropped
+  `subscribed`/ `error` frames (a scoped-key `FORBIDDEN_SESSION` was invisible), and `markChatRead` fired
+  per call without a debounce; all four are fixed (`queryClient.clear()` on logout, state-machine
   validation, frame routing, a 750ms trailing coalescer). Separately, the `tecnativa/docker-socket-proxy`
-  compose entry set `DELETE: 1` which is dead config on the pinned v0.4.2 image (its method gate
-  admits on `POST` alone), so the SECURITY.md "least-privilege" claim oversold the boundary — the
-  dead directive is dropped, the README/SECURITY now document the real threat model (a compromised
-  API container with `POST=1` is host-root-equivalent), and the managed-profile teardown switched
-  from `remove({ v: true })` (which discarded anonymous volumes the disable/re-enable flow assumes)
-  to a stop-only path that reports per-profile errors honestly instead of claiming success on a 403.
-  (#945, #944, #938, #934)
+  compose entry set `DELETE: 1` which is dead config on the pinned v0.4.2 image (its method gate admits on
+  `POST` alone), so the SECURITY.md "least-privilege" claim oversold the boundary — the dead directive is
+  dropped, the README/SECURITY now document the real threat model (a compromised API container with `POST=1`
+  is host-root-equivalent), and the managed-profile teardown switched from `remove({ v: true })` (which
+  discarded anonymous volumes the disable/re-enable flow assumes) to a stop-only path that reports
+  per-profile errors honestly instead of claiming success on a 403. (#945, #944, #938, #934)
 
 - **The data export/import path and the backup/restore scripts no longer silently lose data, crash
   the process, or write databases the app never opens.** Five integrity gaps in the export/import
@@ -120,23 +120,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pending`, and masked the real delivery failures and the `message:failed` events that had already
   fired. FAILED is now in the terminal-status guard, so each terminal status stays exclusive.
 
-- **The ingress queue now actually queues when `QUEUE_ENABLED=true`, persisted ingress events are
-  reconciled after silent-loss windows, and disabling one instance no longer tears down an enabled
-  sibling sharing its session scope.** The IntegrationModule never imported the QueueModule, so the
-  `@Optional()` ingress queue injection was always `undefined` and every delivery dispatched inline
-  despite the operator-facing queued contract (fast-ack, retries, ordering, DLQ) — the module now
-  imports it conditionally (mirroring the webhook module) and the boot fail-fast tripwire crashes
-  startup loudly if the wiring ever regresses. `ingress_events` was a dedup log but never a
-  durability handle: a crash between persist and dispatch, a failed fire-and-forget response route,
-  or a swallowed inline failure lost the event while the provider's honest retry deduped to a no-op.
-  Rows now carry `dispatchState`/`dispatchAttempts`/`lastDispatchAt` (legacy rows excluded), the
-  enqueue path records outcomes, and a 60s reconciler (`INGRESS_RECONCILE_*`) replays stuck
-  deliveries with their original delivery id, retiring them terminally (plus a DLQ row) after five
-  attempts instead of looping forever. Separately, disabling, deleting, or re-scoping an instance
-  unconditionally stripped its session from the plugin's `activeSessions` and wiped the per-session
-  config even when another ENABLED instance shared that scope; the teardown now checks for an
-  enabled sibling first, and concrete activation preserves `'*'` while a wildcard sibling is still
-  enabled. (#921, #924, #922)
+- **The ingress queue now actually queues when `QUEUE_ENABLED=true`, persisted ingress events are reconciled
+  after silent-loss windows, and disabling one instance no longer tears down an enabled sibling sharing its
+  session scope.** The IntegrationModule never imported the QueueModule, so the `@Optional()` ingress queue
+  injection was always `undefined` and every delivery dispatched inline despite the operator-facing queued
+  contract (fast-ack, retries, ordering, DLQ) — the module now imports it conditionally (mirroring the
+  webhook module) and the boot fail-fast tripwire crashes startup loudly if the wiring ever regresses.
+  `ingress_events` was a dedup log but never a durability handle: a crash between persist and dispatch, a
+  failed fire-and-forget response route, or a swallowed inline failure lost the event while the provider's
+  honest retry deduped to a no-op. Rows now carry `dispatchState`/`dispatchAttempts`/`lastDispatchAt`
+  (legacy rows excluded), the enqueue path records outcomes, and a 60s reconciler (`INGRESS_RECONCILE_*`)
+  replays stuck deliveries with their original delivery id, retiring them terminally (plus a DLQ row) after
+  five attempts instead of looping forever; a replay first re-applies the eligibility check the live path
+  makes at the door, so an instance disabled or deleted after the persist is never handed the event.
+  Separately, disabling, deleting, or re-scoping an instance unconditionally stripped its session from the
+  plugin's `activeSessions` and wiped the per-session config even when another ENABLED instance shared that
+  scope; the teardown now checks for an enabled sibling first, and concrete activation preserves `'*'` while
+  a wildcard sibling is still enabled. (#921, #924, #922)
 
 - **Search-provider plugins now receive the finalized state of every outbound message, and two
   runnable cURL examples in the API collection no longer 404.** The `message:persisted` hook fired
@@ -168,59 +168,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-purges both engines' auth dirs (gated by a by-name re-check so delete+recreate keeps its fresh
   dir) on the start and reconnect paths alike. (#949, #961, #952)
 
-- **Infra config writes are section-scoped, mode-aware, and strictly coerced, and the bootstrap
-  config guards cover the paths the app actually uses.** Saving config used to clobber sections
-  absent from the payload and carry stale secrets across mode flips (built-in `minioadmin`/`openwa`
-  credentials surviving into an external-blank config, which the production secret guard then
-  rejected at the next boot — a crash-loop with the dashboard dead); writes now merge per key,
-  drop the old mode's secrets on a builtin→external flip (`S3_ENDPOINT` clearable), and re-run the
-  production default-secret assertion at save time (400 before anything hits disk). Controller-local
-  DTOs moved to `dto/` with strict coercion, so a form-encoded `'false'` can no longer persist as
-  `'true'` for the boolean flags. The SQLite main/data path-collision guard now resolves paths
-  exactly like the runtime (and also fires for CLI migration invocations), `REDIS_ENABLED` is
-  strictly validated (a typo fails boot instead of silently downgrading the throttler and cache to
-  in-memory), and a boot sweep deletes `storage-export-*` archives orphaned by a restart after
-  `STORAGE_EXPORT_SWEEP_MAX_AGE_MS` (default 24h). **Breaking (behavior):** partial config payloads
-  now preserve omitted fields instead of resetting them (the dashboard's full payload is
-  byte-identical), and non-canonical `REDIS_ENABLED` values now fail boot. (#946, #960)
+- **Infra config writes are section-scoped, mode-aware, and strictly coerced, and the bootstrap config
+  guards cover the paths the app actually uses.** Saving config used to clobber sections absent from the
+  payload and carry stale secrets across mode flips (built-in `minioadmin`/`openwa` credentials surviving
+  into an external-blank config, which the production secret guard then rejected at the next boot — a
+  crash-loop with the dashboard dead); writes now merge per key, drop the old mode's secrets on a
+  builtin→external flip (`S3_ENDPOINT` clearable), keep a re-keyed built-in Postgres password instead of
+  re-stamping the bundled default on every save (it is reset only when switching in from an external
+  database), and re-run the production default-secret assertion at save time (400 before anything hits
+  disk). That assertion judges the configuration the next boot would actually see: a value supplied by the
+  host or orchestrator (compose `environment:`) takes precedence over the saved file just as it does at
+  boot, with a blank forward counting as unset, while values the loader itself merged in from `.env` and
+  `data/.env.generated` do not — so a save is judged on the config being written rather than on the one it
+  replaces. Controller-local DTOs moved to `dto/` with strict coercion, so a form-encoded `'false'` can no
+  longer persist as `'true'` for the boolean flags. The SQLite main/data path-collision guard now resolves
+  paths exactly like the runtime (and also fires for CLI migration invocations), `REDIS_ENABLED` is strictly
+  validated (a typo fails boot instead of silently downgrading the throttler and cache to in-memory), the
+  numeric env checks accept plain decimal digits only — an exponent or hex spelling (`1e6`, `0x100`) now
+  fails boot instead of validating as one number while the app, which reads these back with `parseInt`,
+  configures another — `WEBHOOK_MAX_PAYLOAD_BYTES` is validated positive-only (a `0` cap would reject every
+  webhook dispatch), and a boot sweep deletes `storage-export-*` archives orphaned by a restart after
+  `STORAGE_EXPORT_SWEEP_MAX_AGE_MS` (default 24h). Numeric knobs whose `0` is a documented opt-out now read
+  a blank or whitespace-only value — exactly what a compose `${KEY:-}` forward renders — as unset and fall
+  back to their default instead of parsing it as `0`: a blank `INGRESS_INSTANCE_LIMIT` used to mean a limit
+  of zero, which 429'd every inbound ingress webhook, and a blank `BULK_MAX_CONCURRENT_BATCHES` silently
+  meant unlimited. **Breaking (behavior):** partial config payloads now preserve omitted fields instead of
+  resetting them (the dashboard's full payload is byte-identical), and non-canonical `REDIS_ENABLED` values
+  — along with numeric variables spelled in exponent or hex notation — now fail boot. (#946, #960)
 
-- **Bulk batches re-validate rendered payloads and cancel terminally, and outbound rows stuck
-  PENDING after a crash are reaped.** Media presence/size was only checked at batch creation, so
-  `{{variables}}` and the `message:sending` hook could grow a payload past the cap afterwards —
-  every item is now re-validated post-gate (violations fail the item, honoring `stopOnError`). A
-  cancel landing before the first item could be fully overwritten by the cadence/final writes and
-  send the whole batch anyway; all status transitions are now DB-conditional on the current status,
-  so CANCELLED stays terminal (duplicate chatIds are deduped first-wins at creation). Rows left
-  PENDING when the process dies between the pre-send save and the final save previously stayed
-  PENDING forever (in the DB and in plugin search indexes); a periodic reaper
-  (`MESSAGE_REAPER_INTERVAL_MS`/`_GRACE_MS`/`_BATCH_SIZE`, defaults 10min/1h/50) marks them FAILED
-  with a `reapedAt` marker and re-emits `message:persisted` so hook-driven providers reconcile.
-  (#955, #958)
+- **Bulk batches re-validate rendered payloads and cancel terminally, and outbound rows stuck PENDING after
+  a crash are reaped.** Media presence/size was only checked at batch creation, so `{{variables}}` and the
+  `message:sending` hook could grow a payload past the cap afterwards — every item is now re-validated
+  post-gate (violations fail the item, honoring `stopOnError`). A cancel landing before the first item could
+  be fully overwritten by the cadence/final writes and send the whole batch anyway; all status transitions
+  are now DB-conditional on the current status, so CANCELLED stays terminal (only exact duplicate entries
+  are deduped first-wins at creation). Rows left PENDING when the process dies between the pre-send save and
+  the final save previously stayed PENDING forever (in the DB and in plugin search indexes); a periodic
+  reaper (`MESSAGE_REAPER_INTERVAL_MS`/`_GRACE_MS`/`_BATCH_SIZE`, defaults 10min/1h/50) marks them FAILED
+  with a `reapedAt` marker and re-emits `message:persisted` so hook-driven providers reconcile. The reap
+  write is itself conditional on the row still being PENDING, so a send that resolves between the sweep's
+  scan and its write keeps its own SENT outcome and engine message id. (#955, #958)
 
-- **API-key usage accounting no longer loses deltas, and the queue dashboard leaves an audit
-  trail.** A failed `pendingUsage` save dropped the accumulated delta and 500'd the request (the
-  delta now merges back and the request stands); nothing flushed on shutdown, so the last window's
-  usage vanished (a bounded `onModuleDestroy` flush now writes it). Bull Board rejected requests
-  with no audit record and queue-mutating UI actions left none either — 401/403s now write the
-  standard failed-auth row (429s are left to the limiter), and authenticated non-GET requests write
-  a new `QUEUE_BOARD_MUTATED` action with actor/method/path. The bootstrap `data/.api-key` file and
-  boot banner pointed at keys after rotation/revoke; the file is now removed when its key no
-  longer validates (checked by hash at boot, and on the revoke/delete paths). (#963)
+- **API-key usage accounting no longer loses deltas, and the queue dashboard leaves an audit trail.** A
+  failed `pendingUsage` save dropped the accumulated delta and 500'd the request (the delta now merges back
+  and the request stands); nothing flushed on shutdown, so the last window's usage vanished (a bounded
+  `onModuleDestroy` flush now writes it). Bull Board rejected requests with no audit record and
+  queue-mutating UI actions left none either — 401/403s now write the standard failed-auth row (429s are
+  left to the limiter), and authenticated non-GET requests write a new `QUEUE_BOARD_MUTATED` action with
+  actor/method/path. The bootstrap `data/.api-key` file and boot banner pointed at keys after
+  rotation/revoke; the file is now removed when its key no longer validates (checked by hash at boot, and on
+  the revoke/delete paths) — unless a key row still carries the file's prefix, which means the hash miss
+  came from a changed `API_KEY_PEPPER` rather than a dead key: the file then survives and a WARN names the
+  repair (restore the original pepper, or rotate the key). (#963)
 
-- **Group participant batches, template renders, and status media are bounded and reconciled, and
-  the Postgres FTS probe reads the active schema.** Participant arrays accept at most 256 entries
-  (the engine works them serially) and a partially-failing settings patch now names the failed
-  field instead of silently half-applying. Rendered templates are capped at
-  `TEMPLATE_RENDER_MAX_CHARS` (default 64 KiB) instead of growing unbounded. Status media used to
-  write the file before its row (a crash between them left a permanent orphan) and purge deleted
-  the row even when the file delete failed; ingest is now row-first with `write_failed` recorded on
-  attachment failure, purge keeps the row for the next sweep when the file delete fails, and a
-  periodic sweep reclaims `statuses/` files no row references after a grace period. The search FTS
-  probe queried `information_schema` unscoped, so a `POSTGRES_SCHEMA` deployment could read a
-  namesake table in another schema and pick the wrong availability posture in degraded states; it
-  now resolves the table through the session `search_path` via `to_regclass('messages')` and probe
-  errors fail closed without caching. **Breaking (behavior):** batches over 256 participants and
-  renders over the cap are now 400s. (#964, #966)
+- **Group participant batches, template renders, and status media are bounded and reconciled, and the
+  Postgres FTS probe reads the active schema.** Participant arrays accept at most 256 entries (the engine
+  works them serially) and a partially-failing settings patch now names the failed field instead of silently
+  half-applying. Rendered templates are capped at `TEMPLATE_RENDER_MAX_CHARS` (default 64 KiB) instead of
+  growing unbounded. Status media used to write the file before its row (a crash between them left a
+  permanent orphan) and purge deleted the row even when the file delete failed; ingest is now row-first with
+  `write_failed` recorded whenever the media ends up unattached — a failed file write or a failed post-write
+  row update — so the `status.received` webhook always names the reason for a missing attachment, purge
+  keeps the row for the next sweep when the file delete fails (and reports nothing purged when that is every
+  expired row), and a periodic sweep reclaims `statuses/` files no row references after a grace period,
+  walking that prefix in the store directly so a store larger than a single listing leaves no orphan
+  stranded. The search FTS probe queried `information_schema` unscoped, so a `POSTGRES_SCHEMA` deployment
+  could read a namesake table in another schema and pick the wrong availability posture in degraded states;
+  it now resolves the table through the session `search_path` via `to_regclass('messages')` and probe errors
+  fail closed without caching. **Breaking (behavior):** batches over 256 participants and renders over the
+  cap are now 400s. (#964, #966)
 
 - **Contract and documentation drift corrections.** `POST /api/sessions` returned the raw entity
   (leaking `config`/`proxyUrl`) instead of the documented DTO — it now maps through
@@ -238,34 +254,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **The HTTP body parser, the WebSocket gateway, and the plugin install path are now bounded against
-  memory-exhaustion and supply-chain attacks, and the dashboard's plugin frame and CSV export no
-  longer leak or inject.** Five hardening fixes: the bootstrap only enforced a **per-request**
-  `BODY_SIZE_LIMIT`, so N concurrent near-limit bodies pinned N×limit bytes before any guard ran
-  (the throttler sits behind the body parser) — a new aggregate in-flight body budget
-  (`INFLIGHT_BODY_BUDGET_BYTES`, default 4× the per-request cap) reserves `Content-Length` at
-  admission and counts chunked bytes per `data` event, rejecting over-budget requests with 503 +
-  `Retry-After` + `Connection: close` (exactly-once release across finish/close/error/abort).
-  The WebSocket gateway had no rate limit on handshakes (every connect did a DB lookup), no per-key
-  socket cap, and no per-frame throttle — an unauthenticated connection flood, a valid-key frame
-  flood, or socket exhaustion were all open; it now enforces three independent limits (per-IP
-  handshake window, per-key socket cap, per-token frame bucket), all memory-bounded by LRU maps
-  with re-insertion-on-touch so an active abuser cannot drift to the LRU head, and a new
-  `RATE_LIMIT_EXCEEDED` audit action is sampled at 1/min/kind+subject so the audit writes cannot
-  themselves become the flood. Plugin install accepted `http://` URLs with no integrity check
-  (MITM-substitutable executable code); the DTO now requires `https` and an optional sha256 pin
-  carried via URL fragment (`#sha256=…`, never sent to the server so a catalog download link can
-  carry it) or query, fail-closed on mismatch/malformed/conflict. The dashboard plugin config UI
+  memory-exhaustion and supply-chain attacks, and the dashboard's plugin frame and CSV export no longer leak
+  or inject.** Five hardening fixes: the bootstrap only enforced a **per-request** `BODY_SIZE_LIMIT`, so N
+  concurrent near-limit bodies pinned N×limit bytes before any guard ran (the throttler sits behind the body
+  parser) — a new aggregate in-flight body budget (`INFLIGHT_BODY_BUDGET_BYTES`, default 4× the per-request
+  cap) reserves `Content-Length` at admission, rejecting over-budget requests with 503 + `Retry-After` +
+  `Connection: close` (exactly-once release across finish/close/error/abort). A chunk-encoded body declares
+  no length, so it takes a small opening reservation that is then reconciled against the bytes actually read
+  off the socket — a tiny chunked upload never costs a whole request slot, and one that grows past the
+  aggregate is aborted mid-stream. Reservations cannot be squatted on either: a sender that ships headers
+  and then goes silent is dropped after 15s without new body bytes rather than holding its declared size
+  until Node's request timeout, while any progress resets that clock and a fully-received request is never
+  reaped no matter how long its handler runs. The request stream is never tapped, so consumers that attach
+  late — the multipart parser, running after the async guards — still see every chunk. The WebSocket gateway
+  had no rate limit on handshakes (every connect did a DB lookup), no per-key socket cap, and no per-frame
+  throttle — an unauthenticated connection flood, a valid-key frame flood, or socket exhaustion were all
+  open; it now enforces three independent limits (per-IP handshake window, per-key socket cap, per-token
+  frame bucket). The handshake window is charged before authentication, so a flood never reaches the key
+  lookup, and refunded once the handshake proves authentic — it therefore bounds **failed** handshakes,
+  while authenticated volume stays bounded by the socket cap and clients sharing one NAT or reverse-proxy
+  address cannot shut each other out of the dashboard. All three are memory-bounded by LRU maps with
+  re-insertion-on-touch so an active abuser cannot drift to the LRU head, and a new `RATE_LIMIT_EXCEEDED`
+  audit action is sampled at 1/min/kind+subject so the audit writes cannot themselves become the flood.
+  Plugin install accepted `http://` URLs with no integrity check (MITM-substitutable executable code); the
+  DTO now requires `https` and an optional sha256 pin carried via URL fragment (`#sha256=…`, never sent to
+  the server so a catalog download link can carry it), fail-closed on a malformed marker or a digest
+  mismatch — the fragment is the only honored marker, since a `sha256`/`checksum` query parameter belongs to
+  the download host and seizing it would mis-verify an unrelated URL. The dashboard plugin config UI
   rendered in an `allow-scripts` sandbox that inherits the dashboard CSP (which allows any `https:`
-  `img-src`/`media-src`) — a meta-CSP (`img-src 'self' data:`, `media-src 'self' data:`,
-  `connect-src 'none'`) is now injected as the frame's first `<head>` element, closing the egress
-  channel `sandbox` alone cannot block. The audit-log CSV export quoted only `,`/`\n`/`"`, so an
-  attacker-influenced string starting with `=`/`+`/`@`/`-` became a formula when an operator opened
-  the export in a spreadsheet — cells are now apostrophe-prefixed before structural quoting.
-  **Breaking (behavior):** legitimate concurrent sends that together exceed the aggregate body
-  budget now get a transient 503 (raise `INFLIGHT_BODY_BUDGET_BYTES`); a frame/handshake/socket
-  that exceeds its limit is closed with a `RATE_LIMIT_EXCEEDED` audit row; a plugin install over
-  `http://` is now rejected (use `https://`); a config-UI plugin that hot-links remote media will
-  render broken until its CSP-compliant equivalent is used. (#936, #937, #942, #939)
+  `img-src`/`media-src`) — a meta-CSP (`img-src 'self' data:`, `media-src 'self' data:`, `connect-src
+  'none'`) is now injected as the frame's first `<head>` element, closing the egress channel `sandbox` alone
+  cannot block. The audit-log CSV export quoted only `,`/`\n`/`"`, so an attacker-influenced string starting
+  with `=`/`+`/`@`/`-` became a formula when an operator opened the export in a spreadsheet — cells are now
+  apostrophe-prefixed before structural quoting. **Breaking (behavior):** legitimate concurrent sends that
+  together exceed the aggregate body budget now get a transient 503 (raise `INFLIGHT_BODY_BUDGET_BYTES`),
+  and a client that sends request headers and then transmits nothing for 15s has its connection dropped; a
+  frame/handshake/socket that exceeds its limit is closed with a `RATE_LIMIT_EXCEEDED` audit row; a plugin
+  install over `http://` is now rejected (use `https://`); a config-UI plugin that hot-links remote media
+  will render broken until its CSP-compliant equivalent is used. (#936, #937, #942, #939)
 
 - **Release workflows now pin every GitHub Action to a commit SHA and stop re-pointing `:latest` on
   every main push, and the production Docker build context no longer leaks `.git/`, agent
@@ -293,28 +319,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves the tag — only a tagged release does; `npm install` now fails where it previously reported
   success over a broken dashboard/patch. (#940, #943)
 
-- **The create-instance and regenerate-secret responses no longer echo plaintext values for
-  secret-flagged config fields, and the whatsapp-web.js engine no longer reports phantom success
-  for operations it never performed.** Two related honesty fixes:
-  `(POST /integration/plugins/:pluginId/instances, …/regenerate-secret)` rendered the raw instance
-  row when `reveal=true`, bypassing `maskedView` — so any config field flagged `secret: true` at any
-  nesting depth (a nested `credentials.apiToken`, an array-row `webhooks[].signingKey`) was returned
-  in plaintext alongside the one-time ingress secret/verifyToken reveal. The view builder now always
-  starts from `maskedView` (fail-closed when the schema is unavailable) and unmasks only the two
-  documented "revealed once" fields. Separately, several whatsapp-web.js adapter methods reported
-  success for work that never happened: `subscribeToChannel` fabricated `{id:"undefined"}` from a
-  boolean return, `add/remove/promote/demoteParticipants` discarded the per-participant outcome
-  (so a 403 not-admin / 404 not-registered / 409 already-member was a plain 2xx), the catalog reads
-  (`getCatalog/getProducts/getProduct`) were phantom stubs returning `null`/`[]`, and a dead
-  Chromium page was folded into a 404/400 not-found. These now answer honestly: 501 for the
-  unwired catalog/subscribe paths, 403 on a total participant refusal or a discarded `false` boolean
-  (subject/description/unsubscribe), 503 with `EngineTransportError` for a transport death, and an
-  additive `results` field on the four participant endpoints carrying the per-participant outcome.
-  `getProfilePicture` received the same transport-death treatment for consistency. **Breaking
-  (behavior):** callers that previously read their own config secret back from the create response
-  now receive `***`, and any client that programmed against a phantom 2xx for the engine operations
-  above will see the new 4xx/5xx where the operation genuinely cannot succeed. Response envelopes
-  are otherwise additive only. (#929, #925)
+- **The create-instance and regenerate-secret responses no longer echo plaintext values for secret-flagged
+  config fields, and the whatsapp-web.js engine no longer reports phantom success for operations it never
+  performed.** Two related honesty fixes: `(POST /integration/plugins/:pluginId/instances,
+  …/regenerate-secret)` rendered the raw instance row when `reveal=true`, bypassing `maskedView` — so any
+  config field flagged `secret: true` at any nesting depth (a nested `credentials.apiToken`, an array-row
+  `webhooks[].signingKey`) was returned in plaintext alongside the one-time ingress secret/verifyToken
+  reveal. The view builder now always starts from `maskedView` (fail-closed when the schema is unavailable)
+  and unmasks only the two documented "revealed once" fields. Separately, several whatsapp-web.js adapter
+  methods reported success for work that never happened: `subscribeToChannel` fabricated `{id:"undefined"}`
+  from a boolean return, `add/remove/promote/demoteParticipants` discarded the per-participant outcome (so a
+  403 not-admin / 404 not-registered / 409 already-member was a plain 2xx), the catalog reads
+  (`getCatalog/getProducts/getProduct`) were phantom stubs returning `null`/`[]`, and a dead Chromium page
+  was folded into a 404/400 not-found. These now answer honestly: 501 for the unwired catalog/subscribe
+  paths, 403 on a total participant refusal or a discarded `false` boolean
+  (subject/description/unsubscribe), 503 with `EngineTransportError` for a transport death, and an additive
+  `results` field on the four participant endpoints carrying the per-participant outcome. Where
+  whatsapp-web.js delivered a private group invite instead of adding the member, that entry is a success
+  carrying the 403 status and an invite-sent message, so an all-invite batch resolves rather than reading as
+  a total refusal; the remove/promote/demote entries, which the library only confirms as a whole batch, say
+  so in their message instead of implying an individually confirmed outcome. `getProfilePicture` received
+  the same transport-death treatment for consistency. **Breaking (behavior):** callers that previously read
+  their own config secret back from the create response now receive `***`, and any client that programmed
+  against a phantom 2xx for the engine operations above will see the new 4xx/5xx where the operation
+  genuinely cannot succeed. Response envelopes are otherwise additive only. (#929, #925)
 
 - **Plugin ingress routes with `signature.scheme: 'none'` now require an explicit opt-in.** A `none`-scheme
   route is an unauthenticated `@Public()` endpoint that, once an integration instance is provisioned
@@ -351,52 +379,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into `node:22-slim` — and the arm64-only `chromium` packages — that the source-tree `npm audit`
   gate cannot see. Runs at release time only, so it never touches fork-PR token permissions.
 
-- **Session-scoped API keys can no longer escape their fence through key management or integration
-  instance management, and plugin `conversation.send` now verifies the mapping belongs to the
-  envelope's session.** The guard enforces `allowedSessions` only against the `:sessionId` route
-  param, so surfaces without one slipped through: every `/api/auth/api-keys` route (a scoped ADMIN
-  could mint an unrestricted ADMIN key, clear another key's scope, or enumerate all credentials —
-  a total, persistent escape) and the integration instance routes (whose `sessionScope` travels in
-  the request body and persisted rows the guard never sees). A new `@RequireUnscopedKey()` marker
-  rejects any allowlisted key on the key-lifecycle controller (403, audited via the existing
-  failed-auth trail), and instance create/patch/redrive now intersect the requested and persisted
-  scopes with the caller's allowlist — out-of-scope instances answer 404 (indistinguishable from
-  missing, so they cannot be probed), and an all-sessions scope is uncreatable by scoped keys.
-  Separately, `conversation.send` resolved a provider-conversation mapping without comparing its
-  `sessionId` to the envelope session, so a stale mapping after a scope move could send on the
-  wrong WhatsApp session; the lookup now fails closed on any mismatch (an explicit `chatId` in the
-  envelope is unaffected). **Breaking (behavior):** session-scoped ADMIN keys now get 403 on all
-  key-management routes and can only manage instances bound inside their own sessions; unrestricted
-  keys (including the bootstrap key) are unchanged. (#916, #920)
+- **Session-scoped API keys can no longer escape their fence through key management or integration instance
+  management, and plugin `conversation.send` now verifies the mapping belongs to the envelope's session.**
+  The guard enforces `allowedSessions` only against the `:sessionId` route param, so surfaces without one
+  slipped through: every `/api/auth/api-keys` route (a scoped ADMIN could mint an unrestricted ADMIN key,
+  clear another key's scope, or enumerate all credentials — a total, persistent escape) and the integration
+  instance routes (whose `sessionScope` travels in the request body and persisted rows the guard never
+  sees). A new `@RequireUnscopedKey()` marker rejects any allowlisted key on the key-lifecycle controller
+  (403, audited via the existing failed-auth trail), and instance create/patch/redrive now intersect the
+  requested and persisted scopes with the caller's allowlist — out-of-scope instances answer 404
+  (indistinguishable from missing, so they cannot be probed), and an all-sessions scope is uncreatable by
+  scoped keys. Separately, `conversation.send` resolved a provider-conversation mapping without comparing
+  its `sessionId` to the envelope session, so a stale mapping after a scope move could send on the wrong
+  WhatsApp session; the lookup now fails closed on any mismatch (an explicit `chatId` in the envelope is
+  unaffected) — except when the mapping's own session no longer exists, which means the operator deleted and
+  re-paired it: the row is stale rather than cross-session, so it is rebound to the envelope's (already
+  activation-gated) session and the send proceeds, and a mapping upsert that collides with such a dead
+  session's row supersedes it instead of failing forever. Without that repair a deleted session's rows
+  bricked `conversation.send` for that conversation permanently. A mapping owned by another live session is
+  still a genuine violation and still fails closed. **Breaking (behavior):** session-scoped ADMIN keys now
+  get 403 on all key-management routes and can only manage instances bound inside their own sessions;
+  unrestricted keys (including the bootstrap key) are unchanged. (#916, #920)
 
-- **The last-admin guard is race-safe, and webhook media fan-out is bounded.** The
-  last-usable-admin check ran check-then-act across an `await`, so two concurrent demote/delete
-  requests against the last two admins both passed and produced a total management lockout; the
-  check and its mutation now share one in-process mutex (a DB transaction cannot provide this
-  atomicity on the better-sqlite3 driver), entered only when an operation can actually strip admin
-  capability. On the webhook side, one inbound media message cloned its full base64 payload per
-  registered webhook (with no per-session webhook cap) and retained it in Redis on failure: new
-  registrations above `WEBHOOK_MAX_PER_SESSION` (default 16; existing webhooks grandfathered) are
-  rejected, media above `WEBHOOK_MEDIA_INLINE_MAX_BYTES` (default 1 MiB) travels as an omitted
-  marker instead of inline base64, oversized serialized bodies shed their media before enqueue
-  (delivering the event as a marker rather than dropping it), and the serialized bytes are built
-  once per delivery for both signing and posting. **Breaking (behavior):** media above the inline
-  threshold now arrives as a marker (fetch it via history or raise the knob), and webhook
-  registration past the cap returns 400. (#950, #948)
+- **The last-admin guard is race-safe, and webhook media fan-out is bounded.** The last-usable-admin check
+  ran check-then-act across an `await`, so two concurrent demote/delete requests against the last two admins
+  both passed and produced a total management lockout; the check and its mutation now share one in-process
+  mutex (a DB transaction cannot provide this atomicity on the better-sqlite3 driver), entered whenever the
+  target key is an ADMIN and the operation can strip its capability, with the target re-read inside the
+  critical section so the decision never runs against a pre-lock snapshot. A usable admin is an active,
+  unexpired ADMIN key with no session scope: the key-lifecycle routes are fenced behind
+  `@RequireUnscopedKey()`, so a session-scoped admin can authenticate but can never manage keys, and
+  counting it as a survivor would bless the removal of the last key that can — a lockout with no in-band
+  recovery, since the boot seed only re-seeds an empty key table. Applying a session scope to the last
+  unscoped admin is therefore refused with **409 Conflict**, exactly like demoting, revoking, deleting, or
+  expiring it. On the webhook side, one inbound media message cloned its full base64 payload per registered
+  webhook (with no per-session webhook cap) and retained it in Redis on failure: new registrations above
+  `WEBHOOK_MAX_PER_SESSION` (default 16; existing webhooks grandfathered) are rejected, media above
+  `WEBHOOK_MEDIA_INLINE_MAX_BYTES` (default 1 MiB) travels as an omitted marker instead of inline base64,
+  oversized serialized bodies shed their media before enqueue (delivering the event as a marker rather than
+  dropping it), and the serialized bytes are built once per delivery for both signing and posting.
+  **Breaking (behavior):** media above the inline threshold now arrives as a marker (fetch it via history or
+  raise the knob), and webhook registration past the cap returns 400. (#950, #948)
 
-- **The plugin sandbox runtime is bounded and no longer fails silently.** A hung plugin could pin
-  all 32 in-flight capability slots forever — capability RPCs now time out
-  (`PLUGIN_CAP_TIMEOUT_MS`, default 30s), freeing the slot and logging late settles as warnings
-  (worker work already running is not cancelled, by design). Hook handler errors inside the sandbox
-  were swallowed wholesale; the first handler error per hook now surfaces as a rate-limited
-  structured host log and in the plugin's health check. Per-plugin storage writes are quota-bounded
-  (`PLUGIN_STORAGE_MAX_BYTES`, default 50 MiB) and the log relay truncates and caps throughput per
-  plugin. Plugin search-provider responses are validated at the host boundary — malformed
-  hits/totals now fail with 502 instead of a bogus 200/500. `conversation.send` with
-  `type: 'location'` fell through to an empty text message; coordinates are now part of the
-  envelope and send a real location (invalid ranges are rejected). **Breaking (behavior):**
-  malformed plugin search results now 502, and plugins relying on the empty-text fallthrough get an
-  explicit error. (#954)
+- **The plugin sandbox runtime is bounded and no longer fails silently.** A hung plugin could pin all 32
+  in-flight capability slots forever — capability RPCs now time out (`PLUGIN_CAP_TIMEOUT_MS`, default 30s),
+  freeing the slot and logging late settles as warnings (worker work already running is not cancelled, by
+  design). Hook handler errors inside the sandbox were swallowed wholesale; the first handler error per hook
+  now surfaces as a rate-limited structured host log and in the plugin's health check, and a plugin whose
+  load fails at boot has its registry entry reconciled to ERROR instead of still reporting installed/enabled
+  (the operator config is preserved, and a later successful load restores the status). Per-plugin storage
+  writes are quota-bounded (`PLUGIN_STORAGE_MAX_BYTES`, default 50 MiB) and the log relay truncates, caps
+  throughput per plugin, and flushes its dropped-line count on worker exit so a plugin that goes quiet
+  before the window rolls over still reports what it dropped. Plugin search-provider responses are validated
+  at the host boundary — malformed hits/totals now fail with 502 instead of a bogus 200/500.
+  `conversation.send` with `type: 'location'` fell through to an empty text message; coordinates are now
+  part of the envelope and send a real location (invalid ranges are rejected). **Breaking (behavior):**
+  malformed plugin search results now 502, and plugins relying on the empty-text fallthrough get an explicit
+  error. (#954)
 
 ### Changed
 
@@ -448,11 +487,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ten operator-tunable environment variables are now documented in `.env.example`.**
   `INGRESS_MAX_ATTEMPTS`, `INGRESS_RETRY_DELAY_MS`, `INGRESS_RETENTION_DAYS`, `SSRF_DNS_TIMEOUT_MS`,
   `INGRESS_WORKER_CONCURRENCY`, `WEBHOOK_WORKER_CONCURRENCY`, `INBOUND_MEDIA_CONCURRENCY`,
-  `STATUS_MEDIA_MAX_BYTES`, `PLUGIN_DOWNLOAD_MAX_BYTES`, and `BULK_MAX_CONCURRENT_BATCHES` are read
-  from the environment with sensible defaults but were absent from the configuration reference. Each
-  is now documented next to its related block, with the exact default and the parse semantics
-  (`INGRESS_RETENTION_DAYS <= 0` disables pruning, `BULK_MAX_CONCURRENT_BATCHES = 0` is unlimited, the
-  DoS trade-off on `SSRF_DNS_TIMEOUT_MS`).
+  `STATUS_MEDIA_MAX_BYTES`, `PLUGIN_DOWNLOAD_MAX_BYTES`, and `BULK_MAX_CONCURRENT_BATCHES` are read from the
+  environment with sensible defaults but were absent from the configuration reference. Each is now
+  documented next to its related block, with the exact default and the parse semantics
+  (`INGRESS_RETENTION_DAYS <= 0` disables pruning, `BULK_MAX_CONCURRENT_BATCHES = 0` is unlimited, the DoS
+  trade-off on `SSRF_DNS_TIMEOUT_MS`). The numeric knobs whose `0` is a documented opt-out also share one
+  parse rule now: the value must be plain decimal digits, an explicit `0` selects that knob's opt-out
+  (unlimited for `BULK_MAX_CONCURRENT_BATCHES` and `LID_MAPPING_CACHE_MAX`, sweep-off for
+  `MESSAGE_REAPER_INTERVAL_MS` and `INGRESS_RECONCILE_INTERVAL_MS`), and a blank or otherwise unparseable
+  value falls back to the documented default rather than the opt-out — a compose `${KEY:-}` forward or a
+  stray typo can no longer silently disable a cap, a sweep, or a retry backoff.
 
 - **Dockerfile `apt-get install` invocations now use `--no-install-recommends`**
   (build-stage build deps and production-stage Chromium/Puppeteer deps).
@@ -498,26 +542,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The peer-fed Baileys session maps and chat-history inline media are now bounded, and an RFC for
   wa-version content integrity is open for a maintainer decision.** `BaileysSessionStore` held five
-  unbounded maps fed by peer traffic (contacts, chats, lastMessages, lid, ephemeral markers); all
-  are now LRU-capped at `BAILEYS_SESSION_STORE_MAX_ENTRIES` (default 5000, `0` restores unbounded)
-  with defined fallbacks on eviction. `getChatHistory(includeMedia=true)` accumulated up to ~100 ×
-  50 MiB of base64 in one response with no way to cancel — an aggregate budget
-  (`CHAT_HISTORY_MEDIA_BUDGET_BYTES`, default 25 MiB) now omits further media behind the existing
-  `omitted` marker, and the loop honors request abort. `docs/plans/2026-07-27-wa-version-integrity-options.md`
-  analyzes the structural options for integrity-checking the pinned WhatsApp Web HTML (per-release
-  hash allowlist, signed hash channel/mirror, documented accepted-risk, operator pins) and asks the
-  maintainer for a decision; the transparency layer (warn log, accurate docs, dashboard source
-  badge) already shipped. (#951, #962)
+  unbounded maps fed by peer traffic (contacts, chats, lastMessages, lid, ephemeral markers); all are now
+  LRU-capped at `BAILEYS_SESSION_STORE_MAX_ENTRIES` (default 5000, `0` restores unbounded) with defined
+  fallbacks on eviction. `getChatHistory(includeMedia=true)` accumulated up to ~100 × 50 MiB of base64 in
+  one response with no way to cancel — an aggregate budget (`CHAT_HISTORY_MEDIA_BUDGET_BYTES`, default 25
+  MiB) now omits further media behind the existing `omitted` marker, and the loop honors request abort. A
+  caller that ingests into a store rather than into one HTTP response — the status seed, which passes its
+  own per-item media cap — is budgeted from that cap instead of the response default, so a story feed
+  carrying several full-size videos is stored whole while the pass stays bounded.
+  `docs/plans/2026-07-27-wa-version-integrity-options.md` analyzes the structural options for
+  integrity-checking the pinned WhatsApp Web HTML (per-release hash allowlist, signed hash channel/mirror,
+  documented accepted-risk, operator pins) and asks the maintainer for a decision; the transparency layer
+  (warn log, accurate docs, dashboard source badge) already shipped. (#951, #962)
 
-- **MCP tool inputs now enforce the same caps as the REST DTOs, and the dashboard's catalogs and
-  modals are complete.** Nine MCP tool fields (location description/address, contact name/number,
-  reply text, reaction emoji, group name/subject/description) accepted values the equivalent REST
-  endpoints reject — the Zod schemas now share the DTOs' cap constants. On the dashboard, 15
-  `plugins.*` keys used by the Plugins page are translated in all 12 locales, count badges use real
-  plural forms (including the Arabic and Hebrew category sets), `failed`/`authenticating` session
-  statuses render localized in both status renderers, and all 13 hand-written modals moved to the
-  shared Modal with `role="dialog"`, focus trap + restore-to-trigger, Escape-to-close, and
-  background scroll-lock. (#959, #965)
+- **MCP tool inputs now enforce the same caps as the REST DTOs, and the dashboard's catalogs and modals are
+  complete.** Nine MCP tool fields (location description/address, contact name/number, reply text, reaction
+  emoji, group name/subject/description) accepted values the equivalent REST endpoints reject — the Zod
+  schemas now share the DTOs' cap constants, including the 256-entry participant cap on the group create/add
+  tools. `GroupAddParticipants` also returns the per-participant `results` and derives its `success` flag
+  from them, so a batch in which every participant was refused (not registered, already a member) no longer
+  reports success to the caller; a partial refusal reports how many were added rather than failing the
+  batch. On the dashboard, 15 `plugins.*` keys used by the Plugins page are translated in all 12 locales,
+  count badges use real plural forms (including the Arabic and Hebrew category sets),
+  `failed`/`authenticating` session statuses render localized in both status renderers, and all 13
+  hand-written modals moved to the shared Modal with `role="dialog"`, focus trap + restore-to-trigger,
+  Escape-to-close, and background scroll-lock. (#959, #965)
 
 - **CI now boots the queued dispatch path against a real Redis, and the Docker managed profiles
   match compose.** A new `queue-on` e2e suite starts the app with `QUEUE_ENABLED=true` against a
