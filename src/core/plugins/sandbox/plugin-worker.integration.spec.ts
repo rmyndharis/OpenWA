@@ -54,13 +54,13 @@ describe('plugin worker — real worker_threads round-trip (B1)', () => {
     const host = makeHost();
     await host.load(UNLOAD_FIXTURE);
     await host.runLifecycle('onEnable');
-    await expect(host.healthCheck()).resolves.toMatchObject({ message: 'loaded' });
+    await expect(host.healthCheck(3000)).resolves.toMatchObject({ message: 'loaded' });
 
     await host.runLifecycle('onUnload');
 
     // The worker-side instance observed its onUnload — before this hook was dispatched on the
     // unload path, a sandboxed plugin's cleanup (timers, connections) never ran.
-    await expect(host.healthCheck()).resolves.toMatchObject({ message: 'unloaded' });
+    await expect(host.healthCheck(3000)).resolves.toMatchObject({ message: 'unloaded' });
     await host.terminate();
   });
 
