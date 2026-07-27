@@ -2,8 +2,8 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import Docker from 'dockerode';
 
 /**
- * The only Docker profiles OpenWA manages (and may start/stop/remove). Used to bound teardown so a
- * caller-supplied profile name can never reach removeService for an unrelated container.
+ * The only Docker profiles OpenWA manages (and may start/stop). Used to bound teardown so a
+ * caller-supplied profile name can never reach stopManagedService for an unrelated container.
  */
 export const MANAGED_DOCKER_PROFILES: readonly string[] = ['postgres', 'redis', 'minio'];
 
@@ -20,7 +20,6 @@ interface OrchestrationResult {
   message: string;
   containersStarted: string[];
   containersStopped: string[];
-  containersRemoved: string[];
   errors: string[];
   estimatedTime: number; // Estimated restart time in seconds
 }
@@ -426,42 +425,32 @@ export class DockerService implements OnModuleInit {
   }
 
   /**
-   * Stop and remove a container by service name to save space
+   * Stop a managed profile's container and RETAIN it for a later re-enable.
+   *
+   * Deliberately stop-only — no `container.remove()`. The bundled docker-socket-proxy
+   * (tecnativa/docker-socket-proxy, pinned v0.4.2) never reads its `DELETE` env flag: its
+   * haproxy.cfg method gate is `deny unless METH_GET || env(POST)`, so container deletion is
+   * admitted only as an undocumented side effect of POST being enabled — a contract any proxy
+   * upgrade may withdraw. Stopping needs nothing beyond POST /containers/{id}/stop, which the
+   * orchestration feature already requires, and retention is what the disable→re-enable flow
+   * wants anyway: the named data volume and container config survive, and
+   * startService()/createService() simply restart the retained container. Stop-only is also
+   * strictly less destructive (a remove with `v: true` discards anonymous volumes).
+   *
+   * Caveat: a retained container keeps its original env. If the service's credentials changed
+   * while it was disabled, remove the container from the host (`docker rm <name>`) before
+   * re-enabling so it is recreated fresh. To reclaim disk space, likewise remove it manually.
    */
-  async removeService(profile: string): Promise<boolean> {
-    this.logger.log(`Removing service with profile: ${profile}`);
+  async stopManagedService(profile: string): Promise<boolean> {
+    this.logger.log(`Stopping service with profile: ${profile} (container retained, not removed)`);
 
-    // First try to get the container and remove via dockerode
     const serviceMap: Record<string, string> = {
       postgres: 'database',
       redis: 'cache',
       minio: 'storage',
     };
 
-    const service = serviceMap[profile] || profile;
-    const container = await this.getContainerByService(service);
-
-    if (container) {
-      try {
-        const info = await container.inspect();
-        if (info.State.Running) {
-          await container.stop();
-          this.logger.log(`Stopped container: ${profile}`);
-        }
-        // v: true removes only the container's ANONYMOUS volumes; named datastore volumes
-        // (redis/postgres/minio data) are preserved, so disable + re-enable keeps the data.
-        await container.remove({ v: true });
-        this.logger.log(`Removed container: ${profile}`);
-        return true;
-      } catch (error) {
-        this.logger.error(`Failed to remove container: ${error instanceof Error ? error.message : error}`);
-        return false;
-      }
-    }
-
-    // Container doesn't exist - that's fine for removal
-    this.logger.log(`Container for service '${profile}' not found, nothing to remove`);
-    return true;
+    return this.stopService(serviceMap[profile] || profile);
   }
 
   /**
@@ -507,7 +496,6 @@ export class DockerService implements OnModuleInit {
       message: '',
       containersStarted: [],
       containersStopped: [],
-      containersRemoved: [],
       errors: [],
       estimatedTime,
     };

@@ -965,7 +965,9 @@ export class InfraController {
     const profiles = body?.profiles || [];
     const profilesToRemove = body?.profilesToRemove || [];
     let orchestrationResult: object | undefined;
-    let removalResult: { removed: string[]; errors: string[] } | undefined;
+    // Teardown is stop-only (see DockerService.stopManagedService): containers are stopped and
+    // retained for re-enable, never deleted — the result below reports exactly that.
+    let removalResult: { stopped: string[]; errors: string[] } | undefined;
 
     this.logger.log('Restart requested', { profiles });
     this.logger.log('Profiles to remove', { profilesToRemove });
@@ -979,7 +981,7 @@ export class InfraController {
       // away from a built-in backend and then reloading the page before restarting can leave the old
       // container running until the next explicit change.)
       // Only ever tear down OpenWA-managed services. An arbitrary profile name (or the empty string)
-      // would otherwise reach removeService and, via container-name matching, could stop an unrelated
+      // would otherwise reach stopManagedService and, via container-name matching, could stop an unrelated
       // container — so constrain teardown to the managed allowlist and drop anything else.
       const requested = profilesToRemove.filter(p => !profiles.includes(p));
       const toRemove = requested.filter(p => MANAGED_DOCKER_PROFILES.includes(p));
@@ -988,24 +990,24 @@ export class InfraController {
         this.logger.warn('Ignoring non-managed profiles in profilesToRemove', { ignored });
       }
 
-      // First, remove containers for disabled services
+      // First, stop containers for disabled services (stop-only: retained, never deleted)
       if (toRemove.length > 0) {
-        this.logger.log('Removing disabled profiles...', { toRemove });
-        removalResult = { removed: [], errors: [] };
+        this.logger.log('Stopping disabled profiles (containers retained)...', { toRemove });
+        removalResult = { stopped: [], errors: [] };
 
         for (const profile of toRemove) {
           try {
-            const success = await this.dockerService.removeService(profile);
+            const success = await this.dockerService.stopManagedService(profile);
             if (success) {
-              removalResult.removed.push(profile);
+              removalResult.stopped.push(profile);
             } else {
-              removalResult.errors.push(`Failed to remove ${profile}`);
+              removalResult.errors.push(`Failed to stop ${profile}`);
             }
           } catch (err) {
-            removalResult.errors.push(`Error removing ${profile}: ${err}`);
+            removalResult.errors.push(`Error stopping ${profile}: ${err}`);
           }
         }
-        this.logger.log('Removal result', { removalResult });
+        this.logger.log('Teardown result', { removalResult });
       }
 
       // Then, start containers for enabled services

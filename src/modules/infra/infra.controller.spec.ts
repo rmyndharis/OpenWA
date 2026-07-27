@@ -1125,21 +1125,42 @@ describe('InfraController.requestRestart constrains teardown to managed profiles
       { shutdown: jest.fn() } as never, // shutdownService
     );
 
-  it('removes only allowlisted profiles, never an unknown or empty entry', async () => {
-    const removeService = jest.fn().mockResolvedValue(true);
+  it('tears down only allowlisted profiles, never an unknown or empty entry', async () => {
+    const stopManagedService = jest.fn().mockResolvedValue(true);
     const controller = buildController({
       isDockerAvailable: () => true,
-      removeService,
+      stopManagedService,
       orchestrateProfiles: jest.fn().mockResolvedValue({}),
     });
 
     // '' (matches any container by substring) and 'evil' must be dropped; only managed profiles act.
     await controller.requestRestart({ profilesToRemove: ['', 'evil', 'postgres', 'redis'] });
 
-    const removed = removeService.mock.calls.map(call => String((call as unknown[])[0])).sort();
-    expect(removed).toEqual(['postgres', 'redis']);
-    expect(removed).not.toContain('');
-    expect(removed).not.toContain('evil');
+    const torn = stopManagedService.mock.calls.map(call => String((call as unknown[])[0])).sort();
+    expect(torn).toEqual(['postgres', 'redis']);
+    expect(torn).not.toContain('');
+    expect(torn).not.toContain('evil');
+  });
+
+  it('reports teardown as stopped-not-removed, with honest per-profile errors', async () => {
+    const stopManagedService = jest
+      .fn()
+      .mockResolvedValueOnce(true) // postgres stops cleanly
+      .mockResolvedValueOnce(false); // redis fails
+    const controller = buildController({
+      isDockerAvailable: () => true,
+      stopManagedService,
+      orchestrateProfiles: jest.fn().mockResolvedValue({}),
+    });
+
+    const result = await controller.requestRestart({ profilesToRemove: ['postgres', 'redis'] });
+
+    // Teardown is stop-only (containers are retained, never deleted) — the payload must say so.
+    expect(result.removal).toEqual({
+      stopped: ['postgres'],
+      errors: ['Failed to stop redis'],
+    });
+    expect(JSON.stringify(result.removal)).not.toContain('removed');
   });
 });
 

@@ -71,6 +71,64 @@ describe('DockerService.buildDockerOptions', () => {
   });
 });
 
+describe('DockerService.stopManagedService (stop-only teardown)', () => {
+  // Teardown is deliberately stop-only: the pinned docker-socket-proxy v0.4.2 never reads its
+  // DELETE env flag (deletion is admitted only as an undocumented side effect of its POST
+  // method gate), so the code must not depend on container.remove() at all.
+  const makeService = (container: unknown) => {
+    const service = new DockerService();
+    const getContainerByService = jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+    return { service, getContainerByService };
+  };
+
+  it('maps the profile to its service label and stops a running container without removing it', async () => {
+    const container = {
+      inspect: jest.fn().mockResolvedValue({ State: { Running: true } }),
+      stop: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn(),
+    };
+    const { service, getContainerByService } = makeService(container);
+
+    await expect(service.stopManagedService('postgres')).resolves.toBe(true);
+
+    expect(getContainerByService).toHaveBeenCalledWith('database');
+    expect(container.stop).toHaveBeenCalledTimes(1);
+    expect(container.remove).not.toHaveBeenCalled();
+  });
+
+  it('leaves an already-stopped container alone (no stop, no remove)', async () => {
+    const container = {
+      inspect: jest.fn().mockResolvedValue({ State: { Running: false } }),
+      stop: jest.fn(),
+      remove: jest.fn(),
+    };
+    const { service } = makeService(container);
+
+    await expect(service.stopManagedService('redis')).resolves.toBe(true);
+
+    expect(container.stop).not.toHaveBeenCalled();
+    expect(container.remove).not.toHaveBeenCalled();
+  });
+
+  it('returns true when the container is already gone', async () => {
+    const { service } = makeService(null);
+    await expect(service.stopManagedService('minio')).resolves.toBe(true);
+  });
+
+  it('reports failure honestly when stop fails (and still never removes)', async () => {
+    const container = {
+      inspect: jest.fn().mockResolvedValue({ State: { Running: true } }),
+      stop: jest.fn().mockRejectedValue(new Error('daemon gone')),
+      remove: jest.fn(),
+    };
+    const { service } = makeService(container);
+
+    await expect(service.stopManagedService('postgres')).resolves.toBe(false);
+
+    expect(container.remove).not.toHaveBeenCalled();
+  });
+});
+
 describe('DockerService.getContainerByService exact-name fallback', () => {
   // Label lookup returns nothing → exercises the name fallback. The fallback must match the exact
   // OpenWA-managed container name, never a substring (a substring — and especially the empty string —

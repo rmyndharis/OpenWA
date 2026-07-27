@@ -15,13 +15,28 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      # Minimal set that keeps DockerService (src/modules/docker/docker.service.ts) working:
+      # PING (health), INFO (getSystemInfo), CONTAINERS (list/inspect/create/start/stop),
+      # IMAGES (pull), VOLUMES (createVolume). POST is the proxy's single all-or-nothing
+      # method gate for non-GET requests (haproxy.cfg: `deny unless METH_GET || env(POST)`).
+      # Two consequences of the pinned v0.4.2 config, accepted and documented in SECURITY.md:
+      #  - its `DELETE` env flag is dead config (never read), so it is not set here; DELETE is
+      #    admitted to enabled paths as a side effect of POST — OpenWA itself never issues
+      #    deletes (profile teardown is stop-only, see DockerService.stopManagedService).
+      #  - the proxy cannot scope container-create payloads, so a compromised API container
+      #    could create containers with host bind-mounts. If you don't use the built-in
+      #    datastore orchestration (Dashboard > Infrastructure built-in toggles), disable
+      #    this service entirely, e.g. via a docker-compose.override.yml:
+      #      services:
+      #        docker-proxy:
+      #          profiles: ['disabled']
+      #    DockerService then reports Docker unavailable and orchestration degrades gracefully.
       CONTAINERS: 1
       IMAGES: 1
       VOLUMES: 1
       INFO: 1
       PING: 1
       POST: 1
-      DELETE: 1
       # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
     labels:
       - 'com.openwa.service=docker-proxy'
@@ -185,6 +200,9 @@ services:
     depends_on:
       docker-proxy:
         condition: service_started
+        # Not required: lets operators disable the proxy (see the docker-proxy env comment)
+        # without breaking `docker compose up`. DockerService degrades gracefully without it.
+        required: false
       postgres:
         condition: service_healthy
         required: false
