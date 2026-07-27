@@ -129,3 +129,30 @@ mvn -B verify        # compile + run the full test suite
 Tests inject a recording `HttpTransport` and assert on the exact path — so the
 regression that would ship a broken `messages/text` path (the real path is
 `messages/send-text`) can never recur silently.
+
+## Releasing
+
+Publishing to Maven Central is done by the
+[`java-sdk-release.yml`](../../.github/workflows/java-sdk-release.yml) workflow,
+which deploys with `mvn -B -Prelease deploy`. The `release` profile attaches the
+sources/javadoc jars, GPG-signs every artifact, and auto-publishes via the
+Sonatype Central Publishing plugin — a plain `mvn verify` never runs any of it.
+
+One-time setup (repository secrets):
+
+- `MAVEN_CENTRAL_USERNAME` / `MAVEN_CENTRAL_PASSWORD` — the two halves of a
+  Sonatype Central Portal user token for the verified `com.rmyndharis`
+  namespace.
+- `GPG_PRIVATE_KEY` — ASCII-armored signing key.
+- `GPG_PASSPHRASE` — passphrase for that key.
+
+Until the secrets exist the workflow cleanly no-ops (it prints a notice and
+skips the deploy), so tagging early is harmless.
+
+Cutting a release:
+
+1. Bump `<version>` in `pom.xml` and land it on `main`.
+2. Tag that commit `java-sdk-v<version>` (e.g. `java-sdk-v0.1.1`) and push the
+   tag. The SDK has its own version line — the monorepo's `v*` tags are the app
+   version and never trigger an SDK publish.
+3. The workflow builds, signs, and publishes; Central syncs within a few hours.

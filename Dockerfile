@@ -23,6 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy package files
 COPY package*.json ./
 
+# The postinstall hook is a real file (scripts/postinstall.js), and `npm ci` fails outright when
+# a lifecycle script is missing — copy it BEFORE the install. dashboard/ and the backport patcher
+# are deliberately still absent at this point, so the hook cleanly no-ops here (dashboard deps are
+# installed explicitly below; the patcher only matters for the production stage).
+COPY scripts/postinstall.js ./scripts/
+
 # Install all dependencies INCLUDING devDependencies — the build needs them (`nest` from
 # @nestjs/cli, plus `vite`/`typescript` for the dashboard). `--include=dev` is REQUIRED, not
 # cosmetic: npm omits devDependencies whenever NODE_ENV=production is present in the build env.
@@ -103,7 +109,10 @@ COPY package*.json ./
 # Backport upstream whatsapp-web.js#201832 (id._serialized -> id.$1 normalization,
 # broken by WA Web 2.3000.x ~2026-07-14) into the installed dep at build time.
 # The patcher self-disables once whatsapp-web.js ships the fix upstream.
-COPY scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch ./scripts/
+# scripts/postinstall.js rides along: `npm ci` below runs the hook, which fails
+# when the file is missing. With the patcher present the hook applies it in
+# --best-effort mode; the explicit fatal run right after is the real gate.
+COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch ./scripts/
 
 # Install production dependencies only, then apply the backport patcher (needs `patch`).
 RUN npm ci --omit=dev && node scripts/patch-wwebjs-201832.js && npm cache clean --force

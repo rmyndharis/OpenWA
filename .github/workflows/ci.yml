@@ -45,6 +45,11 @@ jobs:
       - name: Check version consistency (docs track package.json)
         run: npm run check:versions
 
+      # The builder stage ends with `COPY . .` — fail if .dockerignore stops rejecting non-build
+      # material (or starts rejecting a build input) before a Docker build finds out.
+      - name: Check Docker build context (.dockerignore)
+        run: npm run check:dockerignore
+
       # The committed openapi.json is the machine-readable API contract. Fail if a controller/DTO
       # change landed without regenerating the snapshot (npm run openapi:export). The generator
       # bootstraps the app hermetically (in-memory/temp SQLite, no listen), so this is a static check.
@@ -96,6 +101,11 @@ jobs:
 
       - name: Run unit tests
         run: npm test -- --coverage
+
+      # node:test specs for the repo-level scripts (postinstall exit-code propagation) — jest's
+      # rootDir is src/, so these live outside its reach and run on the plain node runner.
+      - name: Run script unit tests
+        run: npm run test:scripts
 
       - name: Run e2e smoke tests
         run: npm run test:e2e

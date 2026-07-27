@@ -1,7 +1,7 @@
 name: Java SDK Release
 
 # Publishes com.rmyndharis:openwa to Maven Central from sdk/java. Requires the one-time setup
-# (see sdk/java/README.md -> RELEASING); the publish secrets are verified up front and their
+# (see sdk/java/README.md -> Releasing); the publish secrets are verified up front and their
 # absence FAILS the run instead of silently no-oping green:
 #   - MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD  (Sonatype Central user token halves)
 #   - GPG_PRIVATE_KEY                                   (ASCII-armored signing key)
@@ -76,7 +76,7 @@ jobs:
             if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing publish secret(s):$missing — configure them (see sdk/java/README.md -> RELEASING) before tagging a release."
+            echo "::error::Missing publish secret(s):$missing — configure them (see sdk/java/README.md -> Releasing) before tagging a release."
             exit 1
           fi
 

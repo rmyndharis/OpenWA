@@ -77,6 +77,10 @@ jobs:
       - name: Check version consistency (docs track package.json)
         run: npm run check:versions
 
+      # Same guard as CI: the published image is built from this ref, so the context must be sane.
+      - name: Check Docker build context (.dockerignore)
+        run: npm run check:dockerignore
+
       - name: Check OpenAPI snapshot is up to date
         run: npm run openapi:check
 

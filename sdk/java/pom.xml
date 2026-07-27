@@ -64,7 +64,7 @@
   <profiles>
     <!-- Activated only for publishing to Maven Central: `mvn -Prelease deploy`.
          Requires a GPG signing key and Sonatype Central credentials — see
-         README.md → RELEASING. Ordinary `mvn verify` never runs these. -->
+         README.md → Releasing. Ordinary `mvn verify` never runs these. -->
     <profile>
       <id>release</id>
       <build>
