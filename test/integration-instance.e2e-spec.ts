@@ -16,16 +16,37 @@ import { PluginLoaderService } from '../src/core/plugins/plugin-loader.service';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { ApiKeyRole } from '../src/modules/auth/entities/api-key.entity';
 
-// A stub ingress-capable plugin so the capability check passes without a real plugin on disk.
+// A stub ingress-capable plugin so the capability check passes without a real plugin on disk. The
+// configSchema carries a NESTED secret field so the masking tests can prove a `secret:true` config
+// value is redacted at depth — including on the one-shot create/regenerate reveal responses.
 const INGRESS_PLUGIN = {
-  manifest: { id: 'chatwoot', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress', 'conversation:send'] },
+  manifest: {
+    id: 'chatwoot',
+    ingress: [{ route: 'chatwoot' }],
+    permissions: ['webhook:ingress', 'conversation:send'],
+    configSchema: {
+      type: 'object',
+      properties: {
+        baseUrl: { type: 'string' },
+        credentials: {
+          type: 'object',
+          properties: {
+            apiToken: { type: 'string', secret: true },
+            region: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
 };
 const NON_INGRESS_PLUGIN = { manifest: { id: 'plain', permissions: [] } };
 
 interface InstanceViewBody {
   secret: string;
+  verifyToken: string | null;
   enabled: boolean;
   sessionScope: string | null;
+  config: { baseUrl?: string; credentials?: { apiToken?: string; region?: string } } | null;
   ingressUrls: Array<{ route: string; url: string }>;
 }
 
@@ -131,6 +152,52 @@ describe('IntegrationInstanceController (e2e)', () => {
       .set('X-API-Key', key)
       .expect(200);
     expect((one.body as InstanceViewBody).secret).toBe('***');
+  });
+
+  it('reveals ONLY the ingress secret + verifyToken on create — nested secret config stays masked', async () => {
+    const create = await request(app.getHttpServer())
+      .post(`${base}/chatwoot/instances`)
+      .set('X-API-Key', key)
+      .send({
+        instanceId: 'nested1',
+        verifyToken: 'vt-plain-123',
+        config: {
+          baseUrl: 'https://chatwoot.example',
+          credentials: { apiToken: 'tok-e2e-live', region: 'us' },
+        },
+      })
+      .expect(201);
+    const body = create.body as InstanceViewBody;
+    // The two documented "revealed once" fields are plaintext...
+    expect(body.secret).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.verifyToken).toBe('vt-plain-123');
+    // ...while a secret-flagged config field is masked even on this reveal response, at any depth.
+    expect(body.config?.baseUrl).toBe('https://chatwoot.example');
+    expect(body.config?.credentials?.apiToken).toBe('***');
+    expect(body.config?.credentials?.region).toBe('us');
+    expect(JSON.stringify(body)).not.toContain('tok-e2e-live');
+
+    const one = await request(app.getHttpServer())
+      .get(`${base}/chatwoot/instances/nested1`)
+      .set('X-API-Key', key)
+      .expect(200);
+    const read = one.body as InstanceViewBody;
+    expect(read.secret).toBe('***');
+    expect(read.verifyToken).toBe('***');
+    expect(read.config?.credentials?.apiToken).toBe('***');
+    expect(read.config?.baseUrl).toBe('https://chatwoot.example');
+  });
+
+  it('keeps nested secret config masked on the regenerate-secret reveal', async () => {
+    const regen = await request(app.getHttpServer())
+      .post(`${base}/chatwoot/instances/nested1/regenerate-secret`)
+      .set('X-API-Key', key)
+      .expect(200);
+    const body = regen.body as InstanceViewBody;
+    expect(body.secret).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.verifyToken).toBe('vt-plain-123');
+    expect(body.config?.credentials?.apiToken).toBe('***');
+    expect(JSON.stringify(body)).not.toContain('tok-e2e-live');
   });
 
   it('patches enabled + sessionScope and returns a masked view', async () => {

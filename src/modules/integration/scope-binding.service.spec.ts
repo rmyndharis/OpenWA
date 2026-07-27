@@ -17,7 +17,7 @@ describe('ScopeBindingService.onApplicationBootstrap reconciliation', () => {
       setPluginSessions,
       updatePluginConfig,
     } as unknown as PluginLoaderService;
-    const audit = { logInfo: jest.fn() } as unknown as AuditService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
     return { loader, audit, setPluginSessionConfig, setPluginSessions, updatePluginConfig };
   }
 
@@ -105,7 +105,7 @@ describe('ScopeBindingService.onApplicationBootstrap reconciliation', () => {
       }),
       updatePluginConfig: jest.fn(),
     } as unknown as PluginLoaderService;
-    const audit = { logInfo: jest.fn() } as unknown as AuditService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
 
     const wildcard = { pluginId: 'chatwoot', instanceId: 'wild', sessionScope: null, config: {}, enabled: true };
     const concrete = { pluginId: 'chatwoot', instanceId: 'conc', sessionScope: 'sess-1', config: {}, enabled: true };

@@ -2,6 +2,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { IntegrationInstanceController } from './integration-instance.controller';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { ScopeBindingService } from './scope-binding.service';
 import { ApiKey } from '../auth/entities/api-key.entity';
@@ -23,7 +24,7 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       setPluginSessions,
       updatePluginConfig,
     } as unknown as PluginLoaderService;
-    const audit = { logInfo: jest.fn() } as unknown as AuditService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
     return { loader, audit, setPluginSessionConfig, setPluginSessions, updatePluginConfig };
   }
 
@@ -43,6 +44,7 @@ describe('IntegrationInstanceController provisioning bridge', () => {
         updatedAt: new Date(0),
       }),
       list: jest.fn().mockResolvedValue([]),
+      maskedView: (i: unknown) => i,
     } as unknown as PluginInstanceService;
     const controller = new IntegrationInstanceController(
       instances,
@@ -423,7 +425,7 @@ describe('IntegrationInstanceController session-scope fence', () => {
       setPluginSessions: jest.fn(),
       updatePluginConfig: jest.fn(),
     } as unknown as PluginLoaderService;
-    const audit = { logInfo: jest.fn() } as unknown as AuditService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
     const svc = { maskedView: (i: unknown) => i, ...instances } as unknown as PluginInstanceService;
     const controller = new IntegrationInstanceController(
       svc,
@@ -540,5 +542,212 @@ describe('IntegrationInstanceController session-scope fence', () => {
     await controller.patch('chatwoot-adapter', 'acct1', { enabled: false }, scopedKey);
 
     expect(setEnabled).toHaveBeenCalledWith('chatwoot-adapter', 'acct1', false);
+  });
+});
+
+// The create/regenerate responses are the ONE place plaintext appears — but only for the two fields
+// documented as "revealed once" (the ingress secret + verifyToken). Config fields flagged `secret` in
+// the plugin's schema must stay masked at any depth even there: a reveal that bypassed maskedView
+// would echo a stored provider credential back to the caller.
+describe('IntegrationInstanceController reveal masking', () => {
+  const configSchema = {
+    type: 'object' as const,
+    properties: {
+      baseUrl: { type: 'string' as const },
+      credentials: {
+        type: 'object' as const,
+        properties: {
+          apiToken: { type: 'string' as const, secret: true },
+          region: { type: 'string' as const },
+        },
+      },
+      webhooks: {
+        type: 'array' as const,
+        items: {
+          type: 'object' as const,
+          properties: {
+            url: { type: 'string' as const },
+            signingKey: { type: 'string' as const, secret: true },
+          },
+        },
+      },
+    },
+  };
+
+  const storedConfig = {
+    baseUrl: 'https://chatwoot.example',
+    credentials: { apiToken: 'tok-live-123', region: 'us' },
+    webhooks: [{ url: 'https://hook.example', signingKey: 'whsec-live-456' }],
+  };
+
+  function build() {
+    const loader = {
+      getPlugin: jest.fn().mockReturnValue({
+        manifest: {
+          id: 'chatwoot-adapter',
+          ingress: [{ route: 'chatwoot' }],
+          permissions: ['webhook:ingress'],
+          configSchema,
+        },
+        activeSessions: [],
+      }),
+      setPluginSessionConfig: jest.fn(),
+      setPluginSessions: jest.fn(),
+      updatePluginConfig: jest.fn(),
+    } as unknown as PluginLoaderService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
+    const instance = {
+      id: 'chatwoot-adapter:acct1',
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      sessionScope: 'sess-1',
+      secret: 'plaintext-ingress-secret',
+      verifyToken: 'verify-token-plain',
+      config: storedConfig,
+      enabled: true,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+    const instances = {
+      create: jest.fn().mockResolvedValue(instance),
+      resolve: jest.fn().mockResolvedValue(instance),
+      regenerateSecret: jest.fn().mockResolvedValue({ ...instance, secret: 'new-plaintext-secret' }),
+      list: jest.fn().mockResolvedValue([]),
+      // The REAL redaction (not a stub) so the test fails if a reveal path ever bypasses it.
+      maskedView: (...args: Parameters<PluginInstanceService['maskedView']>) =>
+        PluginInstanceService.prototype.maskedView(...args),
+    } as unknown as PluginInstanceService;
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit,
+      new ScopeBindingService(instances, loader, audit),
+    );
+    return { controller };
+  }
+
+  function expectMaskedConfig(config: Record<string, unknown>) {
+    // Deep secrets masked; non-secret fields (incl. nested + array siblings) still visible.
+    expect(config.baseUrl).toBe('https://chatwoot.example');
+    expect((config.credentials as Record<string, unknown>).apiToken).toBe('***');
+    expect((config.credentials as Record<string, unknown>).region).toBe('us');
+    const hooks = config.webhooks as Array<Record<string, unknown>>;
+    expect(hooks[0].url).toBe('https://hook.example');
+    expect(hooks[0].signingKey).toBe('***');
+    expect(JSON.stringify(config)).not.toContain('tok-live-123');
+    expect(JSON.stringify(config)).not.toContain('whsec-live-456');
+  }
+
+  it('create reveals ONLY the ingress secret + verifyToken; nested config secrets stay masked', async () => {
+    const { controller } = build();
+
+    const view = await controller.create('chatwoot-adapter', {
+      instanceId: 'acct1',
+      sessionScope: 'sess-1',
+      verifyToken: 'verify-token-plain',
+      config: storedConfig,
+    });
+
+    expect(view.secret).toBe('plaintext-ingress-secret');
+    expect(view.verifyToken).toBe('verify-token-plain');
+    expectMaskedConfig(view.config as Record<string, unknown>);
+  });
+
+  it('regenerate-secret reveals the new secret + verifyToken; nested config secrets stay masked', async () => {
+    const { controller } = build();
+
+    const view = await controller.regenerate('chatwoot-adapter', 'acct1');
+
+    expect(view.secret).toBe('new-plaintext-secret');
+    expect(view.verifyToken).toBe('verify-token-plain');
+    expectMaskedConfig(view.config as Record<string, unknown>);
+  });
+
+  it('a plain read masks secret, verifyToken, AND config secrets (unchanged behavior)', async () => {
+    const { controller } = build();
+
+    const view = await controller.getOne('chatwoot-adapter', 'acct1');
+
+    expect(view.secret).toBe('***');
+    expect(view.verifyToken).toBe('***');
+    expectMaskedConfig(view.config as Record<string, unknown>);
+  });
+});
+
+// A successful PATCH must leave an audit row; the metadata names the CHANGED FIELDS only — never the
+// values, since a config patch can carry credentials and audit metadata is not a credential store.
+describe('IntegrationInstanceController update audit', () => {
+  function build() {
+    const loader = {
+      getPlugin: jest.fn().mockReturnValue({
+        manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'] },
+        activeSessions: [],
+      }),
+      setPluginSessionConfig: jest.fn(),
+      setPluginSessions: jest.fn(),
+      updatePluginConfig: jest.fn(),
+    } as unknown as PluginLoaderService;
+    const audit = { logInfo: jest.fn(), logWarn: jest.fn() };
+    const instance = {
+      id: 'chatwoot-adapter:acct1',
+      pluginId: 'chatwoot-adapter',
+      instanceId: 'acct1',
+      sessionScope: 'sess-1',
+      secret: 's',
+      verifyToken: null,
+      config: { apiToken: 'super-secret-token' },
+      enabled: true,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+    const instances = {
+      resolve: jest.fn().mockResolvedValue(instance),
+      setEnabled: jest.fn().mockResolvedValue({ ...instance, enabled: false }),
+      update: jest.fn().mockResolvedValue({ ...instance, config: { apiToken: 'rotated-token' } }),
+      list: jest.fn().mockResolvedValue([]),
+      maskedView: (i: unknown) => i,
+    } as unknown as PluginInstanceService;
+    const controller = new IntegrationInstanceController(
+      instances,
+      loader,
+      audit as unknown as AuditService,
+      new ScopeBindingService(instances, loader, audit as unknown as AuditService),
+    );
+    return { controller, audit, instances };
+  }
+
+  it('emits INTEGRATION_INSTANCE_UPDATED (INFO) on a successful patch with clean metadata', async () => {
+    const { controller, audit } = build();
+
+    await controller.patch('chatwoot-adapter', 'acct1', {
+      enabled: false,
+      config: { apiToken: 'rotated-token' },
+    });
+
+    expect(audit.logInfo).toHaveBeenCalledWith(AuditAction.INTEGRATION_INSTANCE_UPDATED, {
+      metadata: { pluginId: 'chatwoot-adapter', instanceId: 'acct1', updated: ['enabled', 'config'] },
+    });
+    // The metadata must not carry any raw config/secret value.
+    const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: Record<string, unknown> }]>;
+    expect(JSON.stringify(calls[0][1].metadata)).not.toContain('rotated-token');
+    expect(JSON.stringify(calls[0][1].metadata)).not.toContain('super-secret-token');
+  });
+
+  it('records a sessionScope-only change without dragging config into the metadata', async () => {
+    const { controller, audit } = build();
+
+    await controller.patch('chatwoot-adapter', 'acct1', { sessionScope: 'sess-2' });
+
+    expect(audit.logInfo).toHaveBeenCalledWith(AuditAction.INTEGRATION_INSTANCE_UPDATED, {
+      metadata: { pluginId: 'chatwoot-adapter', instanceId: 'acct1', updated: ['sessionScope'] },
+    });
+  });
+
+  it('does not emit an update row when the patch is rejected', async () => {
+    const { controller, audit, instances } = build();
+    (instances.resolve as jest.Mock).mockResolvedValue(null);
+
+    await expect(controller.patch('chatwoot-adapter', 'acct1', { enabled: false })).rejects.toThrow(NotFoundException);
+    expect(audit.logInfo).not.toHaveBeenCalledWith(AuditAction.INTEGRATION_INSTANCE_UPDATED, expect.anything());
   });
 });

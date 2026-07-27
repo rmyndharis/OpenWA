@@ -142,6 +142,12 @@ export class IntegrationInstanceController {
       await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false);
     }
     await this.scopeBinding.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled);
+    // Audit the successful update with the CHANGED FIELD NAMES only — never the values: a config patch
+    // can carry credentials, and audit metadata is not a credential store.
+    const updatedFields = (['enabled', 'sessionScope', 'config'] as const).filter(f => dto[f] !== undefined);
+    void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_UPDATED, {
+      metadata: { pluginId, instanceId, updated: updatedFields },
+    });
     return this.view(updated, this.pluginRoutes(pluginId), false);
   }
 
@@ -206,13 +212,17 @@ export class IntegrationInstanceController {
 
   private view(inst: PluginInstance, routes: string[], reveal: boolean): InstanceView {
     const schema = this.loader.getPlugin(inst.pluginId)?.manifest.configSchema;
-    const masked = reveal ? inst : this.instances.maskedView(inst, schema);
+    // ALWAYS start from the masked view — including the one-shot reveal responses (create /
+    // regenerate-secret). `reveal` unmasks ONLY the two fields documented as "revealed once" (the
+    // ingress secret and the verifyToken); config fields flagged `secret` in the plugin's schema
+    // stay masked at any depth on every response, so a reveal can never echo a stored credential.
+    const masked = this.instances.maskedView(inst, schema);
     return {
       id: masked.id,
       pluginId: masked.pluginId,
       instanceId: masked.instanceId,
       sessionScope: masked.sessionScope,
-      secret: masked.secret,
+      secret: reveal ? inst.secret : masked.secret,
       verifyToken: reveal ? inst.verifyToken : inst.verifyToken ? '***' : null,
       config: masked.config,
       enabled: masked.enabled,

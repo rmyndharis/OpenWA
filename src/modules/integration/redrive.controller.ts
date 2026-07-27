@@ -2,6 +2,8 @@ import { Controller, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
 import { CurrentApiKey, RequireRole } from '../auth/decorators/auth.decorators';
 import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuditService } from '../audit/audit.service';
 import { sessionScopeVisible } from '../../common/security/session-scope';
 import { PluginInstanceService } from './plugin-instance.service';
 import { RedriveService } from './redrive.service';
@@ -16,6 +18,7 @@ export class RedriveController {
   constructor(
     private readonly redrive: RedriveService,
     private readonly instances: PluginInstanceService,
+    private readonly audit: AuditService,
   ) {}
 
   @Post(':pluginId/:instanceId/redrive')
@@ -34,6 +37,12 @@ export class RedriveController {
     if (inst && !sessionScopeVisible(apiKey?.allowedSessions, inst.sessionScope)) {
       throw new NotFoundException('instance not found');
     }
-    return this.redrive.redriveInstance(pluginId, instanceId);
+    const result = await this.redrive.redriveInstance(pluginId, instanceId);
+    // A redrive can trigger real downstream sends, so every successful batch is audited with its
+    // outcome counts (no payload content — the DLQ rows themselves hold those).
+    void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_REDRIVEN, {
+      metadata: { pluginId, instanceId, redriven: result.redriven, remaining: result.remaining },
+    });
+    return result;
   }
 }

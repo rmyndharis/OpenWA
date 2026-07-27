@@ -26,7 +26,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
   /**
    * Re-derive every ENABLED instance's runtime scope binding from the persisted `plugin_instances`
    * rows, so a binding lost at provisioning time (the plugin was momentarily unloaded, so
-   * applyScopeBinding was swallowed as an INFO audit) is restored on the next boot without an operator
+   * applyScopeBinding was swallowed as a WARN audit) is restored on the next boot without an operator
    * re-PATCH — otherwise the row shows `enabled` but the ingress handler resolves base config only.
    * Runs after every module's onModuleInit (so PluginLoaderService has loaded all plugins).
    *
@@ -139,8 +139,11 @@ export class ScopeBindingService implements OnApplicationBootstrap {
       }
       this.loader.setPluginSessions(pluginId, [...set]);
     } catch (err) {
-      // Best-effort: don't fail provisioning if the plugin is momentarily unloaded.
-      void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_UPDATED, {
+      // Best-effort: don't fail provisioning if the plugin is momentarily unloaded. WARN (not INFO):
+      // the binding is LOST until the next boot-time reconciliation — the instance row reads `enabled`
+      // but the ingress worker won't resolve its config — so this degradation must stand out in the
+      // audit trail rather than blend into routine update rows.
+      void this.audit.logWarn(AuditAction.INTEGRATION_INSTANCE_UPDATED, {
         metadata: { pluginId, scope, bridgeError: String(err) },
       });
     }

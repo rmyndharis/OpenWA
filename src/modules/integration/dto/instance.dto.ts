@@ -113,7 +113,8 @@ export class InstanceView {
   verifyToken: string | null;
 
   @ApiPropertyOptional({
-    description: 'Per-instance config slice passed to the adapter, or null.',
+    description:
+      "Per-instance config slice passed to the adapter, or null. Fields flagged `secret` in the plugin's config schema are masked ('***') on EVERY response — including create/regenerate-secret; only the ingress secret and verifyToken are ever revealed once.",
     nullable: true,
     type: Object,
   })

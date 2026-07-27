@@ -3,6 +3,8 @@ import { NotFoundException } from '@nestjs/common';
 import { RedriveController } from './redrive.controller';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { REQUIRED_ROLE_KEY } from '../auth/decorators/auth.decorators';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { AuditService } from '../audit/audit.service';
 import { PluginInstanceService } from './plugin-instance.service';
 import { RedriveService } from './redrive.service';
 
@@ -29,11 +31,13 @@ describe('RedriveController session-scope fence', () => {
           sessionScope === undefined ? null : { pluginId: 'chatwoot', instanceId: 'acct1', sessionScope },
         ),
     };
+    const audit = { logInfo: jest.fn() };
     const controller = new RedriveController(
       redrive as unknown as RedriveService,
       instances as unknown as PluginInstanceService,
+      audit as unknown as AuditService,
     );
-    return { controller, redrive };
+    return { controller, redrive, audit };
   }
 
   it('lets a scoped key redrive an instance bound to one of its sessions', async () => {
@@ -64,5 +68,23 @@ describe('RedriveController session-scope fence', () => {
     await controller.redriveInstance('chatwoot', 'acct1', { allowedSessions: null } as unknown as ApiKey);
 
     expect(redrive.redriveInstance).toHaveBeenCalledWith('chatwoot', 'acct1');
+  });
+
+  it('audits a successful redrive with its outcome counts (a redrive can cause real sends)', async () => {
+    const { controller, redrive, audit } = build('sess-1');
+    redrive.redriveInstance.mockResolvedValue({ redriven: 3, remaining: 7, batchSize: 100 });
+
+    await controller.redriveInstance('chatwoot', 'acct1', scopedKey);
+
+    expect(audit.logInfo).toHaveBeenCalledWith(AuditAction.INTEGRATION_INSTANCE_REDRIVEN, {
+      metadata: { pluginId: 'chatwoot', instanceId: 'acct1', redriven: 3, remaining: 7 },
+    });
+  });
+
+  it('does not audit a rejected (out-of-scope) redrive', async () => {
+    const { controller, audit } = build('sess-2');
+
+    await expect(controller.redriveInstance('chatwoot', 'acct1', scopedKey)).rejects.toThrow(NotFoundException);
+    expect(audit.logInfo).not.toHaveBeenCalled();
   });
 });
