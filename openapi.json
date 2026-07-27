@@ -17,6 +17,7 @@
                 "api_key_revoked",
                 "api_key_deleted",
                 "api_key_auth_failed",
+                "rate_limit_exceeded",
                 "session_created",
                 "session_started",
                 "session_stopped",
