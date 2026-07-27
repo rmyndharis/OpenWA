@@ -9,6 +9,10 @@ export enum AuditAction {
   API_KEY_DELETED = 'api_key_deleted',
   API_KEY_AUTH_FAILED = 'api_key_auth_failed',
 
+  // Rate-limit enforcement (sampled: at most one row per subject+kind per minute — see
+  // EventsGateway — so enforcing a limit never becomes an audit-write flood of its own).
+  RATE_LIMIT_EXCEEDED = 'rate_limit_exceeded',
+
   // Session events
   SESSION_CREATED = 'session_created',
   SESSION_STARTED = 'session_started',

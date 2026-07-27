@@ -1,5 +1,6 @@
 import { computeFeatureFlags } from './feature-flags';
 import { resolveInflightBodyBudgetBytes } from './inflight-body-budget';
+import { readWsRateLimitConfig } from '../modules/events/ws-rate-limit';
 
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
@@ -167,6 +168,14 @@ export default () => ({
       longLimit: parseInt(process.env.RATE_LIMIT_LONG_LIMIT || '1000', 10),
     },
   },
+
+  // WebSocket (/events Socket.IO) rate limits. The gateway sits outside the Nest enhancer
+  // pipeline (global guards never run on WS frames), so EventsGateway enforces these
+  // in-process. Single source of truth is readWsRateLimitConfig (with the same
+  // missing/blank/non-positive/non-numeric → default fallback the MCP limiters use):
+  // per-key frame token bucket (framePerSecond sustained + frameBurst capacity),
+  // pre-auth per-IP handshake sliding window, and a per-key simultaneous-socket cap.
+  websocket: readWsRateLimitConfig(),
 
   // Security configuration
   security: {

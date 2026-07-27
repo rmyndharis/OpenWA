@@ -16,6 +16,12 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { resolveCorsPolicy } from '../../config/bootstrap-security';
 import { resolveClientIp as resolveRequestClientIp, type RequestLike } from '../../common/utils/ip';
 import type { ApiKey } from '../auth/entities/api-key.entity';
+import {
+  readWsRateLimitConfig,
+  TokenBucketLimiter,
+  SlidingWindowLimiter,
+  type WsRateLimitConfig,
+} from './ws-rate-limit';
 
 /**
  * WebSocket CORS origin: reuse the HTTP CORS policy instead of a hardcoded '*'.
@@ -97,10 +103,37 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private expirySweepTimer?: ReturnType<typeof setInterval>;
 
+  /**
+   * Rate limiting for the WS surface (see ws-rate-limit.ts). Frames never pass through the
+   * Nest guard pipeline, so these run in the gateway itself:
+   *  - frameLimiter: per-key token bucket on every inbound client frame (pre-auth sockets are
+   *    keyed by IP instead, since they have no validated key yet);
+   *  - handshakeLimiter: pre-auth per-IP sliding window on new connections, so a handshake
+   *    flood cannot force a DB validateApiKey per attempt;
+   *  - maxSocketsPerKey: cap on simultaneous sockets per key, enforced at connect.
+   */
+  private readonly rateLimits: WsRateLimitConfig;
+  private readonly frameLimiter: TokenBucketLimiter;
+  private readonly handshakeLimiter: SlidingWindowLimiter;
+
+  /**
+   * Rate-limit violation sampler: at most one audit row per kind+subject per minute. An abuser
+   * held at a limit would otherwise generate an audit write per blocked frame/handshake — the
+   * audit trail itself becoming the flood. `count` accumulates the suppressed violations since
+   * the last emitted row and is folded into the next one.
+   */
+  private readonly violations = new Map<string, { count: number; since: number }>();
+  private static readonly VIOLATION_AUDIT_WINDOW_MS = 60_000;
+  private static readonly MAX_VIOLATION_KEYS = 10_000;
+
   constructor(
     private readonly authService: AuthService,
     private readonly auditService: AuditService,
-  ) {}
+  ) {
+    this.rateLimits = readWsRateLimitConfig();
+    this.frameLimiter = new TokenBucketLimiter(this.rateLimits.framePerSecond, this.rateLimits.frameBurst);
+    this.handshakeLimiter = new SlidingWindowLimiter(this.rateLimits.handshakeMax, this.rateLimits.handshakeWindowMs);
+  }
 
   afterInit() {
     this.logger.log('WebSocket Gateway initialized');
@@ -187,13 +220,25 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   async handleConnection(client: Socket) {
+    // Resolve the client IP once here so the handshake throttle, the validation, and the
+    // audit trail all use the same trusted-proxy-aware value (parity with the REST guard / MCP mount).
+    const clientIp = this.resolveClientIp(client);
+
+    // Pre-auth, per-IP handshake throttle. This must run BEFORE any credential handling: an
+    // unauthenticated handshake flood otherwise reaches the DB validateApiKey below on every
+    // attempt (same gap the MCP pre-auth IP throttle covers for the /mcp mount).
+    if (!this.handshakeLimiter.allow(clientIp)) {
+      this.logger.warn(`Client ${client.id} rejected: handshake rate limit exceeded (ip: ${clientIp})`);
+      this.noteRateLimitViolation('handshake', { ipAddress: clientIp });
+      client.emit('message', this.createError('RATE_LIMITED', 'Too many connection attempts, retry later'));
+      client.disconnect();
+      return;
+    }
+
     // Accept the key only via Socket.IO's `auth` field or the header — never the query string, which
     // leaks the credential into proxy/access logs. (The deprecated `?apiKey=` fallback was removed.)
     const handshakeAuth = client.handshake.auth as { apiKey?: string } | undefined;
     const apiKey = handshakeAuth?.apiKey || (client.handshake.headers['x-api-key'] as string);
-    // Resolve the client IP once here so both the validation and the audit trail use the same
-    // trusted-proxy-aware value (parity with the REST guard / MCP mount).
-    const clientIp = this.resolveClientIp(client);
 
     if (!apiKey) {
       this.logger.warn(`Client ${client.id} rejected: No API key provided`);
@@ -213,6 +258,26 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // is passed so an IP-restricted key (allowedIps set) is ENFORCED rather than blanket-rejected
       // for "Client IP could not be determined".
       const validKey = await this.authService.validateApiKey(apiKey, clientIp);
+
+      // Cap simultaneous sockets per key: each socket holds rooms, engine fan-out, and memory,
+      // so one key must not open connections without bound. Enough for multi-tab dashboards;
+      // excess connections get a clear error, not a silent drop.
+      const existing = this.socketsByKeyId.get(validKey.id);
+      if (existing && existing.size >= this.rateLimits.maxSocketsPerKey) {
+        this.logger.warn(
+          `Client ${client.id} rejected: socket cap reached for key ${validKey.id} (${this.rateLimits.maxSocketsPerKey})`,
+        );
+        this.noteRateLimitViolation('sockets', { apiKeyId: validKey.id, ipAddress: clientIp });
+        client.emit(
+          'message',
+          this.createError(
+            'RATE_LIMITED',
+            `Too many concurrent connections for this API key (max ${this.rateLimits.maxSocketsPerKey})`,
+          ),
+        );
+        client.disconnect();
+        return;
+      }
 
       // Store the validated key AND the raw key — the raw key lets handleSubscribe
       // RE-validate on each subscription so a key revoked mid-connection is caught.
@@ -243,6 +308,23 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   @SubscribeMessage('message')
   handleMessage(@ConnectedSocket() client: Socket, @MessageBody() message: WSClientMessage) {
+    // Per-key token bucket on every inbound frame. Keyed by the validated key id; a socket
+    // whose handshake validation is still in flight has no key yet and is metered by IP.
+    // Over-budget frames get an error frame back and are NOT dispatched to a handler — in
+    // particular they never reach the per-subscribe DB re-validation.
+    const frameSubject =
+      (client.data as { apiKey?: Pick<ApiKey, 'id'> } | undefined)?.apiKey?.id ?? this.resolveClientIp(client);
+    if (!this.frameLimiter.allow(frameSubject)) {
+      const requestId = (message as { requestId?: string } | undefined)?.requestId;
+      this.noteRateLimitViolation('frame', {
+        apiKeyId: (client.data as { apiKey?: Pick<ApiKey, 'id'> } | undefined)?.apiKey?.id,
+        ipAddress: this.resolveClientIp(client),
+      });
+      const error = this.createError('RATE_LIMITED', 'Frame rate limit exceeded, slow down', requestId);
+      client.emit('message', error);
+      return error;
+    }
+
     switch (message.type) {
       case 'subscribe':
         return this.handleSubscribe(client, message);
@@ -369,6 +451,41 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       requestId,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Sampled audit for rate-limit violations: emits at most one row per kind+subject per minute
+   * (fire-and-forget, like the auth-failure audit). Violations suppressed inside the window are
+   * counted and folded into the next emitted row's `suppressed` metadata, so the forensic trail
+   * stays accurate without one audit write per blocked frame/handshake.
+   */
+  private noteRateLimitViolation(
+    kind: 'handshake' | 'frame' | 'sockets',
+    subject: { apiKeyId?: string; ipAddress?: string },
+  ): void {
+    const mapKey = `${kind}:${subject.apiKeyId ?? subject.ipAddress ?? 'unknown'}`;
+    const now = Date.now();
+    const prior = this.violations.get(mapKey);
+    if (prior && now - prior.since < EventsGateway.VIOLATION_AUDIT_WINDOW_MS) {
+      prior.count += 1;
+      return;
+    }
+    const suppressed = prior?.count ?? 0;
+    this.violations.delete(mapKey);
+    this.violations.set(mapKey, { count: 0, since: now });
+    while (this.violations.size > EventsGateway.MAX_VIOLATION_KEYS) {
+      const oldest = this.violations.keys().next().value;
+      if (oldest === undefined) break;
+      this.violations.delete(oldest);
+    }
+    void this.auditService.logWarn(AuditAction.RATE_LIMIT_EXCEEDED, {
+      // Only the id is read (for the apiKeyId column) — enough to correlate with the key
+      // without a DB lookup on a hot path.
+      apiKey: subject.apiKeyId ? ({ id: subject.apiKeyId } as ApiKey) : undefined,
+      ipAddress: subject.ipAddress,
+      metadata: { surface: 'websocket', kind, suppressed },
+      errorMessage: `websocket ${kind} rate limit exceeded`,
+    });
   }
 
   // ========== Event Emission Methods (room-based) ==========

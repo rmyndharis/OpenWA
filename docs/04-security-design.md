@@ -333,6 +333,18 @@ TTL values are in milliseconds. The `/api/metrics` and `/api/health*` routes are
 
 Exceeding any window returns `429 Too Many Requests` with a `Retry-After` header. The `ThrottlerGuard` also sets `X-RateLimit-*` response headers (limit / remaining / reset) by default, and the API exposes them via CORS — but with three named windows in play, the `429` + `Retry-After` is the simplest backpressure signal to act on.
 
+### WebSocket (`/events`) limits
+
+Socket.IO frames never pass through the Nest enhancer pipeline, so the HTTP windows above do **not** apply to the WebSocket surface. `EventsGateway` enforces its own in-process limits instead (all keyed in-memory per process; any blank/non-positive/non-numeric env value falls back to the default):
+
+| Limit | Keyed on | Default | Env overrides |
+|-------|----------|---------|---------------|
+| Client frames (subscribe/unsubscribe/ping) — token bucket | API key (IP before auth completes) | 60 frames/s sustained, 120-frame burst | `WS_RATE_LIMIT_FRAME_PER_SECOND` / `WS_RATE_LIMIT_FRAME_BURST` |
+| New handshakes — sliding window, enforced **before** key validation | client IP (resolved through `TRUSTED_PROXIES`) | 10 per 60 s | `WS_RATE_LIMIT_HANDSHAKE_MAX` / `WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS` |
+| Simultaneous sockets | API key | 16 | `WS_MAX_SOCKETS_PER_KEY` |
+
+The frame budget is sized ~6x above legitimate traffic: the dashboard emits ~8 subscribe frames at page mount and only occasional ping/unsubscribe frames afterwards (server→client event fan-out is not limited). The handshake window stops an unauthenticated connection flood from forcing a DB `validateApiKey` per attempt; Socket.IO's exponential-backoff reconnect (~6 attempts/min per tab) stays under it. The socket cap covers multi-tab dashboards and SDK clients sharing one key. A rejected handshake or excess socket is answered with a `RATE_LIMITED` error frame and a clean disconnect; an over-budget frame gets a `RATE_LIMITED` error frame and is not dispatched. Violations are audited as `rate_limit_exceeded`, sampled to at most one row per subject+kind per minute (suppressed occurrences are counted into the next row) so the audit trail itself cannot become the flood.
+
 ## 4.7 CORS Configuration
 
 ### CORS Settings
