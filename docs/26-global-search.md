@@ -3,8 +3,8 @@
 > **Status:** Backend shipped — `GET /api/search` works out of the box on SQLite and PostgreSQL with
 > the built-in database full-text provider, behind an open `SearchProvider` contract. This document is
 > the user-facing feature guide: what it is, how to configure and query it, and when to reach for a
-> plugin backend. A dashboard panel and the SDK helpers arrive in a later phase; until then the feature
-> is driven through the REST endpoint documented here and in
+> plugin backend. The dashboard search panel and the SDK search resources shipped in v0.8.13; both
+> build on the REST endpoint documented here and in
 > [06 - API Specification](./06-api-specification.md).
 
 ## 26.1 What it is
@@ -29,16 +29,17 @@ interface SearchProvider {
   readonly id: string;      // e.g. 'builtin-fts'
   readonly label: string;   // human label for dashboard/config
   search(query: SearchQuery): Promise<SearchResults>;
-  health(): Promise<SearchHealth>; // ok=false surfaces as 503
+  health(): Promise<SearchHealth>; // provider liveness; not yet surfaced on any route
 }
 ```
 
 A registry holds the set of registered providers and the currently active one. Core registers
-`builtin-fts` at bootstrap; a marketplace plugin registers itself the same way and can be promoted
-with `SEARCH_PROVIDER`. When no provider is registered, the route returns `501` (never crashes boot).
-The active provider answers every `/search` call, so swapping backends is a config change, not a code
-change. Importantly, **indexing is not part of the contract** — each provider owns how its index stays
-current (the built-in is DB-level; a plugin is hook-driven, see §26.7).
+`builtin-fts` at bootstrap; a marketplace plugin registers itself the same way and, under the default
+`SEARCH_PROVIDER=auto`, supersedes the built-in when it is enabled (see §26.5). When no provider is
+registered, the route returns `501` (never crashes boot). The active provider answers every `/search`
+call, so swapping backends is a config change, not a code change. Importantly, **indexing is not part
+of the contract** — each provider owns how its index stays current (the built-in is DB-level; a plugin
+is hook-driven, see §26.7).
 
 ## 26.3 The built-in DB full-text default
 
@@ -53,11 +54,14 @@ is maintained by the DB on every INSERT/UPDATE/DELETE with no application code i
   `rowid`, kept in sync by AFTER INSERT/UPDATE/DELETE triggers and backfilled once at migration time.
   Ranking uses FTS5 `rank`; snippets use `snippet()`.
 
-Both dialects wrap the search term in their native "web search"-style helper (`websearch_to_tsquery`
-on Postgres, FTS5 `MATCH` on SQLite), so quoted phrases, `OR`, and `-`exclusion behave as the
-underlying engine defines them. Snippets are emitted with `<mark>`/`</mark>` highlight markers on both
-dialects so the `SearchHit.snippet` contract is dialect-agnostic — and the snippet is already
-XSS-safe text; render it as text, never as HTML.
+On Postgres the search term goes through `websearch_to_tsquery`, so quoted phrases, `OR`, and
+`-`exclusion behave as Postgres defines them. On SQLite the term is matched **literally**: every
+whitespace-separated token is quoted (internal quotes doubled) before it reaches FTS5 `MATCH`, so FTS5
+query grammar (phrases, bare `OR`/`AND`/`NOT`/`NEAR`, parentheses, `*`) is neutralised and inputs such
+as phone numbers or `…@lid` ids match as plain text; multiple tokens are still implicitly ANDed.
+Snippets are emitted with `<mark>`/`</mark>` highlight markers on both dialects so the
+`SearchHit.snippet` contract is dialect-agnostic — and the snippet is already XSS-safe text; render it
+as text, never as HTML.
 
 ## 26.4 Dual-database switching safety
 
@@ -90,7 +94,7 @@ All search configuration lives in the environment (`.env` / Compose / dashboard 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SEARCH_ENABLED` | `true` (unset) | Set to `false` to remove the `/search` route and the entire search module — zero footprint, no DI wiring. The migration still runs (so the index is ready if you re-enable). |
-| `SEARCH_PROVIDER` | `auto` | `auto` selects the built-in provider at runtime; `builtin-fts` pins it explicitly; `none` disables the route at runtime while keeping the config namespace loaded. A plugin provider id selects that plugin once registered. Validated at boot — a typo fails fast. |
+| `SEARCH_PROVIDER` | `auto` | `auto` selects the built-in provider at runtime and lets an enabled plugin provider supersede it; `builtin-fts` pins the built-in explicitly; `none` leaves the registry empty — the module and the route stay mounted, but with no active provider `/api/search` answers `501`. Those three are the only accepted values — anything else (including a plugin id) fails boot. |
 | `SEARCH_LIMIT_MAX` | `100` | Hard cap applied to the `limit` query parameter, so a caller cannot request an unbounded result set. |
 
 ### The opt-out footprint note
@@ -104,17 +108,18 @@ Postgres, a trigger-fire on SQLite — both in-process, both on columns already 
 want to drop the index entirely, run the migration `down` against the data connection.
 
 > **Dev note — `DATABASE_SYNCHRONIZE=true`.** With synchronize on (a common zero-config dev setting),
-> TypeORM creates the `messages` table from the entity, but the FTS migration does **not** run, so
-> `/search` returns `501` (no FTS schema) until you run `npm run migration:run` once to install the FTS
-> virtual table / generated column. Prod defaults to `synchronize=false` + `migrationsRun=true`, so this
-> is dev-only.
+> TypeORM creates the `messages` table from the entity but never runs migrations, so the FTS schema
+> would be missing. The built-in provider therefore re-applies the migration's idempotent DDL at boot
+> (including the one-time SQLite backfill), so `/search` works on a fresh synchronize-based box with no
+> manual `npm run migration:run` step. On migrations-based deployments the same DDL is a set of no-ops.
 >
-> **Postgres caveat — do not combine `DATABASE_TYPE=postgres` with `DATABASE_SYNCHRONIZE=true`.** The
-> Postgres data connection hardcodes `migrationsRun=true` (unlike SQLite, where it is `!synchronize`),
-> so on Postgres both run every boot: the migration adds the generated `body_ts` column, then
-> `synchronize` immediately drops it (the `Message` entity does not declare `body_ts`). The result is
-> `/search` returning `501` silently on every restart. Use migrations (`DATABASE_SYNCHRONIZE=false`, the
-> prod default) for Postgres. SQLite is unaffected (its `migrationsRun` is `!synchronize`).
+> **Postgres caveat — `DATABASE_TYPE=postgres` with `DATABASE_SYNCHRONIZE=true` is rejected at boot.**
+> The Postgres data connection hardcodes `migrationsRun=true` (unlike SQLite, where it is
+> `!synchronize`), so on Postgres both would run every boot: the migration adds the generated `body_ts`
+> column, then `synchronize` immediately drops it (the `Message` entity does not declare `body_ts`),
+> leaving `/search` returning `501` on every restart. Env validation refuses the boot with an explicit
+> error instead. Use migrations (`DATABASE_SYNCHRONIZE=false`, the prod default) for Postgres. SQLite is
+> unaffected (its `migrationsRun` is `!synchronize`).
 
 ## 26.6 The HTTP endpoint
 
@@ -122,7 +127,7 @@ See [06 - API Specification §6.4.12](./06-api-specification.md) for the full pa
 In brief:
 
 ```
-GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<in|out>&type=<type>
+GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<incoming|outgoing>&type=<type>
             &from=<sender>&dateFrom=<ms>&dateTo=<ms>&limit=<n>&offset=<n>
 ```
 
@@ -138,19 +143,20 @@ GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<in|out>&type=<typ
   `direction`, `from`, and optional `score`. `total` is an exact count (bounded; computed lazily only
   when the page could be full). `tookMs` is the provider-side query time. `provider` names which
   backend answered (e.g. `builtin-fts`).
-- **Errors:** `400` empty/whitespace `q`, a non-numeric numeric param, or a malformed SQLite FTS5 query
-  (unbalanced quote/paren, bare operator) — Postgres is tolerant · `401`/`403` auth · `501` no
-  provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) · `503` provider unhealthy
-  (**reserved**: the built-in provider does not return it; it is the contract surface for a future
-  plugin provider whose `search()` throws `ServiceUnavailableException`).
+- **Errors:** `400` empty/whitespace `q` or a non-numeric numeric param (an FTS5 query-grammar error is
+  also mapped to `400`, but since the SQLite path quotes every token ordinary input no longer reaches
+  that fallback) · `401`/`403` auth · `501` no provider configured / FTS schema absent (e.g. a non-FTS5
+  SQLite build) · `502` a plugin provider returned a malformed `SearchResults` payload · `503` a plugin
+  provider whose worker timed out or failed (the built-in provider does not return it).
 
 The endpoint requires at least `OPERATOR` role.
 
 ## 26.7 When to use a plugin backend
 
 The built-in DB full-text provider is the right default for the common case: moderate volume, Latin and
-mixed-Script text, exact-word and phrase matching, and no extra infrastructure. Reach for a plugin
-provider when you need capabilities the SQL engines do not give you:
+mixed-Script text, whole-token matching (phrase and boolean operators only on Postgres — see §26.3),
+and no extra infrastructure. Reach for a plugin provider when you need capabilities the SQL engines do
+not give you:
 
 - **CJK word-segmentation and morphological analysis** — Postgres `'simple'` and SQLite FTS5 tokenize
   on whitespace/punctuation, which does not segment Chinese/Japanese/Korean. A dedicated engine
@@ -161,12 +167,13 @@ provider when you need capabilities the SQL engines do not give you:
   (field weights, synonyms, stop-word lists, custom ranking), a purpose-built search server
   outperforms a relational FTS query and is tunable without touching the message schema.
 
-The upgrade path is the **Meilisearch provider plugin** (the reference plugin backend, Spec 2). It
+The upgrade path is a **search-provider plugin**. The host→plugin search RPC has shipped, so a plugin
 registers as a `SearchProvider`, indexes via the `message:persisted` plugin hook (so it stays current
-without coupling to the message/session services — outbound rows are re-emitted as upserts on every
-state transition, and `message:deleted` fires when a redundant pending row is dropped), and is
-selected by setting `SEARCH_PROVIDER` to its id. Because the route and the response shape are
-identical across providers, dashboard panels and SDKs keep working unchanged when you switch backends.
+without coupling to the message/session services), and becomes the active backend under the default
+`SEARCH_PROVIDER=auto`. No reference plugin is published yet — see
+[27 - Writing a Search-Provider Plugin](./27-plugin-search-providers.md) for the author's contract.
+Because the route and the response shape are identical across providers, dashboard panels and SDKs
+keep working unchanged when you switch backends.
 
 > **Backfill is the plugin's responsibility.** The `message:persisted` hook fires only for **live**
 > traffic — outbound on send, inbound on receive — never for history-backfill persistence. So a plugin

@@ -40,6 +40,13 @@ timeline
                  : Bundled Traefik removed
                  : Bring-your-own reverse proxy
 
+    section v0.5.0-v0.11.0 - Incremental Releases (Released)
+        Jun-Jul 2026 : Integration Fabric provisioning
+                     : Java & Go SDKs
+                     : Live message edits
+                     : Chat kind discriminator & status store
+                     : Security & reliability hardening
+
     section v1.0.0 - Enterprise
         2027 : Kubernetes Operator
              : Multi-tenant
@@ -70,11 +77,16 @@ timeline
 | v0.5.x  | Plugin/dashboard hardening and SDK/docs increments                              | ✅ Released |
 | v0.6.x  | Operational hardening, API surface refinements, dashboard follow-ups            | ✅ Released |
 | v0.7.x  | Dashboard chat UX, infra backup/restore, media-download toggle, infra follow-ups | ✅ Released |
+| v0.8.x  | Integration Fabric provisioning (instance API + dashboard tab), Java & Go SDKs   | ✅ Released |
+| v0.9.0  | Live message-edit events; `general.sessionTimeout` dropped from settings         | ✅ Released |
+| v0.10.x | Chat `kind` discriminator, 24-hour status store, Docker Hub dual-publish         | ✅ Released |
+| v0.11.0 | SDK poll / profile-picture / status-media coverage, security & reliability hardening | ✅ Released |
 | v1.0.0  | Enterprise Ready (K8s Operator, multi-tenant)                                   | 📋 Planned  |
 
-> SDK / docs-site / observability features (Node & Python SDK, Postman collection, Grafana, OpenTelemetry)
-> are delivered **incrementally** in `0.2.x`/`0.3.x` as they're additive — they no longer gate a single
-> version. The version **number** follows SemVer (see §15.2), not the theme.
+> SDK / docs-site / observability features are delivered **incrementally** as they're additive — they no
+> longer gate a single version. The five client SDKs landed this way across `0.7.3`–`0.8.19`; the docs
+> site, a Postman export, Grafana and OpenTelemetry remain open (see §15.6). The version **number**
+> follows SemVer (see §15.2), not the theme.
 
 ### Risk Buffer
 
@@ -110,7 +122,7 @@ Examples:
 0.1.0 - Initial Stable Release (Full features)
 0.1.1 - Bug fix for QR timeout
 0.2.0 - i18n, Real-time Chats, Webhook Delivery-state & Hardening
-0.3.0 - SDK & Developer Tools
+0.3.0 - Engine Pluggability (Baileys engine, plugin layer)
 1.0.0 - Enterprise Ready
 2.0.0 - Breaking API changes
 ```
@@ -494,7 +506,7 @@ v0.1.0 Release Package:
 ## 15.6 Future Roadmap (v0.3.0+)
 
 > **Note:** Version 0.1.0 is the initial stable release including all features from Phases 1-3.
-> Versions 0.1.7 through 0.7.8 have since shipped (see the CHANGELOG); v1.0.0
+> Versions 0.1.7 through 0.11.0 have since shipped (see the CHANGELOG); v1.0.0
 > onward is forward-looking.
 
 ```mermaid
@@ -512,9 +524,10 @@ flowchart LR
         V020[v0.2.0 - i18n, Real-time Chats,<br/>Webhook Delivery-state & Hardening]
     end
 
-    subgraph v0.x["✅ Released (v0.3–v0.4)"]
+    subgraph v0.x["✅ Released (v0.3–v0.11)"]
         V030[v0.3.0 - Engine Pluggability<br/>Baileys engine + plugin layer]
         V040[v0.4.0 - Single-Port Deployment<br/>Dashboard on API port, no bundled Traefik]
+        V011[v0.5.0-v0.11.0 - Incremental releases<br/>see the CHANGELOG]
     end
 
     subgraph v1.x["v1.x Series - Enterprise"]
@@ -553,13 +566,16 @@ vars are removed. Ships with a migration guide.
 
 #### Incremental themes — SDK, Developer Tools & Observability
 
-Delivered additively whenever ready, per SemVer (not gated to one version). The client SDKs and Prometheus metrics have **shipped** (v0.7.x); the rest remain open.
+Delivered additively whenever ready, per SemVer (not gated to one version). Prometheus metrics shipped
+in `0.2.2` and the five client SDKs across `0.7.3`–`0.8.19`; the rest remain open.
 
 | Feature                | Priority | Status | Description                     |
 | ---------------------- | -------- | ------ | ------------------------------- |
 | JavaScript/Node.js SDK | P1       | ✅ Shipped (`@rmyndharis/openwa`) | Official client library |
 | Python SDK             | P2       | ✅ Shipped (`rmyndharis-openwa`) | Python client library |
 | PHP SDK                | P2       | ✅ Shipped (`rmyndharis/openwa`) | PHP client library |
+| Java SDK               | P2       | ✅ Shipped (`com.rmyndharis:openwa`) | Java client library |
+| Go SDK                 | P2       | ✅ Shipped (`github.com/rmyndharis/OpenWA/sdk/go`) | Go client library |
 | Postman Collection     | P1       | ◐ cURL collection (doc 07); Postman export TBD | Ready-to-use API collection |
 | Docs Site              | P1       | ☐ Open | Documentation website |
 | Video Tutorials        | P2       | ☐ Open | Getting started video series    |
@@ -592,14 +608,22 @@ architecture and design rationale):
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
 | P0    | Core substrate: inbound webhook RPC, `@Public` ingress endpoint with HMAC-over-raw-body verification, plugin-instance primitive, normalized send capability, identity/dedup/DLQ tables, ingress queue. SDK v1 frozen. | ✅ Merged (internal substrate) |
 | P1    | Scale-correctness: per-conversation FIFO ordering, per-instance fairness, DLQ redrive, bot/human handover.                                                                    | ✅ Merged (internal substrate) |
-| P2    | Operator provisioning (mint plugin instances and secrets, dashboard) + the first adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.           | 📋 Planned                     |
-| P3    | Second adapter (chatbot flow builder) — validates the substrate generalizes.                                                                                                 | 📋 Planned                     |
-| P4    | Developer experience: SDK reference docs, compatibility test suite, secret rotation, multi-node routing.                                                                      | 📋 Planned                     |
+| P2    | Operator provisioning (mint plugin instances and secrets, dashboard) + the first adapter (helpdesk inbox) shipped as a marketplace plugin — closes #553 end-to-end.           | ✅ Shipped (provisioning `0.8.0`; adapter needs `0.8.7`+) |
+| P3    | A second ingress adapter — validates the substrate generalizes beyond the first consumer.                                                                                     | ✅ Shipped (`supabase-otp-hook`) |
+| P4    | Developer experience: SDK reference docs, compatibility test suite, multi-node routing.                                                                                       | 📋 Planned                     |
 
-> **P0 and P1 are an internal foundation, not a user-facing feature yet.** The ingress flow requires an
-> operator provisioning step (minting a plugin instance and its secret) that lands in P2; until then it is
-> reachable only by direct configuration. The public SDK reference and the first ready-to-use adapter
-> arrive in P2–P4.
+> **Provisioning is operator-facing since `0.8.0`.** An ADMIN key mints a per-plugin instance and its
+> ingress secret through `POST /api/integration/plugins/:pluginId/instances`, and rotates that secret
+> through `POST /api/integration/plugins/:pluginId/instances/:instanceId/regenerate-secret`; both are also
+> reachable from the **Instances** tab of the dashboard plugin dialog. Rotation is a hard cutover — the old
+> secret stops verifying the moment the new one is minted, so a dual-secret grace window is still open.
+> `chatwoot-adapter` is P2's helpdesk adapter and needs a gateway on `0.8.7`+. P3 is closed by
+> `supabase-otp-hook`, the second official ingress plugin — a different vehicle than the chatbot flow
+> builder this row originally named, but it is what proved the substrate generalizes to an independent
+> consumer. Adapters ship from the
+> [OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins) catalog, so consult that repository for
+> each plugin's declared capabilities. P4 remains open: the published SDK reference, a compatibility test
+> suite, and multi-node routing.
 
 ### v1.0.0 - Enterprise Ready
 

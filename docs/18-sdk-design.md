@@ -20,7 +20,7 @@ OpenWA ships five official, hand-written client libraries for the REST API. They
 - **It is a request/response client, not an event SDK.** There is no WebSocket, EventEmitter, or `client.on(...)`. To receive inbound messages and acks, register a webhook (the `webhooks` resource) and host your own receiver, or connect to the real-time Socket.IO API directly (see [API Specification §6.5](./06-api-specification.md)).
 - **Typed errors.** Non-2xx responses raise/throw a typed error mapped from the HTTP status (`401/403/404/409/429/501`), plus a timeout error — all `instanceof`/`catch`-checkable. See each language's Error Handling subsection.
 - **Injectable transport.** The HTTP layer is replaceable (`fetch` in JS, an `httpx` transport in Python, a Guzzle client in PHP) — the extension point for retry/observability middleware and for testing without the network.
-- **Safe by default.** Redirects are never followed (so the API key is never re-sent to a redirect target), the auth/JSON headers always take precedence over caller-supplied defaults, path segments are percent-encoded, a base-URL path prefix (e.g. behind a reverse proxy at `/v1`) is preserved, and there is a default 30s per-request timeout. **No automatic retries** — wrap calls in your own backoff if you need them (especially for `429`).
+- **Safe by default.** Redirects are never followed (so the API key is never re-sent to a redirect target), the auth/JSON headers always take precedence over caller-supplied defaults, path segments are percent-encoded, a base-URL path prefix (e.g. behind a reverse proxy at `/v1`) is preserved, and there is a default 30s per-request timeout. **No automatic retries by default** — in JS, Python, PHP, and Java wrap calls in your own backoff if you need them (especially for `429`); the Go SDK additionally ships an opt-in `WithRetry(RetryPolicy)` that never replays a `POST` after a network error and limits `POST` retries to `429`/`503`.
 
 ### Resource Coverage
 
@@ -29,19 +29,22 @@ All five SDKs expose the same fluent surface:
 | Resource | Methods |
 | --- | --- |
 | `sessions` | list, get, create, delete, start, stop, forceKill, getQrCode, requestPairingCode, stats |
-| `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, reply, forward, react, delete, history, reactions, sendBulk, batchStatus, cancelBatch |
-| `contacts` | list, get, check, profilePicture, phone, block, unblock |
-| `groups` | list, get, create, add/remove/promote/demoteParticipants, setSubject, setDescription, leave, inviteCode, revokeInviteCode |
+| `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, forward, react, delete, editMessage, history, reactions, sendBulk, batchStatus, cancelBatch |
+| `contacts` | list, get, check, profilePicture, profilePictures, phone, block, unblock |
+| `groups` | list, get, create, joinGroup, add/remove/promote/demoteParticipants, setSubject, setDescription, getGroupSettings, updateGroupSettings, leave, inviteCode, revokeInviteCode |
 | `webhooks` | list, get, create, update, delete, test |
 | `chats` | list, markRead, markUnread, delete, sendState |
 | `labels` | list, get, forChat, addToChat, removeFromChat *(WhatsApp Business)* |
 | `channels` | list, get, messages, subscribe, unsubscribe *(Newsletters)* |
 | `catalog` | info, products, product, sendProduct, sendCatalog *(WhatsApp Business)* |
-| `status` | list, fromContact, sendText, sendImage, sendVideo, delete *(Stories)* |
+| `status` | list, fromContact, media, sendText, sendImage, sendVideo, delete *(Stories)* |
+| `search` | search |
 | `templates` | list, get, create, update, delete |
+| `profile` | setProfileName, setProfileStatus, setProfilePicture |
+| `calls` | rejectCall |
 | `health` | check, live, ready |
 
-> The operator/admin-only server modules — `docker`, `metrics`, `infra`, `plugins`, `mcp` — are intentionally **not** exposed in the SDKs; all user-facing resources above are. Methods that require an `OPERATOR`-level key are annotated **OPERATOR** in the per-language tables below.
+> The SDKs cover the user-facing resources above and stop there. The administrative and operational surfaces are deliberately left out — `auth/api-keys`, `audit`, `settings`, `stats`, `infra`, `plugins` and the `integration` management routes are predominantly `ADMIN`-gated; `metrics` is a `@Public()` Prometheus scrape gated by `METRICS_TOKEN` rather than by role; `mcp` is a Streamable-HTTP transport mounted straight onto the Express adapter; and `ingress` is the `@Public()` receiver that integration providers post into. `docker` has no HTTP surface at all — it is an internal service module. Methods that require an `OPERATOR`-level key are annotated **OPERATOR** in the per-language tables below.
 
 ## 18.2 TypeScript / JavaScript SDK
 
@@ -109,7 +112,7 @@ The constructor takes a single `OpenWAClientOptions` object. `baseUrl` and `apiK
 
 ### Resources & Methods
 
-All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an API key with the `OPERATOR` role; a non-operator key receives a `403` (`OpenWAForbiddenError`).
+All resources are accessed as properties on the client (`client.<resource>.<method>`). Every method returns a `Promise`. Methods marked **OPERATOR** require an `OPERATOR`-level API key (an `ADMIN` key satisfies it); a `VIEWER` key receives a `403` (`OpenWAForbiddenError`).
 
 The top-level client also exposes:
 
@@ -126,11 +129,11 @@ The top-level client also exposes:
 | `get` | `get(id)` | Get a single session by id. |
 | `create` | `create(body)` | Create a new session (`body.name` required). **OPERATOR** |
 | `delete` | `delete(id)` | Delete a session. **OPERATOR** |
-| `start` | `start(id)` | Start a session and initialize the WhatsApp connection. |
-| `stop` | `stop(id)` | Stop a session and disconnect gracefully. |
-| `forceKill` | `forceKill(id)` | Force-kill a stuck session (SIGKILL + teardown). |
-| `getQrCode` | `getQrCode(id)` | Get the current QR code for authentication (live from the engine). |
-| `requestPairingCode` | `requestPairingCode(id, body)` | Request an 8-character pairing code for phone-based login. |
+| `start` | `start(id)` | Start a session and initialize the WhatsApp connection. **OPERATOR** |
+| `stop` | `stop(id)` | Stop a session and disconnect gracefully. **OPERATOR** |
+| `forceKill` | `forceKill(id)` | Force-kill a stuck session (SIGKILL + teardown). **OPERATOR** |
+| `getQrCode` | `getQrCode(id)` | Get the current QR code for authentication (live from the engine). **OPERATOR** |
+| `requestPairingCode` | `requestPairingCode(id, body)` | Request an 8-character pairing code for phone-based login. **OPERATOR** |
 | `stats` | `stats()` | Aggregate statistics across the key's sessions. |
 
 #### `messages`
@@ -138,22 +141,24 @@ The top-level client also exposes:
 | Method | Signature | Description |
 | --- | --- | --- |
 | `list` | `list(sessionId, query?)` | List messages (filter by chat/sender); returns `{ messages, total }`. |
-| `sendText` | `sendText(sessionId, { chatId, text })` | Send a text message (`text` max 4096 chars). |
-| `sendImage` | `sendImage(sessionId, body)` | Send an image (`url` or `base64`). |
-| `sendVideo` | `sendVideo(sessionId, body)` | Send a video (`url` or `base64`). |
-| `sendAudio` | `sendAudio(sessionId, body)` | Send an audio file (`url` or `base64`). |
-| `sendDocument` | `sendDocument(sessionId, body)` | Send a document (`url` or `base64`; `filename` recommended). |
-| `sendSticker` | `sendSticker(sessionId, body)` | Send a sticker (`url` or `base64`). |
-| `sendLocation` | `sendLocation(sessionId, body)` | Send a location (`{ chatId, latitude, longitude, description? }`). |
-| `sendContact` | `sendContact(sessionId, body)` | Send a contact card. |
-| `sendTemplate` | `sendTemplate(sessionId, body)` | Render and send a stored message template. |
-| `reply` | `reply(sessionId, body)` | Reply to a specific message. |
-| `forward` | `forward(sessionId, body)` | Forward a message to another chat. |
-| `react` | `react(sessionId, body)` | React to a message (empty `reaction` removes it). |
-| `delete` | `delete(sessionId, body)` | Delete a message. |
+| `sendText` | `sendText(sessionId, { chatId, text })` | Send a text message (`text` max 4096 chars). **OPERATOR** |
+| `sendImage` | `sendImage(sessionId, body)` | Send an image (`url` or `base64`). **OPERATOR** |
+| `sendVideo` | `sendVideo(sessionId, body)` | Send a video (`url` or `base64`). **OPERATOR** |
+| `sendAudio` | `sendAudio(sessionId, body)` | Send an audio file (`url` or `base64`). **OPERATOR** |
+| `sendDocument` | `sendDocument(sessionId, body)` | Send a document (`url` or `base64`; `filename` recommended). **OPERATOR** |
+| `sendSticker` | `sendSticker(sessionId, body)` | Send a sticker (`url` or `base64`). **OPERATOR** |
+| `sendLocation` | `sendLocation(sessionId, body)` | Send a location (`{ chatId, latitude, longitude, description? }`). **OPERATOR** |
+| `sendContact` | `sendContact(sessionId, body)` | Send a contact card. **OPERATOR** |
+| `sendTemplate` | `sendTemplate(sessionId, body)` | Render and send a stored message template. **OPERATOR** |
+| `sendPoll` | `sendPoll(sessionId, body)` | Send a poll message. **OPERATOR** |
+| `reply` | `reply(sessionId, body)` | Reply to a specific message. **OPERATOR** |
+| `forward` | `forward(sessionId, body)` | Forward a message to another chat. **OPERATOR** |
+| `react` | `react(sessionId, body)` | React to a message (empty `reaction` removes it). **OPERATOR** |
+| `delete` | `delete(sessionId, body)` | Delete a message. **OPERATOR** |
+| `editMessage` | `editMessage(sessionId, body)` | Edit the text of a message already sent. **OPERATOR** |
 | `history` | `history(sessionId, chatId, query?)` | Get message history for a chat (read live from WhatsApp). |
 | `reactions` | `reactions(sessionId, chatId, messageId)` | Get reactions for a specific message. |
-| `sendBulk` | `sendBulk(sessionId, body)` | Send a batch asynchronously (202 + batch id); poll via `batchStatus`. |
+| `sendBulk` | `sendBulk(sessionId, body)` | Send a batch asynchronously (202 + batch id); poll via `batchStatus`. **OPERATOR** |
 | `batchStatus` | `batchStatus(sessionId, batchId)` | Poll the status/progress of a bulk-send batch. |
 | `cancelBatch` | `cancelBatch(sessionId, batchId)` | Cancel a running batch. **OPERATOR** |
 
@@ -167,6 +172,7 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 | `get` | `get(sessionId, contactId)` | Get details for a single contact by JID. |
 | `check` | `check(sessionId, number)` | Check whether a phone number is registered on WhatsApp. |
 | `profilePicture` | `profilePicture(sessionId, contactId)` | Get the contact's profile picture URL (or null). |
+| `profilePictures` | `profilePictures(sessionId, ids)` | Batch-resolve profile picture URLs for up to 50 contacts in one request. |
 | `phone` | `phone(sessionId, contactId)` | Resolve a contact id (e.g. a `@lid`) to a phone number. |
 | `block` | `block(sessionId, contactId)` | Block a contact. **OPERATOR** |
 | `unblock` | `unblock(sessionId, contactId)` | Unblock a contact. **OPERATOR** |
@@ -178,12 +184,15 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 | `list` | `list(sessionId, query?)` | List all groups for the session. |
 | `get` | `get(sessionId, groupId)` | Get detailed group info including participants. |
 | `create` | `create(sessionId, body)` | Create a new group. **OPERATOR** |
+| `joinGroup` | `joinGroup(sessionId, body)` | Join a group via its invite code. **OPERATOR** |
 | `addParticipants` | `addParticipants(sessionId, groupId, participants)` | Add participants (`string[]`) to a group. **OPERATOR** |
 | `removeParticipants` | `removeParticipants(sessionId, groupId, participants)` | Remove participants from a group. **OPERATOR** |
 | `promoteParticipants` | `promoteParticipants(sessionId, groupId, participants)` | Promote participants to group admin. **OPERATOR** |
 | `demoteParticipants` | `demoteParticipants(sessionId, groupId, participants)` | Demote participants from group admin. **OPERATOR** |
 | `setSubject` | `setSubject(sessionId, groupId, subject)` | Update the group subject (name). **OPERATOR** |
 | `setDescription` | `setDescription(sessionId, groupId, description)` | Update the group description (empty clears it). **OPERATOR** |
+| `getGroupSettings` | `getGroupSettings(sessionId, groupId)` | Get the group settings (announce / locked / ephemeral timer). |
+| `updateGroupSettings` | `updateGroupSettings(sessionId, groupId, body)` | Update the group settings (at least one field required). **OPERATOR** |
 | `leave` | `leave(sessionId, groupId)` | Leave a group. **OPERATOR** |
 | `inviteCode` | `inviteCode(sessionId, groupId)` | Get the group invite code and link. |
 | `revokeInviteCode` | `revokeInviteCode(sessionId, groupId)` | Revoke the current invite code and generate a new one. **OPERATOR** |
@@ -202,8 +211,8 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(sessionId)` | List all webhooks for a session. |
-| `get` | `get(sessionId, id)` | Get a single webhook by id. |
+| `list` | `list(sessionId)` | List all webhooks for a session. **OPERATOR** |
+| `get` | `get(sessionId, id)` | Get a single webhook by id. **OPERATOR** |
 | `create` | `create(sessionId, body)` | Create a new webhook. **OPERATOR** |
 | `update` | `update(sessionId, id, body)` | Update a webhook. **OPERATOR** |
 | `delete` | `delete(sessionId, id)` | Delete a webhook. **OPERATOR** |
@@ -245,6 +254,7 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 | --- | --- | --- |
 | `list` | `list(sessionId)` | Get all status updates (`{ statuses }`). |
 | `fromContact` | `fromContact(sessionId, contactId)` | Get status updates from a specific contact. |
+| `media` | `media(sessionId, statusId)` | Fetch the stored media bytes for a status update (404 when there is none). |
 | `sendText` | `sendText(sessionId, body)` | Post a text status update. **OPERATOR** |
 | `sendImage` | `sendImage(sessionId, body)` | Post an image status update. **OPERATOR** |
 | `sendVideo` | `sendVideo(sessionId, body)` | Post a video status update. **OPERATOR** |
@@ -252,15 +262,35 @@ Media bodies share the `SendMediaRequest` shape: `{ chatId, url? | base64?, mime
 
 > This is WhatsApp "Status/Stories", distinct from session lifecycle status.
 
+#### `search`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `search` | `search(params)` | Search persisted messages across sessions via the active search provider; a scoped key's reach is bounded by its `allowedSessions`. **OPERATOR** |
+
 #### `templates`
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(sessionId)` | List all templates for a session. |
-| `get` | `get(sessionId, id)` | Get a single template by id. |
+| `list` | `list(sessionId)` | List all templates for a session. **OPERATOR** |
+| `get` | `get(sessionId, id)` | Get a single template by id. **OPERATOR** |
 | `create` | `create(sessionId, body)` | Create a new template. **OPERATOR** |
 | `update` | `update(sessionId, id, body)` | Update a template. **OPERATOR** |
 | `delete` | `delete(sessionId, id)` | Delete a template. **OPERATOR** |
+
+#### `profile`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `setProfileName` | `setProfileName(sessionId, name)` | Set the account display name. **OPERATOR** |
+| `setProfileStatus` | `setProfileStatus(sessionId, status)` | Set the account about/status text (empty clears it). **OPERATOR** |
+| `setProfilePicture` | `setProfilePicture(sessionId, body)` | Set the account profile picture (`url` or `base64` + `mimetype`). **OPERATOR** |
+
+#### `calls`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `rejectCall` | `rejectCall(sessionId, callId)` | Reject a ringing incoming call (`callId` comes from the `call.received` event). **OPERATOR** |
 
 #### `health`
 
@@ -320,7 +350,7 @@ try {
 ### Notable Behaviors
 
 - **Redirects are never followed.** The transport uses `redirect: 'manual'`, so a `3xx` surfaces to the caller as an error (via `OpenWAApiError`) rather than being followed — this guarantees the `X-API-Key` header is never re-sent to a redirect target (potentially a different origin).
-- **Auth and JSON headers take precedence.** Request headers are merged in the order `Content-Type: application/json` → `defaultHeaders` → per-call headers → `X-API-Key`. The `X-API-Key` is applied last and cannot be overridden; `Content-Type` defaults to JSON.
+- **Auth and JSON headers take precedence.** Request headers are merged in the order `defaultHeaders` → per-call headers → `Content-Type: application/json` → `X-API-Key`. Both `Content-Type` and `X-API-Key` are applied last, so neither can be overridden by a caller-supplied header.
 - **Path segments are percent-encoded.** Ids (session, chat, message, etc.) are encoded so a value cannot break out of its path position, while keeping the WhatsApp-safe characters `@`, `:`, and `+` readable (e.g. `628123456789@c.us`).
 - **Base-URL path prefix is preserved.** A `baseUrl` such as `https://gateway.example.com/v1` keeps its `/v1` prefix on every request; only a trailing slash is trimmed.
 - **No automatic retries.** A failed request rejects immediately — the SDK does not retry, even on `429`. Wrap calls in your own backoff if you need retries.
@@ -422,13 +452,13 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | --- | --- | --- |
 | `list` | `list() -> list[SessionResponse]` | List all sessions. |
 | `get` | `get(session_id) -> SessionResponse` | Get one session. |
-| `create` | `create(body) -> SessionResponse` | Create a session (`body["name"]` required). |
-| `delete` | `delete(session_id) -> None` | Delete a session. |
-| `start` | `start(session_id) -> SessionResponse` | Start (connect) a session. |
-| `stop` | `stop(session_id) -> SessionResponse` | Stop a session. |
-| `force_kill` | `force_kill(session_id) -> SessionResponse` | Force-terminate a session. |
-| `get_qr_code` | `get_qr_code(session_id) -> QrCodeResponse` | Fetch the login QR code. |
-| `request_pairing_code` | `request_pairing_code(session_id, body) -> PairingCodeResponse` | Request a phone-number pairing code. |
+| `create` | `create(body) -> SessionResponse` | Create a session (`body["name"]` required). **OPERATOR** |
+| `delete` | `delete(session_id) -> None` | Delete a session. **OPERATOR** |
+| `start` | `start(session_id) -> SessionResponse` | Start (connect) a session. **OPERATOR** |
+| `stop` | `stop(session_id) -> SessionResponse` | Stop a session. **OPERATOR** |
+| `force_kill` | `force_kill(session_id) -> SessionResponse` | Force-terminate a session. **OPERATOR** |
+| `get_qr_code` | `get_qr_code(session_id) -> QrCodeResponse` | Fetch the login QR code. **OPERATOR** |
+| `request_pairing_code` | `request_pairing_code(session_id, body) -> PairingCodeResponse` | Request a phone-number pairing code. **OPERATOR** |
 | `stats` | `stats() -> SessionStatsOverview` | Session statistics overview. |
 
 #### `client.messages`
@@ -436,22 +466,24 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | Method | Signature | Description |
 | --- | --- | --- |
 | `list` | `list(session_id, query=None) -> MessageListResponse` | List stored messages. |
-| `send_text` | `send_text(session_id, body) -> MessageResponse` | Send a text message. |
-| `send_image` | `send_image(session_id, body) -> MessageResponse` | Send an image. |
-| `send_video` | `send_video(session_id, body) -> MessageResponse` | Send a video. |
-| `send_audio` | `send_audio(session_id, body) -> MessageResponse` | Send audio. |
-| `send_document` | `send_document(session_id, body) -> MessageResponse` | Send a document. |
-| `send_sticker` | `send_sticker(session_id, body) -> MessageResponse` | Send a sticker. |
-| `send_location` | `send_location(session_id, body) -> MessageResponse` | Send a location. |
-| `send_contact` | `send_contact(session_id, body) -> MessageResponse` | Send a contact card. |
-| `send_template` | `send_template(session_id, body) -> MessageResponse` | Send a stored template. |
-| `reply` | `reply(session_id, body) -> MessageResponse` | Reply to a message. |
-| `forward` | `forward(session_id, body) -> MessageResponse` | Forward a message. |
-| `react` | `react(session_id, body) -> SuccessResult` | React to a message. |
-| `delete` | `delete(session_id, body) -> SuccessResult` | Delete a message. |
+| `send_text` | `send_text(session_id, body) -> MessageResponse` | Send a text message. **OPERATOR** |
+| `send_image` | `send_image(session_id, body) -> MessageResponse` | Send an image. **OPERATOR** |
+| `send_video` | `send_video(session_id, body) -> MessageResponse` | Send a video. **OPERATOR** |
+| `send_audio` | `send_audio(session_id, body) -> MessageResponse` | Send audio. **OPERATOR** |
+| `send_document` | `send_document(session_id, body) -> MessageResponse` | Send a document. **OPERATOR** |
+| `send_sticker` | `send_sticker(session_id, body) -> MessageResponse` | Send a sticker. **OPERATOR** |
+| `send_location` | `send_location(session_id, body) -> MessageResponse` | Send a location. **OPERATOR** |
+| `send_contact` | `send_contact(session_id, body) -> MessageResponse` | Send a contact card. **OPERATOR** |
+| `send_template` | `send_template(session_id, body) -> MessageResponse` | Send a stored template. **OPERATOR** |
+| `send_poll` | `send_poll(session_id, body) -> MessageResponse` | Send a poll message. **OPERATOR** |
+| `reply` | `reply(session_id, body) -> MessageResponse` | Reply to a message. **OPERATOR** |
+| `forward` | `forward(session_id, body) -> MessageResponse` | Forward a message. **OPERATOR** |
+| `react` | `react(session_id, body) -> SuccessResult` | React to a message. **OPERATOR** |
+| `delete` | `delete(session_id, body) -> SuccessResult` | Delete a message. **OPERATOR** |
+| `edit_message` | `edit_message(session_id, body) -> MessageResponse` | Edit the text of a message already sent. **OPERATOR** |
 | `history` | `history(session_id, chat_id, query=None) -> list[ChatHistoryMessage]` | Fetch chat history. |
 | `reactions` | `reactions(session_id, chat_id, message_id) -> list[ReactionRecord]` | List reactions on a message. |
-| `send_bulk` | `send_bulk(session_id, body) -> BulkMessageResponse` | Enqueue a bulk send batch. |
+| `send_bulk` | `send_bulk(session_id, body) -> BulkMessageResponse` | Enqueue a bulk send batch. **OPERATOR** |
 | `batch_status` | `batch_status(session_id, batch_id) -> BatchStatusResponse` | Get bulk batch status. |
 | `cancel_batch` | `cancel_batch(session_id, batch_id) -> BatchStatusResponse` | Cancel a running batch. **OPERATOR** |
 
@@ -463,6 +495,7 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | `get` | `get(session_id, contact_id) -> ContactRecord` | Get one contact. |
 | `check` | `check(session_id, number) -> CheckNumberResponse` | Check whether a number is on WhatsApp. |
 | `profile_picture` | `profile_picture(session_id, contact_id) -> ProfilePictureResponse` | Get a contact's profile picture. |
+| `profile_pictures` | `profile_pictures(session_id, ids) -> ProfilePicturesResponse` | Batch-resolve profile picture URLs for up to 50 contacts. |
 | `phone` | `phone(session_id, contact_id) -> ContactPhoneResponse` | Resolve a contact's phone number. |
 | `block` | `block(session_id, contact_id) -> SuccessResult` | Block a contact. **OPERATOR** |
 | `unblock` | `unblock(session_id, contact_id) -> SuccessResult` | Unblock a contact. **OPERATOR** |
@@ -474,12 +507,15 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | `list` | `list(session_id, query=None) -> list[GroupSummary]` | List groups (`query`: `limit`, `offset`). |
 | `get` | `get(session_id, group_id) -> GroupInfo` | Get group details. |
 | `create` | `create(session_id, body) -> GroupInfo` | Create a group. **OPERATOR** |
+| `join_group` | `join_group(session_id, body) -> JoinGroupResponse` | Join a group via its invite code. **OPERATOR** |
 | `add_participants` | `add_participants(session_id, group_id, participants) -> SuccessResult` | Add participants (`list[str]`). **OPERATOR** |
 | `remove_participants` | `remove_participants(session_id, group_id, participants) -> SuccessResult` | Remove participants. **OPERATOR** |
 | `promote_participants` | `promote_participants(session_id, group_id, participants) -> SuccessResult` | Promote to admin. **OPERATOR** |
 | `demote_participants` | `demote_participants(session_id, group_id, participants) -> SuccessResult` | Demote from admin. **OPERATOR** |
 | `set_subject` | `set_subject(session_id, group_id, subject) -> SuccessResult` | Set group subject. **OPERATOR** |
 | `set_description` | `set_description(session_id, group_id, description) -> SuccessResult` | Set group description. **OPERATOR** |
+| `get_group_settings` | `get_group_settings(session_id, group_id) -> GroupSettings` | Get the group settings (announce / locked / ephemeral timer). |
+| `update_group_settings` | `update_group_settings(session_id, group_id, body) -> SuccessResult` | Update the group settings (at least one field required). **OPERATOR** |
 | `leave` | `leave(session_id, group_id) -> SuccessResult` | Leave the group. **OPERATOR** |
 | `invite_code` | `invite_code(session_id, group_id) -> InviteCodeResponse` | Get the invite code. |
 | `revoke_invite_code` | `revoke_invite_code(session_id, group_id) -> InviteCodeResponse` | Revoke and regenerate the invite code. **OPERATOR** |
@@ -498,8 +534,8 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(session_id) -> list[WebhookResponse]` | List webhooks. |
-| `get` | `get(session_id, webhook_id) -> WebhookResponse` | Get one webhook. |
+| `list` | `list(session_id) -> list[WebhookResponse]` | List webhooks. **OPERATOR** |
+| `get` | `get(session_id, webhook_id) -> WebhookResponse` | Get one webhook. **OPERATOR** |
 | `create` | `create(session_id, body) -> WebhookResponse` | Create a webhook. **OPERATOR** |
 | `update` | `update(session_id, webhook_id, body) -> WebhookResponse` | Update a webhook. **OPERATOR** |
 | `delete` | `delete(session_id, webhook_id) -> None` | Delete a webhook. **OPERATOR** |
@@ -541,20 +577,41 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | --- | --- | --- |
 | `list` | `list(session_id) -> dict[str, list[StatusRecord]]` | List all status updates. |
 | `from_contact` | `from_contact(session_id, contact_id) -> dict[str, list[StatusRecord]]` | Status updates from one contact. |
+| `media` | `media(session_id, status_id) -> StatusMedia` | Fetch the stored media bytes for a status update. |
 | `send_text` | `send_text(session_id, body) -> StatusResult` | Post a text status. **OPERATOR** |
 | `send_image` | `send_image(session_id, body) -> StatusResult` | Post an image status. **OPERATOR** |
 | `send_video` | `send_video(session_id, body) -> StatusResult` | Post a video status. **OPERATOR** |
 | `delete` | `delete(session_id, status_id) -> None` | Delete a status. **OPERATOR** |
 
+#### `client.search`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `search` | `search(params) -> SearchResults` | Search persisted messages across sessions via the active search provider. **OPERATOR** |
+
 #### `client.templates`
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(session_id) -> list[TemplateRecord]` | List templates. |
-| `get` | `get(session_id, template_id) -> TemplateRecord` | Get one template. |
+| `list` | `list(session_id) -> list[TemplateRecord]` | List templates. **OPERATOR** |
+| `get` | `get(session_id, template_id) -> TemplateRecord` | Get one template. **OPERATOR** |
 | `create` | `create(session_id, body) -> TemplateRecord` | Create a template. **OPERATOR** |
 | `update` | `update(session_id, template_id, body) -> TemplateRecord` | Update a template. **OPERATOR** |
 | `delete` | `delete(session_id, template_id) -> None` | Delete a template. **OPERATOR** |
+
+#### `client.profile`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `set_profile_name` | `set_profile_name(session_id, body) -> SuccessResult` | Set the account display name. **OPERATOR** |
+| `set_profile_status` | `set_profile_status(session_id, body) -> SuccessResult` | Set the account about/status text (empty clears it). **OPERATOR** |
+| `set_profile_picture` | `set_profile_picture(session_id, body) -> SuccessResult` | Set the account profile picture (`url` or `base64` + `mimetype`). **OPERATOR** |
+
+#### `client.calls`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `reject_call` | `reject_call(session_id, call_id) -> SuccessResult` | Reject a ringing incoming call. **OPERATOR** |
 
 #### `client.health`
 
@@ -658,7 +715,7 @@ $result = $client->messages->sendText('my-session', [
 echo $result['messageId'];
 ```
 
-The entry class is `OpenWA\Client`. It validates that `baseUrl` and `apiKey` are present (throwing `OpenWAException` otherwise), constructs the shared HTTP transport, and exposes each resource as a public property: `$client->sessions`, `$client->messages`, `$client->contacts`, `$client->groups`, `$client->webhooks`, `$client->chats`, `$client->status`, `$client->health`, `$client->labels`, `$client->channels`, `$client->catalog`, `$client->templates`.
+The entry class is `OpenWA\Client`. It validates that `baseUrl` and `apiKey` are present (throwing `OpenWAException` otherwise), constructs the shared HTTP transport, and exposes each resource as a public property: `$client->sessions`, `$client->messages`, `$client->search`, `$client->contacts`, `$client->groups`, `$client->webhooks`, `$client->chats`, `$client->status`, `$client->health`, `$client->labels`, `$client->channels`, `$client->catalog`, `$client->templates`, `$client->profile`, `$client->calls`.
 
 Two escape hatches sit on the client itself:
 
@@ -691,13 +748,13 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | --- | --- | --- |
 | `list` | `list(): array` | List all sessions. |
 | `get` | `get(string $id): array` | Get one session. |
-| `create` | `create(array $body): array` | Create a session (`$body['name']` required). |
-| `delete` | `delete(string $id): void` | Delete a session. |
-| `start` | `start(string $id): array` | Start a session. |
-| `stop` | `stop(string $id): array` | Stop a session. |
-| `forceKill` | `forceKill(string $id): array` | Force-kill a session. |
-| `getQrCode` | `getQrCode(string $id): array` | Fetch the current QR code. |
-| `requestPairingCode` | `requestPairingCode(string $id, array $body): array` | Request a phone-pairing code. |
+| `create` | `create(array $body): array` | Create a session (`$body['name']` required). **OPERATOR** |
+| `delete` | `delete(string $id): void` | Delete a session. **OPERATOR** |
+| `start` | `start(string $id): array` | Start a session. **OPERATOR** |
+| `stop` | `stop(string $id): array` | Stop a session. **OPERATOR** |
+| `forceKill` | `forceKill(string $id): array` | Force-kill a session. **OPERATOR** |
+| `getQrCode` | `getQrCode(string $id): array` | Fetch the current QR code. **OPERATOR** |
+| `requestPairingCode` | `requestPairingCode(string $id, array $body): array` | Request a phone-pairing code. **OPERATOR** |
 | `stats` | `stats(): array` | `GET /api/sessions/stats/overview`. |
 
 #### `messages`
@@ -705,22 +762,24 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | Method | Signature | Description |
 | --- | --- | --- |
 | `list` | `list(string $sessionId, array $query = []): array` | List stored messages. |
-| `sendText` | `sendText(string $sessionId, array $body): array` | Send a text message (`send-text`). |
-| `sendImage` | `sendImage(string $sessionId, array $body): array` | Send an image. |
-| `sendVideo` | `sendVideo(string $sessionId, array $body): array` | Send a video. |
-| `sendAudio` | `sendAudio(string $sessionId, array $body): array` | Send audio. |
-| `sendDocument` | `sendDocument(string $sessionId, array $body): array` | Send a document. |
-| `sendSticker` | `sendSticker(string $sessionId, array $body): array` | Send a sticker. |
-| `sendLocation` | `sendLocation(string $sessionId, array $body): array` | Send a location. |
-| `sendContact` | `sendContact(string $sessionId, array $body): array` | Send a contact card. |
-| `sendTemplate` | `sendTemplate(string $sessionId, array $body): array` | Send a stored template. |
-| `reply` | `reply(string $sessionId, array $body): array` | Reply to a message. |
-| `forward` | `forward(string $sessionId, array $body): array` | Forward a message. |
-| `react` | `react(string $sessionId, array $body): array` | React to a message. |
-| `delete` | `delete(string $sessionId, array $body): array` | Delete a message. |
+| `sendText` | `sendText(string $sessionId, array $body): array` | Send a text message (`send-text`). **OPERATOR** |
+| `sendImage` | `sendImage(string $sessionId, array $body): array` | Send an image. **OPERATOR** |
+| `sendVideo` | `sendVideo(string $sessionId, array $body): array` | Send a video. **OPERATOR** |
+| `sendAudio` | `sendAudio(string $sessionId, array $body): array` | Send audio. **OPERATOR** |
+| `sendDocument` | `sendDocument(string $sessionId, array $body): array` | Send a document. **OPERATOR** |
+| `sendSticker` | `sendSticker(string $sessionId, array $body): array` | Send a sticker. **OPERATOR** |
+| `sendLocation` | `sendLocation(string $sessionId, array $body): array` | Send a location. **OPERATOR** |
+| `sendContact` | `sendContact(string $sessionId, array $body): array` | Send a contact card. **OPERATOR** |
+| `sendTemplate` | `sendTemplate(string $sessionId, array $body): array` | Send a stored template. **OPERATOR** |
+| `sendPoll` | `sendPoll(string $sessionId, array $body): array` | Send a native poll (2–12 options). **OPERATOR** |
+| `reply` | `reply(string $sessionId, array $body): array` | Reply to a message. **OPERATOR** |
+| `forward` | `forward(string $sessionId, array $body): array` | Forward a message. **OPERATOR** |
+| `react` | `react(string $sessionId, array $body): array` | React to a message. **OPERATOR** |
+| `delete` | `delete(string $sessionId, array $body): array` | Delete a message. **OPERATOR** |
+| `editMessage` | `editMessage(string $sessionId, array $body): array` | Edit the text of a message already sent (`$body` needs `chatId`, `messageId`, `body`). **OPERATOR** |
 | `history` | `history(string $sessionId, string $chatId, array $query = []): array` | Fetch chat history. |
 | `reactions` | `reactions(string $sessionId, string $chatId, string $messageId): array` | List reactions on a message. |
-| `sendBulk` | `sendBulk(string $sessionId, array $body): array` | Enqueue a bulk send batch. |
+| `sendBulk` | `sendBulk(string $sessionId, array $body): array` | Enqueue a bulk send batch. **OPERATOR** |
 | `batchStatus` | `batchStatus(string $sessionId, string $batchId): array` | Get bulk batch status. |
 | `cancelBatch` | `cancelBatch(string $sessionId, string $batchId): array` | Cancel a bulk batch. **OPERATOR** |
 
@@ -732,6 +791,7 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | `get` | `get(string $sessionId, string $contactId): array` | Get one contact. |
 | `check` | `check(string $sessionId, string $number): array` | Check whether a number is on WhatsApp. |
 | `profilePicture` | `profilePicture(string $sessionId, string $contactId): array` | Get a contact's profile picture. |
+| `profilePictures` | `profilePictures(string $sessionId, array $ids): array` | Batch-resolve profile picture URLs for up to 50 contacts in one request. |
 | `phone` | `phone(string $sessionId, string $contactId): array` | Resolve a contact's phone number. |
 | `block` | `block(string $sessionId, string $contactId): array` | Block a contact. **OPERATOR** |
 | `unblock` | `unblock(string $sessionId, string $contactId): array` | Unblock a contact. **OPERATOR** |
@@ -743,12 +803,15 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | `list` | `list(string $sessionId, array $query = []): array` | List groups. |
 | `get` | `get(string $sessionId, string $groupId): array` | Get one group. |
 | `create` | `create(string $sessionId, array $body): array` | Create a group. **OPERATOR** |
+| `joinGroup` | `joinGroup(string $sessionId, string $inviteCode): array` | Join a group via its invite code. **OPERATOR** |
 | `addParticipants` | `addParticipants(string $sessionId, string $groupId, array $participants): array` | Add participants. **OPERATOR** |
 | `removeParticipants` | `removeParticipants(string $sessionId, string $groupId, array $participants): array` | Remove participants. **OPERATOR** |
 | `promoteParticipants` | `promoteParticipants(string $sessionId, string $groupId, array $participants): array` | Promote to admin. **OPERATOR** |
 | `demoteParticipants` | `demoteParticipants(string $sessionId, string $groupId, array $participants): array` | Demote admins. **OPERATOR** |
 | `setSubject` | `setSubject(string $sessionId, string $groupId, string $subject): array` | Update the group subject. **OPERATOR** |
 | `setDescription` | `setDescription(string $sessionId, string $groupId, string $description): array` | Update the group description. **OPERATOR** |
+| `getGroupSettings` | `getGroupSettings(string $sessionId, string $groupId): array` | Get the group settings (only the ones the active engine supports are present). |
+| `updateGroupSettings` | `updateGroupSettings(string $sessionId, string $groupId, array $settings): array` | Update the group settings (at least one of `announce`, `locked`, `ephemeralSeconds`). **OPERATOR** |
 | `leave` | `leave(string $sessionId, string $groupId): array` | Leave the group. **OPERATOR** |
 | `inviteCode` | `inviteCode(string $sessionId, string $groupId): array` | Get the invite code. |
 | `revokeInviteCode` | `revokeInviteCode(string $sessionId, string $groupId): array` | Revoke and regenerate the invite code. **OPERATOR** |
@@ -767,8 +830,8 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(string $sessionId): array` | List webhooks. |
-| `get` | `get(string $sessionId, string $id): array` | Get one webhook. |
+| `list` | `list(string $sessionId): array` | List webhooks. **OPERATOR** |
+| `get` | `get(string $sessionId, string $id): array` | Get one webhook. **OPERATOR** |
 | `create` | `create(string $sessionId, array $body): array` | Create a webhook. **OPERATOR** |
 | `update` | `update(string $sessionId, string $id, array $body): array` | Update a webhook. **OPERATOR** |
 | `delete` | `delete(string $sessionId, string $id): void` | Delete a webhook. **OPERATOR** |
@@ -810,20 +873,41 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | --- | --- | --- |
 | `list` | `list(string $sessionId): array` | List status updates. |
 | `fromContact` | `fromContact(string $sessionId, string $contactId): array` | Status updates from one contact. |
+| `media` | `media(string $sessionId, string $statusId): array` | Fetch the stored media bytes for a status update (`{data, contentType}`; 404 when there is none). |
 | `sendText` | `sendText(string $sessionId, array $body): array` | Post a text status. **OPERATOR** |
 | `sendImage` | `sendImage(string $sessionId, array $body): array` | Post an image status. **OPERATOR** |
 | `sendVideo` | `sendVideo(string $sessionId, array $body): array` | Post a video status. **OPERATOR** |
 | `delete` | `delete(string $sessionId, string $statusId): void` | Delete a status. **OPERATOR** |
 
+#### `search`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `search` | `search(array $params): array` | Search persisted messages across sessions via the active search provider (`$params['q']` required). **OPERATOR** |
+
 #### `templates`
 
 | Method | Signature | Description |
 | --- | --- | --- |
-| `list` | `list(string $sessionId): array` | List templates. |
-| `get` | `get(string $sessionId, string $templateId): array` | Get one template. |
+| `list` | `list(string $sessionId): array` | List templates. **OPERATOR** |
+| `get` | `get(string $sessionId, string $templateId): array` | Get one template. **OPERATOR** |
 | `create` | `create(string $sessionId, array $body): array` | Create a template (`$body` needs `name` and `body`; `header`/`footer` optional). **OPERATOR** |
 | `update` | `update(string $sessionId, string $templateId, array $body): array` | Update a template. **OPERATOR** |
 | `delete` | `delete(string $sessionId, string $templateId): void` | Delete a template. **OPERATOR** |
+
+#### `profile`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `setProfileName` | `setProfileName(string $sessionId, string $name): array` | Set the account display name. **OPERATOR** |
+| `setProfileStatus` | `setProfileStatus(string $sessionId, string $status): array` | Set the account about/status text (empty clears it). **OPERATOR** |
+| `setProfilePicture` | `setProfilePicture(string $sessionId, array $body): array` | Set the account profile picture (`url` or `base64` + `mimetype`). **OPERATOR** |
+
+#### `calls`
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `rejectCall` | `rejectCall(string $sessionId, string $callId): array` | Reject a ringing incoming call (404 when it is not found or no longer ringing). **OPERATOR** |
 
 #### `health`
 

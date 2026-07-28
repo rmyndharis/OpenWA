@@ -1,9 +1,10 @@
 # 25 - Integration Fabric
 
-> **Status:** P0 substrate merged as an internal foundation. This document describes the architecture and
-> the design rationale — *why* it is built this way — not a how-to or an API reference. The public SDK
-> reference and the first ready-to-use adapter arrive in later phases (see
-> [15 - Project Roadmap](./15-project-roadmap.md)).
+> **Status:** Shipped. The core substrate, operator provisioning (an ADMIN instance API and a dashboard
+> **Instances** tab), and the official ingress adapters are all in place; the public SDK reference is
+> still to come (P4). This document describes the architecture and the design rationale — *why* it is
+> built this way — not a how-to or an API reference (see
+> [15 - Project Roadmap](./15-project-roadmap.md) for the phase table).
 
 ## 25.1 What it is
 
@@ -130,7 +131,7 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   a human-handled conversation deterministically stops the bot. `sessionId` is non-foreign-key provenance
   because a mapping outlives a session.
 - **`ingress_events`** — the persist-before-acknowledge row and the inbound deduplication oracle
-  (`UNIQUE(instanceId, providerDeliveryId)`, insert-or-skip). It also carries the dispatch-lifecycle
+  (`UNIQUE(pluginId, instanceId, providerDeliveryId)`, insert-or-skip). It also carries the dispatch-lifecycle
   markers the reconciler sweeps on: `dispatchState` (`pending | dispatched | failed`, `NULL` on rows
   that predate the columns on a synchronize-bootstrapped DB — "not watched"), `dispatchAttempts`, and
   `lastDispatchAt`. New rows are `pending`; a recorded enqueue outcome flips them to `dispatched`;
@@ -155,8 +156,8 @@ Four tables live on the data connection, each created by a hand-authored dual-di
   guard still applies, and the payload is intentionally not bound to a DTO so strict validation cannot
   reject unknown provider fields.
 - **Replay and duplication.** A signed-timestamp tolerance rejects stale deliveries, and
-  `(instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id provides
-  best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
+  `(pluginId, instanceId, providerDeliveryId)` deduplication plus a queue job id keyed on the delivery id
+  provides best-effort de-duplication when the provider supplies a stable delivery id. Standard Webhooks defaults
   to its signed `webhook-id`; other handlers must remain idempotent because arbitrary provider headers
   are not authenticated by every scheme. Freshness is enforced whenever a route declares
   `signature.timestampHeader`: the declared `toleranceSec` wins, and otherwise the host default
@@ -175,7 +176,10 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 - **Fail-closed by construction.** No request — including an empty-body request — is accepted by an
   authenticating scheme without the correct per-instance secret. HMAC and Standard Webhooks bind body
   integrity; `shared-secret` authenticates only the caller header and does not bind the body.
-  `scheme: "none"` is the only unauthenticated path.
+  `scheme: "none"` is the only unauthenticated path, and a route declaring it **fails the whole plugin's
+  load** unless the operator has explicitly opted in with `ALLOW_UNSIGNED_INGRESS=true` — manifest
+  validation throws, so none of that plugin's other routes load either and its registry status is set to
+  `ERROR`. When the operator has opted in, the loader still logs its boot warning for every such route.
 - **Raw-body content types.** Signature verification observes exact bytes for `application/json` and
   `application/x-www-form-urlencoded`. Plain text, XML, octet streams, and non-UTF JSON charsets are not
   supported ingress body formats and fail verification/content handling rather than being re-serialized.
@@ -225,13 +229,14 @@ dedup rows and re-admit their replays, which is worse than the bounded growth it
 The stable surface untrusted adapters consume. A plugin declares `sdkVersion: "1"` and an `ingress`
 descriptor (the route, its signature scheme, replay tolerance, dedup header, and an optional verification
 handshake) in its manifest, and requests the `webhook:ingress` and `conversation:send` permissions. The
-host refuses to route ingress to a plugin whose declared **major** differs from the host's supported
-major, and the surface is **additive-only** within a major. The worker-facing API centres on
+host refuses to load an ingress-declaring plugin whose declared **major** differs from the host's
+supported major, and the surface is **additive-only** within a major. The worker-facing API centres on
 `ctx.registerWebhook(...)` (claim an inbound route), `ctx.conversations.send(...)` (normalized reply), and
 per-instance mapping and handover helpers.
 
 The `signature.scheme` field enumerates `hmac-sha256` (HMAC over a `contentTemplate`), `shared-secret`
-(constant-time header compare), `standard-webhooks`, and `none` (unauthenticated — see §25.6). The
+(constant-time header compare), `standard-webhooks`, and `none` (unauthenticated — a route declaring it
+fails the whole plugin's load unless the operator sets `ALLOW_UNSIGNED_INGRESS=true`; see §25.6). The
 `standard-webhooks` scheme verifies a [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks)
 payload host-side — Supabase Auth's Send-SMS hook and any Svix-routed provider speak it natively. Its wire
 format is fixed by the spec (the `webhook-id` / `webhook-timestamp` / `webhook-signature` header triple,
@@ -257,20 +262,27 @@ that was never wired to the HTTP response (the pipeline is always async + fast-a
 not rely on it at runtime.
 
 The full SDK reference — every manifest field, the envelope schema, the lifecycle, and the golden
-compatibility fixtures — is published alongside the first adapter, so it documents a contract that can
-actually be exercised end to end. Until then this document and the manifest types are the source of truth.
+compatibility fixtures — is a P4 deliverable and is not published yet, so this document and the manifest
+types remain the source of truth.
 
 ## 25.9 Phasing and status
 
 See [15 - Project Roadmap](./15-project-roadmap.md) for the full phase table. In brief: **P0** (this
-substrate) is merged as an internal foundation; **P1** adds scale-correctness (per-conversation ordering,
-per-instance fairness, DLQ redrive, handover); **P2** adds operator provisioning and ships the first
-adapter as a marketplace plugin; **P3** ships a second adapter; **P4** covers developer experience (SDK
-reference, compatibility suite, secret rotation, multi-node routing).
+substrate) is merged; **P1** added scale-correctness (per-conversation ordering, per-instance fairness,
+DLQ redrive, handover); **P2** shipped operator provisioning in v0.8.0 — an ADMIN-only instance API
+(`POST|GET /api/integration/plugins/:pluginId/instances` to create and list, with
+`GET|PATCH|DELETE /api/integration/plugins/:pluginId/instances/:instanceId` and
+`POST /api/integration/plugins/:pluginId/instances/:instanceId/regenerate-secret` on the item path) and a
+dashboard **Instances** tab; **P3** validated the substrate against a second ingress adapter
+(`supabase-otp-hook`). The official
+ingress adapters ship as sandboxed plugins in the
+[OpenWA-plugins](https://github.com/rmyndharis/OpenWA-plugins) catalog, not in this repository. What
+remains open is **P4**: the published SDK reference, a compatibility test suite, and multi-node routing.
 
-> **P0 and P1 are not a user-facing feature yet.** The ingress flow requires an operator provisioning step
-> (minting a plugin instance and its secret) that lands in P2; until then it is reachable only by direct
-> configuration.
+> **Provisioning is a first-class operator surface.** An ADMIN key mints a plugin instance against an
+> ingress-capable plugin, binds it to a session scope, and receives the ingress URLs for the plugin's
+> declared routes. The instance's ingress secret (and its `verifyToken`) are revealed once, on create and
+> on regenerate, and masked on every later read.
 
 ---
 
