@@ -98,7 +98,9 @@ jest.mock('@whiskeysockets/baileys', () => ({
   },
 }));
 
-import { BaileysAdapter } from './baileys.adapter';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+import { BaileysAdapter, createProxyAgent } from './baileys.adapter';
 import {
   EditedMessage,
   EngineStatus,
@@ -3439,5 +3441,75 @@ describe('BaileysAdapter status posting', () => {
       },
     });
     expect(fakeStore.getMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysAdapter proxy support', () => {
+  beforeEach(() => {
+    fakeSock.user = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+  });
+
+  const proxied = (proxyUrl: string): BaileysAdapter =>
+    new BaileysAdapter({
+      sessionId: 'sess-1',
+      dbSessionId: 'db-uuid-1',
+      authDir: './data/baileys',
+      messageStore: fakeStore,
+      proxyUrl,
+    });
+
+  const makeWASocketMock = (): jest.Mock =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
+
+  const lastSocketConfig = (): Record<string, unknown> => {
+    const calls = makeWASocketMock().mock.calls as Array<[Record<string, unknown>]>;
+    const last = calls.at(-1);
+    if (!last) throw new Error('Expected makeWASocket to have been called');
+    return last[0];
+  };
+
+  it('selects HttpsProxyAgent for http/https proxy URLs', () => {
+    expect(createProxyAgent('http://user:pass@proxy.example:8080')).toBeInstanceOf(HttpsProxyAgent);
+    expect(createProxyAgent('https://proxy.example:443')).toBeInstanceOf(HttpsProxyAgent);
+  });
+
+  it('selects SocksProxyAgent for socks4/socks5 proxy URLs', () => {
+    expect(createProxyAgent('socks5://user:pass@proxy.example:1080')).toBeInstanceOf(SocksProxyAgent);
+    expect(createProxyAgent('socks4://proxy.example:1080')).toBeInstanceOf(SocksProxyAgent);
+  });
+
+  it('throws on an unsupported proxy scheme', () => {
+    expect(() => createProxyAgent('ftp://proxy.example:21')).toThrow(/unsupported proxy/i);
+  });
+
+  it('passes the agent to makeWASocket as both agent (WS) and fetchAgent (media)', async () => {
+    await proxied('http://user:pass@proxy.example:8080').initialize(noopCallbacks());
+    const cfg = lastSocketConfig();
+    expect(cfg.agent).toBeInstanceOf(HttpsProxyAgent);
+    expect(cfg.fetchAgent).toBe(cfg.agent);
+  });
+
+  it('passes a SOCKS agent through for a socks5 URL', async () => {
+    await proxied('socks5://user:pass@proxy.example:1080').initialize(noopCallbacks());
+    expect(lastSocketConfig().agent).toBeInstanceOf(SocksProxyAgent);
+  });
+
+  it('leaves agent/fetchAgent unset without a proxyUrl', async () => {
+    await newAdapter().initialize(noopCallbacks());
+    const cfg = lastSocketConfig();
+    expect(cfg.agent).toBeUndefined();
+    expect(cfg.fetchAgent).toBeUndefined();
+  });
+
+  it('fails closed: an unusable proxy value fails initialize instead of connecting direct', async () => {
+    const onError = jest.fn();
+    const adapter = proxied('ftp://proxy.example:21');
+    await expect(adapter.initialize(noopCallbacks({ onError }))).rejects.toThrow(/unsupported proxy/i);
+    expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
+    expect(onError).toHaveBeenCalled();
+    expect(makeWASocketMock()).not.toHaveBeenCalled();
   });
 });

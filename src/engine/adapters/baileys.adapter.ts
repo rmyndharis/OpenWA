@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { Agent } from 'https';
 import * as qrcode from 'qrcode';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type {
   AnyMessageContent,
@@ -77,6 +80,24 @@ const BAILEYS_BROWSER: [string, string, string] = [
   'Chrome',
   '120.0.0',
 ];
+
+/**
+ * Build the Node-layer agent for a session egress proxy (#859). Both the WhatsApp WebSocket
+ * (`agent`) and media up/downloads (`fetchAgent`) ride it; credentials stay in the URL and are
+ * authenticated on the socket itself, so none of the Chromium CDP auth timing the wwjs engine is
+ * exposed to applies here. The scheme set matches the create-session DTO validator; anything else
+ * (a pre-validation DB row) throws, failing the session closed rather than silently going direct.
+ */
+export function createProxyAgent(proxyUrl: string): Agent {
+  const { protocol } = new URL(proxyUrl);
+  if (protocol === 'http:' || protocol === 'https:') {
+    return new HttpsProxyAgent(proxyUrl);
+  }
+  if (protocol === 'socks4:' || protocol === 'socks5:') {
+    return new SocksProxyAgent(proxyUrl);
+  }
+  throw new Error(`Unsupported proxy protocol for the baileys engine: ${protocol}`);
+}
 
 /** Fully silent logger so Baileys does not spam stdout; diagnostics flow via connection.update. */
 function createSilentLogger(): BaileysLogger {
@@ -180,13 +201,6 @@ export class BaileysAdapter implements IWhatsAppEngine {
     // Isolate each session's auth state under its own subdirectory of the shared auth dir.
     this.authPath = path.join(config.authDir, config.sessionId);
     this.sessionStore = new BaileysSessionStore(config.lidMappingStore, config.sessionId);
-    if (config.proxyUrl) {
-      // Proxy support is gated for this slice — Baileys proxying needs an http/socks agent (a new dep).
-      this.logger.warn('Proxy configured but not supported by the baileys engine in this slice; ignoring it', {
-        action: 'baileys_proxy_unsupported',
-        sessionId: config.sessionId,
-      });
-    }
   }
 
   // ----- Lifecycle -----
@@ -218,6 +232,15 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   private async connectInner(): Promise<void> {
     this.setStatus(EngineStatus.INITIALIZING);
+    // Build the egress proxy agent BEFORE any auth-state I/O so an unusable proxy value fails the
+    // session (engine_error) instead of silently connecting direct (#859).
+    let proxyAgent: Agent | undefined;
+    if (this.config.proxyUrl) {
+      proxyAgent = createProxyAgent(this.config.proxyUrl);
+      const { protocol, host } = new URL(this.config.proxyUrl);
+      // Credential-stripped, matching the wwjs adapter's log line (#628).
+      this.logger.log(`Using proxy: ${protocol}//${host}`, { sessionId: this.config.sessionId });
+    }
     const b = await this.loadLib();
     const { state, saveCreds } = await b.useMultiFileAuthState(this.authPath);
     const { version } = await b.fetchLatestBaileysVersion();
@@ -276,6 +299,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
       version,
       browser: BAILEYS_BROWSER,
       printQRInTerminal: false,
+      // Session egress proxy (#859): the WS and media transfers share one agent; undefined = direct.
+      agent: proxyAgent,
+      fetchAgent: proxyAgent,
       // Enable the initial sync. Baileys defaults `shouldSyncHistoryMessage` to `() => !!syncFullHistory`,
       // so leaving both unset disables ALL history + app-state sync - no contacts, chats, recent history,
       // or lid->phone mappings ever arrive (the address-book app-state sync only runs once history sync is
