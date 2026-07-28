@@ -5916,7 +5916,21 @@
       "description": "Health check endpoints"
     }
   ],
-  "servers": [],
+  "servers": [
+    {
+      "url": "http://{host}:{port}",
+      "description": "OpenWA instance",
+      "variables": {
+        "host": {
+          "default": "localhost"
+        },
+        "port": {
+          "default": "2785",
+          "description": "PORT env var"
+        }
+      }
+    }
+  ],
   "components": {
     "securitySchemes": {
       "X-API-Key": {

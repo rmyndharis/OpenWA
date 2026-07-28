@@ -96,6 +96,14 @@ export function createSwaggerConfig(): Omit<OpenAPIObject, 'paths'> {
       .addTag('audit', 'Audit log')
       .addTag('metrics', 'Prometheus metrics')
       .addTag('health', 'Health check endpoints')
+      // Templated server: defaults to the out-of-box local instance, and the {host}/{port}
+      // variables keep Swagger UI "Try it" usable on real deployments (a hardcoded
+      // localhost URL would break Try-it for anyone serving elsewhere). Static consumers
+      // of the spec (the docs site) also get a concrete base URL to display.
+      .addServer('http://{host}:{port}', 'OpenWA instance', {
+        host: { default: 'localhost' },
+        port: { default: '2785', description: 'PORT env var' },
+      })
       .build()
   );
 }

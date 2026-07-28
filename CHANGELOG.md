@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection. Credentials authenticate on the socket itself, so the Chromium first-CONNECT 407
   limitation that can bite the wwjs engine's proxy-auth path does not apply to this engine.
 
+- **The OpenAPI spec now declares a templated default server.** `servers` was empty; it now carries
+  `http://{host}:{port}` with `localhost`/`2785` defaults, so Swagger UI's "Try it" works out of the
+  box and stays usable on real deployments via the host/port variables, and static consumers of the
+  published `openapi.json` get a concrete base URL to display.
+
 ### Fixed
 
 - **A source install without the GNU `patch` binary no longer silently ships an unpatched

@@ -24,6 +24,16 @@ describe('createSwaggerConfig', () => {
     // requirement would falsely claim every route accepts it.
     expect(config.security).not.toContainEqual({ [METRICS_BEARER_SCHEME]: [] });
   });
+
+  it('declares a templated default server so published specs carry a base URL', () => {
+    const config = createSwaggerConfig();
+
+    expect(config.servers).toHaveLength(1);
+    const [server] = config.servers ?? [];
+    expect(server.url).toBe('http://{host}:{port}');
+    expect(server.variables?.host.default).toBe('localhost');
+    expect(server.variables?.port.default).toBe('2785');
+  });
 });
 
 describe('exemptPublicOperations', () => {
