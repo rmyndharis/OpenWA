@@ -1,4 +1,4 @@
-# Engine Capability Matrix
+# 29 - Engine Capability Matrix
 
 This page is the operator- and engineer-facing view of which `IWhatsAppEngine` capabilities are real on each adapter — `wwjs` (whatsapp-web.js, the default) and `baileys` (the browser-free alternative) — and, for the ones that are missing, *why* and *where to start*.
 
@@ -22,7 +22,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 ## Unwired-capability inventory
 
-15 of the 80 interface methods are `not-available` on at least one adapter (20 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
+16 of the 80 interface methods are `not-available` on at least one adapter (21 not-available adapter-cells total). Grouped by cluster below. Each entry shows: status today → rootCause → evidence → wiring note.
 
 ### Channels / Newsletter
 
@@ -90,6 +90,14 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 - **`getChatHistory` (baileys, library-limitation).** The only history primitive is `fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp)` (`Socket/business.d.ts:25`) — it returns a sync-token *string*, not messages; the messages are delivered later via the `messaging-history.set` event. There is no per-chat `fetchMessages(chatId, limit)` on the socket. A synchronous `Promise<IncomingMessage[]>` for one chat would require an OpenWA-side chat-indexed store populated from `messages.upsert` + `messaging-history.set` events.
 - **`getMessageReactions` (baileys, library-limitation).** No on-demand server fetch. Reactions exist only as event-augmented state on `WAMessage.reactions` (`proto.IReaction[]` at `WAProto/index.d.ts:10623`), mutated by `updateMessageWithReaction` and surfaced via the `messages.reaction` event. The adapter already processes `reactionMessage` events (`baileys.adapter.ts:1048-1057`) and emits `onMessageReaction`, but it does **not** persist `.reactions` into its `messageStore` (early-returns at line 1058). A store-backed read would need that persistence added first; even then, only reactions observed since session start are known (no historical backfill).
+
+### Groups — disappearing messages
+
+| Method | baileys | wwjs |
+|---|---|---|
+| `setGroupEphemeral` | supported | not-available — **library-limitation** |
+
+- **`setGroupEphemeral` (wwjs, library-limitation).** whatsapp-web.js 1.34.7 exposes no disappearing-timer setter (0 hits for `ephemeral` in `index.d.ts`); the only timer surface is the create-time `messageTimer` option (`Client.js:2371`). The adapter throws `EngineNotSupportedError` (501). Baileys wires `groupToggleEphemeral(jid, ephemeralExpiration)` (`Socket/groups.d.ts:40`).
 
 ---
 

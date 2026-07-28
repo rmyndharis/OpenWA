@@ -42,7 +42,6 @@
 | 08  | [Development Guidelines](./08-development-guidelines.md)         | Coding standards and workflow                     |
 | 09  | [Testing Strategy](./09-testing-strategy.md)                     | Test types and tooling                            |
 | 10  | [DevOps & Infrastructure](./10-devops-infrastructure.md)         | Docker, deployment, and environment configuration |
-| 10-ID| [Panduan Docker (ID)](./DOCKER_ID.md)                            | Panduan deployment Docker dalam Bahasa Indonesia  |
 | 11  | [Operational Runbooks](./11-operational-runbooks.md)             | Incident, maintenance, and backup runbooks        |
 | 12  | [Troubleshooting FAQ](./12-troubleshooting-faq.md)               | Common issues and fixes                           |
 | 13  | [Horizontal Scaling](./13-horizontal-scaling.md)                 | Multi-node deployment guidance                    |
@@ -60,6 +59,9 @@
 | 24  | [MCP Integration](./24-mcp-integration.md)                       | Model Context Protocol tools and auth model       |
 | 25  | [Integration Fabric](./25-integration-fabric.md)                | Inbound webhook substrate for plugin integrations |
 | 26  | [Global Search](./26-global-search.md)                          | Cross-session message search and the provider model |
+| 27  | [Plugin Search Providers](./27-plugin-search-providers.md)      | Writing a search-provider plugin                  |
+| 28  | [Multitenancy](./28-multitenancy.md)                            | Multi-tenant target design (draft proposal)       |
+| 29  | [Engine Capability Matrix](./29-engine-capability-matrix.md)    | Per-engine capability support, gaps, and roadmap  |
 
 **Examples**
 
@@ -238,6 +240,6 @@ MIT License.
 
 **Start Reading: [01 - Project Overview](./01-project-overview.md)**
 
-_OpenWA Documentation · Last updated: 2026-06-18_
+_OpenWA Documentation · Last updated: 2026-07-28_
 
 </div>

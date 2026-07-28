@@ -7,7 +7,7 @@ import { ENGINE_CAPABILITY_MATRIX } from './engine-capability-matrix';
 /**
  * Drift invariants for the engine capability matrix. The matrix's `status` (supported /
  * not-available) is hand-curated and richer than a throw-scan: it also marks "phantom support"
- * methods (adapter stubs that return null/[] without throwing — see docs/engine-capability-matrix.md).
+ * methods (adapter stubs that return null/[] without throwing — see docs/29-engine-capability-matrix.md).
  * So the gate asserts the invariants a throw-scan CAN verify, not full equality:
  *
  *   1. A method whose adapter body throws EngineNotSupportedError/ChannelMediaNotSupportedError
