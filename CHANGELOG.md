@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Baileys engine now honors the per-session egress proxy** (#859). `proxyUrl` — http, https,
+  socks4 or socks5, credentialed form included — is applied through a Node-layer agent on both the
+  WhatsApp WebSocket and media up/downloads (`https-proxy-agent` / `socks-proxy-agent`, now direct
+  dependencies). Previously the engine warned `baileys_proxy_unsupported` and connected direct,
+  silently exposing the host's real egress IP for exactly the deployments that configured a proxy.
+  An unusable proxy value now fails the session start instead of falling back to a direct
+  connection. Credentials authenticate on the socket itself, so the Chromium first-CONNECT 407
+  limitation that can bite the wwjs engine's proxy-auth path does not apply to this engine.
+
 ### Fixed
 
 - **The release runbook in `docs/15` now describes the process the repository actually uses.** §15.7
