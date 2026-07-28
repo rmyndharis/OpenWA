@@ -39,20 +39,28 @@ npm --prefix dashboard run test:unit
 | `npm run test:cov`                                                | Run backend tests with coverage and coverage thresholds                 |
 | `npm run test:e2e`                                                | Run smoke-level e2e tests from `test/`                                  |
 | `npm run test:pg-smoke`                                           | Run the PostgreSQL migration and UUID-default smoke test                |
+| `npm run test:scripts`                                            | Run the repo-level script tests on the Node test runner                 |
+| `./scripts/smoke-test-backup-restore.sh`                          | Run the backup/restore smoke test used by the `scripts-smoke` job       |
 | `npm run lint`                                                    | Run backend ESLint with type-aware rules                                |
+| `npm run format:check`                                            | Check Prettier formatting for backend source and specs                  |
 | `npx tsc --noEmit -p tsconfig.json`                               | Type-check backend source, unit specs, and e2e specs                    |
 | `npm run openapi:check`                                           | Verify the committed OpenAPI snapshot                                   |
 | `npm run check:versions`                                          | Verify documentation and package version consistency                    |
+| `npm run check:dockerignore`                                      | Verify the Docker build context that `.dockerignore` defines            |
 | `cd dashboard && npm run lint`                                    | Run dashboard ESLint                                                    |
 | `cd dashboard && npm run typecheck`                               | Type-check dashboard test files                                         |
 | `cd dashboard && npm run test:unit`                               | Run dashboard pure utility/unit tests                                   |
 | `cd dashboard && npm run i18n:check`                              | Verify dashboard locale key parity                                      |
 | `cd dashboard && npm run build`                                   | Type-check and build the dashboard                                      |
-| `cd sdk/javascript && npm test && npm run build && npm run smoke` | Test and package-smoke the JavaScript SDK                               |
+| `cd sdk/javascript && npm test && npm run typecheck`              | Type-check and unit-test the JavaScript SDK                             |
+| `cd sdk/javascript && npm run build && npm run smoke`             | Build and dual CJS/ESM package-smoke the JavaScript SDK                 |
 | `cd sdk/python && pytest`                                         | Run the Python SDK tests                                                |
 | `cd sdk/php && ./vendor/bin/phpunit`                              | Run the PHP SDK tests                                                   |
 | `cd sdk/java && mvn -B verify`                                    | Run the Java SDK tests                                                  |
-| `cd sdk/go && go vet ./... && go test -race ./...`                | Vet and race-test the Go SDK                                            |
+| `cd sdk/go && gofmt -l . && go vet ./... && go test -race ./...`  | List unformatted files, vet, and race-test the Go SDK                   |
+| `npm run test:scripts`                                            | Run the install-script tests (`node --test scripts/postinstall.spec.js`) |
+| `npm run check:dockerignore`                                      | Verify `.dockerignore` still excludes what the image must not carry      |
+| `npm run check:versions`                                          | Verify docs and Swagger track the `package.json` version                |
 
 ## 9.3 Backend Unit Tests
 
@@ -118,15 +126,19 @@ E2E smoke tests live in `test/` and use `test/jest-e2e.json`.
 
 ```text
 test/
+├── __mocks__/
+├── fixtures/
 ├── app.e2e-spec.ts
 ├── baileys-engine.e2e-spec.ts
 ├── ingress-instance-throttle.e2e-spec.ts
 ├── integration-fabric.e2e-spec.ts
 ├── integration-instance.e2e-spec.ts
 ├── mcp-auth.e2e-spec.ts
+├── queue-on.e2e-spec.ts
 ├── search.e2e-spec.ts
 ├── serve-static.e2e-spec.ts
 ├── session-scope.e2e-spec.ts
+├── setup-e2e-env.e2e-spec.ts
 ├── webhooks.e2e-spec.ts
 ├── jest-e2e.json
 └── setup-e2e.ts
@@ -170,9 +182,9 @@ Main CI is defined in `.github/workflows/ci.yml`.
 
 | Job             | Checks                                                                                          |
 | --------------- | ----------------------------------------------------------------------------------------------- |
-| `lint`          | backend ESLint, full-program TypeScript check, formatting, version consistency, OpenAPI snapshot |
+| `lint`          | backend ESLint, full-program TypeScript check, formatting, version consistency, .dockerignore context, OpenAPI snapshot |
 | `audit`         | dependency security audit                                                                        |
-| `test`          | backend coverage run, e2e smoke tests, Codecov upload                                           |
+| `test`          | backend coverage run, script unit tests (node:test), e2e smoke tests, Codecov upload            |
 | `test-postgres` | real PostgreSQL 16 service, backend build, migration smoke, and PostgreSQL FTS provider spec     |
 | `dashboard`     | dashboard install, lint, test type-check, unit tests, i18n parity, build                         |
 | `scripts-smoke` | shellcheck on the backup/restore scripts plus the backup/restore smoke test                      |
@@ -180,9 +192,11 @@ Main CI is defined in `.github/workflows/ci.yml`.
 | `docker`        | multi-arch Docker build on pushes and pull requests; publish only where workflow permissions allow |
 
 SDK CI is defined in `.github/workflows/sdk-ci.yml` and is path-filtered to SDK sources plus server
-contract surfaces that SDKs mirror (`src/**/dto/**` and the engine interface). It runs:
+contract surfaces that SDKs mirror (`src/**/dto/**`, `src/**/*.controller.ts`, `src/**/*.service.ts`, and
+`src/engine/interfaces/whatsapp-engine.interface.ts`), so any backend controller or service change also
+re-runs the SDK suites. It runs:
 
-- JavaScript SDK tests, build, and dual CJS/ESM smoke test.
+- JavaScript SDK tests, type-check, build, and dual CJS/ESM smoke test.
 - Python SDK tests with `pytest`.
 - PHP SDK tests with PHPUnit.
 - Java SDK tests with Maven.
@@ -261,14 +275,18 @@ Live WhatsApp checks require an operator-owned account and should not be part of
 ## 9.9 Known Gaps
 
 - No default CI job exercises a real WhatsApp connection.
-- The default `test` job uses SQLite; a dedicated `test-postgres` CI job exercises PostgreSQL 16.
-- No default CI job exercises real Redis, S3/MinIO, or Docker socket proxy integration.
+- The default `test` job uses SQLite; PostgreSQL 16 is only exercised by the dedicated `test-postgres` job.
+- No default CI job exercises S3/MinIO or Docker socket proxy integration. (Redis is no longer a gap: the
+  `test` job starts a `redis:7-alpine` service container so the queue-on e2e suite has a broker. That suite
+  skips itself when no Redis is reachable, so it stays green on a machine without one.)
 - Performance testing is not automated.
 - Dashboard browser/visual UI tests are not currently automated; dashboard pure utility tests run via `npm --prefix dashboard run test:unit`.
 
-These gaps are intentional for the default suite because the project prioritizes deterministic tests that
-run without external services. Add opt-in integration jobs only when they are isolated, documented, and do
-not make normal contributor workflows brittle.
+These gaps are intentional because the project prioritizes deterministic tests: no job needs an
+operator-owned WhatsApp account, cloud credentials, or a Docker socket, and neither service container CI
+starts is required locally — `npm test` and `npm run test:e2e` stay on SQLite with the queue disabled. Add
+opt-in integration jobs only when they are isolated, documented, and do not make normal contributor
+workflows brittle.
 
 ---
 

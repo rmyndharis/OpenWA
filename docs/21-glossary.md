@@ -3,19 +3,19 @@
 ## A
 
 ### ACK (Acknowledgement)
-Delivery acknowledgment status. WhatsApp ACK levels:
-- `error` (-1): Failed to send
-- `pending` (0): Pending
-- `server` (1): Sent to WhatsApp server
-- `device` (2): Delivered to recipient device
-- `read` (3): Read by recipient
-- `played` (4): Media played (audio/video)
+Delivery acknowledgment. Each adapter maps its native ack code to one neutral status - `pending`, `sent`, `delivered`, `read` or `failed` - so no consumer sees engine-specific codes. The whatsapp-web.js ack integers map as:
+- `-1` ERROR -> `failed`
+- `0` PENDING -> `pending`
+- `1` SERVER -> `sent`
+- `2` DEVICE -> `delivered`
+- `3` READ -> `read`
+- `4` PLAYED -> `read` (media playback is not a distinct status)
 
 ### Adapter
 An interface implementation that provides a specific capability. In OpenWA, adapters are used for:
 - **Database Adapter**: SQLite, PostgreSQL
 - **Storage Adapter**: Local, S3
-- **Cache Adapter**: Memory, Redis
+- **Cache**: Redis (optional — `CacheService` is Redis-only; with Redis disabled it no-ops and callers fall through to the database)
 - **Engine Adapter**: whatsapp-web.js (default), Baileys
 
 ### API Key
@@ -32,11 +32,10 @@ Node.js library for WhatsApp Web that uses WebSocket directly without a browser 
 ### Broadcast
 Sending the same message to multiple recipients. On WhatsApp, this differs from the native "Broadcast List" feature.
 
-### Bull
-A Redis-based Node.js job queue library. Used for:
-- Message queue (delayed sends)
-- Webhook delivery queue (retry mechanism)
-- Background tasks
+### BullMQ
+A Redis-based Node.js job queue library (`bullmq`, wired in through `@nestjs/bullmq`). It backs the two queues OpenWA runs:
+- `webhook-queue`: webhook delivery, with retry and a dead-letter row on final failure
+- `ingress-queue`: inbound integration deliveries dispatched to plugins, with retry and a dead-letter row on final failure
 
 ## C
 
@@ -55,10 +54,10 @@ Docker Compose - a tool to define and run multi-container Docker applications.
 ## D
 
 ### Dashboard
-Web interface to manage OpenWA without using the API directly. Built with React + shadcn/ui.
+Web interface to manage OpenWA without using the API directly. Built with React and Vite, using TanStack Query for data fetching and plain CSS for styling.
 
 ### Dead Letter Queue (DLQ)
-Queue that stores messages that failed after all retry attempts. Used for debugging and manual retry.
+The durable record of deliveries abandoned after every retry. In OpenWA it is a **database table**, not a Redis queue: `webhook_delivery_failures` for outbound webhooks and `integration_delivery_failures` for plugin ingress. Used for debugging and manual redrive.
 
 ### Docker
 Containerization platform for packaging and deploying applications. OpenWA is distributed as a Docker image.
@@ -78,7 +77,7 @@ A system-emitted occurrence, for example:
 ## F
 
 ### Factory Pattern
-Design pattern used to create adapter instances based on configuration. Example: `DatabaseAdapterFactory.create()`.
+Design pattern used to create adapter instances based on configuration. Example: `EngineFactory.create()`, which returns the whatsapp-web.js or Baileys adapter for the configured `ENGINE_TYPE`.
 
 ## G
 
@@ -94,7 +93,7 @@ GitHub Container Registry - registry for storing Docker images. The OpenWA image
 Browser mode that runs without a GUI. Puppeteer runs Chrome in headless mode.
 
 ### Health Check
-Endpoint to check system health. `/health` is public for basic status, `/health/detailed` requires an API key for full status.
+Endpoints to check system health: `/api/health` (basic status and running version), `/api/health/live` (liveness) and `/api/health/ready` (readiness — probes both databases, and reports 503 while the process is draining). All three are public and exempt from rate limiting. The `/api` prefix is applied globally with no exclusions, so the unprefixed paths do not exist — container and Kubernetes probes must use the prefixed form.
 
 ### Hook
 An extension point that allows plugins to intercept and modify processing flows.
@@ -102,7 +101,7 @@ An extension point that allows plugins to intercept and modify processing flows.
 ## I
 
 ### In-Memory
-Data stored in RAM. Fast but non-persistent. Used for cache in minimal deployments.
+Data stored in RAM. Fast but non-persistent — lost on restart. Independent of Redis, several in-process caches always run: the LID→phone map, the Baileys session store's LRU maps, and the live-engine registry.
 
 ## J
 
@@ -110,7 +109,7 @@ Data stored in RAM. Fast but non-persistent. Used for cache in minimal deploymen
 WhatsApp's id format, inherited from XMPP; the user-facing "Chat ID" is a JID. The same entity can be addressed in more than one dialect: `<phone>@c.us` (whatsapp-web.js, and OpenWA's neutral form), `<phone>@s.whatsapp.net` (Baileys' raw form for the same user), `<id>@g.us` (a group), or `<lid>@lid` (a LID, a privacy id). OpenWA normalizes engine ids to a single neutral dialect at the engine boundary - see *System Architecture > WhatsApp Identity Contract*.
 
 ### Job Queue
-Queueing system for asynchronous task processing. Used for webhook delivery and message scheduling.
+Queueing system for asynchronous task processing. OpenWA registers exactly two queues — `webhook-queue` and `ingress-queue` — both optional (`QUEUE_ENABLED`). There is no scheduled or delayed sending: outbound messages are dispatched inline by the request that asks for them.
 
 ## L
 
@@ -126,7 +125,7 @@ Icon library used in the dashboard. A fork of Feather Icons with more icons.
 ## M
 
 ### Message Queue
-Queue for asynchronous message delivery. Prevents rate limiting and ensures message ordering.
+Not a component of OpenWA. Outbound sends are synchronous; the only queues are `webhook-queue` (outbound webhook delivery) and `ingress-queue` (inbound plugin events) — see *Job Queue*. Bulk sending paces itself with a per-message delay rather than a queue.
 
 ### Middleware
 Function executed before a request handler in NestJS. Used for logging, authentication, etc.
@@ -185,10 +184,9 @@ Limiting request volume over time to prevent abuse and WhatsApp bans.
 
 ### Redis
 In-memory data store used for:
-- Caching
-- Message queue (with Bull)
-- Session storage
-- Real-time pub/sub
+- Caching (`REDIS_CACHE_DB`)
+- Job queues (with BullMQ)
+- Rate-limit (throttler) counters
 
 ### REST API
 Architectural style for APIs used by OpenWA. Uses HTTP methods (GET, POST, PUT, DELETE).
@@ -207,9 +205,6 @@ An instance of a WhatsApp Web connection. One phone number = one session.
 ### SQLite
 Embedded database used as the default for minimal deployments.
 
-### shadcn/ui
-Component library for React used in the dashboard. Built on top of Radix UI.
-
 ### Strategy Pattern
 Design pattern that allows selecting an algorithm/implementation at runtime. Used for pluggable adapters.
 
@@ -217,9 +212,6 @@ Design pattern that allows selecting an algorithm/implementation at runtime. Use
 API documentation tool. OpenWA provides Swagger UI at `/api/docs`.
 
 ## T
-
-### Tailwind CSS
-Utility-first CSS framework used in the dashboard.
 
 ### TanStack Query
 Library for data fetching and caching in React. Previously known as React Query.
@@ -256,11 +248,6 @@ Protocol for real-time bidirectional communication. Used for:
 
 ### whatsapp-web.js
 Default engine library used by OpenWA to interact with WhatsApp Web. Uses Puppeteer to control a headless Chromium browser. Selected via `ENGINE_TYPE=whatsapp-web.js` (or by omitting the env var).
-
-## Z
-
-### Zustand
-State management library for React used in the dashboard.
 
 ---
 

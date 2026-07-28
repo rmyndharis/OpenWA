@@ -31,11 +31,13 @@ flowchart LR
 ```
 
 The styling foundation is **plain CSS** — there is no Tailwind, no shadcn/ui, and no CSS-in-JS.
-Each page and shared component ships its own stylesheet colocated beside the source
+Every page — and most shared components — ships its own stylesheet colocated beside the source
 (`Sessions.tsx` + `Sessions.css`, `Layout.tsx` + `Layout.css`, ...), imported directly by the
-component. Icons come from `lucide-react`; charts from `recharts`; i18n from `react-i18next`.
-Client state is **TanStack Query** for server data (see `src/hooks/queries.ts`) plus a couple of
-small React Context providers (`useRole`, `useTheme`) — there is no Zustand store.
+component (see §17.4 for the handful that carry no stylesheet of their own). Icons come from
+`lucide-react`; charts from `recharts`; i18n from `react-i18next`.
+Client state is **TanStack Query** for server data (see `src/hooks/queries.ts`) plus two small React
+Context providers (`RoleProvider`, `ToastProvider`); theme mode is a provider-less `useTheme` hook
+backed by `localStorage` — there is no Zustand store.
 
 ### Design Principles
 
@@ -351,17 +353,29 @@ a non-admin hitting the path falls through to the `*` redirect.
 ### Bespoke components
 
 The UI is built from a small set of project-specific components under `dashboard/src/components/`,
-each with a colocated CSS file. There is no design-system package to pull from.
+most with a colocated CSS file. Five ship none: `ErrorBoundary` styles inline via `style={{...}}`,
+`GithubIcon` carries no styling beyond `fill="currentColor"`, `Modal` reuses the global `.modal-*`
+rules from `index.css`, and the `chats/` pair take their classes from the page stylesheet
+(`pages/Chats.css`) plus the `yet-another-react-lightbox` vendor CSS. There is no design-system
+package to pull from.
 
 | Component                    | File                             | Responsibility                                                                                                        |
 | ---------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `Layout`                     | `components/Layout.tsx`          | App shell: collapsible sidebar nav, mobile drawer, language menu, light/dark theme toggle, logout, live version badge |
 | `ToastProvider` / `useToast` | `components/Toast.tsx`           | Context-based toast notifications (success/error/warning/info) with de-dup keys                                       |
 | `PageHeader`                 | `components/PageHeader.tsx`      | Shared page title / subtitle / badge / actions header                                                                 |
+| `Modal`                      | `components/Modal.tsx`           | Accessible dialog (`role="dialog"`, Escape/overlay close, focus trap + restore); uses the global `.modal-*` styles    |
+| `CustomSelect`               | `components/CustomSelect.tsx`    | Keyboard-navigable select replacement (type-ahead, arrow keys) used by Sessions / Logs / Login                        |
 | `DashboardCharts`            | `components/DashboardCharts.tsx` | `recharts`-based message-volume / activity charts on the Dashboard                                                    |
 | `FilterBuilder`              | `components/FilterBuilder.tsx`   | Visual condition builder for webhook event filters                                                                    |
+| `GlobalSearch`               | `components/GlobalSearch.tsx`    | Debounced message-search box in the Chats header, with all-sessions / current-session scope                           |
+| `PluginInstances`            | `components/PluginInstances.tsx` | Per-plugin instance list: create / edit / delete and secret regeneration                                              |
 | `ErrorBoundary`              | `components/ErrorBoundary.tsx`   | Top-level React error boundary wrapping the whole app                                                                 |
 | `GithubIcon`                 | `components/GithubIcon.tsx`      | Inline brand SVG                                                                                                      |
+
+Chat-specific pieces live one level down in `components/chats/`: `MessageBody` (WhatsApp text
+formatting + link detection) and `MediaLightbox` (the media viewer, built on
+`yet-another-react-lightbox`).
 
 Pages live under `dashboard/src/pages/`, each as a `*.tsx` + `*.css` pair (e.g. `Sessions.tsx` +
 `Sessions.css`). Pages are lazy-loaded in `App.tsx` via `React.lazy` + `Suspense`.
@@ -401,9 +415,11 @@ library — those visuals are composed directly with `div`s and the page's own C
 ## 17.5 State Management
 
 There is **no Zustand store** (and no global client-state library). Server data is owned by
-**TanStack Query** (`@tanstack/react-query`); the only other shared state is two small React Context
-providers — `useRole` (the authenticated key's role) and `useTheme` (mode, persisted to
-`localStorage`).
+**TanStack Query** (`@tanstack/react-query`); the only other shared state lives in the two React
+Context providers in the app — `RoleProvider` (the authenticated key's role, read through the
+`useRole` hook) and `ToastProvider` (transient notifications). Theme mode is deliberately _not_ a
+context: `useTheme` is a plain hook that persists to `localStorage` and writes one attribute on
+`<html>` (see §17.7).
 
 ### API client — raw payloads, no `{ data }` envelope
 
@@ -615,16 +631,19 @@ The dev server listens on **2886** and proxies `/api` to the API on `2785`. The 
 on **`/socket.io`** (socket.io's transport path) with `ws: true` — _not_ `/ws`. There is no `@`
 import alias and no custom `manualChunks`/Radix vendor split; code-splitting is handled by the
 per-page `React.lazy` imports in `App.tsx`. The build-time version (`__APP_VERSION__`) is injected
-from `package.json` via `define`.
+via `define` from the **root** `package.json` — the file a release bumps — resolved relative to the
+config file rather than `process.cwd()`, because the dashboard is normally built from inside
+`dashboard/`, where a cwd-relative read picks up the release-untouched `dashboard/package.json`
+instead. `APP_VERSION` in the environment still overrides it.
 
 ```typescript
 // vite.config.ts
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const { version: pkgVersion } = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')) as {
+// Root package.json, resolved from this file — NOT process.cwd().
+const { version: pkgVersion } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as {
   version: string;
 };
 

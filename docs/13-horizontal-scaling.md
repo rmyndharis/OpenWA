@@ -70,10 +70,11 @@ Since WhatsApp sessions maintain active connections (a browser instance for `wha
 
 ### Strategy 1: Session-to-Node Mapping (Recommended)
 
-Store session-node mapping in the database:
+Store session-node mapping in the database. **(Not implemented — no `node_id` / `node_url` column
+exists in any entity or migration; the DDL below is illustrative of the future design.)**
 
 ```sql
--- Sessions table includes node assignment
+-- Illustrative only: these columns do not exist in the shipped schema
 ALTER TABLE sessions ADD COLUMN node_id VARCHAR(50);
 ALTER TABLE sessions ADD COLUMN node_url VARCHAR(255);
 ```
@@ -82,7 +83,8 @@ The load balancer reads the mapping and routes accordingly.
 
 ### Strategy 2: Consistent Hashing
 
-Route sessions based on session ID hash:
+Route sessions based on session ID hash. **(Not implemented — no such routing helper exists in
+code; the sketch below is illustrative of the future design.)**
 
 ```typescript
 function getNodeForSession(sessionId: string, nodes: string[]): string {
@@ -105,7 +107,7 @@ version: '3.8'
 
 services:
   openwa:
-    image: ghcr.io/rmyndharis/openwa:0.4.6
+    image: ghcr.io/rmyndharis/openwa:latest
     deploy:
       replicas: 1 # MUST stay 1 until session-claim is implemented — multiple replicas on one session volume corrupt WhatsApp auth
       update_config:
@@ -124,10 +126,12 @@ services:
       - DATABASE_TYPE=postgres
       - DATABASE_HOST=postgres
       - DATABASE_NAME=openwa
-      - DATABASE_USER=openwa
+      - DATABASE_USERNAME=openwa
       - DATABASE_PASSWORD=${DB_PASSWORD}
       - REDIS_HOST=redis
-      - ENABLE_QUEUE=true
+      - QUEUE_ENABLED=true
+      # Operator-facing metadata only — the application does not read NODE_ID (no consumer
+      # exists in src/). Useful for correlating log lines by hand, nothing more.
       - NODE_ID={{.Node.Hostname}}-{{.Task.Slot}}
     volumes:
       - sessions:/app/data/sessions
@@ -187,13 +191,17 @@ docker swarm init
 # Deploy stack
 docker stack deploy -c docker-compose.swarm.yml openwa
 
-# Scale up/down
-docker service scale openwa_openwa=5
-
 # Check status
 docker service ls
 docker service ps openwa_openwa
 ```
+
+> **Do not scale the `openwa` service** (`docker service scale openwa_openwa=N`). The `sessions`
+> volume above is declared with the default local driver (not `external`), so Swarm creates one per
+> node: replicas co-located on a single node share that directory and corrupt the WhatsApp auth
+> state, while replicas placed on other nodes each get a fresh empty volume and start an
+> unauthenticated engine instead. Either way the deployment breaks — see the warning at the top of
+> this guide. Scaling only becomes safe once session-claim exists.
 
 ## 13.4 Kubernetes Deployment
 
@@ -222,7 +230,7 @@ data:
   DATABASE_NAME: 'openwa'
   REDIS_HOST: 'redis-service'
   REDIS_PORT: '6379'
-  ENABLE_QUEUE: 'true'
+  QUEUE_ENABLED: 'true'
   PORT: '2785'
 ```
 
@@ -236,10 +244,8 @@ metadata:
   namespace: openwa
 type: Opaque
 stringData:
-  DATABASE_USER: openwa
+  DATABASE_USERNAME: openwa
   DATABASE_PASSWORD: your-secure-password
-  ADMIN_API_KEY: your-admin-api-key
-  WEBHOOK_SECRET: your-webhook-secret
 ```
 
 ### k8s/deployment.yaml
@@ -251,7 +257,7 @@ metadata:
   name: openwa
   namespace: openwa
 spec:
-  serviceName: openwa
+  serviceName: openwa-headless # must match the headless Service declared in k8s/service.yaml
   replicas: 1 # MUST stay 1 until session-claim is implemented — see the warning at the top of this guide
   selector:
     matchLabels:
@@ -271,7 +277,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: openwa
-          image: ghcr.io/rmyndharis/openwa:0.10.10
+          image: ghcr.io/rmyndharis/openwa:latest
           ports:
             - containerPort: 2785
               name: http
@@ -281,6 +287,8 @@ spec:
             - secretRef:
                 name: openwa-secrets
           env:
+            # Operator-facing metadata only — the application does not read NODE_ID (no consumer
+            # exists in src/); it is retained for the future node-affinity design in 13.2.
             - name: NODE_ID
               valueFrom:
                 fieldRef:
@@ -402,11 +410,13 @@ kubectl apply -f k8s/
 kubectl get pods -n openwa
 
 # Check logs
-kubectl logs -f deployment/openwa -n openwa
-
-# Scale
-kubectl scale statefulset openwa --replicas=5 -n openwa
+kubectl logs -f statefulset/openwa -n openwa
 ```
+
+> **Do not raise `replicas` above 1** (`kubectl scale statefulset openwa --replicas=N`). Each pod
+> gets its own PVC, so extra replicas do not share a session directory — they each start their own
+> unauthenticated engine, and with `AUTO_START_SESSIONS=true` every pod tries to drive the same
+> configured sessions from the shared database. See the warning at the top of this guide.
 
 ## 13.5 Load Balancer Configuration
 
@@ -495,16 +505,23 @@ server {
 
 ### Scaling Guidelines
 
-| Metric                        | Threshold  | Action     |
-| ----------------------------- | ---------- | ---------- |
-| CPU > 80%                     | 5 minutes  | Scale up   |
-| Memory > 85%                  | 5 minutes  | Scale up   |
-| CPU < 30%                     | 15 minutes | Scale down |
-| Active sessions per node > 20 | -          | Scale up   |
+The replica count stays at **1** (see 13.3 and 13.4), so the only levers available today are
+**vertical** — adjust the `resources` limits/reservations in the manifests above — or run a second
+single-instance deployment with its own session volume and split sessions between them. Horizontal
+`scale up` / `scale down` becomes an option only once session-claim is implemented.
 
-### Benchmarks
+| Metric                            | Threshold  | Action                                                 |
+| --------------------------------- | ---------- | ------------------------------------------------------ |
+| CPU > 80%                         | 5 minutes  | Raise `limits.cpu` (StatefulSet); the Swarm block above declares no CPU constraint, so add one |
+| Memory > 85%                      | 5 minutes  | Raise the memory limit                                 |
+| CPU < 30%                         | 15 minutes | Lower `requests.cpu` — that is what the scheduler reserves; lowering `limits.cpu` only tightens throttling |
+| Active sessions per instance > 20 | -          | Move sessions to a second instance with its own volume |
 
-Tested on 2 vCPU / 4GB RAM nodes:
+### Throughput Projections
+
+Design targets for 2 vCPU / 4GB RAM nodes, **not measurements** — no benchmark artifact in this
+repository backs any row, including the 1-node one, and multi-node operation is not implemented (see
+the warning at the top of this guide), so the 3- and 5-node rows could not have been run at all:
 
 | Nodes | Sessions | Messages/sec | p95 Latency |
 | ----- | -------- | ------------ | ----------- |
@@ -514,7 +531,25 @@ Tested on 2 vCPU / 4GB RAM nodes:
 
 ## 13.7 Monitoring
 
-### Prometheus Metrics (Future)
+### Prometheus Metrics
+
+OpenWA exports Prometheus text exposition at `GET /api/metrics` (`openwa_*` gauges and counters).
+The endpoint returns `404` until `METRICS_TOKEN` is set, and then requires that token as a Bearer:
+
+```yaml
+# prometheus/prometheus.yml
+scrape_configs:
+  - job_name: 'openwa'
+    static_configs:
+      # Swarm service name (13.3). On Kubernetes there is no Service called `openwa` — scrape the
+      # pod through the headless Service instead, e.g.
+      # openwa-0.openwa-headless.openwa.svc.cluster.local:2785
+      - targets: ['openwa:2785']
+    metrics_path: '/api/metrics'
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token
+```
 
 ```yaml
 # prometheus/openwa-rules.yaml

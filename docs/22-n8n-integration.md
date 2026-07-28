@@ -82,6 +82,7 @@ Start workflows when WhatsApp events occur.
 | `message.revoked`       | Message deleted for everyone        | Deletion tracking         |
 | `message.reaction`      | Reaction added / changed / removed  | Reaction tracking         |
 | `message.edited`        | Message body or caption edited      | Content synchronization   |
+| `status.received`       | Contact posted a Status update      | Status archiving          |
 | `session.status`        | Session status changed              | Lifecycle tracking        |
 | `session.qr`            | QR code generated                   | Reconnection alerts       |
 | `session.authenticated` | Session logged in (phone available) | Startup notifications     |
@@ -120,9 +121,10 @@ Start workflows when WhatsApp events occur.
 
 > **Deduplication.** Every delivery includes `idempotencyKey` and `deliveryId` in the body **and** as the
 > `X-OpenWA-Idempotency-Key` / `X-OpenWA-Delivery-Id` headers. `idempotencyKey` is **stable across retries**
-> of the same event, while `deliveryId` is unique per HTTP attempt. Because a webhook can be retried, add a
-> dedup step keyed on `idempotencyKey` (e.g. an n8n IF or "Remove Duplicates" node) so a retried delivery
-> isn't processed twice.
+> of the same event; `deliveryId` identifies one delivery to one webhook and is stable across that
+> delivery's retry attempts too — read the `X-OpenWA-Retry-Count` header for the attempt number. Because a
+> webhook can be retried, add a dedup step keyed on `idempotencyKey` (e.g. an n8n IF or "Remove Duplicates"
+> node) so a retried delivery isn't processed twice.
 
 ## Example Workflows
 
@@ -263,7 +265,7 @@ Always use the correct format for chat IDs:
 
 ### Message Not Sending
 
-1. Verify session status is "READY"
+1. Verify session status is `ready` (the API returns lowercase status values)
 2. Check chat ID format is correct
 3. Ensure recipient number exists on WhatsApp
 4. Check message content isn't empty
@@ -308,7 +310,7 @@ docker run -it --rm \
 ## Related Documentation
 
 - [OpenWA API Specification](./06-api-specification.md)
-- [Webhook System](./03-system-architecture.md#webhooks)
+- [Webhook System](./03-system-architecture.md#353-webhook-system)
 - [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md)
 - [n8n Documentation](https://docs.n8n.io/)
 

@@ -16,7 +16,7 @@ openwa/
 │   └── plugins/                   # Built-in engine and extension plugins
 ├── test/                          # E2E smoke tests and mocks
 ├── dashboard/                     # React/Vite dashboard
-├── sdk/                           # JavaScript and Python SDK scaffolds
+├── sdk/                           # Client SDKs: go, java, javascript, php, python
 ├── docs/                          # Documentation
 ├── scripts/                       # Utility scripts
 ├── .github/workflows/             # CI and release workflows
@@ -35,35 +35,36 @@ openwa/
 ### TypeScript Configuration
 
 ```json
-// tsconfig.json
+// tsconfig.json (abridged — see the file for the commented rationale)
 {
   "compilerOptions": {
-    "module": "commonjs",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "rootDir": ".",
+    "outDir": "./dist",
+    "types": ["node", "jest"],
     "declaration": true,
-    "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "allowSyntheticDefaultImports": true,
-    "target": "ES2022",
-    "sourceMap": true,
-    "outDir": "./dist",
-    "baseUrl": "./",
-    "incremental": true,
-    "skipLibCheck": true,
     "strictNullChecks": true,
     "noImplicitAny": true,
     "strictBindCallApply": true,
-    "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
-    "paths": {
-      "@/*": ["src/*"],
-      "@common/*": ["src/common/*"],
-      "@modules/*": ["src/modules/*"],
-      "@config/*": ["src/config/*"]
-    }
-  }
+    "strictPropertyInitialization": false,
+    "strictFunctionTypes": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["src", "test"],
+  "exclude": ["node_modules", "dist", "dashboard"]
 }
 ```
+
+There are **no path aliases** — no `baseUrl`, no `paths`. Import with relative paths
+(`../common/services/logger.service`), not `@/…`. Under TypeScript 6 the strict family defaults on,
+so the three `false` entries above are deliberate opt-outs pending their own migrations
+(`strictPropertyInitialization` alone flags around 260 TypeORM entity properties). `types` must be
+listed explicitly because TypeScript 6 no longer auto-includes every `@types` package.
 
 ### ESLint Configuration
 
@@ -210,7 +211,7 @@ import { Example } from './entities/example.entity';
 
 @Injectable()
 export class ExampleService {
-  private readonly logger = new Logger(ExampleService.name);
+  private readonly logger = createLogger('ExampleService');
 
   constructor(private readonly repository: ExampleRepository) {}
 
@@ -524,70 +525,37 @@ export class SessionController {
 
 ## 8.7 Error Handling
 
-### Custom Exception Classes
+There is **no custom exception base class and no global exception filter**. Handlers throw NestJS's
+built-in HTTP exceptions and NestJS's own `BaseExceptionFilter` renders them, so responses carry the
+framework default shape `{ statusCode, message, error }`.
 
 ```typescript
-// common/exceptions/business.exception.ts
-export class BusinessException extends HttpException {
-  constructor(
-    public readonly code: string,
-    message: string,
-    statusCode: HttpStatus = HttpStatus.BAD_REQUEST,
-    public readonly details?: Record<string, any>,
-  ) {
-    super({ code, message, details }, statusCode);
-  }
-}
-
-// Usage
-throw new BusinessException(
-  'SESSION_NOT_READY',
-  'Session is not ready to send messages',
-  HttpStatus.BAD_REQUEST,
-  { sessionId, currentStatus: session.status }
-);
+throw new BadRequestException('Session is not started');
+throw new NotFoundException(`Contact ${contactId} not found`);
 ```
 
-### Global Exception Filter
+### Domain errors extend a built-in exception
 
-```typescript
-// common/filters/http-exception.filter.ts
-@Catch()
-export class AllExceptionsFilter implements ExceptionFilter {
-  private readonly logger = new Logger(AllExceptionsFilter.name);
+Where a failure mode recurs across engines, `src/common/errors/` defines a named error that extends
+the NestJS exception carrying the right status, so throwing it from an adapter maps to the intended
+HTTP code with no filter involved:
 
-  catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
+| Error | Extends | Status |
+| --- | --- | --- |
+| `EngineNotSupportedError` | `NotImplementedException` | 501 |
+| `ChannelMediaNotSupportedError` | `NotImplementedException` | 501 |
+| `EngineNotReadyError` | `ConflictException` | 409 |
+| `EngineRefusedError` | `ForbiddenException` | 403 |
+| `EngineTransportError` | `ServiceUnavailableException` | 503 |
+| `ChatLabelsUnsupportedError` | `UnprocessableEntityException` | 422 |
+| `CallNotFoundError` / `ChannelNotFoundError` / `GroupNotFoundError` / `MessageNotFoundError` | `NotFoundException` | 404 |
 
-    const status = exception instanceof HttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+Add a new one only when the condition is engine-agnostic and recurs; a one-off stays an inline
+`throw new BadRequestException(...)`.
 
-    const errorResponse = this.formatError(exception, request);
-
-    this.logger.error(
-      `${request.method} ${request.url} - ${status}`,
-      exception instanceof Error ? exception.stack : undefined,
-    );
-
-    response.status(status).json(errorResponse);
-  }
-
-  private formatError(exception: unknown, request: Request) {
-    const status = exception instanceof HttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
-    // Return NestJS default error shape: { statusCode, message, error }
-    return {
-      statusCode: status,
-      message: this.getErrorMessage(exception),
-      error: this.getErrorCode(exception),
-    };
-  }
-}
-```
+> Do not introduce a response envelope. A `ResponseInterceptor`/`HttpExceptionFilter` pair that
+> wrapped every payload in `{ success, data, meta }` was written once, never registered, and has
+> since been deleted — `dashboard/src/services/api.ts` reads the raw payload.
 
 ---
 
@@ -799,13 +767,14 @@ ENABLE_SWAGGER=false
 
 ```typescript
 // Use Logger from NestJS
-import { Logger, Inject, Scope } from '@nestjs/common';
+import { Inject, Scope } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Request } from 'express';
+import { createLogger } from '../common/services/logger.service';
 
 @Injectable({ scope: Scope.REQUEST })
 export class MyService {
-  private readonly logger = new Logger(MyService.name);
+  private readonly logger = createLogger('MyService');
 
   constructor(@Inject(REQUEST) private readonly request: Request) {}
 
@@ -894,17 +863,21 @@ npm test -- session.service.spec.ts
 # Run tests with verbose output
 npm test -- --verbose
 
-# Check for TypeScript errors
-npm run build -- --noEmit
+# Check for TypeScript errors without emitting (the Nest CLI has no --noEmit; call tsc directly).
+# Use the root tsconfig, not tsconfig.build.json — it is the only one that also type-checks the
+# colocated *.spec.ts files, which is what CI gates on.
+npx tsc --noEmit -p tsconfig.json
 
 # Lint with auto-fix
 npm run lint -- --fix
 
-# Debug database queries (TypeORM)
-# Add to .env: DEBUG=typeorm:query
+# Debug database queries (TypeORM) — add to .env:
+# DATABASE_LOGGING=true
+# (there is no DEBUG=typeorm:query switch; both connections read DATABASE_LOGGING)
 
-# View Docker logs
-docker compose logs -f app
+# View Docker logs (service is `openwa-api` in docker-compose.yml, `openwa` in
+# docker-compose.dev.yml — there is no service named `app`)
+docker compose logs -f openwa-api
 ```
 
 ## 8.10 Performance Best Practices
@@ -981,7 +954,7 @@ const results = await Promise.all(
 // Bound teardown so one stuck browser/socket cannot block shutdown.
 @Injectable()
 export class EngineTeardownService {
-  private readonly logger = new Logger(EngineTeardownService.name);
+  private readonly logger = createLogger('EngineTeardownService');
 
   async destroyWithTimeout(sessionId: string, engine: IWhatsAppEngine): Promise<void> {
     const timeout = new Promise<never>((_, reject) => {
