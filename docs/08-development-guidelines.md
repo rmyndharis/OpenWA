@@ -576,10 +576,14 @@ Add a new one only when the condition is engine-agnostic and recurs; a one-off s
 - pgAdmin or DBeaver
 ```
 
-> `npm install` patches whatsapp-web.js for the WhatsApp Web 2.3000.x message-id rename. It applies
-> the patch with GNU `patch`, falling back to `git apply` — so Git alone is enough, including on
-> Windows outside Git Bash. With neither available the install still succeeds, but the
+> Dependency installation patches whatsapp-web.js for the WhatsApp Web 2.3000.x message-id rename.
+> It applies the patch with GNU `patch`, falling back to `git apply` — so Git alone is enough,
+> including on Windows outside Git Bash. With neither available the install still succeeds, but the
 > whatsapp-web.js engine then fails on every send; see `docs/12-troubleshooting-faq.md`.
+>
+> The committed lockfile resolves dependencies from the npm registry and works with npm 12's default
+> Git-dependency block. Do not work around `EALLOWGIT` by changing npm or Git configuration globally;
+> update to a current lockfile instead.
 
 ### Quick Start
 
@@ -588,12 +592,14 @@ Add a new one only when the condition is engine-agnostic and recurs; a one-off s
 git clone https://github.com/rmyndharis/OpenWA.git
 cd OpenWA
 
-# 2. Install dependencies (also installs dashboard dependencies)
-npm install
+# 2. Install the locked dependencies (also installs dashboard dependencies)
+npm ci
 
 # 3. Start API + dashboard in development mode
 npm run dev
 ```
+
+Use `npm install` only when intentionally changing dependencies and updating the lockfile.
 
 On first boot the API creates `data/.env.generated` with a minimal SQLite/local-storage
 configuration. A project-level `.env` is optional; real process environment variables take precedence

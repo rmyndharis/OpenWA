@@ -175,8 +175,8 @@ docker compose -f docker-compose.dev.yml up -d
 git clone https://github.com/rmyndharis/OpenWA.git
 cd OpenWA
 
-# Install dependencies (includes dashboard)
-npm install
+# Install the locked dependencies (includes dashboard)
+npm ci
 
 # Start API + Dashboard (config is auto-generated on first run)
 npm run dev
@@ -186,6 +186,10 @@ npm run dev
 # API: http://localhost:2785/api
 # Swagger: http://localhost:2785/api/docs
 ```
+
+Use `npm install` instead when intentionally changing dependencies. OpenWA's committed lockfile uses
+registry artifacts only, so npm 12 works with its secure default that blocks Git dependencies; do not
+disable that policy globally.
 
 ---
 

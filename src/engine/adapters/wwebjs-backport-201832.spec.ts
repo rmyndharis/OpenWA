@@ -5,9 +5,14 @@ import * as path from 'path';
 
 // The patcher is a CommonJS build script (scripts/*.js); import it with a typed
 // shape so the spec stays under the strict lint rules.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { applyBackport, DEFAULT_PATCH: PATCH_FILE } = require('../../../scripts/patch-wwebjs-201832') as {
+const {
+  applyBackport,
+  normalizeArtifactPath,
+  DEFAULT_PATCH: PATCH_FILE,
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+} = require('../../../scripts/patch-wwebjs-201832') as {
   applyBackport: (wwjsDir: string, patchFile?: string) => { skipped: boolean; reason?: string; note?: string };
+  normalizeArtifactPath: (rel: string) => string;
   DEFAULT_PATCH: string;
 };
 
@@ -26,6 +31,10 @@ const SCRIPT = path.join(__dirname, '..', '..', '..', 'scripts', 'patch-wwebjs-2
  */
 describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => {
   const tmpDirs: string[] = [];
+
+  it('normalizes Windows reject paths before matching expected artifacts', () => {
+    expect(normalizeArtifactPath('src\\structures\\Contact.js.rej')).toBe('src/structures/Contact.js.rej');
+  });
 
   /**
    * A pristine (unpatched) copy of the installed whatsapp-web.js.

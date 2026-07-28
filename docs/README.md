@@ -81,8 +81,8 @@
 git clone https://github.com/rmyndharis/OpenWA.git
 cd OpenWA
 
-# Install & configure
-npm install
+# Install the locked dependencies & configure
+npm ci
 cp .env.minimal .env
 
 # Create data directories

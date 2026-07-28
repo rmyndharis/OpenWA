@@ -67,6 +67,11 @@ const REQUIRED_SITES = [
 /** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */
 const ARTIFACT_RE = /(\.rej|\.orig|~)$/;
 
+/** Keep artifact keys stable across POSIX and Windows for EXPECTED_REJECTS comparisons. */
+function normalizeArtifactPath(rel) {
+  return rel.replaceAll('\\', '/');
+}
+
 /** True once `rel`'s REQUIRED_SITES marker is present in the installed tree. */
 function siteLanded(wwjsDir, rel) {
   const marker = REQUIRED_SITES.find(([r]) => r === rel)[1];
@@ -93,7 +98,7 @@ function findArtifacts(root, dir = root) {
     if (entry.isDirectory()) {
       out.push(...findArtifacts(root, full));
     } else if (ARTIFACT_RE.test(entry.name)) {
-      out.push(path.relative(root, full));
+      out.push(normalizeArtifactPath(path.relative(root, full)));
     }
   }
   return out;
@@ -259,4 +264,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { applyBackport, DEFAULT_WWJS, DEFAULT_PATCH, EXPECTED_REJECTS };
+module.exports = { applyBackport, normalizeArtifactPath, DEFAULT_WWJS, DEFAULT_PATCH, EXPECTED_REJECTS };

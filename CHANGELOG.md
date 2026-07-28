@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Native Windows and npm 12 source installs no longer fail during dependency setup.** The
+  whatsapp-web.js backport now normalizes reject-file paths before comparing them, so Windows'
+  `src\structures\Contact.js.rej` is recognized as the same expected, harmless reject as the POSIX
+  path and is cleaned up after verification. The lockfile also resolves `libsignal@6.0.0` from its
+  npm registry tarball (published from the same commit previously fetched over Git SSH), avoiding
+  npm 12's `EALLOWGIT` default without weakening its project security policy.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
