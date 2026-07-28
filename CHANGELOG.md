@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The documentation set now matches the shipped implementation.** Every numbered document was
+  checked claim by claim against source, and the corrections concentrate where following the docs
+  could fail silently. Session auth was documented at `./data/.wwebjs_auth` when it lives under
+  `SESSION_DATA_PATH` (default `./data/sessions`), so every backup, server-transfer and rollback
+  procedure copied a directory that does not exist and still reported success; compose commands
+  addressed a service named `openwa` where the shipped file defines `openwa-api`; the upgrade runbook
+  used `docker compose pull` against a compose file that builds from source; health checks omitted
+  the global `api` prefix; and several referenced files and scripts were never part of the repository.
+  Documented settings that the configuration layer does not read (`WA_RECONNECT_INTERVAL`,
+  `STORAGE_S3_*`, `CACHE_TYPE`, `API_PREFIX` and others) are replaced by the real names. Endpoints
+  and tooling that do not exist — per-session export/import, a 1.x upgrade path, an MCP tool name —
+  are removed, the catalog endpoints are marked as answering 501 on both engines, and the glossary no
+  longer defines a message queue, message scheduling or a Redis-backed dead-letter queue, none of
+  which the gateway has. Two risk-register rows that claimed send-rate safeguards now describe the
+  controls that ship. Structurally, `docs/23-plugin-sandboxing.md` becomes `docs/30`, resolving a
+  duplicate prefix; the engine capability matrix joins the sequence as `docs/29`; a language-forked
+  second copy of the Docker guide is removed; and the index lists all thirty documents.
+
 - **A source install without the GNU `patch` binary no longer silently ships an unpatched
   whatsapp-web.js.** OpenWA backports the fix for the WhatsApp Web 2.3000.x message-id rename during
   `npm install`; when the `patch` binary was missing — the default on Windows outside Git Bash — the
