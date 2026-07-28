@@ -5,7 +5,7 @@
 This document provides a comprehensive guide for migrating OpenWA, including:
 
 - Database migration (SQLite → PostgreSQL)
-- Version upgrades (v0.1 → v0.2 → v1.0)
+- Version upgrades within the 0.x line
 - Transfer session authentication state
 - Rollback procedures
 
@@ -36,8 +36,9 @@ flowchart TB
 
 ### Backup
 
-- [ ] Database backup completed
-- [ ] Session auth files backed up (.wwebjs_auth/)
+- [ ] Database backup completed (both connections: ./data/main.sqlite + the data store)
+- [ ] Session auth backed up (SESSION_DATA_PATH, default ./data/sessions)
+- [ ] Baileys auth backed up, if used (BAILEYS_AUTH_DIR, default ./data/baileys)
 - [ ] Environment variables documented
 - [ ] Docker volumes backed up (if applicable)
 
@@ -132,16 +133,38 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
     "sessions": [...],
     "webhooks": [...],
     "messages": [...],
-    "messageBatches": [...]
+    "messageBatches": [...],
+    "templates": [...],
+    "baileysStoredMessages": [...],
+    "lidMappings": [...],
+    "pluginInstances": [...],
+    "conversationMappings": [...],
+    "ingressEvents": [...],
+    "webhookDeliveryFailures": [...],
+    "integrationDeliveryFailures": [...],
+    "statusUpdates": [...]
   },
   "counts": {
     "sessions": 5,
     "webhooks": 12,
     "messages": 1500,
-    "messageBatches": 3
-  }
+    "messageBatches": 3,
+    "templates": 4,
+    "baileysStoredMessages": 0,
+    "lidMappings": 87,
+    "pluginInstances": 2,
+    "conversationMappings": 31,
+    "ingressEvents": 12,
+    "webhookDeliveryFailures": 0,
+    "integrationDeliveryFailures": 0,
+    "statusUpdates": 19
+  },
+  "skippedTables": []
 }
 ```
+
+> [!NOTE]
+> `skippedTables` lists optional tables absent from an older schema; the import tolerates them.
 
 ### Storage Migration (Local ↔ S3/MinIO)
 
@@ -184,7 +207,7 @@ curl -X POST 'http://localhost:2785/api/infra/storage/import' \
 
 ### Redis Migration (Cache)
 
-Redis in OpenWA is used **only for caching** with TTL-based expiration. Cache data is ephemeral and automatically regenerates from the database.
+Redis in OpenWA holds only **ephemeral** state: TTL-based cache entries, BullMQ jobs (see below), and — when `REDIS_ENABLED` — the rate-limit hit counters. Cache data automatically regenerates from the database.
 
 **No migration API needed** - just change configuration:
 
@@ -198,12 +221,12 @@ REDIS_USERNAME=optional
 REDIS_PASSWORD=optional
 ```
 
-| Scenario                  | Support | Notes                        |
-| ------------------------- | ------- | ---------------------------- |
-| Built-in → External Redis | ✅      | Config change only           |
-| External → Built-in Redis | ✅      | Config change only           |
-| Enable → Disable Redis    | ✅      | App uses memory fallback     |
-| Disable → Enable Redis    | ✅      | Cache rebuilds automatically |
+| Scenario                  | Support | Notes                                     |
+| ------------------------- | ------- | ----------------------------------------- |
+| Built-in → External Redis | ✅      | Config change only                        |
+| External → Built-in Redis | ✅      | Config change only                        |
+| Enable → Disable Redis    | ✅      | Cache no-ops; reads fall through to the DB |
+| Disable → Enable Redis    | ✅      | Cache rebuilds automatically              |
 
 > [!TIP]
 > **Cache Warm-up**: After switching Redis instances, the cache will automatically rebuild as requests come in. No data migration is necessary.
@@ -216,7 +239,7 @@ BullMQ stores job data in Redis. When switching Redis instances, pending jobs ma
 
 ```bash
 # Step 1: Check queue status via Bull Board
-# Visit: http://localhost:2785/admin/queues
+# Visit: http://localhost:2785/api/admin/queues
 
 # Step 2: Wait until MESSAGE and WEBHOOK queues are empty
 # Or check via API:
@@ -238,7 +261,7 @@ docker compose up -d
 | Built-in → External Redis | ⚠️      | Drain queue first |
 
 > [!WARNING]
-> **Job Loss Prevention**: Always ensure the MESSAGE and WEBHOOK queues are empty before switching Redis instances. Check `/admin/queues` dashboard.
+> **Job Loss Prevention**: Always ensure the MESSAGE and WEBHOOK queues are empty before switching Redis instances. Check the `/api/admin/queues` dashboard.
 
 ### Infrastructure Migration Summary
 
@@ -251,7 +274,11 @@ docker compose up -d
 
 ### Migration Script (Legacy)
 
-> **Note:** This example uses the standalone `sqlite3` npm package, which is no longer part of
+> **Note:** This is an illustrative standalone script, not a shipped one — there is no
+> `scripts/migrate-sqlite-to-postgres.ts` in the repo. Save it locally before running it, and prefer
+> the export/import API above, which always covers the full table set.
+>
+> It uses the standalone `sqlite3` npm package, which is no longer part of
 > OpenWA's dependencies (the app itself uses `better-sqlite3`). Install it ad hoc before running:
 > `npm install --no-save sqlite3`.
 >
@@ -261,7 +288,7 @@ docker compose up -d
 > (see `src/config/configuration.ts`).
 
 ```typescript
-// scripts/migrate-sqlite-to-postgres.ts
+// migrate-sqlite-to-postgres.ts — illustrative, not shipped in the repo
 
 import { DataSource } from 'typeorm';
 import * as sqlite3 from 'sqlite3';
@@ -294,16 +321,22 @@ async function migrateSqliteToPostgres(config: MigrationConfig): Promise<Migrati
   const tables = await getSqliteTables(sqliteDb);
   console.log(`📋 Found ${tables.length} tables to migrate`);
 
-  // 3. Migration order (respect foreign keys)
+  // 3. Migration order (respect foreign keys). Data-DB tables only — the Main DB
+  //    (api_keys, audit_logs) is always local SQLite and is never migrated.
   const migrationOrder = [
     'sessions',
-    'api_keys',
     'webhooks',
-    'contacts',
     'messages',
-    'media_files',
-    'webhook_logs',
-    'audit_logs',
+    'message_batches',
+    'templates',
+    'baileys_stored_messages',
+    'lid_mappings',
+    'plugin_instances',
+    'conversation_mappings',
+    'ingress_events',
+    'webhook_delivery_failures',
+    'integration_delivery_failures',
+    'status_updates',
   ];
 
   // 4. Migrate each table
@@ -360,7 +393,9 @@ async function migrateTable(
         // Insert into PostgreSQL
         for (const row of rows) {
           try {
-            const columns = Object.keys(row);
+            // Entity columns are camelCase (e.g. sessionId); PostgreSQL folds unquoted
+            // identifiers to lowercase, so they must be quoted or the INSERT fails.
+            const columns = Object.keys(row).map(column => `"${column}"`);
             const values = Object.values(row);
             const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
 
@@ -437,15 +472,15 @@ migrateSqliteToPostgres(config)
 # Step 1: Stop OpenWA
 docker compose down
 
-# Step 2: Backup current data
-cp -r ./data ./data-backup-$(date +%Y%m%d)
-docker exec openwa-db pg_dump -U postgres openwa > backup.sql
+# Step 2: Backup current data (both databases + session auth + media)
+./scripts/backup.sh
 
-# Step 3: Setup PostgreSQL (if not exists)
-docker compose -f docker-compose.postgres.yml up -d postgres
+# Step 3: Setup PostgreSQL (if not exists) — the built-in service lives behind a compose profile
+docker compose --profile postgres up -d postgres
 
-# Step 4: Run migration script
-npx ts-node scripts/migrate-sqlite-to-postgres.ts
+# Step 4: Run the migration — save the "Migration Script (Legacy)" example above as
+#         migrate-sqlite-to-postgres.ts first; it is not shipped in the repo
+npx ts-node migrate-sqlite-to-postgres.ts
 
 # Step 5: Update environment
 export DATABASE_TYPE=postgres
@@ -460,39 +495,37 @@ psql -h "$DATABASE_HOST" -U "$DATABASE_USERNAME" -d "$DATABASE_NAME" -c "SELECT 
 psql -h "$DATABASE_HOST" -U "$DATABASE_USERNAME" -d "$DATABASE_NAME" -c "SELECT COUNT(*) FROM messages;"
 
 # Step 7: Start with PostgreSQL
-docker compose -f docker-compose.postgres.yml up -d
+docker compose --profile postgres up -d
 
 # Step 8: Verify functionality
-curl http://localhost:2785/health
+curl http://localhost:2785/api/health
 ```
 
 ### Verification Queries
 
 ```sql
 -- Compare row counts
--- Run on both SQLite and PostgreSQL
+-- Run on both SQLite and PostgreSQL. Data DB only — api_keys and audit_logs stay in the local Main DB.
 
 -- Sessions
 SELECT 'sessions' as table_name, COUNT(*) as count FROM sessions
 UNION ALL
 SELECT 'messages', COUNT(*) FROM messages
 UNION ALL
-SELECT 'contacts', COUNT(*) FROM contacts
+SELECT 'message_batches', COUNT(*) FROM message_batches
 UNION ALL
-SELECT 'webhooks', COUNT(*) FROM webhooks
-UNION ALL
-SELECT 'api_keys', COUNT(*) FROM api_keys;
+SELECT 'webhooks', COUNT(*) FROM webhooks;
 
--- Verify foreign key integrity
-SELECT m.id, m.session_id
+-- Verify foreign key integrity (entity columns are camelCase — quote them)
+SELECT m.id, m."sessionId"
 FROM messages m
-LEFT JOIN sessions s ON m.session_id = s.id
+LEFT JOIN sessions s ON m."sessionId" = s.id
 WHERE s.id IS NULL;
 
 -- Check for data integrity
-SELECT session_id, COUNT(*) as msg_count
+SELECT "sessionId", COUNT(*) as msg_count
 FROM messages
-GROUP BY session_id
+GROUP BY "sessionId"
 ORDER BY msg_count DESC
 LIMIT 10;
 ```
@@ -502,450 +535,182 @@ LIMIT 10;
 ### Understanding Session Auth
 
 ```
-Session Auth Structure:
-.wwebjs_auth/
-├── session-{sessionId}/
+whatsapp-web.js (LocalAuth) — SESSION_DATA_PATH, default ./data/sessions
+./data/sessions/
+├── session-{sessionName}/
 │   ├── Default/
 │   │   ├── IndexedDB/
 │   │   ├── Local Storage/
 │   │   └── Session Storage/
 │   └── ... (Chrome profile data)
+
+Baileys — BAILEYS_AUTH_DIR, default ./data/baileys
+./data/baileys/
+└── {sessionName}/          # multi-file auth state
 ```
+
+> [!IMPORTANT]
+> **Directories are keyed by session NAME, not by the REST id.** The API addresses a session by its
+> UUID (`/api/sessions/{id}`), but the engine receives `session.name` as its client id, so the on-disk
+> profile is `session-<name>` (whatsapp-web.js) or `<name>` (Baileys). Resolve the name via
+> `GET /api/sessions/{id}` before copying anything.
 
 ### Transfer Methods
 
-#### Method 1: Direct File Copy (Same Host)
+#### Method 1: Direct File Copy (Server to Server)
+
+Moves the auth profile only. The session's database record is created separately — either by
+`POST /api/sessions` on the target with the same `name`, or with the infra export/import of
+Method 2. Copying rows between SQLite files by hand is not supported: the `sessions` table carries
+columns the copy would have to reproduce exactly, and a mismatch corrupts the row.
+
+Under the shipped compose the data directory lives in a named Docker volume
+(`openwa-data:/app/data`), not a host bind mount, so the profile is copied through the container
+with `docker compose cp` rather than straight off the host filesystem. `APP_DIR` is the directory
+holding `docker-compose.yml` on each server; `SESSION_NAME` is the session `name` (resolve it via
+`GET /api/sessions/{id}` — the on-disk directory is keyed by name, not by the REST id).
 
 ```bash
-#!/bin/bash
-# transfer-session.sh
+APP_DIR=/srv/openwa            # docker compose project directory on both hosts
+SESSION_NAME=my-session
 
-SOURCE_DIR="/old-server/data/.wwebjs_auth"
-TARGET_DIR="/new-server/data/.wwebjs_auth"
-SESSION_ID=$1
+# 1. Stop the app on both hosts. Use `stop`, not `down`: a running engine holds the profile open,
+#    but `down` removes the container that step 2 copies through.
+ssh old-server "cd $APP_DIR && docker compose stop openwa-api"
+ssh new-server "cd $APP_DIR && docker compose stop openwa-api"
 
-if [ -z "$SESSION_ID" ]; then
-    echo "Usage: ./transfer-session.sh <session-id>"
-    exit 1
-fi
+# 2. Copy the auth profile out of the source container, to the target host, and back in.
+#    whatsapp-web.js: /app/data/sessions/session-<name>.
+#    Baileys:         /app/data/baileys/<name> (no "session-" prefix).
+ssh old-server "cd $APP_DIR && docker compose cp \
+    openwa-api:/app/data/sessions/session-$SESSION_NAME ./session-$SESSION_NAME"
+rsync -avz --progress "old-server:$APP_DIR/session-$SESSION_NAME/" \
+    "new-server:$APP_DIR/session-$SESSION_NAME/"
+ssh new-server "cd $APP_DIR && docker compose cp \
+    ./session-$SESSION_NAME openwa-api:/app/data/sessions/session-$SESSION_NAME"
 
-# Stop both instances
-echo "⏹️ Stopping services..."
-ssh old-server "docker compose down"
-ssh new-server "docker compose down"
-
-# Copy session data
-echo "📦 Copying session data..."
-rsync -avz --progress \
-    "old-server:${SOURCE_DIR}/session-${SESSION_ID}/" \
-    "${TARGET_DIR}/session-${SESSION_ID}/"
-
-# Copy database record
-echo "📄 Exporting session record..."
-ssh old-server "sqlite3 /data/openwa.sqlite \
-    \"SELECT * FROM sessions WHERE id='${SESSION_ID}'\" \
-    -csv" > session_record.csv
-
-# Import to new database
-echo "📥 Importing session record..."
-ssh new-server "sqlite3 /data/openwa.sqlite \
-    \".import session_record.csv sessions\""
-
-# Start new server
-echo "▶️ Starting new server..."
-ssh new-server "docker compose up -d"
-
-echo "✅ Session ${SESSION_ID} transferred successfully"
+# 3. Start the target back up.
+ssh new-server "cd $APP_DIR && docker compose start openwa-api"
 ```
 
-#### Method 2: Export/Import via API
+Delete the staging copies (`$APP_DIR/session-$SESSION_NAME` on both hosts) afterwards — they hold
+live WhatsApp credentials.
 
-```typescript
-// Export session from old server
-// GET /api/sessions/{id}/export
+#### Method 2: Records via the Infra API + auth state by file copy
 
-interface SessionExport {
-  session: {
-    id: string;
-    name: string;
-    phoneNumber: string;
-    status: string;
-    config: object;
-  };
-  authData: string; // Base64 encoded tar.gz of auth folder
-  webhooks: WebhookConfig[];
-  contacts: Contact[];
-}
+There is **no per-session export/import endpoint** — the session controller exposes only lifecycle and
+chat operations. What ships is a whole-Data-DB export at `/api/infra/export-data` and
+`/api/infra/import-data` (see [14.3](#143-database-migration-sqlite--postgresql)); it carries the session
+_records_, not the on-disk authentication state. A server-to-server move is therefore two steps:
 
-// api/sessions/export.controller.ts
-@Get(':id/export')
-@UseGuards(ApiKeyGuard)
-async exportSession(@Param('id') id: string): Promise<SessionExport> {
-  const session = await this.sessionService.findOne(id);
+```bash
+# 1. Move the Data DB records (sessions, webhooks, messages, …)
+curl -s 'http://old-server:2785/api/infra/export-data' \
+  -H 'X-API-Key: OLD_KEY' > data-backup.json
 
-  // Create tar.gz of auth folder
-  const authPath = path.join(this.authDir, `session-${id}`);
-  const tarBuffer = await this.createTarGz(authPath);
+curl -X POST 'http://new-server:2785/api/infra/import-data' \
+  -H 'X-API-Key: NEW_KEY' \
+  -H 'Content-Type: application/json' \
+  -d @data-backup.json
 
-  return {
-    session: {
-      id: session.id,
-      name: session.name,
-      phoneNumber: session.phoneNumber,
-      status: 'exported',
-      config: session.config,
-    },
-    authData: tarBuffer.toString('base64'),
-    webhooks: await this.webhookService.findBySession(id),
-    contacts: await this.contactService.findBySession(id),
-  };
-}
-
-// Import session to new server
-// POST /api/sessions/import
-
-@Post('import')
-@UseGuards(ApiKeyGuard)
-async importSession(@Body() data: SessionExport): Promise<Session> {
-  // 1. Create session record
-  const session = await this.sessionService.create({
-    id: data.session.id,
-    name: data.session.name,
-    config: data.session.config,
-  });
-
-  // 2. Extract auth data
-  const authBuffer = Buffer.from(data.authData, 'base64');
-  const authPath = path.join(this.authDir, `session-${session.id}`);
-  await this.extractTarGz(authBuffer, authPath);
-
-  // 3. Import webhooks
-  for (const webhook of data.webhooks) {
-    await this.webhookService.create({
-      ...webhook,
-      sessionId: session.id,
-    });
-  }
-
-  // 4. Import contacts
-  for (const contact of data.contacts) {
-    await this.contactService.create({
-      ...contact,
-      sessionId: session.id,
-    });
-  }
-
-  // 5. Initialize session (will use existing auth)
-  await this.whatsappService.initSession(session.id);
-
-  return session;
-}
+# 2. Move the engine auth state with both instances stopped (Method 1), keyed by session NAME.
+#    OLD_DIR/NEW_DIR are each host's OpenWA working directory; SESSION_DATA_PATH defaults to
+#    ./data/sessions and BAILEYS_AUTH_DIR to ./data/baileys, relative to it. The production
+#    docker-compose.yml keeps /app/data in the named volume `openwa_openwa-data` rather than on the
+#    host, so on that layout copy through the container (`docker cp`) instead of a host path.
+rsync -avz "old-server:${OLD_DIR}/data/sessions/" "${NEW_DIR}/data/sessions/"
+rsync -avz "old-server:${OLD_DIR}/data/baileys/" "${NEW_DIR}/data/baileys/"   # Baileys sessions only
 ```
 
-### Bulk Session Transfer
-
-```typescript
-// scripts/bulk-transfer-sessions.ts
-
-interface TransferConfig {
-  sourceUrl: string;
-  sourceApiKey: string;
-  targetUrl: string;
-  targetApiKey: string;
-  sessionIds: string[] | 'all';
-}
-
-async function bulkTransferSessions(config: TransferConfig): Promise<void> {
-  const axios = require('axios');
-
-  // Get session list
-  let sessionIds = config.sessionIds;
-  if (sessionIds === 'all') {
-    const response = await axios.get(`${config.sourceUrl}/api/sessions`, {
-      headers: { 'X-API-Key': config.sourceApiKey },
-    });
-    sessionIds = response.data.map((s: any) => s.id);
-  }
-
-  console.log(`📋 Transferring ${sessionIds.length} sessions...`);
-
-  for (const sessionId of sessionIds) {
-    try {
-      console.log(`\n🔄 Processing session: ${sessionId}`);
-
-      // 1. Stop session on source
-      await axios.post(
-        `${config.sourceUrl}/api/sessions/${sessionId}/stop`,
-        {},
-        { headers: { 'X-API-Key': config.sourceApiKey } },
-      );
-
-      // 2. Export from source
-      const exportResponse = await axios.get(`${config.sourceUrl}/api/sessions/${sessionId}/export`, {
-        headers: { 'X-API-Key': config.sourceApiKey },
-      });
-
-      // 3. Import to target
-      await axios.post(`${config.targetUrl}/api/sessions/import`, exportResponse.data, {
-        headers: { 'X-API-Key': config.targetApiKey },
-      });
-
-      console.log(`✅ Session ${sessionId} transferred`);
-    } catch (error: any) {
-      console.error(`❌ Failed to transfer ${sessionId}: ${error.message}`);
-    }
-  }
-}
-```
+Sessions whose auth directory is not copied arrive as records only and must be re-paired by scanning a
+fresh QR code.
 
 ## 14.5 Version Upgrade Guide
 
 ### Upgrade Matrix
 
-```mermaid
-flowchart LR
-    V01[v0.1.x] -->|Direct| V02[v0.2.x]
-    V02 -->|Direct| V10[v1.0.x]
-    V01 -->|"Via v0.2"| V10
-    V10 -->|Direct| V11[v1.1.x]
-    V11 -->|Direct| V12[v1.2.x]
-```
+OpenWA is pre-1.0 — every release to date is on the `0.x` line. Under the project's SemVer 0.x policy a
+breaking change bumps the **minor** (`0.10.x` → `0.11.0`) and everything else is a patch, so a minor bump
+is the one that warrants reading the release notes closely.
 
-| From   | To     | Migration Type            | Downtime  |
-| ------ | ------ | ------------------------- | --------- |
-| v0.1.x | v0.2.x | Schema migration          | 5-10 min  |
-| v0.2.x | v1.0.x | Schema + Config migration | 10-15 min |
-| v0.1.x | v1.0.x | Must go via v0.2.x        | 15-25 min |
-| v1.x   | v1.y   | Usually automatic         | < 5 min   |
+| From                  | To                  | Migration Type                                 | Downtime  |
+| --------------------- | ------------------- | ---------------------------------------------- | --------- |
+| `0.x.y`               | `0.x.z` (patch)     | Pending migrations only                        | < 5 min   |
+| `0.x.y`               | `0.(x+1).0` (minor) | Pending migrations + review the breaking notes | 5-15 min  |
+| Several releases back | Current             | Same — the migration chain replays in order    | 10-15 min |
 
-### v0.1 → v0.2 Migration
+Upgrades are cumulative: migrations apply in order from wherever the schema currently sits, so jumping
+straight to the current release is supported. There is no required intermediate stop — but read every
+intervening `CHANGELOG.md` entry, because behavior changes are not replayed by migrations.
 
-#### Breaking Changes in v0.2
+Schema migrations run automatically at boot on the **data** connection only — always on PostgreSQL,
+and on SQLite unless `DATABASE_SYNCHRONIZE=true` puts the data store in synchronize mode. The Main
+(auth/audit) connection defaults to synchronize instead, and under that default runs no migrations at
+boot. Setting `MAIN_DATABASE_SYNCHRONIZE=false` switches it to its own migration chain, which then
+also runs at boot (`migrationsRun` is the inverse of `synchronize` on both connections); run that
+chain by hand with `npm run migration:run:main`.
 
-```yaml
-breaking_changes:
-  api:
-    - path: /api/session → /api/sessions (plural)
-    - path: /api/send → /api/sessions/{id}/messages
-    - auth: Basic Auth → API Key
-
-  config:
-    - DATABASE_PATH → DATABASE_TYPE + discrete connection vars (DATABASE_HOST, DATABASE_PORT, DATABASE_NAME, DATABASE_USERNAME, DATABASE_PASSWORD) for PostgreSQL
-    - WEBHOOK_URL → Managed via API
-
-  database:
-    - New tables: api_keys, webhook_logs
-    - Modified: sessions (added config JSON column)
-    - Modified: messages (added metadata column)
-```
-
-#### Migration Steps
+### Upgrade Steps
 
 ```bash
 #!/bin/bash
-# upgrade-v01-to-v02.sh
-
+# upgrade.sh — same shape for a patch or a minor
 set -e
 
-echo "🚀 Upgrading OpenWA v0.1.x → v0.2.x"
+# 1. Backup: both databases + session auth + media + plugin state
+./scripts/backup.sh
 
-# 1. Backup
-echo "📦 Creating backup..."
-BACKUP_DIR="./backups/v01-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BACKUP_DIR"
-cp -r ./data "$BACKUP_DIR/"
-cp .env "$BACKUP_DIR/"
-
-# 2. Stop current version
-echo "⏹️ Stopping v0.1..."
+# 2. Stop the current version
 docker compose down
 
-# 3. Run database migrations
-echo "🔄 Running migrations..."
-docker run --rm \
-  -v $(pwd)/data:/app/data \
-  -e DATABASE_TYPE=sqlite \
-  -e DATABASE_NAME=/app/data/openwa.sqlite \
-  ghcr.io/rmyndharis/openwa:0.2.0 \
-  npm run migration:run:prod   # the prod image strips ts-node/TS source — use :prod
+# 3. Move to the new version
+#    The repo's compose file BUILDS the API image from source:
+git pull && docker compose up -d --build
+#    Deployments pinned to a published image instead (ghcr.io/rmyndharis/openwa:<version>)
+#    bump the tag in their compose file, then: docker compose pull && docker compose up -d
 
-# 4. Migrate configuration
-echo "⚙️ Migrating configuration..."
-cat > .env.new << 'EOF'
-# OpenWA v0.2.x Configuration
-
-# Database (unchanged if using SQLite)
-DATABASE_TYPE=sqlite
-DATABASE_NAME=./data/openwa.sqlite
-
-# New in v0.2: API Key Authentication
-API_KEY_ENABLED=true
-# Generate with: openssl rand -hex 32
-API_KEY=your-generated-api-key
-
-# Webhook (now managed via API, but can set default)
-DEFAULT_WEBHOOK_URL=${WEBHOOK_URL:-}
-
-# Other settings migrated from v0.1
-NODE_ENV=${NODE_ENV:-production}
-PORT=${PORT:-3000}
-LOG_LEVEL=${LOG_LEVEL:-info}
-EOF
-
-# Merge with existing .env
-source .env
-envsubst < .env.new > .env.migrated
-mv .env.migrated .env
-rm .env.new
-
-# 5. Start new version
-echo "▶️ Starting v0.2..."
-docker compose pull
-docker compose up -d
-
-# 6. Wait for health
-echo "⏳ Waiting for health check..."
-sleep 10
-curl -f http://localhost:2785/health || exit 1
-
-# 7. Create API key for existing integrations
-echo "🔑 Creating API key..."
-docker exec openwa npm run cli -- create-api-key --name "migrated-key"
-
-echo "✅ Upgrade complete!"
-echo ""
-echo "⚠️ IMPORTANT: Update your API clients:"
-echo "  - Change /api/session to /api/sessions"
-echo "  - Change /api/send to /api/sessions/{id}/messages"
-echo "  - Add X-API-Key header to all requests"
-```
-
-### v0.2 → v1.0 Migration
-
-#### Breaking Changes in v1.0
-
-```yaml
-breaking_changes:
-  api:
-    - Groups API restructured
-    - Webhook payload format v2
-    - Rate limiting enforced
-
-  config:
-    - ENGINE_TYPE required (default: whatsapp-web.js; also accepts: baileys)
-    - STORAGE_ADAPTER required (default: local)
-
-  database:
-    - New tables: groups, group_participants, channels
-    - sessions.status enum expanded
-```
-
-#### Migration Steps
-
-```bash
-#!/bin/bash
-# upgrade-v02-to-v10.sh
-
-set -e
-
-echo "🚀 Upgrading OpenWA v0.2.x → v1.0.0"
-
-# Pre-flight checks
-CURRENT_VERSION=$(docker inspect ghcr.io/rmyndharis/openwa --format '{{.Config.Labels.version}}' 2>/dev/null || echo "unknown")
-echo "Current version: $CURRENT_VERSION"
-
-# 1. Comprehensive backup
-echo "📦 Creating comprehensive backup..."
-BACKUP_DIR="./backups/v02-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$BACKUP_DIR"
-
-# Backup database
-if [ "$DATABASE_TYPE" = "postgres" ]; then
-  pg_dump -h "$DATABASE_HOST" -U "$DATABASE_USERNAME" "$DATABASE_NAME" > "$BACKUP_DIR/database.sql"
-else
-  cp ./data/openwa.sqlite "$BACKUP_DIR/"
-fi
-
-# Backup auth sessions
-cp -r ./data/.wwebjs_auth "$BACKUP_DIR/"
-
-# Backup config
-cp .env "$BACKUP_DIR/"
-cp docker-compose.yml "$BACKUP_DIR/"
-
-# 2. Export webhook configurations (per session, new format in v1.0)
-echo "📤 Exporting webhooks..."
-for sessionId in $(curl -s -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions | jq -r '.data[].id'); do
-  curl -s -H "X-API-Key: $API_KEY" \
-    "http://localhost:2785/api/sessions/${sessionId}/webhooks" \
-    > "$BACKUP_DIR/webhooks_${sessionId}.json"
-done
-
-# 3. Stop services
-echo "⏹️ Stopping v0.2..."
-docker compose down
-
-# 4. Update configuration
-echo "⚙️ Updating configuration..."
-cat >> .env << 'EOF'
-
-# New in v1.0
-ENGINE_TYPE=whatsapp-web.js  # default (Chromium-based); set to "baileys" for browser-free engine
-STORAGE_ADAPTER=local
-CACHE_ADAPTER=memory
-
-# Webhook v2 format (recommended)
-WEBHOOK_VERSION=2
-EOF
-
-# 5. Run database migrations
-echo "🔄 Running migrations..."
-docker run --rm \
-  -v $(pwd)/data:/app/data \
-  --env-file .env \
-  ghcr.io/rmyndharis/openwa:1.0.0 \
-  npm run migration:run
-
-# 6. Migrate webhooks to new format
-echo "🔄 Migrating webhooks..."
-docker run --rm \
-  -v $(pwd)/data:/app/data \
-  -v "$BACKUP_DIR/webhooks.json:/tmp/webhooks.json" \
-  --env-file .env \
-  ghcr.io/rmyndharis/openwa:1.0.0 \
-  npm run cli -- migrate-webhooks /tmp/webhooks.json
-
-# 7. Start new version
-echo "▶️ Starting v1.0..."
-sed -i 's/:0.2./:1.0./g' docker-compose.yml
-docker compose pull
-docker compose up -d
-
-# 8. Health check
-echo "⏳ Waiting for health check..."
+# 4. Wait for health — every route lives under the /api prefix
 for i in {1..30}; do
-  if curl -sf http://localhost:2785/health > /dev/null; then
+  if curl -sf http://localhost:2785/api/health > /dev/null; then
     echo "✅ Health check passed"
     break
   fi
   sleep 2
 done
 
-# 9. Verify sessions
-echo "🔍 Verifying sessions..."
-curl -s -H "X-API-Key: $API_KEY" \
-  http://localhost:2785/api/sessions | jq '.[] | {id, status}'
+# 5. Confirm the running version
+curl -s http://localhost:2785/api/health | jq '.version'
 
-echo ""
-echo "✅ Upgrade to v1.0.0 complete!"
-echo ""
-echo "📝 Post-upgrade tasks:"
-echo "  1. Update webhook consumers for v2 payload format"
-echo "  2. Test all active sessions"
-echo "  3. Review new rate limits"
-echo "  4. Check Groups API if used"
+# 6. Verify sessions came back
+curl -s -H "X-API-Key: $API_KEY" \
+  http://localhost:2785/api/sessions | jq '.[] | {id, name, status}'
 ```
+
+> [!NOTE]
+> `GET /api/sessions` returns a bare array — responses carry no `{success, data}` envelope, so filter with
+> `jq '.[]'`, never `jq '.data[]'`.
+
+Migrations can also be run explicitly against a stopped app — useful when a long index build would
+outlast an orchestrator's liveness grace:
+
+```bash
+docker compose run --rm openwa-api npm run migration:run:prod
+```
+
+> [!WARNING]
+> Use `migration:run:prod` inside the production image. Plain `npm run migration:run` needs `ts-node` and
+> the TypeScript sources, both stripped by `npm ci --omit=dev` in the released image.
+
+### Known Upgrade Hazards
+
+| Release  | Change                                                                              | Action                                                                                                     |
+| -------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `0.8.15` | PostgreSQL schemas bootstrapped with `DATABASE_SYNCHRONIZE=true` crash-loop on boot | Self-healing guard migration; see [14.9](#149-troubleshooting-migration-issues) for the large-table window |
+| `0.9.0`  | `GET /api/settings` no longer returns the always-zero `general.sessionTimeout`      | Remove reads of that field — there is no replacement                                                       |
+| `0.10.3` | Boolean/numeric request fields are parsed strictly (`1`, `yes`, `""` now `400`)     | Send canonical JSON values; JSON clients and the SDKs are unaffected                                       |
+| `0.10.3` | Status posts pass the `message:sending` plugin gate, with no `chatId` in the input  | Branch on `source`/`type` before reading `input.chatId`                                                    |
+
+The authoritative list is `CHANGELOG.md`; breaking items are flagged there with ⚠️ **Breaking**.
 
 ## 14.6 Rollback Procedures
 
@@ -955,12 +720,13 @@ echo "  4. Check Groups API if used"
 #!/bin/bash
 # rollback.sh
 
+# A DIRECTORY of restored files — not the tar.gz that scripts/backup.sh writes (see the TIP below).
 BACKUP_DIR=$1
 TARGET_VERSION=$2
 
 if [ -z "$BACKUP_DIR" ] || [ -z "$TARGET_VERSION" ]; then
     echo "Usage: ./rollback.sh <backup-dir> <target-version>"
-    echo "Example: ./rollback.sh ./backups/v02-20260215-120000 0.2.0"
+    echo "Example: ./rollback.sh ./backups/pre-upgrade-20260215-120000 0.2.0"
     exit 1
 fi
 
@@ -979,25 +745,31 @@ else
     cp "$BACKUP_DIR/openwa.sqlite" ./data/
 fi
 
-# 3. Restore auth sessions
+# 3. Restore auth sessions (SESSION_DATA_PATH + BAILEYS_AUTH_DIR)
 echo "📥 Restoring auth sessions..."
-rm -rf ./data/.wwebjs_auth
-cp -r "$BACKUP_DIR/.wwebjs_auth" ./data/
+rm -rf ./data/sessions ./data/baileys
+cp -r "$BACKUP_DIR/sessions" ./data/
+[ -d "$BACKUP_DIR/baileys" ] && cp -r "$BACKUP_DIR/baileys" ./data/
 
 # 4. Restore configuration
 echo "📥 Restoring configuration..."
 cp "$BACKUP_DIR/.env" .
 cp "$BACKUP_DIR/docker-compose.yml" .
 
-# 5. Start old version
+# 5. Start the target version. The repo compose BUILDS the image, so check out the tag and rebuild;
+#    a deployment pinned to a published image bumps the tag and runs `docker compose pull` instead.
 echo "▶️ Starting v${TARGET_VERSION}..."
-docker compose pull
-docker compose up -d
+git checkout "v${TARGET_VERSION}"
+docker compose up -d --build
 
 # 6. Verify
 sleep 10
-curl -f http://localhost:2785/health && echo "✅ Rollback successful"
+curl -f http://localhost:2785/api/health && echo "✅ Rollback successful"
 ```
+
+> [!TIP]
+> `./scripts/restore.sh <backup-archive.tar.gz>` performs the same restore from an archive produced by
+> `scripts/backup.sh` — including the Main DB (`./data/main.sqlite`), which the script above does not touch.
 
 ### Rollback Decision Tree
 
@@ -1035,32 +807,41 @@ migration:
   target: staging
 
   steps:
-    - name: Export sessions (anonymized)
+    - name: Export the Data DB from development
       command: |
-        npm run cli -- export-sessions \
-          --anonymize \
-          --output /tmp/sessions-staging.json
+        curl -s 'http://dev-host:2785/api/infra/export-data' \
+          -H "X-API-Key: $DEV_API_KEY" > /tmp/dev-data.json
 
-    - name: Reset database
+    - name: Start staging on an empty data store
       command: |
-        npm run migration:fresh
+        # Schema migrations run at boot, so a removed store is recreated from scratch
+        docker compose down
+        rm -f ./data/openwa.sqlite
+        docker compose up -d
 
-    - name: Import test sessions
+    - name: Import into staging
       command: |
-        npm run cli -- import-sessions /tmp/sessions-staging.json
+        curl -X POST 'http://staging-host:2785/api/infra/import-data' \
+          -H "X-API-Key: $STAGING_API_KEY" \
+          -H 'Content-Type: application/json' \
+          -d @/tmp/dev-data.json
 
     - name: Configure staging webhooks
       command: |
-        npm run cli -- set-webhook \
-          --url https://staging-webhook.example.com/openwa \
-          --events message,status
+        curl -X POST 'http://staging-host:2785/api/sessions/{sessionId}/webhooks' \
+          -H "X-API-Key: $STAGING_API_KEY" \
+          -H 'Content-Type: application/json' \
+          -d '{"url":"https://staging-webhook.example.com/openwa","events":["message.received"]}'
 
-    - name: Set staging limits
-      command: |
-        npm run cli -- set-limits \
-          --max-sessions 10 \
-          --rate-limit 100/min
+    - name: Set staging rate limits
+      note: |
+        Rate limits are environment variables, not an API — set RATE_LIMIT_MEDIUM_TTL and
+        RATE_LIMIT_MEDIUM_LIMIT (plus the SHORT/LONG pairs) in the staging .env, then restart.
 ```
+
+> [!NOTE]
+> The export covers the Data DB only. API keys live in the Main DB and are never transferred — staging
+> issues its own keys.
 
 ### Staging → Production
 
@@ -1072,22 +853,18 @@ migration:
 
   pre_checks:
     - name: Staging tests passed
-      command: npm run test:e2e -- --tag staging
+      command: npm run test:e2e
       required: true
 
-    - name: Performance benchmarks
-      command: npm run benchmark
-      threshold: 'p99 < 500ms'
-
     - name: Security scan
-      command: npm audit --production
+      command: npm audit --omit=dev
       required: true
 
   steps:
     - name: Blue-green deployment
       type: blue-green
       config:
-        health_check: /health
+        health_check: /api/health
         switch_after: 60s
         rollback_on_error: true
 
@@ -1104,8 +881,13 @@ migration:
 
 ### Full Export
 
+> [!NOTE]
+> This is an illustrative standalone script, not a shipped one. `/api/infra/export-data` already covers
+> every Data-DB table (see [14.3](#143-database-migration-sqlite--postgresql)); hand-rolled table lists
+> like the one below silently drop whatever they omit.
+
 ```typescript
-// scripts/full-export.ts
+// full-export.ts — illustrative, not shipped in the repo
 
 interface ExportOptions {
   outputDir: string;
@@ -1121,18 +903,21 @@ async function fullExport(options: ExportOptions): Promise<void> {
   const exportDir = path.join(options.outputDir, `export-${Date.now()}`);
   await fs.ensureDir(exportDir);
 
-  // 1. Export database tables
+  // 1. Export database tables (Data DB only — api_keys/audit_logs stay in the local Main DB)
   console.log('📊 Exporting database...');
-  const tables = ['sessions', 'messages', 'contacts', 'webhooks', 'api_keys'];
+  const tables = ['sessions', 'webhooks', 'messages', 'message_batches', 'templates'];
 
   for (const table of tables) {
     const data = await db.query(`SELECT * FROM ${table}`);
     await fs.writeJson(path.join(exportDir, `${table}.json`), data, { spaces: 2 });
   }
 
-  // 2. Export auth sessions
+  // 2. Export auth sessions (SESSION_DATA_PATH + BAILEYS_AUTH_DIR)
   console.log('🔐 Exporting auth sessions...');
-  await fs.copy('./data/.wwebjs_auth', path.join(exportDir, 'auth'));
+  await fs.copy('./data/sessions', path.join(exportDir, 'sessions'));
+  if (await fs.pathExists('./data/baileys')) {
+    await fs.copy('./data/baileys', path.join(exportDir, 'baileys'));
+  }
 
   // 3. Export media (optional)
   if (options.includeMedia) {
@@ -1179,8 +964,12 @@ async function fullExport(options: ExportOptions): Promise<void> {
 
 ### Full Import
 
+> [!NOTE]
+> Also illustrative, not a shipped script — `/api/infra/import-data` is the supported counterpart to
+> the export above.
+
 ```typescript
-// scripts/full-import.ts
+// full-import.ts — illustrative, not shipped in the repo
 
 interface ImportOptions {
   inputPath: string;
@@ -1218,7 +1007,7 @@ async function fullImport(options: ImportOptions): Promise<void> {
   }
 
   // Import order matters (foreign keys)
-  const importOrder = ['sessions', 'api_keys', 'webhooks', 'contacts', 'messages'];
+  const importOrder = ['sessions', 'webhooks', 'messages', 'message_batches', 'templates'];
 
   for (const table of importOrder) {
     const dataPath = path.join(importDir, `${table}.json`);
@@ -1233,13 +1022,18 @@ async function fullImport(options: ImportOptions): Promise<void> {
   }
 
   // Import auth sessions
-  const authPath = path.join(importDir, 'auth');
-  if (await fs.pathExists(authPath)) {
-    console.log('🔐 Importing auth sessions...');
-    if (!options.dryRun) {
-      await fs.copy(authPath, './data/.wwebjs_auth', {
-        overwrite: options.mergeStrategy === 'replace',
-      });
+  for (const [dir, target] of [
+    ['sessions', './data/sessions'],
+    ['baileys', './data/baileys'],
+  ]) {
+    const authPath = path.join(importDir, dir);
+    if (await fs.pathExists(authPath)) {
+      console.log(`🔐 Importing auth state: ${dir}...`);
+      if (!options.dryRun) {
+        await fs.copy(authPath, target, {
+          overwrite: options.mergeStrategy === 'replace',
+        });
+      }
     }
   }
 
@@ -1289,21 +1083,23 @@ docker compose up -d
 # Check database integrity
 sqlite3 ./data/openwa.sqlite "PRAGMA integrity_check;"
 
-# Verify auth session files
-ls -la ./data/.wwebjs_auth/session-*/
+# Verify auth session files (directories are named after the session NAME)
+ls -la ./data/sessions/session-*/
+ls -la ./data/baileys/          # Baileys engine
 
 # Check file permissions
 stat ./data/openwa.sqlite
-stat ./data/.wwebjs_auth
+stat ./data/sessions
 
 # Verify PostgreSQL connection
 psql -h "$DATABASE_HOST" -U "$DATABASE_USERNAME" -d "$DATABASE_NAME" -c "SELECT version();"
 
-# Check migration status
+# Check migration status (add :main for the auth/audit connection)
 npm run migration:show
 
-# Force re-run specific migration
-npm run migration:run -- --name CreateApiKeysTable
+# Re-apply the most recent migration (there is no per-migration re-run —
+# migration:run always applies the whole pending chain)
+npm run migration:revert && npm run migration:run
 ```
 
 ---

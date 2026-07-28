@@ -9,28 +9,30 @@
 
 ## 10.1 Infrastructure Overview
 
+OpenWA is a **single-process** application, so a deployment is exactly one app instance per
+session-data volume (`replicas: 1` — see §10.2). The repo has no staging/production environments and
+no auto-deploy: CI builds and publishes images, and pulling one onto a server is the operator's step.
+
 ```mermaid
 flowchart TB
     subgraph Development["Development"]
         DEV[Local Docker Compose]
     end
     
-    subgraph Staging["Staging"]
-        STG[Single Server]
+    subgraph Registry["Container Registry"]
+        GHCR["GHCR branch / SHA / release tags"]
     end
     
-    subgraph Production["Production"]
-        LB[Load Balancer]
-        LB --> APP1[App Instance 1]
-        LB --> APP2[App Instance 2]
-        APP1 --> DB[(PostgreSQL)]
-        APP2 --> DB
-        APP1 --> REDIS[(Redis)]
-        APP2 --> REDIS
+    subgraph Deployment["Deployment (single server)"]
+        PROXY[Reverse Proxy]
+        PROXY --> APP[OpenWA - one instance]
+        APP --> DB[(PostgreSQL or SQLite)]
+        APP --> REDIS[(Redis - optional)]
+        APP --> VOL["Data volume (/app/data)"]
     end
     
-    DEV --> |deploy| STG
-    STG --> |promote| Production
+    DEV --> |CI builds and pushes| GHCR
+    GHCR --> |operator pulls| Deployment
 ```
 
 ## 10.2 Docker Configuration
@@ -41,7 +43,7 @@ flowchart TB
 # Dockerfile (multi-stage build)
 
 # Build stage
-FROM node:22-slim AS build
+FROM node:22-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -119,15 +121,21 @@ CMD ["node", "dist/main.js"]
 
 ### Docker Compose (Development)
 
+The repo's own `docker-compose.dev.yml` is a single-container local smoke test that runs the
+**production** image against a bind-mounted `./data` — it has no source mount and no `start:dev`.
+The multi-service file below is a hypothetical hot-reload variant you would write yourself under a
+different name (writing it to `docker-compose.dev.yml` would overwrite the shipped file); the
+`builder` target is the first stage of the repo `Dockerfile`.
+
 ```yaml
-# docker-compose.yml
+# docker-compose.hotreload.yml (write this yourself; not shipped in the repo)
 version: '3.8'
 
 services:
   app:
     build:
       context: .
-      target: build
+      target: builder
     command: npm run start:dev
     ports:
       - "2785:2785"
@@ -145,10 +153,15 @@ services:
       # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
       # strong secret. Production refuses to boot with a placeholder/default.
       - API_MASTER_KEY=
+      # Without this, plugins fall back to ./plugins (outside the data volume) and are lost
+      # when the container is replaced. The shipped compose sets it for the same reason.
+      - PLUGINS_DIR=/app/data/plugins
     volumes:
       - ./:/app
       - /app/node_modules
-      - session-data:/app/.wwebjs_auth
+      # Everything the app writes locally (session auth, the main (auth/audit) SQLite DB, media,
+      # plugins) lives under /app/data; with DATABASE_TYPE=postgres above, the data DB does not
+      - openwa-data:/app/data
     depends_on:
       - postgres
       - redis
@@ -178,13 +191,21 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  session-data:
+  openwa-data:
 ```
 
 ### Docker Compose (Production)
 
+The repo ships `docker-compose.yml` (full stack, builds the image from source) and
+`docker-compose.dev.yml` (local smoke test). The file below is an image-based variant you would
+write yourself for a release deployment; it mirrors the shipped compose in the part that matters —
+the single `/app/data` volume that holds session auth, the main (auth/audit) SQLite DB, media and
+plugins. Note the example below sets `DATABASE_TYPE=postgres`, so the **data** database lives in
+PostgreSQL and needs its own backup; only with the SQLite default (what the shipped
+`docker-compose.yml` leaves in place) does the data DB sit in this volume too.
+
 ```yaml
-# docker-compose.prod.yml
+# docker-compose.release.yml (write this yourself; not shipped in the repo)
 version: '3.8'
 
 services:
@@ -211,8 +232,13 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - API_MASTER_KEY=${API_MASTER_KEY}
+      # Without this, plugins fall back to ./plugins (outside the data volume) and are lost
+      # when the container is replaced. The shipped compose sets it for the same reason.
+      - PLUGINS_DIR=/app/data/plugins
     volumes:
-      - session-data:/app/.wwebjs_auth
+      # Session auth, the main (auth/audit) SQLite DB, media and plugins all live here — losing
+      # this volume loses the linked WhatsApp sessions and the API keys.
+      - openwa-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2785/api/health/ready"]
       interval: 30s
@@ -233,7 +259,7 @@ services:
     restart: always
 
 volumes:
-  session-data:
+  openwa-data:
     driver: local
 ```
 
@@ -250,146 +276,24 @@ volumes:
 
 ### GitHub Actions Workflow
 
-```yaml
-# .github/workflows/ci.yml
-name: CI/CD Pipeline
+`.github/workflows/ci.yml` (`name: CI`) runs on pushes and pull requests targeting `main` /
+`develop`. It is **integration only** — no job deploys anywhere. The final job publishes branch and
+SHA image tags to GHCR; `latest` is deliberately not set there and moves only through the separate,
+boot-smoke-gated release workflow.
 
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+| Job | Needs | What it runs |
+|-----|-------|--------------|
+| `lint` | — | ESLint, `tsc --noEmit -p tsconfig.json` (full program, so spec files are type-checked too), `format:check`, `check:versions`, `check:dockerignore`, `openapi:check` |
+| `audit` | — | `npm audit --audit-level=high`, split out of `lint` so a newly published advisory can't abort the code-quality gates |
+| `test` | — | `npm test -- --coverage`, `test:scripts`, `test:e2e` (a `redis:7-alpine` service backs the queue-on e2e suite), coverage upload |
+| `test-postgres` | — | `npm run build`, then `test:pg-smoke` (migrations + uuid-default) and the Postgres FTS migration spec against a `postgres:16-alpine` service |
+| `dashboard` | — | In `dashboard/`: `lint`, `typecheck`, `i18n:check`, `build`, `test:unit` |
+| `scripts-smoke` | — | `shellcheck` plus the backup/restore smoke test for `scripts/backup.sh` and `scripts/restore.sh` |
+| `build` | lint, audit, test, dashboard, scripts-smoke | `npm run build`, uploads the `dist` artifact |
+| `docker` | build, test-postgres | Buildx multi-arch build (`linux/amd64,linux/arm64`) with provenance + SBOM attestations; pushes to `ghcr.io/<owner>/<repo>` on push events (fork PRs build both architectures without publishing) |
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Run linter
-        run: npm run lint
-      
-      - name: Run tests
-        run: npm run test:cov
-        env:
-          DATABASE_TYPE: postgres
-          DATABASE_HOST: localhost
-          DATABASE_PORT: '5432'
-          DATABASE_USERNAME: test
-          DATABASE_PASSWORD: test
-          DATABASE_NAME: test
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/lcov.info
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-      
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy-staging:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
-    steps:
-      - name: Deploy to Staging
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          script: |
-            cd /opt/openwa
-            docker compose pull
-            docker compose up -d
-            docker system prune -f
-
-  deploy-production:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    
-    steps:
-      - name: Deploy to Production
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          script: |
-            cd /opt/openwa
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --no-deps app
-            docker system prune -f
-```
+Rollout is left to the operator — the repo has no SSH deploy step, no staging/production
+environments and no auto-deploy on merge.
 
 ## 10.4 Deployment Architecture
 
@@ -451,14 +355,15 @@ flowchart TB
 ### Environment Variables
 
 ```bash
-# .env.example
+# .env — excerpt of the commonly-tuned keys. The repo's `.env.example` is the canonical,
+# fully annotated list; add nothing here that does not appear there.
 
 # ===========================================
 # APPLICATION
 # ===========================================
 NODE_ENV=production
 PORT=2785
-API_PREFIX=/api
+# The global `/api` prefix is fixed in code — there is no env var for it.
 LOG_LEVEL=info
 LOG_FORMAT=json
 
@@ -483,47 +388,48 @@ DATABASE_NAME=./data/openwa.sqlite
 # ===========================================
 # MEDIA STORAGE (choose one)
 # ===========================================
+# STORAGE_TYPE accepts only `local` or `s3` — env validation rejects anything else and the app
+# FAILS TO BOOT ("Invalid environment configuration"). There is no silent fallback to local disk.
 # Option 1: Local filesystem (default)
 STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./media
-STORAGE_LOCAL_BASE_URL=/media
+STORAGE_LOCAL_PATH=./data/media
 
-# Option 2: S3
+# Option 2: S3 (AWS) — leave S3_ENDPOINT unset; the SDK derives it from the region
 # STORAGE_TYPE=s3
-# STORAGE_S3_BUCKET=openwa-media
-# STORAGE_S3_REGION=ap-southeast-1
-# STORAGE_S3_ACCESS_KEY_ID=your-access-key
-# STORAGE_S3_SECRET_ACCESS_KEY=your-secret-key
+# S3_BUCKET=openwa
+# S3_REGION=ap-southeast-1
+# S3_ACCESS_KEY_ID=your-access-key
+# S3_SECRET_ACCESS_KEY=your-secret-key
 
-# Option 3: MinIO (S3-compatible)
-# STORAGE_TYPE=minio
-# STORAGE_S3_BUCKET=openwa-media
-# STORAGE_S3_ENDPOINT=http://minio:9000
-# STORAGE_S3_ACCESS_KEY_ID=minioadmin
-# STORAGE_S3_SECRET_ACCESS_KEY=minioadmin
-# STORAGE_S3_FORCE_PATH_STYLE=true
+# Option 3: MinIO / other S3-compatible store — same STORAGE_TYPE=s3 plus an endpoint.
+# Setting S3_ENDPOINT is what enables path-style addressing; there is no separate flag.
+# STORAGE_TYPE=s3
+# S3_ENDPOINT=http://minio:9000
+# S3_BUCKET=openwa
+# S3_ACCESS_KEY_ID=minioadmin
+# S3_SECRET_ACCESS_KEY=minioadmin
 
 # ===========================================
-# CACHE & QUEUE (choose one)
+# CACHE & QUEUE
 # ===========================================
-# Option 1: In-Memory (for single instance)
-CACHE_TYPE=memory
-CACHE_TTL=300
-CACHE_MAX=1000
-
-# Option 2: Redis (for multi-instance / production)
-# CACHE_TYPE=redis
-# REDIS_URL=redis://localhost:6379
+# Both are opt-in and both need a reachable Redis, configured with the discrete host/port pair
+# (there is no REDIS_URL). Defaults: no cache at all (CacheService is a no-op and every read falls
+# through to the database — there is no in-memory tier) and inline (non-queued) dispatch.
+REDIS_ENABLED=false
+REDIS_HOST=localhost
+REDIS_PORT=6379
+# Redis-backed caching switches on when REDIS_ENABLED=true OR CACHE_ENABLED=true — enabling Redis
+# for the queue alone therefore also enables the cache.
+# CACHE_ENABLED=true
+# QUEUE_ENABLED=true   # process webhooks/ingress through the BullMQ queue
 
 # ===========================================
 # WHATSAPP ENGINE
 # ===========================================
-ENGINE_TYPE=whatsapp-web.js
-# ENGINE_TYPE=baileys
 # ENGINE_TYPE=baileys   # whatsapp-web.js (default) | baileys; omit to use the dashboard selection
 
 # Session
-SESSION_DATA_PATH=./.wwebjs_auth
+SESSION_DATA_PATH=./data/sessions
 
 # Puppeteer (for whatsapp-web.js)
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -560,7 +466,7 @@ RATE_LIMIT_MEDIUM_LIMIT=100
 ```typescript
 // config/configuration.ts (shape abbreviated — see src/config/configuration.ts for the real file)
 export default () => ({
-  port: parseInt(process.env.PORT, 10) || 3000,
+  port: parseInt(process.env.PORT || '2785', 10),
   // Main boot DB: always SQLite (auth/audit)
   database: {
     type: 'sqlite',
@@ -583,11 +489,24 @@ export default () => ({
     username: process.env.REDIS_USERNAME,
     password: process.env.REDIS_PASSWORD,
   },
+  // API_MASTER_KEY is NOT part of this factory — `security` holds only trustedProxies, and the
+  // master key is read straight from process.env by the auth service.
   security: {
-    masterApiKey: process.env.API_MASTER_KEY,
+    trustedProxies: (process.env.TRUSTED_PROXIES || '').split(',').map(proxy => proxy.trim()).filter(Boolean),
   },
-  session: {
-    dataPath: process.env.SESSION_DATA_PATH || './data/sessions',
+  // Session data path and Puppeteer both live under `engine` — there is no top-level
+  // `session` or `puppeteer` key.
+  engine: {
+    type: process.env.ENGINE_TYPE || 'whatsapp-web.js',
+    sessionDataPath: process.env.SESSION_DATA_PATH || './data/sessions',
+    puppeteer: {
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      headless: process.env.PUPPETEER_HEADLESS !== 'false',
+      // Split on commas AND whitespace; the default is a four-flag string, not an empty list
+      args: (process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu')
+        .split(/[\s,]+/)
+        .filter(Boolean),
+    },
   },
   webhook: {
     timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),
@@ -595,18 +514,16 @@ export default () => ({
     dispatchConcurrency: parseInt(process.env.WEBHOOK_DISPATCH_CONCURRENCY || '16', 10),
     dispatchMaxQueued: parseInt(process.env.WEBHOOK_DISPATCH_MAX_QUEUED || '1000', 10),
   },
-  rateLimit: {
-    shortTtl: parseInt(process.env.RATE_LIMIT_SHORT_TTL, 10) || 1000,
-    shortLimit: parseInt(process.env.RATE_LIMIT_SHORT_LIMIT, 10) || 10,
-    mediumTtl: parseInt(process.env.RATE_LIMIT_MEDIUM_TTL, 10) || 60000,
-    mediumLimit: parseInt(process.env.RATE_LIMIT_MEDIUM_LIMIT, 10) || 100,
-    longTtl: parseInt(process.env.RATE_LIMIT_LONG_TTL, 10) || 3600000,
-    longLimit: parseInt(process.env.RATE_LIMIT_LONG_LIMIT, 10) || 1000,
-  },
-  puppeteer: {
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-    headless: process.env.PUPPETEER_HEADLESS !== 'false',
-    args: process.env.PUPPETEER_ARGS?.split(',') || [],
+  // Rate limits are nested under `api` — read them as `api.rateLimit.*`
+  api: {
+    rateLimit: {
+      shortTtl: parseInt(process.env.RATE_LIMIT_SHORT_TTL || '1000', 10),
+      shortLimit: parseInt(process.env.RATE_LIMIT_SHORT_LIMIT || '10', 10),
+      mediumTtl: parseInt(process.env.RATE_LIMIT_MEDIUM_TTL || '60000', 10),
+      mediumLimit: parseInt(process.env.RATE_LIMIT_MEDIUM_LIMIT || '100', 10),
+      longTtl: parseInt(process.env.RATE_LIMIT_LONG_TTL || '3600000', 10),
+      longLimit: parseInt(process.env.RATE_LIMIT_LONG_LIMIT || '1000', 10),
+    },
   },
 });
 ```
@@ -658,6 +575,8 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
+      # Holds the METRICS_TOKEN value; see the scrape config below
+      - ./monitoring/metrics_token:/etc/prometheus/metrics_token:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -751,6 +670,12 @@ scrape_configs:
     static_configs:
       - targets: ['app:2785']
     metrics_path: '/api/metrics'
+    # /api/metrics is disabled (404) until METRICS_TOKEN is set, and then rejects a scrape
+    # without the bearer (401) — either way `up` goes to 0 and ServiceDown fires.
+    # Prometheus does not expand env vars in its config, so mount the token as a file.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token
 
   - job_name: 'node'
     static_configs:
@@ -1038,62 +963,36 @@ export class MetricsService {
 
 ### Structured Logging
 
+Logging is dependency-free: there is no winston (or any logging library) in `package.json`. The
+logger is a small custom `LoggerService` in `src/common/services/logger.service.ts` that writes to
+the console — `error` and `warn` go to **stderr**, every other level to **stdout**, so a shipper
+configured for stdout alone drops exactly the lines you most want. `LOG_LEVEL`
+(`error|warn|info|debug|verbose`) sets verbosity and `LOG_FORMAT` (`json|pretty`) the rendering,
+defaulting to `json` under `NODE_ENV=production` and `pretty` elsewhere. Metadata whose **key name**
+looks like a secret (password, token, api-key, authorization, …) keeps the key and has its **value**
+replaced with `[REDACTED]` before the line is written.
+
+There is no in-app Loki transport: in the stack above, logs reach Loki because **promtail** scrapes
+the container's stdout and stderr from `/var/lib/docker/containers`.
+
 ```typescript
-// common/logging/logger.service.ts
-import { Injectable, LoggerService } from '@nestjs/common';
-import * as winston from 'winston';
+// common/services/logger.service.ts — usage
+import { createLogger } from '../common/services/logger.service';
 
 @Injectable()
-export class AppLoggerService implements LoggerService {
-  private logger: winston.Logger;
+export class MessageService {
+  private readonly logger = createLogger('MessageService');
 
-  constructor() {
-    this.logger = winston.createLogger({
-      level: process.env.LOG_LEVEL || 'info',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-      defaultMeta: { 
-        service: 'openwa',
-        version: process.env.npm_package_version 
-      },
-      transports: [
-        new winston.transports.Console(),
-        // For Loki
-        new winston.transports.Http({
-          host: process.env.LOKI_HOST || 'loki',
-          port: 3100,
-          path: '/loki/api/v1/push',
-        }),
-      ],
+  async send(): Promise<void> {
+    // log/warn/debug/verbose take (message, context?) where context is a string or metadata object;
+    // error() is (message, trace?, context?) — the stack trace comes second
+    this.logger.log('Message sent', {
+      sessionId: 'sess_123',
+      chatId: '628xxx@c.us',
+      messageType: 'text',
     });
   }
-
-  log(message: string, context?: object) {
-    this.logger.info(message, { context });
-  }
-
-  error(message: string, trace?: string, context?: object) {
-    this.logger.error(message, { trace, context });
-  }
-
-  warn(message: string, context?: object) {
-    this.logger.warn(message, { context });
-  }
-
-  debug(message: string, context?: object) {
-    this.logger.debug(message, { context });
-  }
 }
-
-// Usage example
-this.logger.log('Message sent', {
-  sessionId: 'sess_123',
-  chatId: '628xxx@c.us',
-  messageType: 'text',
-  duration: 1.5
-});
 ```
 
 ### Key Metrics to Monitor

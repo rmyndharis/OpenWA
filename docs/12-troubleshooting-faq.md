@@ -21,7 +21,7 @@ docker compose ps
 docker compose logs --tail=50
 
 # System resources
-docker stats openwa
+docker stats openwa-api
 ```
 
 ### Diagnostic Flowchart
@@ -141,20 +141,24 @@ RUN apt-get install -y ... curl ...
 # Check what's using the port
 lsof -i :2785
 # or
-netstat -tlnp | grep 3000
+netstat -tlnp | grep 2785
 
 # Kill process using port
 kill -9 $(lsof -t -i:2785)
 
-# Check Docker logs
-docker compose logs openwa
+# Check Docker logs (service name in the shipped production compose; it is `openwa` in
+# docker-compose.dev.yml)
+docker compose logs openwa-api
 
 # Common fixes
-docker compose down --volumes  # Reset volumes
-docker system prune -f         # Clean up Docker
-docker compose pull            # Get latest image
-docker compose up -d
+docker system prune -f         # Clean up dangling images/containers
+git pull                       # The shipped compose BUILDS openwa-api from source —
+docker compose up -d --build   # `docker compose pull` never updates it
 ```
+
+> Do **not** reach for `docker compose down --volumes` here. It deletes the `openwa-data` volume,
+> which holds the linked WhatsApp session profiles, the auth/audit database and every API key — a
+> port conflict never requires it.
 
 ### Issue: Dashboard Renders a Blank White Screen
 
@@ -179,7 +183,7 @@ in the browser, so the server log stays clean.
 CSP_UPGRADE_INSECURE_REQUESTS=false
 
 # Confirm it actually reached the process
-docker compose exec openwa printenv NODE_ENV CSP_UPGRADE_INSECURE_REQUESTS
+docker compose exec openwa-api printenv NODE_ENV CSP_UPGRADE_INSECURE_REQUESTS
 ```
 
 A production boot that serves the dashboard with the opt-out unset prints a warning naming this
@@ -192,9 +196,9 @@ setting. If you are behind a TLS proxy, ignore that warning — the directive is
 ### Issue: Session Won't Connect
 
 **Symptoms:**
-- QR code generated but session stays "INITIALIZING"
-- "TIMEOUT" status after scanning QR
-- Session stuck in "CONNECTING" state
+- QR code generated but session stays `initializing`
+- Session ends in `failed` (with a `lastError`) after scanning the QR
+- Session stuck at `qr_ready` or `authenticating` and never reaches `ready`
 
 **Diagnostic:**
 
@@ -204,10 +208,10 @@ curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}
 
 # Check WhatsApp engine logs
-docker compose logs openwa 2>&1 | grep -i "whatsapp\|puppeteer\|browser"
+docker compose logs openwa-api 2>&1 | grep -i "whatsapp\|puppeteer\|browser"
 
-# Check auth folder
-ls -la ./data/.wwebjs_auth/session-{sessionId}/
+# Check auth folder (named after the session NAME, under SESSION_DATA_PATH)
+docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/
 ```
 
 **Solutions:**
@@ -221,10 +225,17 @@ ls -la ./data/.wwebjs_auth/session-{sessionId}/
 | WhatsApp blocked | Set a per-session proxy (`proxyUrl`) |
 
 ```bash
-# Clear auth and restart
-rm -rf ./data/.wwebjs_auth/session-{sessionId}
-docker compose restart openwa
+# Clear auth and restart (the profile dir carries the session NAME, not its UUID id)
+docker compose exec openwa-api rm -rf /app/data/sessions/session-<name>
+docker compose restart openwa-api
 ```
+
+> The service name above is the one in the shipped production `docker-compose.yml` (`openwa-api`),
+> which mounts `/app/data` from a **named volume** — there is no `./data` on the host to inspect;
+> reach into the container (`docker compose exec openwa-api ls /app/data/sessions`) instead. In
+> `docker-compose.dev.yml` the app service is called `openwa` and `./data` is bind-mounted, so the
+> same paths can be read directly from the host. Host-relative `./data/...` commands elsewhere in
+> this document assume a source install (`npm run start:dev`) or that dev bind mount.
 
 Proxy egress (if WhatsApp is blocked on your network) is configured **per session** via the
 `proxyUrl`/`proxyType` fields on `POST /api/sessions` — it is **not** an environment variable, and an
@@ -444,7 +455,7 @@ except the WhatsApp pairing, which must be re-scanned.
 
 **Symptoms:**
 - Session disconnects every few hours
-- "DISCONNECTED" status in logs
+- `disconnected` status in logs
 - Need to rescan QR frequently
 
 **Causes & Solutions:**
@@ -465,20 +476,28 @@ flowchart LR
 
 **Configuration fixes:**
 
-```env
-# Increase reconnection attempts
-WA_RECONNECT_INTERVAL=5000
-WA_MAX_RECONNECT_ATTEMPTS=10
+The reconnect backoff is configured **per session**, not by environment variables — pass it in the
+`config` object on `POST /api/sessions`:
 
-# Enable session persistence
-WA_PERSISTENT_SESSION=true
-
-# Increase timeouts
-WA_AUTH_TIMEOUT=120000
-WA_QR_TIMEOUT=60000
+```json
+{
+  "name": "my-bot",
+  "config": {
+    "reconnectBaseDelay": 5000,
+    "maxReconnectAttempts": 10
+  }
+}
 ```
 
-## 12.3 Messaging Issues
+`reconnectBaseDelay` is the exponential-backoff base in milliseconds (clamped to 1000–300000,
+default 5000). `maxReconnectAttempts` is clamped to 0–20 — `0` disables auto-reconnect entirely, and
+leaving it unset means unlimited retries with the delay parking at a 1-hour cap. Subscribe to the
+`session.reconnect_loop` webhook to be alerted on every 5th consecutive attempt.
+
+On a slow host, raise the first-boot init wait with `WWEBJS_AUTH_TIMEOUT_MS` (see *QR generation
+times out on slow first boot* above).
+
+## 12.4 Messaging Issues
 
 ### Issue: Messages Not Sending
 
@@ -571,13 +590,13 @@ rm -rf node_modules/whatsapp-web.js && npm ci
 **Solutions:**
 
 ```bash
-# Check file size limit
-echo $MAX_FILE_SIZE  # Default: 16MB
+# Media size cap — covers remote-URL sends, inbound media, and outbound base64 sends.
+# Default 50 MiB; oversized base64 is rejected with 413 (Payload Too Large).
+MEDIA_DOWNLOAD_MAX_BYTES=52428800
 
-# Increase limit in docker-compose.yml
-environment:
-  - MAX_FILE_SIZE=64mb
-  - UPLOAD_TIMEOUT=60000
+# Max request body — base64 media rides inside the JSON body, so raise this too.
+# Default 25mb.
+BODY_SIZE_LIMIT=25mb
 
 # Supported formats
 # Images: jpg, jpeg, png, gif, webp
@@ -614,7 +633,7 @@ curl -H "X-API-Key: $API_KEY" \
   http://localhost:2785/api/sessions/{sessionId}/webhooks
 
 # No webhook-delivery log API — check the server logs / audit trail instead
-docker compose logs openwa 2>&1 | grep -i webhook
+docker compose logs openwa-api 2>&1 | grep -i webhook
 
 # Test webhook endpoint
 curl -X POST http://your-webhook-url \
@@ -624,23 +643,30 @@ curl -X POST http://your-webhook-url \
 
 **Solutions:**
 
-```yaml
-# Webhook configuration
-webhook:
-  url: https://your-server.com/webhook
-  events:
-    - message.received
-    - message.ack
-    - session.status
-  retry:
-    max_attempts: 3
-    delay: 5000
-  timeout: 30000
-  headers:
-    Authorization: "Bearer your-token"
+Webhooks are rows created through the API — there is no webhook config file:
+
+```bash
+curl -X POST http://localhost:2785/api/sessions/{sessionId}/webhooks \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-server.com/webhook",
+    "events": ["message.received", "message.ack", "session.status"],
+    "secret": "your-signing-secret",
+    "headers": { "Authorization": "Bearer your-token" },
+    "retryCount": 3
+  }'
 ```
 
-## 12.4 Performance Issues
+`retryCount` (0–5, default 3) is per webhook. The delivery timings are process-wide environment
+variables:
+
+```bash
+WEBHOOK_TIMEOUT=10000      # per-attempt HTTP timeout in ms (default 10000)
+WEBHOOK_RETRY_DELAY=5000   # base retry backoff in ms (default 5000)
+```
+
+## 12.5 Performance Issues
 
 ### Issue: High Memory Usage
 
@@ -653,7 +679,7 @@ webhook:
 
 ```bash
 # Check memory usage
-docker stats openwa --no-stream
+docker stats openwa-api --no-stream
 
 # Check process memory (Prometheus text; read openwa_process_resident_memory_bytes)
 curl -H "Authorization: Bearer $METRICS_TOKEN" \
@@ -668,27 +694,18 @@ curl -H "Authorization: Bearer $METRICS_TOKEN" \
 ```yaml
 # docker-compose.yml - Set memory limits
 services:
-  openwa:
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          memory: 512M
+  openwa-api:
+    # The shipped compose already exposes this as mem_limit: ${OPENWA_MEM_LIMIT:-2g}
+    mem_limit: 2g
     environment:
       # Optimize Puppeteer (whatsapp-web.js engine only)
       - PUPPETEER_ARGS=--disable-dev-shm-usage,--disable-gpu,--no-sandbox
-      # Limit cache
-      - WA_CACHE_SIZE=1000
-      # Disable media caching
-      - CACHE_MEDIA=false
 ```
 
 **Memory Optimization Tips:**
 
 | Optimization | Impact | Trade-off |
 |--------------|--------|-----------|
-| Disable media cache | -30% RAM | Slower media re-send |
 | Reduce message history | -20% RAM | Less searchable history |
 | Headless Chrome flags | -15% RAM (wwebjs only) | None |
 | Limit concurrent sessions | Linear | Fewer sessions |
@@ -717,33 +734,31 @@ curl -H "X-API-Key: $API_KEY" \
 **Solutions:**
 
 ```sql
--- SQLite: Add indexes
-CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_contacts_session_id ON contacts(session_id);
+-- Indexes ship with the schema (migrations) — there is nothing to add by hand. `messages`
+-- carries ("sessionId", "createdAt"), ("chatId"), ("status"), ("createdAt") and a unique
+-- ("sessionId", "waMessageId").
 
--- PostgreSQL: Analyze tables
+-- PostgreSQL: refresh planner statistics on the hot tables
 ANALYZE sessions;
 ANALYZE messages;
-ANALYZE contacts;
 ```
 
-```yaml
-# Enable connection pooling (PostgreSQL)
-database:
-  type: postgresql
-  pool:
-    min: 5
-    max: 20
-    idle_timeout: 30000
+Pooling and caching are environment variables — OpenWA has no config file:
 
-# Enable Redis caching
-cache:
-  adapter: redis
-  ttl: 3600
+```bash
+# Connection pool + timeouts (applied to the PostgreSQL data connection)
+DATABASE_POOL_SIZE=10                 # max pooled connections (default 10)
+DATABASE_IDLE_TIMEOUT_MS=30000        # idle client eviction (default 30000)
+DATABASE_CONNECTION_TIMEOUT_MS=10000  # wait for a free connection (default 10000)
+DATABASE_STATEMENT_TIMEOUT_MS=30000   # server-side per-query cap (default 30000)
+
+# Redis caching (per-key TTLs are fixed in code — there is no cache TTL env var)
+REDIS_ENABLED=true
+REDIS_HOST=localhost
+REDIS_PORT=6379
 ```
 
-## 12.5 Database Issues
+## 12.6 Database Issues
 
 ### Issue: Database Locked (SQLite)
 
@@ -780,8 +795,6 @@ flowchart TD
     D -->|No| E[Optimize SQLite]
 
     E --> E1[Enable WAL mode]
-    E --> E2[Increase timeout]
-    E --> E3[Add indexes]
 ```
 
 ### Issue: Database Migration Failed
@@ -810,7 +823,7 @@ npm run migration:run:main
 
 **PostgreSQL crash-loop on boot after upgrade** — if logs show `column "id" is of type uuid but default expression is of type character varying` or `foreign key constraint ... cannot be implemented ... incompatible types: character varying and uuid`, the deployment was previously bootstrapped with `DATABASE_SYNCHRONIZE=true` (native `uuid` columns vs the migrations' `varchar`). A guard migration converts the columns automatically on the next boot; for large `messages` tables, run the migration against the stopped app (`npm run migration:run`) during a maintenance window. See [14.5 / 14.9 — PostgreSQL crash-loop after upgrading a `DATABASE_SYNCHRONIZE=true` deployment](./14-migration-guide.md). `DATABASE_SYNCHRONIZE=true` is unsupported on PostgreSQL for production.
 
-## 12.6 Docker Issues
+## 12.7 Docker Issues
 
 ### Issue: Volume Permissions
 
@@ -831,7 +844,7 @@ sudo chown -R $(id -u):$(id -g) ./data/
 # Or use Docker's user mapping
 # docker-compose.yml
 services:
-  openwa:
+  openwa-api:
     user: "1000:1000"  # Your UID:GID
 ```
 
@@ -847,7 +860,7 @@ services:
 ```yaml
 # docker-compose.yml - Ensure proper networking
 services:
-  openwa:
+  openwa-api:
     networks:
       - openwa-network
     extra_hosts:
@@ -864,11 +877,11 @@ networks:
 
 ```bash
 # Test connectivity from container
-docker exec openwa ping postgres
-docker exec openwa curl http://host.docker.internal:8080
+docker exec openwa-api ping postgres
+docker exec openwa-api curl http://host.docker.internal:8080
 ```
 
-## 12.7 Frequently Asked Questions
+## 12.8 Frequently Asked Questions
 
 ### General Questions
 
@@ -1027,6 +1040,9 @@ available_events:
   - message.reaction     # Reaction added, changed, or removed
   - message.edited       # Message body or media caption edited
 
+  # Status
+  - status.received      # A contact posted a status/story (opt-in: must be listed explicitly or via "*")
+
   # Session
   - session.status       # Session status change
   - session.qr           # New QR code generated
@@ -1049,6 +1065,8 @@ available_events:
   "event": "message.received",
   "timestamp": "2026-02-02T10:30:00Z",
   "sessionId": "sess_abc123",
+  "idempotencyKey": "msg_sess_abc123_ABC123_DEF456",
+  "deliveryId": "dlv_550e8400-e29b-41d4-a716-446655440000",
   "data": {
     "id": "ABC123_DEF456",
     "from": "628123456789@c.us",
@@ -1064,7 +1082,7 @@ available_events:
 }
 ```
 
-## 12.8 Error Code Reference
+## 12.9 Error Code Reference
 
 ### HTTP Error Codes
 
@@ -1080,25 +1098,25 @@ available_events:
 | 500 | Internal Error | Server error | Check logs |
 | 503 | Service Unavailable | Session disconnected | Reconnect session |
 
-### WhatsApp Error Codes
+### Error Body Shape
 
-| Code | Meaning | Solution |
-|------|---------|----------|
-| `WA_SESSION_NOT_FOUND` | Session doesn't exist | Create session first |
-| `WA_SESSION_NOT_READY` | Session not connected | Wait for connection or rescan QR |
-| `WA_INVALID_PHONE` | Invalid phone format | Use format: 628xxx@c.us |
-| `WA_NUMBER_NOT_EXISTS` | Number not on WhatsApp | Verify number |
-| `WA_RATE_LIMITED` | Too many messages | Wait and reduce rate |
-| `WA_MEDIA_ERROR` | Media processing failed | Check file format/size |
-| `WA_GROUP_NOT_FOUND` | Group doesn't exist | Verify group ID |
-| `WA_NOT_ADMIN` | Not group admin | Need admin rights |
+There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape, so match on
+`statusCode` (above) and read `message` for the human-readable cause:
 
-## 12.9 Getting Help
+```json
+{
+  "statusCode": 404,
+  "message": "Session with id 'a1b2c3d4-...' not found",
+  "error": "Not Found"
+}
+```
+
+## 12.10 Getting Help
 
 ### Before Asking for Help
 
 1. **Check this FAQ** - Most common issues are covered
-2. **Check logs** - `docker compose logs openwa --tail=100`
+2. **Check logs** - `docker compose logs openwa-api --tail=100`
 3. **Try basic troubleshooting** - Restart, clear cache, etc.
 4. **Search GitHub issues** - Your issue might be already reported
 
