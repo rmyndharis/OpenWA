@@ -4487,11 +4487,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Always null on whatsapp-web.js: catalog reads are not implemented on either engine."
-          },
           "501": {
-            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
+            "description": "Not supported: neither engine implements catalog reads."
           }
         },
         "summary": "Get business catalog info (not implemented by any engine)",
@@ -4536,11 +4533,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Always an empty page on whatsapp-web.js: catalog reads are not implemented on either engine."
-          },
           "501": {
-            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
+            "description": "Not supported: neither engine implements catalog reads."
           }
         },
         "summary": "List catalog products (not implemented by any engine)",
@@ -4571,11 +4565,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Always null on whatsapp-web.js: catalog reads are not implemented on either engine."
-          },
           "501": {
-            "description": "Not supported by the active engine: Baileys does not implement catalog reads."
+            "description": "Not supported: neither engine implements catalog reads."
           }
         },
         "summary": "Get a specific product (not implemented by any engine)",

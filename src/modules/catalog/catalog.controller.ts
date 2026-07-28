@@ -13,12 +13,8 @@ export class CatalogController {
   @Get('catalog')
   @ApiOperation({ summary: 'Get business catalog info (not implemented by any engine)' })
   @ApiResponse({
-    status: 200,
-    description: 'Always null on whatsapp-web.js: catalog reads are not implemented on either engine.',
-  })
-  @ApiResponse({
     status: 501,
-    description: 'Not supported by the active engine: Baileys does not implement catalog reads.',
+    description: 'Not supported: neither engine implements catalog reads.',
   })
   async getCatalog(@Param('sessionId') sessionId: string) {
     return this.catalogService.getCatalog(sessionId);
@@ -27,12 +23,8 @@ export class CatalogController {
   @Get('catalog/products')
   @ApiOperation({ summary: 'List catalog products (not implemented by any engine)' })
   @ApiResponse({
-    status: 200,
-    description: 'Always an empty page on whatsapp-web.js: catalog reads are not implemented on either engine.',
-  })
-  @ApiResponse({
     status: 501,
-    description: 'Not supported by the active engine: Baileys does not implement catalog reads.',
+    description: 'Not supported: neither engine implements catalog reads.',
   })
   async getProducts(@Param('sessionId') sessionId: string, @Query() query: ProductQueryDto) {
     return this.catalogService.getProducts(sessionId, query.page, query.limit);
@@ -41,12 +33,8 @@ export class CatalogController {
   @Get('catalog/products/:productId')
   @ApiOperation({ summary: 'Get a specific product (not implemented by any engine)' })
   @ApiResponse({
-    status: 200,
-    description: 'Always null on whatsapp-web.js: catalog reads are not implemented on either engine.',
-  })
-  @ApiResponse({
     status: 501,
-    description: 'Not supported by the active engine: Baileys does not implement catalog reads.',
+    description: 'Not supported: neither engine implements catalog reads.',
   })
   async getProduct(@Param('sessionId') sessionId: string, @Param('productId') productId: string) {
     return this.catalogService.getProduct(sessionId, productId);

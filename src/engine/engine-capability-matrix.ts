@@ -166,7 +166,7 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'not-available', rootCause: 'library-limitation' },
     evidence:
-      'baileys no enumerate-newsletters fn; all 23 Socket/newsletter.d.ts exports are per-jid (newsletterMetadata requires a key; newsletterSubscribers returns the count of ONE). Only the newsletter EVENT surfaces jids opportunistically (incremental, not list-all); wwjs Client.getChannels (Client.js:1680)',
+      'baileys no enumerate-newsletters fn; 18 of the 19 Socket/newsletter.d.ts newsletter members are per-jid (only newsletterCreate is not) (newsletterMetadata requires a key; newsletterSubscribers returns the count of ONE). Only the newsletter EVENT surfaces jids opportunistically (incremental, not list-all); wwjs Client.getChannels (Client.js:1680)',
   },
   initialize: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   joinGroupViaInviteCode: {

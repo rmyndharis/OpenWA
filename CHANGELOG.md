@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The published OpenAPI spec no longer advertises a `200` the catalog endpoints never return.**
+  `GET /sessions/{id}/catalog`, `/catalog/products` and `/catalog/products/{productId}` each declared
+  a `200` response described as "always null on whatsapp-web.js", from a time when that engine
+  returned an empty result instead of refusing. Both adapters now throw, so every call answers `501`,
+  and a generated client built against the old snapshot modelled a success case that cannot occur.
+  The stale declarations are removed, the remaining `501` description no longer names only Baileys,
+  and `openapi.json` is regenerated.
+
 - **The documentation set now matches the shipped implementation.** Every numbered document was
   checked claim by claim against source, and the corrections concentrate where following the docs
   could fail silently. Session auth was documented at `./data/.wwebjs_auth` when it lives under
