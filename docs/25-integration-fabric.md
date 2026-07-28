@@ -29,7 +29,7 @@ public contract — Integration SDK v1** — because the contract, not any singl
 
 The overriding goal is to preserve the untrusted-worker safety invariants *by construction*. OpenWA
 plugins run in a capability-gated worker thread with no ambient host access (see
-[23 - Plugin Sandboxing](./23-plugin-sandboxing.md)). Every host↔worker message is a serializable POJO
+[30 - Plugin Sandboxing](./30-plugin-sandboxing.md)). Every host↔worker message is a serializable POJO
 across a `structuredClone` boundary; host-initiated calls fail open on a timeout and drain on a worker
 crash; permissions are manifest-static and cannot be widened by configuration; session scope is enforced
 host-side.
@@ -289,5 +289,5 @@ remains open is **P4**: the published SDK reference, a compatibility test suite,
 > See also: [03 - System Architecture](03-system-architecture.md),
 > [04 - Security Design](04-security-design.md),
 > [19 - Plugin Architecture](19-plugin-architecture.md),
-> [23 - Plugin Sandboxing](23-plugin-sandboxing.md),
+> [30 - Plugin Sandboxing](30-plugin-sandboxing.md),
 > [15 - Project Roadmap](15-project-roadmap.md).

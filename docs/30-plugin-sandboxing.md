@@ -1,4 +1,4 @@
-# 23 — Plugin Sandboxing
+# 30 — Plugin Sandboxing
 
 OpenWA runs **untrusted plugins** (anything loaded from the plugins directory) in an isolated worker
 thread, separate from the first-party built-ins (the two engine adapters) which run in-process. This

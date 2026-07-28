@@ -19,7 +19,7 @@
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **Sandboxed execution** | ✅ Implemented | Untrusted (disk-loaded) plugins run in a `worker_thread`; see [23 — Plugin Sandboxing](./23-plugin-sandboxing.md). No `vm2`. |
+| **Sandboxed execution** | ✅ Implemented | Untrusted (disk-loaded) plugins run in a `worker_thread`; see [30 — Plugin Sandboxing](./30-plugin-sandboxing.md). No `vm2`. |
 | **Permission enforcement** | ✅ Implemented | Capability permissions enforced at the call boundary via `assertPermission` |
 | **Per-session activation** | ✅ Implemented | A session-scoped plugin runs only for the sessions an operator activated it for |
 | **Per-session config** | ✅ Implemented | Per-session config overrides shallow-merged over the base config at hook time |
@@ -52,7 +52,7 @@ flowchart TB
     end
 ```
 
-1. **Isolation** - Untrusted plugins (anything loaded from the `plugins/` directory) run in a `worker_thread`, separate from in-process built-ins; capability calls round-trip to the host. First-party built-ins (the engine adapters) run in-process. A `worker_thread` is V8-context isolation in the same OS process, not an OS-level sandbox — see [23 — Plugin Sandboxing](./23-plugin-sandboxing.md) for what it does and does not guarantee, and the OS-containment guidance.
+1. **Isolation** - Untrusted plugins (anything loaded from the `plugins/` directory) run in a `worker_thread`, separate from in-process built-ins; capability calls round-trip to the host. First-party built-ins (the engine adapters) run in-process. A `worker_thread` is V8-context isolation in the same OS process, not an OS-level sandbox — see [30 — Plugin Sandboxing](./30-plugin-sandboxing.md) for what it does and does not guarantee, and the OS-containment guidance.
 2. **Extensibility** - Easy to add new features
 3. **Safety** - Capability permissions are enforced at the call boundary (`assertPermission` throws `PluginCapabilityError`), session scope is enforced per call, and outbound HTTP is SSRF-guarded.
 4. **Performance** - Lazy loading, minimal overhead
@@ -519,7 +519,7 @@ double-enable, and engines must match the configured active engine):
   drive `onLoad`/`onEnable` over the channel. Capability calls and hook dispatches round-trip to the
   host, which runs the **same** permission + session-scope checks. Lifecycle calls are bounded by a
   30 s timeout and hooks by a 5 s timeout; a failure tears the worker back down. See
-  [23 — Plugin Sandboxing](./23-plugin-sandboxing.md).
+  [30 — Plugin Sandboxing](./30-plugin-sandboxing.md).
 
 **Disable / unload / uninstall.** `disablePlugin` runs `onDisable` (force-terminating the worker for a
 sandboxed plugin, even if `onDisable` hangs or throws) and unregisters the plugin's hooks. `onModuleDestroy`
@@ -708,7 +708,7 @@ tier automatically. Key properties:
 This is V8-context isolation in the same OS process, not an OS-level sandbox: a worker can still reach
 Node built-ins (`fs`, `process`, sockets). For genuinely untrusted plugins, combine it with OS
 containment (the shipped Docker image runs read-only rootfs, non-root, `cap_drop: ALL`). See
-[23 — Plugin Sandboxing](./23-plugin-sandboxing.md) for the full security model and author rules.
+[30 — Plugin Sandboxing](./30-plugin-sandboxing.md) for the full security model and author rules.
 
 ---
 

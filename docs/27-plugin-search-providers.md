@@ -220,5 +220,5 @@ ctx interface is planned; for now the search contract types above are the stable
 
 > See also: [26 - Global Search](./26-global-search.md) (the feature + the built-in provider),
 > [19 - Plugin Architecture](./19-plugin-architecture.md),
-> [23 - Plugin Sandboxing](./23-plugin-sandboxing.md),
+> [30 - Plugin Sandboxing](./30-plugin-sandboxing.md),
 > [06 - API Specification](./06-api-specification.md) §6.4.12 Search.

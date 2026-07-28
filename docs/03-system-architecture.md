@@ -742,26 +742,35 @@ flowchart TB
 
 ## 3.10 Error Handling Architecture
 
+Handlers throw NestJS's own HTTP exceptions; NestJS's built-in `BaseExceptionFilter` renders them.
+There is no custom filter and no custom exception base class — see
+[08 - Development Guidelines](./08-development-guidelines.md) for the domain errors in
+`src/common/errors/` and the status each maps to.
+
 ```mermaid
 flowchart TB
     E[Error Occurs] --> T{Error Type}
-    
-    T -->|Validation| V[ValidationException]
-    T -->|Not Found| N[NotFoundException]
-    T -->|Auth| A[UnauthorizedException]
-    T -->|Business| B[BusinessException]
-    T -->|System| S[InternalException]
-    
-    V --> F[Exception Filter]
+
+    T -->|Validation fails| V[BadRequestException 400]
+    T -->|Missing resource| N[NotFoundException 404]
+    T -->|Bad/absent key| A[UnauthorizedException 401]
+    T -->|Role or scope refused| FB[ForbiddenException 403]
+    T -->|Engine cannot do this| NI[EngineNotSupportedError → 501]
+    T -->|Engine not ready| C[EngineNotReadyError → 409]
+    T -->|Engine transport down| SU[EngineTransportError → 503]
+    T -->|Unhandled| S[InternalServerErrorException 500]
+
+    V --> F[NestJS BaseExceptionFilter]
     N --> F
     A --> F
-    B --> F
+    FB --> F
+    NI --> F
+    C --> F
+    SU --> F
     S --> F
-    
-    F --> R[Formatted Response]
-    F --> L[Log Error]
-    
-    L -->|Critical| AL[Alert]
+
+    F --> R["{ statusCode, message, error }"]
+    S --> L[Log with stack]
 ```
 
 ## 3.11 Scalability Considerations
