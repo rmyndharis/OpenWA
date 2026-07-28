@@ -210,8 +210,11 @@ curl -H "X-API-Key: $API_KEY" \
 # Check WhatsApp engine logs
 docker compose logs openwa-api 2>&1 | grep -i "whatsapp\|puppeteer\|browser"
 
-# Check auth folder (named after the session NAME, under SESSION_DATA_PATH)
-docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/
+# Check auth folder. Both engines key it on the session NAME, but the location differs:
+#   whatsapp-web.js → SESSION_DATA_PATH (default /app/data/sessions), dir `session-<name>`
+#   baileys         → BAILEYS_AUTH_DIR  (default /app/data/baileys),  dir `<name>` (no prefix)
+docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/   # whatsapp-web.js
+docker compose exec openwa-api ls -la /app/data/baileys/<name>/            # baileys
 ```
 
 **Solutions:**
@@ -225,8 +228,10 @@ docker compose exec openwa-api ls -la /app/data/sessions/session-<name>/
 | WhatsApp blocked | Set a per-session proxy (`proxyUrl`) |
 
 ```bash
-# Clear auth and restart (the profile dir carries the session NAME, not its UUID id)
-docker compose exec openwa-api rm -rf /app/data/sessions/session-<name>
+# Clear auth and restart (the profile dir carries the session NAME, not its UUID id).
+# Remove the one that matches the session's engine — deleting the other path is a silent no-op.
+docker compose exec openwa-api rm -rf /app/data/sessions/session-<name>   # whatsapp-web.js
+docker compose exec openwa-api rm -rf /app/data/baileys/<name>            # baileys
 docker compose restart openwa-api
 ```
 
@@ -1065,7 +1070,7 @@ available_events:
   "event": "message.received",
   "timestamp": "2026-02-02T10:30:00Z",
   "sessionId": "sess_abc123",
-  "idempotencyKey": "msg_sess_abc123_ABC123_DEF456",
+  "idempotencyKey": "msg_sess_abc123_ABC123_DEF456_f1e2d3c4-b5a6-7890-1234-567890abcdef",
   "deliveryId": "dlv_550e8400-e29b-41d4-a716-446655440000",
   "data": {
     "id": "ABC123_DEF456",

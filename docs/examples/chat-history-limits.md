@@ -64,7 +64,7 @@ Use the live history endpoint as a bounded recent-history helper, not as a full 
 
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:2785/api/sessions/default/messages/628123456789@c.us/history?limit=100"
+  "http://localhost:2785/api/sessions/{sessionId}/messages/628123456789@c.us/history?limit=100"
 ```
 
 Use `limit=100` when you want the maximum single-request live history window currently allowed by OpenWA.

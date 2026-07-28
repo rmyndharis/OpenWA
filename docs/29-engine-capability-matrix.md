@@ -35,7 +35,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 > **Wired.** ✅ `getChannelById`, `subscribeToChannel`, `unsubscribeFromChannel` on Baileys — via `newsletterMetadata('jid'|'invite', …)` → `NewsletterMetadata` mapped to `Channel` (id/name/description/inviteCode/subscriberCount/picture/verified/createdAt), `newsletterFollow` (subscribe, invite→jid bridge), `newsletterUnfollow` (unsubscribe, 1:1). `getChannelById` on Baileys resolves ANY channel by jid (richer than the wwjs subscribed-list lookup).
 - **`subscribeToChannel` (wwjs, adapter-gap).** whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a boolean (`Client.js:2533`) — it cannot satisfy the subscribe-by-invite-code contract on its own. The correct wiring is two-step: `getChannelByInviteCode(inviteCode)` (`Client.js:1707`) → `subscribeToChannel(channel.id)`. The adapter previously passed the invite code straight in and fabricated a `Channel` out of the returned boolean (`{ id: "undefined" }` — a reported success that never subscribed); it now throws an honest `EngineNotSupportedError` (501) until the two-step flow is verified against a live session.
 - **`getChannelMessages` (baileys, adapter-gap).** `sock.newsletterFetchMessages(channelId, limit, 0, 0)` (`Socket/newsletter.d.ts:19`) returns the **raw `BinaryNode`** of `<message_updates>` children (`newsletter.js:149`). The fetch is one line; the real work is walking the children and mapping each to `ChannelMessage{id,body,timestamp,hasMedia}` — no library parser is exposed. Not wired: a hand-written BinaryNode walk can't be verified without a live WhatsApp session, so it stays a documented gap rather than an unverified implementation.
-- **`getSubscribedChannels` (baileys, library-limitation).** No enumerate-subscribed-newsletters query in the library. All 23 `Socket/newsletter.d.ts` exports are per-jid (`newsletterMetadata` requires a key; `newsletterSubscribers(jid)` returns the count of one newsletter). The `newsletter` event surfaces jids opportunistically during live sync, but that is incremental, not a list-all. Would require a raw WMex/app-state hack against an undocumented XWAPath.
+- **`getSubscribedChannels` (baileys, library-limitation).** No enumerate-subscribed-newsletters query in the library. All 19 newsletter members of `Socket/newsletter.d.ts` address a single newsletter — by jid, by invite key, or by creating one (`newsletterMetadata('invite'|'jid', key)` requires a key; `newsletterSubscribers(jid)` returns the count of one newsletter; `newsletterCreate(name, description?)` makes a new one). The `newsletter` event surfaces jids opportunistically during live sync, but that is incremental, not a list-all. Would require a raw WMex/app-state hack against an undocumented XWAPath.
 
 ### Labels (WhatsApp Business)
 
@@ -68,7 +68,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 ### Status — post / delete
 
 > **Wired.** ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` + `deleteStatus` on whatsapp-web.js. Posts route via `sendMessage('status@broadcast', …)` (`{ extra: { backgroundColor, fontStyle } }` for text; `{ caption }` for media); `deleteStatus` calls `revokeStatusMessage(statusId)` (own-status only). **Caveat:** whatsapp-web.js has no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys engine honors `recipients` (`statusJidList`).
-- **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as *empirically unverified* (`baileys.adapter.ts:909-911`) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
+- **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as *empirically unverified* (`baileys.adapter.ts`, the `deleteStatus()` doc comment) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
 
 ### Status — read (contact stories)
 
@@ -89,7 +89,7 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 | `getMessageReactions` | not-available — **library-limitation** | supported |
 
 - **`getChatHistory` (baileys, library-limitation).** The only history primitive is `fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp)` (`Socket/business.d.ts:25`) — it returns a sync-token *string*, not messages; the messages are delivered later via the `messaging-history.set` event. There is no per-chat `fetchMessages(chatId, limit)` on the socket. A synchronous `Promise<IncomingMessage[]>` for one chat would require an OpenWA-side chat-indexed store populated from `messages.upsert` + `messaging-history.set` events.
-- **`getMessageReactions` (baileys, library-limitation).** No on-demand server fetch. Reactions exist only as event-augmented state on `WAMessage.reactions` (`proto.IReaction[]` at `WAProto/index.d.ts:10623`), mutated by `updateMessageWithReaction` and surfaced via the `messages.reaction` event. The adapter already processes `reactionMessage` events (`baileys.adapter.ts:1048-1057`) and emits `onMessageReaction`, but it does **not** persist `.reactions` into its `messageStore` (early-returns at line 1058). A store-backed read would need that persistence added first; even then, only reactions observed since session start are known (no historical backfill).
+- **`getMessageReactions` (baileys, library-limitation).** No on-demand server fetch. Reactions exist only as event-augmented state on `WAMessage.reactions` (`proto.IReaction[]` at `WAProto/index.d.ts:10623`), mutated by `updateMessageWithReaction` and surfaced via the `messages.reaction` event. The adapter already processes `reactionMessage` events (`baileys.adapter.ts`, the `reactionMessage` branch of `processInboundMessage()`) and emits `onMessageReaction`, but it does **not** persist `.reactions` into its `messageStore` (that branch returns before the `messageStore.put`). A store-backed read would need that persistence added first; even then, only reactions observed since session start are known (no historical backfill).
 
 ### Groups — disappearing messages
 
@@ -142,7 +142,7 @@ _All Tier-2 items wired (see progress above). Remaining channel work is Tier 3: 
 These are honestly out of reach of a clean adapter wiring because the installed library exposes no first-class symbol. Listed so operators can plan around them rather than file unactionable bugs.
 
 **baileys (9 cells):**
-- `getSubscribedChannels` — no enumerate-newsletters query; all `Socket/newsletter.d.ts` exports are per-jid. Needs a raw WMex/app-state hack.
+- `getSubscribedChannels` — no enumerate-newsletters query; all 19 newsletter members of `Socket/newsletter.d.ts` address a single newsletter (by jid, by invite key, or by creating one). Needs a raw WMex/app-state hack.
 - `getLabels` / `getLabelById` / `getChatLabels` — no label read symbol; only writes (`Types/Label.d.ts` is types-only). Workaround: capture labels from the `messaging-history.set` app-state event into an in-memory cache (relay hack, no on-demand refresh).
 - `getChatHistory` — only `fetchMessageHistory` (event-delivered sync token); no synchronous per-chat `fetchMessages`. Needs an OpenWA-side chat-indexed store fed from `messages.upsert` + `messaging-history.set`.
 - `getMessageReactions` — no on-demand fetch; reactions only arrive via the `messages.reaction` event. Partial local path: persist each event into the `messageStore`, then read (no historical backfill).
@@ -153,7 +153,7 @@ These are honestly out of reach of a clean adapter wiring because the installed 
 - `getCatalog` / `getProducts` / `getProduct` — no catalog API at all (`index.d.ts` 0 hits; `Product` is inbound-only).
 - `sendProduct` — no outbound product content type.
 - `sendCatalog` — no outbound catalog content type.
-- `setGroupEphemeral` — no disappearing-timer setter in whatsapp-web.js 1.34.7 (`ephemeralDuration` exists only as a createGroup option). Baileys: `groupToggleEphemeral`.
+- `setGroupEphemeral` — no disappearing-timer setter in whatsapp-web.js 1.34.7; the timer is only reachable through the create-time `messageTimer` option (`index.d.ts:870`), which `Client.js` maps to the internal `ephemeralDuration` wire field. Baileys: `groupToggleEphemeral`.
 
 ---
 

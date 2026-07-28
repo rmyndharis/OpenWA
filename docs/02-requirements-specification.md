@@ -92,7 +92,7 @@ sequenceDiagram
     
     alt Webhook Failed
         OW->>OW: Queue for Retry
-        OW->>WH: Retry (max 3x)
+        OW->>WH: Retry (up to retryCount attempts in total, default 3)
     end
 ```
 
@@ -100,7 +100,7 @@ sequenceDiagram
 |----|-------------|----------|-------|
 | FR-WH-001 | The system must deliver events to webhook URLs | High | 1 |
 | FR-WH-002 | The system must support multiple webhook URLs | Medium | 2 |
-| FR-WH-003 | The system must retry failed webhooks (max 3x) | Medium | 2 |
+| FR-WH-003 | The system must retry failed webhooks (per-webhook `retryCount`, 0-5, default 3) | Medium | 2 |
 | FR-WH-004 | The system must filter event types per webhook | Medium | 2 |
 | FR-WH-005 | The system must log webhook delivery status | Medium | 2 |
 | FR-WH-006 | The system must support webhook signature verification | Medium | 2 |
@@ -388,7 +388,7 @@ sequenceDiagram
     Engine->>WA: Send via WhatsApp Web
     WA-->>Engine: Message sent
     Engine-->>API: Success response
-    API-->>User: 200 OK {messageId}
+    API-->>User: 201 Created {messageId}
 ```
 
 **Actors**: External application, Developer  
@@ -430,7 +430,7 @@ sequenceDiagram
 4. The webhook endpoint acknowledges
 
 **Alternative Flow**:
-- Webhook failed → Retry 3x
+- Webhook failed → Deliver at most `retryCount` times in **total**, not `retryCount` retries on top of the first try (0-5, default 3 — so the default is one delivery plus two retries, and `retryCount: 1` retries nothing)
 - All retries failed → Log and mark failed
 
 ### UC-003: Create New Session

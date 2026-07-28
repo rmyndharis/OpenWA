@@ -1,6 +1,6 @@
 # 27 - Writing a Search-Provider Plugin
 
-> **Status:** The host→plugin search RPC shipped in v0.8.13 (PR #674). A sandboxed plugin can now register
+> **Status:** The host→plugin search RPC shipped in v0.8.14 (PR #674). A sandboxed plugin can now register
 > as a `SearchProvider` and answer `GET /api/search` queries from its own backend (Meilisearch,
 > Elasticsearch, Typesense, OpenSearch, …) while the core stays backend-agnostic. This guide is the
 > plugin-author's contract.

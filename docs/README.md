@@ -127,7 +127,7 @@ random `owa_k1_...` admin key is generated on first run in all environments; set
 `ALLOW_DEV_API_KEY=true` to seed the well-known `dev-admin-key` for local
 development only. Use an admin key to create additional keys with
 `POST /api/auth/api-keys` (see
-[API Specification](./06-api-specification.md#api-key-management)).
+[API Specification](./06-api-specification.md#649-api-keys)).
 
 ## API Example
 
@@ -166,7 +166,7 @@ const socket = io('http://localhost:2785/events', {
 socket.on('connect', () => {
   socket.emit('message', {
     type: 'subscribe',
-    sessionId: 'sess_abc123',
+    sessionId: '550e8400-e29b-41d4-a716-446655440000',
     events: ['message.received', 'session.status'],
     requestId: 'req_001',
   });
@@ -195,7 +195,8 @@ socket.on('message', msg => {
 | Rate Limiting                   | Ready                         |
 | Audit Logging                   | Ready                         |
 | Groups / Contacts / Labels API  | Ready                         |
-| Channels / Status / Catalog API | Experimental (engine-limited) |
+| Channels / Status API           | Experimental (engine-limited) |
+| Catalog / Product API           | Endpoints defined; `501` on both engines |
 | Pluggable Engine (wwebjs / Baileys) | Ready (set `ENGINE_TYPE`)  |
 | Plugin Extension System         | Ready                         |
 | Queue-based Webhook Retries     | Optional (QUEUE_ENABLED=true) |

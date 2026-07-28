@@ -766,7 +766,7 @@ ENABLE_SWAGGER=false
 ### Logging Best Practices
 
 ```typescript
-// Use Logger from NestJS
+// Use createLogger from the shared LoggerService, not console.*
 import { Inject, Scope } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Request } from 'express';

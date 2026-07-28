@@ -125,7 +125,7 @@ Phase 2 (Production Ready)
 ├── PostgreSQL support
 ├── Web Dashboard
 ├── Webhook management UI
-├── Message queue (Redis/Bull)
+├── Message queue (Redis/BullMQ)
 ├── Rate limiting
 └── Authentication (API Key)
 
@@ -254,7 +254,7 @@ flowchart TB
 | Browser | Puppeteer/Chrome | Used by default (whatsapp-web.js) engine; not required for baileys engine |
 | Database | SQLite (default) / PostgreSQL | Zero-config default, PostgreSQL for scaling |
 | Cache | Redis | Fast, pub/sub support |
-| Queue | Bull | Reliable job processing |
+| Queue | BullMQ | Reliable job processing |
 | Dashboard | React + Vite | Fast, modern |
 | Styling | Bespoke CSS modules/stylesheets | Lightweight dashboard styling without Tailwind |
 | UI Components | Custom React components + Lucide | Accessible, polished |
