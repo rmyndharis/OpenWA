@@ -13,10 +13,11 @@
  * Self-removing: it no-ops once the installed whatsapp-web.js already defines
  * `Base._normalizeId` (i.e. upstream shipped #201832 and OpenWA bumped its dep).
  *
- * Why `patch` and not `git apply`: a bare `git -C node_modules/whatsapp-web.js
+ * Why `patch` first and not `git apply`: a bare `git -C node_modules/whatsapp-web.js
  * apply` silently no-ops ("Skipped / 0 files changed") because the parent repo's
  * .git interferes with the diff's blob-SHA index lines. `patch` has no repo
- * discovery and applies cleanly.
+ * discovery and applies cleanly. `git apply` is still the fallback when the `patch`
+ * binary is missing — see applyWithGit, which fences off that repo discovery.
  *
  * Known reject on 1.34.7: Contact.js hunk #2 targets a LID-aware block()/
  * unblock() path that does not exist in 1.34.7 (the PR's base is ahead there).
@@ -98,6 +99,38 @@ function findArtifacts(root, dir = root) {
   return out;
 }
 
+/**
+ * Fallback applier for hosts without the GNU `patch` binary — the default on Windows outside Git
+ * Bash, and the reason a native install could silently ship an unpatched whatsapp-web.js while
+ * `npm install` still reported success (#889). Anyone installing from source necessarily has git,
+ * so this closes that gap without adding a dependency.
+ *
+ * GIT_CEILING_DIRECTORIES is what makes it work at all: without it git discovers the parent OpenWA
+ * repo, whose index the diff's blob SHAs do not match, and skips every file while exiting 0. Aimed
+ * at node_modules, discovery stops before it can reach any repo.
+ *
+ * `--reject` reproduces GNU patch's behaviour on this patch exactly — byte-identical tree, the same
+ * single Contact.js reject, the same exit 1 — so the caller's artifact and REQUIRED_SITES checks
+ * apply unchanged. core.autocrlf is forced off because a Windows global config would otherwise
+ * rewrite line endings in the files it touches, producing a tree no other platform generates.
+ */
+function applyWithGit(wwjsDir, patchFile) {
+  try {
+    execFileSync('git', ['-c', 'core.autocrlf=false', 'apply', '-p1', '--reject', '--ignore-whitespace', patchFile], {
+      cwd: wwjsDir,
+      env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(wwjsDir) },
+      stdio: 'pipe',
+    });
+  } catch (e) {
+    // Exit 1 = hunks rejected: expected, and verified against EXPECTED_REJECTS by the caller.
+    if (e.status === 1) return;
+    const detail = e.stderr ? String(e.stderr).trim() : e.message;
+    const err = new Error(`neither \`patch\` nor \`git apply\` could run (${e.code ?? `exit ${e.status}`}): ${detail}`);
+    // ENOENT means git never executed either, so the tree is untouched and degrading is still safe.
+    throw e.code === 'ENOENT' ? err : partialTree(err);
+  }
+}
+
 function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   const baseJs = path.join(wwjsDir, 'src', 'structures', 'Base.js');
   if (!fs.existsSync(baseJs)) {
@@ -157,13 +190,14 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
     );
   } catch (e) {
     // `patch` exits 1 when hunks reject — expected here (Contact.js hunk #2), and the reject set is
-    // verified below. Anything else (2 = serious trouble, ENOENT = `patch` not installed) is a real
-    // failure: rethrow it rather than let the assertions below misreport it as version skew.
-    if (e.status !== 1) {
+    // verified below. ENOENT means the binary is absent: apply with git instead of leaving the dep
+    // unpatched. Anything else (2 = serious trouble) is a real failure: rethrow it rather than let
+    // the assertions below misreport it as version skew.
+    if (e.code === 'ENOENT') {
+      applyWithGit(wwjsDir, patchFile);
+    } else if (e.status !== 1) {
       const detail = e.stderr ? String(e.stderr).trim() : e.message;
-      const err = new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`);
-      // ENOENT means `patch` never executed, so the tree is untouched and degrading is still safe.
-      throw e.code === 'ENOENT' ? err : partialTree(err);
+      throw partialTree(new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`));
     }
   }
 

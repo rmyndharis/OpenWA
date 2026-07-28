@@ -76,6 +76,7 @@ import {
 } from '../types/whatsapp-web-js.types';
 import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
+import { BACKPORT_MISSING_MESSAGE, isBackportMissing } from './wwebjs-backport-check';
 import {
   capInboundMedia,
   chatHistoryMediaBudgetBytes,
@@ -464,6 +465,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
+
+    // An install that skipped the message-id backport fails later with errors that name no cause
+    // (#889) — say so here instead, while the operator is still looking at the startup logs.
+    if (isBackportMissing()) {
+      this.logger.error(BACKPORT_MISSING_MESSAGE);
+    }
 
     try {
       // Build puppeteer args, including proxy if configured

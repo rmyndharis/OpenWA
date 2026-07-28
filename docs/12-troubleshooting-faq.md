@@ -527,6 +527,40 @@ curl -H "X-API-Key: $API_KEY" \
   "http://localhost:2785/api/sessions/default/contacts/check/628123456789"
 ```
 
+### Issue: Sends return 500 "engine returned no message", and chats or media fail with `r: r`
+
+**Symptoms:**
+
+- `POST /api/sessions/{id}/messages/send-text` returns `{"statusCode":500,"message":"Internal server error"}` — but the message *is* delivered
+- Logs show `the engine returned no message for this send, so it may not have been delivered`
+- Unrelated operations fail with the minified error `r: r`: `GET /api/sessions/{id}/chats`, media downloads, typing indicators
+- Startup logs may contain `The installed whatsapp-web.js is missing the message-id backport…`
+
+**Cause:** WhatsApp Web 2.3000.x renamed the internal message-id property that whatsapp-web.js
+reads. OpenWA ships a backport that restores it, applied at install time by
+`scripts/patch-wwebjs-201832.js`. When the install cannot run it — neither GNU `patch` nor `git`
+available, or `npm install --ignore-scripts` — whatsapp-web.js stays unpatched and every operation
+that reads a message id fails. Source installs only; the Docker image always applies the backport.
+
+**Solution:**
+
+```bash
+# Is the backport missing? Works on every platform, including Windows without grep.
+node -e "console.log(require('fs').readFileSync('node_modules/whatsapp-web.js/src/structures/Base.js','utf8').includes('_normalizeId')?'PATCHED':'NOT PATCHED')"
+
+# Apply it, then restart
+node scripts/patch-wwebjs-201832.js
+```
+
+If that reports a partially patched tree, reinstall the dependency first:
+
+```bash
+rm -rf node_modules/whatsapp-web.js && npm ci
+```
+
+> Pinning `WWEBJS_WEB_VERSION` does **not** work around this — the rename is present in every
+> current WhatsApp Web build, so no pin avoids it.
+
 ### Issue: Media Upload Fails
 
 **Symptoms:**

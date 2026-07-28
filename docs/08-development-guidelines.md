@@ -608,6 +608,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
 - pgAdmin or DBeaver
 ```
 
+> `npm install` patches whatsapp-web.js for the WhatsApp Web 2.3000.x message-id rename. It applies
+> the patch with GNU `patch`, falling back to `git apply` — so Git alone is enough, including on
+> Windows outside Git Bash. With neither available the install still succeeds, but the
+> whatsapp-web.js engine then fails on every send; see `docs/12-troubleshooting-faq.md`.
+
 ### Quick Start
 
 ```bash

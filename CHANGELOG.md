@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A source install without the GNU `patch` binary no longer silently ships an unpatched
+  whatsapp-web.js.** OpenWA backports the fix for the WhatsApp Web 2.3000.x message-id rename during
+  `npm install`; when the `patch` binary was missing — the default on Windows outside Git Bash — the
+  install printed one warning, exited successfully, and left whatsapp-web.js broken. The failure then
+  surfaced only in production, as sends returning `the engine returned no message` despite delivering,
+  and chat, media and typing operations throwing the minified `r: r`. The backport now falls back to
+  `git apply`, which every source install has by definition and which produces a byte-identical tree.
+  With neither applier present the install still degrades rather than failing, so a Baileys-only setup
+  is unaffected — but the whatsapp-web.js engine now logs an explicit, actionable error at session
+  start instead of failing opaquely later. Prerequisites and a troubleshooting entry are documented.
+
 - **The release runbook in `docs/15` now describes the process the repository actually uses.** §15.7
   documented a release-branch-and-PR flow with a generic pre-release checklist; releases are in fact
   cut as a single `chore(release)` commit on `main` plus an annotated `v*` tag, with everything from

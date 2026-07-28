@@ -218,11 +218,35 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       expect(res.stderr).toMatch(/PARTIALLY patched/);
     });
 
-    it('degrades when `patch` is not installed, leaving the tree pristine', () => {
+    it('falls back to `git apply` when only `patch` is missing', () => {
+      // The Windows-outside-Git-Bash case, and the one that let #889 happen: git.exe is on PATH but
+      // patch.exe ships only inside Git Bash, so the backport was skipped and `npm install` still
+      // reported success. Anyone installing from source has git by definition, so the dep gets
+      // patched instead of silently shipping broken.
       const dir = copyWwjs();
-      // The case the flag exists for (Windows outside WSL, Baileys-only setups): `patch` never runs, so
-      // nothing was written and a warning beats breaking `npm install`. Emptying PATH is what makes the
-      // lookup fail; node itself is invoked by absolute path and is unaffected.
+      const gitOnly = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-gitonly-'));
+      tmpDirs.push(gitOnly);
+      fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(gitOnly, 'git'));
+
+      const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: gitOnly },
+      });
+
+      expect(res.status).toBe(0);
+      // Every normalization site landed, and the tree is whole enough that a second run stands down —
+      // the same bar the `patch` path is held to, since git apply must not diverge from it.
+      expect(applyBackport(dir)).toEqual({
+        skipped: true,
+        reason: 'installed whatsapp-web.js already normalizes message ids',
+      });
+    });
+
+    it('degrades when neither `patch` nor git is installed, leaving the tree pristine', () => {
+      const dir = copyWwjs();
+      // With no applier at all (a stripped container, a Baileys-only setup), nothing was written and a
+      // warning beats breaking `npm install` — the trade this flag exists to make. Emptying PATH is what
+      // makes both lookups fail; node itself is invoked by absolute path and is unaffected.
       const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-nopath-'));
       tmpDirs.push(emptyDir);
 
