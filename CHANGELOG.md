@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release runbook in `docs/15` now describes the process the repository actually uses.** §15.7
+  documented a release-branch-and-PR flow with a generic pre-release checklist; releases are in fact
+  cut as a single `chore(release)` commit on `main` plus an annotated `v*` tag, with everything from
+  the multi-arch build through promotion, anonymous publish verification and the GitHub Release
+  handled by `release.yml`. The section now carries the exact four-file commit, the gate commands to
+  run locally beforehand, what the pipeline does with the tag, how to recover from a failed gate
+  (nothing is published before `promote`, so the tag can be moved), and the post-release checks —
+  including doing the registry checks logged out.
+
 ## [0.11.0] - 2026-07-27
 
 ### Added

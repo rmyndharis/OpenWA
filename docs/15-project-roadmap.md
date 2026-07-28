@@ -611,61 +611,132 @@ architecture and design rationale):
 | Audit compliance    | P2       | SOC2, GDPR compliance          |
 | WhatsApp Pay        | P3       | Payment links integration      |
 
-## 15.7 Release Checklist
+## 15.7 Cutting a Release
 
-### Pre-Release
+Releases are cut by a maintainer from `main`. There is no release branch and no release PR: the
+version bump lands as a single commit on `main`, and pushing the tag hands everything else to
+`.github/workflows/release.yml`.
 
-```markdown
-## Pre-Release Checklist
+### Before you start
 
-### Code Quality
+- `main` is green and holds everything intended for the release. Cross-check the merged PRs against
+  the `[Unreleased]` entries: `git log <last-tag>..HEAD --oneline`.
+- Working tree clean, on `main`, and `git config user.email` is the intended author identity.
+- The release job needs `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` (promotion logs into both
+  registries before applying any tag) and optionally `RELEASE_PAT` (authors the GitHub Release as a
+  user rather than the bot). Check with `gh secret list`.
+- Pick the version per [15.2](#152-version-numbering). Pre-1.0, a release containing **any**
+  breaking change is a MINOR — patch releases carry none.
 
-- [ ] All tests passing
-- [ ] Code coverage meeting target (v0.1.0: minimal, future: > 80%)
-- [ ] No critical linter warnings
-- [ ] Security scan passed
-- [ ] Dependency audit clean
+### The release commit
 
-### Documentation
+Exactly four files change. Nothing else belongs in this commit.
 
-- [ ] API docs updated
-- [ ] CHANGELOG updated
-- [ ] README updated
-- [ ] Migration guide (if breaking)
-
-### Testing
-
-- [ ] Manual QA completed
-- [ ] Performance benchmarks
-- [ ] Load testing (if applicable)
-- [ ] Rollback tested
-
-### Infrastructure
-
-- [ ] Docker image builds
-- [ ] Docker Compose tested
-- [ ] Environment variables documented
+```bash
+npm version --no-git-tag-version 0.11.0   # package.json + package-lock.json
+npm run openapi:export                     # openapi.json info.version follows package.json
 ```
 
-### Release Process
+Then in `CHANGELOG.md`, insert the new heading directly under the retained, now-empty
+`## [Unreleased]` — the accumulated entries fall under it by position:
+
+```markdown
+## [Unreleased]
+
+## [0.11.0] - 2026-07-27
+```
+
+`## [<version>]` is not cosmetic: `npm run check:versions` fails without it, and the GitHub Release
+body is extracted from this heading to the next `## [`. An absent or misspelled heading silently
+degrades the release notes to a bare `Release v<version>`.
+
+### Verify, commit, tag
+
+Run the same gates the tag will run, so a failure costs a local minute rather than a released tag:
+
+```bash
+npm run check:versions && npm run openapi:check && npm run lint && npm run format:check
+npx tsc --noEmit -p tsconfig.json && npm run check:dockerignore
+npm audit --audit-level=high
+npm test && npm run test:e2e && npm run build
+cd dashboard && npm run lint && npm run typecheck && npm run i18n:check && npm run build && npm run test:unit
+```
+
+```bash
+git add package.json package-lock.json openapi.json CHANGELOG.md
+git commit -m "chore(release): v0.11.0"
+git tag -a v0.11.0 -m "v0.11.0"
+git push origin main --follow-tags
+```
+
+The tag must be annotated and `v`-prefixed; `release.yml` triggers on `v*` and refuses to proceed if
+the tag string and `package.json` disagree.
+
+### What the tag automates
 
 ```mermaid
 flowchart TB
-    A[Feature Complete] --> B[Create Release Branch]
-    B --> C[Version Bump]
-    C --> D[Update CHANGELOG]
-    D --> E[Final Testing]
-    E --> F{Tests Pass?}
-    F -->|No| G[Fix Issues]
-    G --> E
-    F -->|Yes| H[Create PR to main]
-    H --> I[Code Review]
-    I --> J[Merge to main]
-    J --> K[Create Git Tag]
-    K --> L[Build & Push Docker]
-    L --> M[Create GitHub Release]
-    M --> N[Announce Release]
+    A[push tag v*] --> B[lint / test / test-postgres / dashboard]
+    B --> C[build]
+    C --> D[docker: multi-arch build, staging tag only]
+    D --> E[boot-smoke: run the image on amd64 + arm64]
+    D --> F[image-scan: Trivy, CRITICAL/HIGH, fixable only]
+    E --> G[promote: apply X.Y.Z, X.Y, latest to GHCR + Docker Hub]
+    F --> G
+    G --> H[verify-published: resolve every ref anonymously]
+    H --> I[GitHub Release, notes from the CHANGELOG section]
 ```
+
+The build publishes **only** a `smoke-<run_id>` staging tag. Release tags are applied by `promote`,
+after the image has both booted on each architecture and passed the vulnerability scan, so a tag
+never points at an image that was not tested. `verify-published` then re-resolves every promoted ref
+with no registry login, asserting public pullability and digest identity on both platforms. The
+GitHub Release is gated on all of it.
+
+Prereleases (`-rc`, `-beta`, `-alpha` in the tag) skip the mutable `X.Y` and `latest` channels and
+are flagged prerelease on GitHub.
+
+### When a gate fails
+
+Everything from `promote` onward is skipped, so no release tag reaches either registry and no GitHub
+Release is created — the previous release stays intact. Confirm that is what happened, fix the cause
+on `main`, then move the tag:
+
+```bash
+git push origin :refs/tags/v0.11.0   # delete the remote tag
+git tag -d v0.11.0
+# ... commit the fix ...
+git tag -a v0.11.0 -m "v0.11.0" && git push origin v0.11.0
+```
+
+Re-using the version is safe precisely because nothing was published under it. A version that DID
+publish before a defect was found must not be re-tagged — supersede it (v0.10.3 → v0.10.4).
+
+Two failure classes are worth anticipating because they depend on the outside world rather than on
+the change being released:
+
+- **`npm audit --audit-level=high`** in the release gate is time-dependent: a tree that was clean
+  last week can fail on a newly published advisory.
+- **The image scan reads the base image**, including the dependency tree bundled inside its npm CLI,
+  which `npm audit` never sees. Accepted findings live in `.trivyignore`, each with a written
+  justification and the condition for removing it.
+
+### After the release
+
+```bash
+gh run list --workflow=release.yml --limit 1
+gh release view v0.11.0
+docker buildx imagetools inspect ghcr.io/rmyndharis/openwa:0.11.0
+docker buildx imagetools inspect docker.io/rmyndharis/openwa:latest
+```
+
+Do the registry checks logged **out**. A promotion can look green while the tags are unreachable to
+everyone else — that is the failure mode that took `latest`, `0.10` and `0.10.5` offline after
+v0.10.5 published its GitHub Release.
+
+Upgrading a Compose deployment is `git pull && docker compose up -d --build`: the bundled
+`docker-compose.yml` **builds** the API service rather than pulling it, so `docker compose pull` is
+a no-op for OpenWA itself.
 
 ## 15.8 Success Metrics
 
