@@ -22,7 +22,7 @@ An interface implementation that provides a specific capability. In OpenWA, adap
 Authentication token to access the OpenWA API. Sent via the `X-API-Key` header.
 
 ### Auth State
-WhatsApp Web session authentication data stored in the `.wwebjs_auth/` folder. Includes cookies, session storage, and Chrome profile data.
+WhatsApp Web session authentication data. On the whatsapp-web.js engine it is a Chrome profile (cookies, local/session storage) under `SESSION_DATA_PATH` — default `./data/sessions`, one `session-<name>` directory per session. On Baileys it is a set of credential JSON files under `BAILEYS_AUTH_DIR`, default `./data/baileys`. Losing it unlinks the WhatsApp account and requires a fresh QR scan.
 
 ## B
 

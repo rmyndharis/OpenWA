@@ -135,6 +135,8 @@ refactor(database): migrate to TypeORM repository pattern
 
 2. **PR Description Template:**
 
+   GitHub pre-fills `.github/pull_request_template.md`:
+
 ```markdown
 ## Description
 
@@ -142,31 +144,30 @@ Brief description of changes
 
 ## Type of Change
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that causes existing functionality to change)
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
 - [ ] Documentation update
-
-## Testing
-
-Describe how you tested your changes
 
 ## Checklist
 
-- [ ] My code follows the project's style guidelines
-- [ ] I have performed a self-review of my code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or feature works
-- [ ] New and existing unit tests pass locally with my changes
+- [ ] Tests added/updated
+- [ ] Documentation updated
+- [ ] Lint passes
+- [ ] Self-reviewed
+
+## Screenshots (if applicable)
+
+## Related Issues
+
+Closes #
 ```
 
 3. **Review Process:**
-   - At least one maintainer approval required
-   - All CI checks must pass
-   - Address all review comments
-   - Squash commits if requested
+   - CI (`.github/workflows/ci.yml`) runs on every pull request targeting `main` or `develop`
+   - A maintainer reviews the change and merges it
+   - Address review comments
+   - Keep the PR focused on one logical change
 
 ### Code Style
 
@@ -240,70 +241,38 @@ Discussions.
 
 ### Bug Reports
 
-Use the bug report template:
+Blank issues are disabled — GitHub presents the **Bug report** form
+(`.github/ISSUE_TEMPLATE/bug_report.yml`). Required fields:
 
-```markdown
-## Bug Description
+| Field              | Notes                                                                        |
+| ------------------ | ---------------------------------------------------------------------------- |
+| Pre-flight         | Both checkboxes: searched for duplicates, and on the latest released version |
+| OpenWA version     | e.g. `0.2.1` (shown on the dashboard Login screen) or a commit SHA           |
+| Deployment         | Docker Compose / Docker (manual run) / Bare metal (npm) / Other              |
+| Database           | SQLite (default) / PostgreSQL                                                |
+| What happened?     | The bug and its impact                                                       |
+| Steps to reproduce | Exact steps, including the API call or dashboard action                      |
 
-Clear and concise description of the bug
-
-## Environment
-
-- OpenWA Version:
-- Node.js Version:
-- OS:
-- Docker Version (if applicable):
-- Database: SQLite / PostgreSQL
-
-## Steps to Reproduce
-
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
-
-## Expected Behavior
-
-What you expected to happen
-
-## Actual Behavior
-
-What actually happened
-
-## Screenshots/Logs
-
-If applicable, add screenshots or logs
-
-## Additional Context
-
-Any other relevant information
-```
+Optional but valuable: **WhatsApp engine** (defaults to `whatsapp-web.js`), **Expected
+behavior**, **Relevant logs** (redact API keys and secrets), and **Environment /
+additional context**.
 
 ### Feature Requests
 
-Use the feature request template:
+The **Feature request** form (`.github/ISSUE_TEMPLATE/feature_request.yml`) asks for the
+problem first — describe what you are trying to do and what gets in the way, since the
+best solution isn't always the one initially imagined.
 
-```markdown
-## Feature Description
+| Field                   | Notes                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| Pre-flight              | Required: searched existing issues, not already requested   |
+| Problem / motivation    | Required: what you're trying to do and what blocks it today |
+| Proposed solution       | Optional: API shape, dashboard behavior, config, etc.       |
+| Alternatives considered | Optional                                                    |
+| Scope                   | Acknowledgment that some features are limited by the engine |
 
-Clear description of the feature you'd like
-
-## Use Case
-
-Why do you need this feature? What problem does it solve?
-
-## Proposed Solution
-
-If you have a solution in mind, describe it here
-
-## Alternatives Considered
-
-Other solutions you've considered
-
-## Additional Context
-
-Any other relevant information, mockups, or examples
-```
+The scope checkbox matters: capabilities such as interactive Buttons / List messages are
+not supported on whatsapp-web.js, the default engine.
 
 ### Issue Labels
 
@@ -345,27 +314,14 @@ Categories:
 - **Show and Tell**: Share your projects using OpenWA
 - **General**: General discussion
 
-### Discord Server (Optional)
-
-Real-time chat for:
-
-- Quick questions
-- Community support
-- Development discussions
-
-Channels:
-
-- `#general` - General discussion
-- `#support` - Help with OpenWA
-- `#development` - Development discussions
-- `#showcase` - Share your projects
-- `#off-topic` - Non-OpenWA discussions
-
 ### Support Priority
 
 1. **GitHub Issues** - Bug reports and feature requests
 2. **GitHub Discussions** - Questions and general discussion
-3. **Discord** - Quick questions and community chat
+
+There is no official real-time chat server. The issue-template contact links
+(`.github/ISSUE_TEMPLATE/config.yml`) point only to the documentation and to the private
+security-advisory form.
 
 ## 20.5 Governance
 
@@ -375,90 +331,52 @@ Channels:
 flowchart TB
     A[Proposal] --> B{Type?}
     B -->|Minor| C[Maintainer Decision]
-    B -->|Major| D[RFC Process]
+    B -->|Major| D[Design Issue]
 
-    D --> E[Community Discussion]
-    E --> F[Voting Period]
-    F --> G{Consensus?}
+    D --> E[Discussion in Thread]
+    E --> G{Approach Agreed?}
     G -->|Yes| H[Implement]
     G -->|No| I[Revise or Reject]
 
     C --> H
 ```
 
-### RFC Process (Request for Comments)
+### Design Discussions
 
-For major changes:
+There is no separate RFC repository or directory. For substantial architectural changes
+(new frameworks, large rewrites) — and for any change to REST response shapes or status
+codes, since the REST API is the public contract — open a GitHub Issue to align on the
+approach **before** investing the work. Maintainers label these `design`, and the issue
+thread is the design record.
 
-1. **Create RFC** - Submit RFC in `rfcs/` directory
-2. **Discussion** - Community discusses for 2 weeks
-3. **Voting** - Maintainers vote
-4. **Decision** - Accept, revise, or reject
-5. **Implementation** - If accepted, implement
+A design issue should cover:
 
-RFC Template:
+- **Summary** - one paragraph explaining the change
+- **Motivation** - the problem it solves, and for whom
+- **Proposed design** - the API, config, or schema surface it touches
+- **Alternatives** - other approaches considered, and why they were set aside
+- **Open questions** - what is still undecided
 
-```markdown
-# RFC: [Title]
+Once the approach is agreed, implementation proceeds as an ordinary pull request.
 
-## Summary
+### Roles
 
-One paragraph explanation
+| Role            | Responsibilities                                                                    |
+| --------------- | ----------------------------------------------------------------------------------- |
+| **Maintainer**  | Triage and label issues, review and merge PRs, version stamping and release cutting |
+| **Contributor** | Submit PRs, report issues, take part in Discussions                                 |
 
-## Motivation
-
-Why are we doing this?
-
-## Detailed Design
-
-Technical details of the implementation
-
-## Drawbacks
-
-Why should we NOT do this?
-
-## Alternatives
-
-What other designs have been considered?
-
-## Unresolved Questions
-
-What related issues are out of scope?
-```
-
-### Maintainer Roles
-
-| Role            | Responsibilities                            |
-| --------------- | ------------------------------------------- |
-| **Owner**       | Final decision authority, project direction |
-| **Maintainer**  | Code review, merge PRs, triage issues       |
-| **Committer**   | Merge own PRs after approval                |
-| **Contributor** | Submit PRs, report issues                   |
-
-### Becoming a Maintainer
-
-Maintainer status is earned through:
-
-- Consistent quality contributions
-- Helpful community participation
-- Understanding of project goals
-- Positive collaboration
-
-Process:
-
-1. Nominated by existing maintainer
-2. Discussion among maintainers
-3. Unanimous approval required
+There is no tiered committer body and no documented nomination process.
 
 ## 20.6 Recognition
 
 ### Contributors
 
-All contributors are recognized in:
+Contributions are credited in:
 
-- `CONTRIBUTORS.md` file
-- Release notes
-- README acknowledgments
+- `CHANGELOG.md` - a "Thanks @handle." line on the entry describing the change
+- GitHub release notes, which are generated from that release's CHANGELOG section
+- The pull request and issue threads themselves
 
 ### Contribution Types
 
@@ -474,54 +392,45 @@ We value all contributions:
 
 ### Acknowledgment
 
+A CHANGELOG entry carrying credit looks like this:
+
 ```markdown
-## Contributors
-
-Thanks to all the people who have contributed to OpenWA!
-
-<!-- ALL-CONTRIBUTORS-LIST:START -->
-<!-- ALL-CONTRIBUTORS-LIST:END -->
-
-This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification.
+- **Short summary of the user-visible change.** What was wrong, and what happens instead
+  now. Thanks @handle. (#1234)
 ```
+
+Security reporters are credited in the advisory and the release notes instead, unless they
+prefer to remain anonymous - see `SECURITY.md`.
 
 ## 20.7 Security Policy
 
+`SECURITY.md` at the repository root is the authoritative policy; it also carries
+hardening notes for operators. The summary below tracks it.
+
 ### Reporting Vulnerabilities
 
-**DO NOT** report security vulnerabilities through public GitHub issues.
+**DO NOT** report security vulnerabilities through public GitHub issues, discussions, or
+pull requests.
 
-Instead:
+Report privately through either channel:
 
-1. GitHub Security Advisories (private) — **preferred**:
+1. **GitHub Security Advisories** (preferred) — open a private report at
    <https://github.com/rmyndharis/OpenWA/security/advisories/new>
-2. Email: yudhi@rmyndharis.com
+2. **Email** — yudhi@rmyndharis.com
 
-See [SECURITY.md](../SECURITY.md) for the authoritative policy.
+Include, where possible:
 
-Include:
+- A description of the issue and its impact
+- Steps to reproduce or a proof of concept
+- Affected version(s) and deployment details (Docker / bare metal, database, engine)
 
-- Type of vulnerability
-- Full paths of affected files
-- Step-by-step instructions to reproduce
-- Proof-of-concept or exploit code
-- Impact assessment
+### What to Expect
 
-### Response Timeline
+No fixed response SLA is promised, but in practice:
 
-| Severity | Initial Response | Resolution Target |
-| -------- | ---------------- | ----------------- |
-| Critical | 24 hours         | 7 days            |
-| High     | 48 hours         | 14 days           |
-| Medium   | 7 days           | 30 days           |
-| Low      | 14 days          | 90 days           |
-
-### Disclosure Policy
-
-- We will acknowledge receipt within 48 hours
-- We will confirm the vulnerability and work on a fix
-- We will notify you when the fix is released
-- We will credit you in the security advisory (unless you prefer anonymity)
+- An acknowledgement, typically within a few days
+- An assessment, and — where applicable — a coordinated fix and release
+- Credit in the advisory / release notes, unless you'd prefer to remain anonymous
 
 ---
 

@@ -59,25 +59,38 @@ sequenceDiagram
 ### API Key Format
 
 ```
-Format: owa_<32-character-random-string>
-Example: owa_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+Format: owa_k1_<64 hex chars>   (32 random bytes, hex-encoded — 71 characters in total)
+Example: owa_k1_3f9c1d0a7b2e4c5680a1f2d3e4b5c6a7980b1c2d3e4f50617283940a1b2c3d4e
 
-Storage: SHA-256 hash only (never store plain key)
+Storage: SHA-256 hash only (never store plain key); `keyPrefix` keeps the first 12 characters
 ```
+
+Every key minted through the API-keys endpoints uses that format. The bootstrap seed key is the only
+exception: an explicit `API_MASTER_KEY` is taken verbatim, and `ALLOW_DEV_API_KEY=true` opts into the
+fixed `dev-admin-key`; with neither set, the seed key is generated in the format above.
 
 ### Permission Model
 
-| Permission        | Description            |
-| ----------------- | ---------------------- |
-| `*`               | Full access (admin)    |
-| `sessions:read`   | View sessions          |
-| `sessions:write`  | Create/delete sessions |
-| `messages:send`   | Send messages          |
-| `messages:read`   | Read message history   |
-| `webhooks:manage` | CRUD webhooks          |
-| `contacts:read`   | View contacts          |
-| `groups:read`     | View groups            |
-| `groups:write`    | Manage groups          |
+API keys carry **no permission strings**. Authorization is a role hierarchy on the key itself, plus
+two scoping dimensions enforced by `ApiKeyGuard`.
+
+| Role | Rank | Meaning |
+|------|------|---------|
+| `admin` | 3 | Satisfies every `@RequireRole` level, including API-key management |
+| `operator` | 2 | Satisfies `operator` and `viewer` routes — the default for a new key |
+| `viewer` | 1 | Satisfies `viewer` routes only |
+
+A route declares its minimum level with `@RequireRole(...)`; a key passes when its role ranks at or
+above that level (`AuthService.hasPermission`). A key below it is rejected with `403 Forbidden`.
+
+| Scope | Field | Effect |
+|-------|-------|--------|
+| Source IP | `allowedIps` | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3) |
+| Sessions | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `401` |
+
+The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
+a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
+beyond its own confinement.
 
 ## 4.3 IP Whitelisting
 
@@ -92,24 +105,9 @@ flowchart TB
     AUTH -->|Yes| WL{IP Whitelist Enabled?}
     WL -->|No| ALLOW[Allow Request]
     WL -->|Yes| CHECK{IP in Whitelist?}
-    CHECK -->|No| R403[403 Forbidden]
+    CHECK -->|No| RIP[401 Unauthorized]
     CHECK -->|Yes| ALLOW
     ALLOW --> PROCESS[Process Request]
-```
-
-### Configuration
-
-```typescript
-// API to manage IP whitelist
-interface IpWhitelistEntry {
-  id: string;
-  apiKeyId: string;
-  ipAddress: string; // Single IP: "203.0.113.50"
-  cidrRange?: string; // CIDR: "10.0.0.0/24"
-  description?: string;
-  active: boolean;
-  createdAt: Date;
-}
 ```
 
 ### Managing the whitelist
@@ -132,76 +130,20 @@ PUT  /api/auth/api-keys/:id
 
 ### Implementation
 
-```typescript
-// IP Whitelist Guard
-@Injectable()
-export class IpWhitelistGuard implements CanActivate {
-  constructor(private readonly ipWhitelistService: IpWhitelistService) {}
+There is no dedicated whitelist guard, service or table — no `IpWhitelistGuard`, no whitelist
+sub-resource, no per-entry `active` flag. Enforcement lives in two places:
 
-  async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
-    const apiKeyId = request.apiKey?.id;
-
-    if (!apiKeyId) {
-      return true; // Let other guards handle missing API key
-    }
-
-    const clientIp = this.getClientIp(request);
-    const whitelist = await this.ipWhitelistService.getByApiKey(apiKeyId);
-
-    // If no whitelist entries, allow all IPs
-    if (whitelist.length === 0) {
-      return true;
-    }
-
-    // Check if IP matches any whitelist entry
-    const isAllowed = whitelist.some(entry => this.ipMatches(clientIp, entry));
-
-    if (!isAllowed) {
-      throw new ForbiddenException({
-        code: 'IP_NOT_WHITELISTED',
-        message: `IP address ${clientIp} is not in the whitelist`,
-      });
-    }
-
-    return true;
-  }
-
-  private getClientIp(request: Request): string {
-    // Handle proxies (X-Forwarded-For, X-Real-IP)
-    const forwarded = request.headers['x-forwarded-for'];
-    if (forwarded) {
-      return (forwarded as string).split(',')[0].trim();
-    }
-    return (request.headers['x-real-ip'] as string) || request.socket.remoteAddress || '';
-  }
-
-  private ipMatches(clientIp: string, entry: IpWhitelistEntry): boolean {
-    if (!entry.active) return false;
-
-    if (entry.cidrRange) {
-      return this.ipInCidr(clientIp, entry.cidrRange);
-    }
-
-    return clientIp === entry.ipAddress;
-  }
-
-  private ipInCidr(ip: string, cidr: string): boolean {
-    // IPv4-only example. For IPv6 support, use a library like ipaddr.js.
-    const [range, bits] = cidr.split('/');
-    const mask = ~(2 ** (32 - parseInt(bits)) - 1);
-
-    const ipNum = this.ipToNumber(ip);
-    const rangeNum = this.ipToNumber(range);
-
-    return (ipNum & mask) === (rangeNum & mask);
-  }
-
-  private ipToNumber(ip: string): number {
-    return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-  }
-}
-```
+- **Client IP resolution** — `ApiKeyGuard` calls `resolveClientIp(request, TRUSTED_PROXIES)`
+  (`src/common/utils/ip.ts`). `X-Forwarded-For` is client-controllable, so it is honored **only**
+  when the request actually arrives from a configured trusted proxy; with no trusted proxies set the
+  header is ignored entirely and the direct socket address is used. That is what prevents a caller
+  from spoofing its way past the whitelist with a forged header (see §4.6 for `TRUSTED_PROXIES`).
+- **Matching** — `AuthService.validateApiKey` compares that IP against the key's `allowedIps` with
+  the shared `ipMatches` helper, which accepts an exact address or CIDR notation and returns `false`
+  on a malformed entry rather than coercing it into range. With a whitelist configured, an
+  undeterminable client IP throws `UnauthorizedException` (`401`) straight away, with no log line;
+  an IP outside the list writes a `logger.warn` with `action: 'ip_rejected'` first, then throws the
+  same `401`.
 
 ### Best Practices
 
@@ -215,7 +157,9 @@ export class IpWhitelistGuard implements CanActivate {
 
 ### IPv6 Support
 
-For IPv6, use a library that supports IPv6 parsing (e.g., `ipaddr.js`) when performing `ipInCidr`.
+CIDR matching is IPv4-only: an IPv6 range in `allowedIps` never matches. An exact IPv6 address still
+works, by literal comparison — IPv4-mapped forms (`::ffff:203.0.113.50`) are normalized to their bare
+IPv4 address first.
 
 ## 4.4 Data Encryption
 
@@ -256,39 +200,43 @@ flowchart TB
 
 ### Validation Examples
 
-| Field         | Rules                              |
-| ------------- | ---------------------------------- |
-| `chatId`      | Pattern: `^\d+@(c\.us\|g\.us)$`    |
-| `phone`       | Pattern: `^\d{10,15}$`             |
-| `url`         | Valid URL, HTTPS only for webhooks |
-| `text`        | Max 4096 chars (`send-text`)       |
-| `sessionName` | Alphanumeric + hyphen, 3-50 chars  |
+| Field | Rules |
+|-------|-------|
+| `chatId` | Non-empty string — **no format pattern**; the engine resolves the id, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass |
+| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format |
+| `url` | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced |
+| `text` | Max 4096 chars (`send-text`) |
+| `sessionName` | Alphanumeric + hyphen, 3-50 chars |
 
 ### DTO Validation
 
 ```typescript
-// Example DTO with validation
-import { IsString, IsUrl, Matches, MaxLength } from 'class-validator';
-
-export class SendTextDto {
+// src/modules/message/dto/send-message.dto.ts
+export class SendTextMessageDto {
   @IsString()
-  @Matches(/^\d+@(c\.us|g\.us)$/, {
-    message: 'Invalid chatId format',
-  })
+  @IsNotEmpty()
   chatId: string;
 
   @IsString()
-  @MaxLength(4096)
+  @IsNotEmpty()
+  @MaxLength(MESSAGE_TEXT_MAX_LENGTH) // 4096, shared with the agent-tool input schemas
   text: string;
 }
 
+// src/modules/webhook/dto/webhook.dto.ts
 export class CreateWebhookDto {
-  @IsUrl({ protocols: ['https'], require_protocol: true })
+  // require_tld:false allows hostnames without a dot (e.g. http://localhost:3000); the SSRF
+  // guard still decides whether the host may actually be delivered to.
+  @IsUrl({ require_tld: false })
   url: string;
 
+  @IsOptional()
   @IsArray()
-  @IsIn(['message.received', 'message.sent', 'session.status'], { each: true })
-  events: string[];
+  @ArrayMinSize(1)
+  // The full WEBHOOK_EVENTS catalog (message.*, status.received, session.*, group.*,
+  // call.received) plus '*' for subscribe-all.
+  @IsIn([...WEBHOOK_EVENTS, '*'], { each: true })
+  events?: string[];
 }
 ```
 
@@ -349,28 +297,34 @@ The frame budget is sized ~6x above legitimate traffic: the dashboard emits ~8 s
 ### CORS Settings
 
 ```typescript
-// Secure CORS configuration
-const corsOptions = {
-  origin: (origin, callback) => {
-    const allowedOrigins = process.env.CORS_ORIGINS?.split(',') || [];
+// resolveCorsPolicy (src/config/bootstrap-security.ts): CORS_ORIGINS is a comma-separated
+// allowlist; unset defaults to the wildcard. In production a wildcard is REFUSED — the policy
+// collapses to same-origin only, with credentials off, so a misconfigured deployment cannot
+// reflect arbitrary origins with credentials.
+const corsPolicy = resolveCorsPolicy(process.env.CORS_ORIGINS, process.env.NODE_ENV);
 
-    // Allow requests with no origin (mobile apps, Postman)
+app.enableCors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, server-to-server)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+    if (corsPolicy.allowAnyOrigin || corsPolicy.origins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // Deny WITHOUT throwing — throwing surfaced as a 500 Internal Server Error (#250).
+      // Returning false simply omits the CORS headers, so the browser blocks the genuine
+      // cross-origin request itself while same-origin traffic keeps working.
+      callback(null, false);
     }
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Request-ID'],
+  credentials: corsPolicy.credentials, // false whenever the allowlist is a wildcard
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
   // Throttlers are named, so rate-limit headers carry a per-window suffix
   // (see "Response on limit" above); there are no unsuffixed variants.
   exposedHeaders: ['X-RateLimit-Limit-short', 'X-RateLimit-Remaining-short', '...'],
   maxAge: 86400, // 24 hours
-};
+});
 ```
 
 ## 4.8 Webhook Security
@@ -426,47 +380,56 @@ media shedding, so it is small. The HMAC signature is computed over the exact sh
 
 ## 4.9 Security Headers
 
-### Recommended Headers
+### Helmet Configuration
+
+The shipped configuration lives in `src/main.ts` — that file is the source of truth:
 
 ```typescript
-// Helmet configuration
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'"],
-        imgSrc: ["'self'", 'data:', 'https:'],
-      },
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      // The bundled dashboard pulls webfonts from Google Fonts.
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      // Per-response nonce; the served dashboard document carries the same value.
+      scriptSrc: ["'self'", (_req, res) => `'nonce-${res.locals.cspNonce}'`],
+      // blob: for the outgoing attachment preview, data: for chat media rendered inline.
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      mediaSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      objectSrc: ["'none'"],
+      // On in production, unless CSP_UPGRADE_INSECURE_REQUESTS opts an HTTP-only
+      // private-network deployment out (#611).
+      upgradeInsecureRequests: isUpgradeInsecureRequestsEnabled(...) ? [] : null,
     },
-    hsts: {
-      maxAge: 31536000,
-      includeSubDomains: true,
-    },
-    noSniff: true,
-    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-  }),
-);
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  noSniff: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  crossOriginResourcePolicy: { policy: 'cross-origin' }, // API usage
+}));
 ```
 
 ### Security Headers Checklist
 
-| Header                      | Value              | Purpose               |
-| --------------------------- | ------------------ | --------------------- |
-| `Strict-Transport-Security` | `max-age=31536000` | Force HTTPS           |
-| `X-Content-Type-Options`    | `nosniff`          | Prevent MIME sniffing |
-| `X-Frame-Options`           | `DENY`             | Prevent clickjacking  |
-| `X-XSS-Protection`          | `1; mode=block`    | XSS filter            |
-| `Referrer-Policy`           | `strict-origin`    | Control referrer      |
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains; preload` | Force HTTPS |
+| `X-Content-Type-Options` | `nosniff` | Prevent MIME sniffing |
+| `X-Frame-Options` | `SAMEORIGIN` | Prevent clickjacking (helmet's default; not overridden) |
+| `X-XSS-Protection` | `0` | Helmet 8 deliberately disables the legacy auditor — the CSP is the protection |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Control referrer |
 
 ## 4.10 Audit Logging
 
 ### What Gets Logged
 
 > **Reality check:** persisted audit coverage currently includes API-key create/update/revoke/delete
-> (updates carry before/after authorization state), rejected authentication, session lifecycle, and
-> integration-instance creation, secret rotation, deletion, and scope-binding bridge failures. Enum
+> (updates carry before/after authorization state), rejected authentication, session lifecycle,
+> integration-instance creation, secret rotation, deletion, and scope-binding bridge failures, the
+> infra operations (config save, restart request, data export/import, storage export/import),
+> WebSocket rate-limit violations (sampled — see §4.6), and Bull Board queue mutations. Enum
 > members for API-key use, connection transitions, message sends, and webhook lifecycle are explicitly
 > registered as intentionally unemitted; application logs cover those operational events until dedicated
 > audit callsites are added. There is no global audit interceptor.
@@ -495,7 +458,7 @@ flowchart TB
   "severity": "info",
   "apiKeyId": "uuid",
   "sessionId": "sess_123",
-  "ip": "192.168.1.1",
+  "ipAddress": "192.168.1.1",
   "method": "POST",
   "path": "/api/sessions/sess_123/start",
   "statusCode": 201,
@@ -505,11 +468,11 @@ flowchart TB
 }
 ```
 
-`action` is an `AuditAction` enum value (snake_case); `severity` is `info` / `warn` / `error`. There is no `requestId` or `responseTime` field, and no global request-logging interceptor — entries are written explicitly by the code paths that emit them.
+`action` is an `AuditAction` enum value (snake_case); `severity` is `info` / `warn` / `error`. There is no `requestId` or `responseTime` **column**, but the active request id is merged into the `metadata` object of every row written inside a request scope, so an entry still correlates with the application log lines for that request. There is no global request-logging interceptor — entries are written explicitly by the code paths that emit them.
 
 ### Security Alerts
 
-> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The only related runtime behavior today is a `logger.warn` when an IP-restricted key is used from a disallowed IP. Forward the audit log / application log to your SIEM to build these alerts.
+> **Not implemented.** There is no alerting or automatic temp-block subsystem; the table below is a design target, not shipped behavior. The signals do get recorded — rejected authentication and WebSocket rate-limit violations write persisted audit rows (the latter sampled), and an IP-restricted key used from a disallowed IP also emits a `logger.warn` — but nothing acts on them. Forward the audit log / application log to your SIEM to build these alerts.
 
 | Event                | Severity | Intended action (roadmap) |
 | -------------------- | -------- | ------------------------- |
@@ -566,11 +529,11 @@ flowchart TB
 ### Environment Variables Security
 
 ```bash
-# ❌ BAD: Secrets in code or docker-compose.yml
-DATABASE_URL=postgresql://user:password123@localhost:5432/db
+# ❌ BAD: Secrets hard-coded in a committed file (docker-compose.yml, Dockerfile, source)
+DATABASE_PASSWORD=password123
 
 # ✅ GOOD: Use .env file (not committed)
-DATABASE_URL=${DATABASE_URL}
+DATABASE_PASSWORD=${DATABASE_PASSWORD}
 
 # ✅ BETTER: Use Docker secrets or vault
 docker secret create db_password ./secret.txt
@@ -581,24 +544,18 @@ docker secret create db_password ./secret.txt
 > **Caveat:** the `*_FILE` convention shown below requires a secret-file reader in the app (see "Reading Secrets" below), which is **not currently implemented** — OpenWA reads secrets straight from environment variables. Until that helper exists, pass secrets as plain env vars (e.g. an `.env` file with restricted permissions) rather than `_FILE` paths.
 
 ```yaml
-# docker-compose.prod.yml
-version: '3.8'
-
+# Illustrative overlay — not the docker-compose.yml shipped in this repo
 services:
   app:
     image: openwa:latest
     secrets:
       - db_password
-      - encryption_key
       - api_master_key
     environment:
       - DATABASE_PASSWORD_FILE=/run/secrets/db_password
-      - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
 
 secrets:
   db_password:
-    external: true
-  encryption_key:
     external: true
   api_master_key:
     external: true
@@ -606,7 +563,7 @@ secrets:
 
 ### Reading Secrets in Application
 
-> **Not implemented as shown.** OpenWA does **not** read `<NAME>_FILE` Docker-secret files — there is no `getSecret()` helper today. Secrets come straight from `process.env`, layered at boot as `process.env` → `.env` → `data/.env.generated` (`override:false`, so a real environment value wins). The function below is a suggested pattern to add if you want Docker-secret `_FILE` support; as-is, `DATABASE_PASSWORD_FILE` / `ENCRYPTION_KEY_FILE` are not consulted.
+> **Not implemented as shown.** OpenWA does **not** read `<NAME>_FILE` Docker-secret files — there is no `getSecret()` helper today. Secrets come straight from `process.env`, layered at boot as `process.env` → `.env` → `data/.env.generated` (`override:false`, so a real environment value wins). The function below is a suggested pattern to add if you want Docker-secret `_FILE` support; as-is, `DATABASE_PASSWORD_FILE` is not consulted.
 
 ```typescript
 // config/secrets.ts
@@ -629,8 +586,8 @@ export function getSecret(name: string): string {
 }
 
 // Usage
-const encryptionKey = getSecret('ENCRYPTION_KEY');
 const dbPassword = getSecret('DATABASE_PASSWORD');
+const masterKey = getSecret('API_MASTER_KEY');
 ```
 
 ### Key Rotation Procedure
@@ -687,29 +644,40 @@ npm audit --json > audit-report.json
 ### GitHub Dependabot Configuration
 
 ```yaml
-# .github/dependabot.yml
+# .github/dependabot.yml — the root npm ecosystem (the file also covers /dashboard,
+# github-actions and docker)
 version: 2
 updates:
-  - package-ecosystem: 'npm'
-    directory: '/'
+  - package-ecosystem: npm
+    directory: /
     schedule:
-      interval: 'weekly'
-      day: 'monday'
-    open-pull-requests-limit: 10
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
     groups:
-      development-dependencies:
-        dependency-type: 'development'
-      production-dependencies:
-        dependency-type: 'production'
+      minor-and-patch:
+        update-types: [minor, patch]
+      major:
+        update-types: [major]
+    labels:
+      - dependencies
     ignore:
-      # Major version updates require manual review
-      - dependency-name: '*'
-        update-types: ['version-update:semver-major']
+      # TypeScript 7 is the native port: typescript-eslint and ts-jest cannot load it (#727/#729).
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
+      # better-sqlite3 v13: every released TypeORM caps its peer at ^12, and the linux-arm64
+      # prebuild needs glibc 2.38 (the node:22-slim base has 2.36).
+      - dependency-name: "better-sqlite3"
+        versions: [">=13.0.0"]
 ```
+
+Majors are **not** ignored — they arrive as their own grouped PR, separate from the minor/patch
+group. The only ignores are the two pinned incompatibilities above, each with its lift condition
+documented inline.
 
 ### Security Scanning in CI
 
-> **Aspirational template — not in the repo.** There is no `security.yml`, no Snyk, and no CodeQL workflow today. The actual dependency check is an inline step in `ci.yml` (`npm audit --audit-level=critical`, run on push/PR — not on a schedule). The workflow below is a recommended setup to add if you want scheduled scanning and SAST.
+> **Aspirational template — not in the repo.** There is no `security.yml`, no Snyk, and no CodeQL workflow today. The actual dependency check is a dedicated `audit` job ("Security audit") in `ci.yml`, running `npm audit --audit-level=high` on push/PR — not on a schedule. It is deliberately its own job rather than a step inside Lint: an advisory published against an unrelated dependency would otherwise abort the job before ESLint, the type-check and the drift gates ever ran. The threshold is `high` rather than `critical` because the `overrides` in `package.json` clear the root tree's existing HIGH advisories, so it now fences regressions. The workflow below is a recommended setup to add if you want scheduled scanning and SAST.
 
 ```yaml
 # .github/workflows/security.yml
@@ -854,7 +822,7 @@ contacts:
 
   security_lead:
     name: 'Security Lead'
-    email: 'yudhi@rmyndharis.com'
+    email: 'yudhi@rmyndharis.com' # see SECURITY.md — GitHub Security Advisories preferred
 
   escalation:
     - level: 1

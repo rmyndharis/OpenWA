@@ -100,24 +100,30 @@ flowchart TB
 **Built-in Safeguards:**
 
 ```typescript
-// Default rate limits to prevent ban
-const DEFAULT_SAFEGUARDS = {
-  // Message sending
-  minDelayBetweenMessages: 3000,  // 3 seconds minimum
-  maxMessagesPerMinute: 20,
-  maxMessagesPerHour: 200,
-  
-  // Session behavior
-  enableTypingIndicator: true,
-  randomizeDelays: true,
-  
-  // Warnings
-  warnOnBulkSend: true,
-  warnOnNewNumberSpam: true,
+// src/modules/message/bulk-message.service.ts — bulk-send pacing defaults
+const options = {
+  delayBetweenMessages: dto.options?.delayBetweenMessages ?? 3000, // 3s (DTO range 1000–60000)
+  randomizeDelay: dto.options?.randomizeDelay ?? true,             // adds 0–2s jitter per message
+  stopOnError: dto.options?.stopOnError ?? false,
 };
 ```
 
-**User Guidelines Document:**
+Alongside that:
+
+- `SIMULATE_TYPING` (on by default; `SIMULATE_TYPING_MAX_MS` default 5000) shows the engine's typing
+  indicator and pauses for a length-scaled, jittered interval before a **text** send — `send-text`,
+  and `send-template` only because it renders to text and delegates to the same path. Every other
+  send (image, video, audio, document, sticker, location, contact, poll, reply, forward) reaches the
+  engine with no typing indicator and no pause.
+- `BULK_MAX_CONCURRENT_BATCHES` (default 50, `0` = unlimited) caps concurrent bulk batches per process.
+- A single bulk request carries at most 100 messages (`@ArrayMaxSize(100)` on
+  `SendBulkMessageDto.messages`); a 101st entry is rejected by the global `ValidationPipe` with HTTP 400.
+
+Not implemented: there are no per-minute / per-hour / per-day send caps, no media-specific delay and
+no new-number warmup enforcement. The guidelines below are operator discipline, not something the
+gateway enforces.
+
+**User Guidelines:**
 
 ```markdown
 ## Anti-Ban Best Practices
@@ -289,7 +295,7 @@ Dependencies (`whatsapp-web.js`, Puppeteer, NestJS, etc.) may have vulnerabiliti
 
 **Mitigation Strategies:**
 
-> **Current state:** the real dependency check is an inline `npm audit --audit-level=critical` step in `ci.yml` (runs on push / PR — not on a daily schedule), plus Dependabot PRs (`.github/dependabot.yml`: npm for `/` and `/dashboard`, weekly). There is **no** standalone `security.yml` and **no** Snyk integration. The workflow below is a recommended enhancement to add scheduled scanning.
+> **Current state:** the real dependency check is a dedicated `audit` job in `ci.yml` running `npm audit --audit-level=high` (on push / PR — not on a daily schedule); it is deliberately split out of the `Lint` job so a newly published advisory cannot abort the other quality gates. `release.yml` repeats the same `npm audit --audit-level=high` and additionally runs a Trivy image scan (`CRITICAL,HIGH`, `ignore-unfixed`) against an explicit `.trivyignore` before the release tags are promoted. Dependabot PRs cover npm for `/` and `/dashboard` (weekly), GitHub Actions (monthly) and Docker base/compose images (weekly), with version-pinned ignores for `typescript >=7` and `better-sqlite3 >=13`. There is **no** standalone `security.yml` and **no** Snyk integration. The workflow below is a recommended enhancement to add scheduled scanning.
 
 ```yaml
 # .github/workflows/security.yml
@@ -320,9 +326,11 @@ jobs:
 
 | Action | Frequency |
 |--------|-----------|
-| npm audit (`--audit-level=critical`, inline in CI) | Every push / PR |
+| npm audit (`--audit-level=high`, dedicated `audit` job in CI) | Every push / PR |
+| Trivy image scan (`CRITICAL,HIGH`, `.trivyignore`) | Every release |
 | Snyk scan | Not configured (planned) |
-| Dependabot PRs (npm: `/` and `/dashboard`) | Weekly |
+| Dependabot PRs (npm: `/` and `/dashboard`; docker) | Weekly |
+| Dependabot PRs (github-actions) | Monthly |
 | Major updates | Reviewed manually |
 | Security patches | Immediate |
 
@@ -504,28 +512,23 @@ WhatsApp has undocumented internal rate limits. Sending too many messages can tr
 
 **Built-in Safeguards:**
 
-```typescript
-// Anti-ban configuration defaults
-const RATE_LIMIT_CONFIG = {
-  // Per session limits
-  messagesPerMinute: 20,
-  messagesPerHour: 200,
-  messagesPerDay: 1000,
+The gateway enforces HTTP request throttling (`@nestjs/throttler`, registered globally as
+`ProxyAwareThrottlerGuard` and tracked per client IP) plus the bulk-send pacing described in R002:
 
-  // Delays
-  minDelayBetweenMessages: 3000,    // 3 seconds
-  maxDelayBetweenMessages: 5000,    // 5 seconds
-  delayAfterMedia: 5000,            // 5 seconds after media
+| Control | Default | Scope |
+|---------|---------|-------|
+| `RATE_LIMIT_SHORT_TTL` / `RATE_LIMIT_SHORT_LIMIT` | 1000 ms / 10 requests | HTTP burst window |
+| `RATE_LIMIT_MEDIUM_TTL` / `RATE_LIMIT_MEDIUM_LIMIT` | 60000 ms / 100 requests | HTTP sustained window |
+| `RATE_LIMIT_LONG_TTL` / `RATE_LIMIT_LONG_LIMIT` | 3600000 ms / 1000 requests | HTTP hourly window |
+| `delayBetweenMessages` / `randomizeDelay` | 3000 ms + 0–2 s jitter | Bulk send, between consecutive messages inside a batch |
+| `BULK_MAX_CONCURRENT_BATCHES` | 50 (`0` = unlimited) | Concurrent bulk batches per process |
+| `@ArrayMaxSize(100)` on `SendBulkMessageDto.messages` | 100 messages (hard limit) | Messages accepted per bulk request |
+| `SIMULATE_TYPING` / `SIMULATE_TYPING_MAX_MS` | on / 5000 ms | Typing pause, text sends only (`send-text` / `send-template`) |
 
-  // Bulk messaging
-  bulkBatchSize: 50,
-  bulkDelayBetweenBatches: 60000,   // 1 minute
-
-  // New number warmup
-  newNumberDailyLimit: 50,
-  newNumberWarmupDays: 14,
-};
-```
+These bound API traffic and bulk pacing — they are **not** per-session WhatsApp send caps. The
+gateway does not count messages per minute, hour or day per session, so staying inside WhatsApp's
+undocumented limits remains the operator's responsibility. The thresholds below are targets for
+operator-side monitoring, not values the gateway enforces.
 
 **Monitoring Metrics:**
 
@@ -571,14 +574,19 @@ flowchart TB
     Prevention --> Detection --> Recovery
 ```
 
-**Backup Schedule:**
+**Backup Coverage:**
 
 | Data Type | Frequency | Retention | Storage |
 |-----------|-----------|-----------|---------|
-| Database (full) | Daily 02:00 | 30 days | S3/GCS |
-| Database (incremental) | Every 6 hours | 7 days | S3/GCS |
-| Session auth state | On change | Indefinite | Database |
+| Databases (`main.sqlite` plus the data store, or a `pg_dump` when `DATABASE_TYPE=postgres`) | Each operator-run of `scripts/backup.sh` — the repo ships no scheduled backup | Whatever the operator keeps; the script never prunes | One `openwa-backup-<timestamp>.tar.gz` under `BACKUP_DIR` (default `./backups`) — local disk, no object-storage upload |
+| Session auth state | On change | Indefinite | Filesystem — `SESSION_DATA_PATH` (default `./data/sessions`), `BAILEYS_AUTH_DIR` (default `./data/baileys`) |
 | Configuration | On change | Indefinite | Git |
+
+> Session auth state is **not** in the database: whatsapp-web.js `LocalAuth` writes under
+> `SESSION_DATA_PATH` and Baileys writes multi-file auth state under `BAILEYS_AUTH_DIR/<sessionId>`.
+> A database-only backup loses every pairing — those directories must be in the file-level backup.
+> `scripts/backup.sh` already captures both alongside the databases. Running it on a schedule and
+> copying the archives off-box are the operator's responsibility.
 
 ---
 
@@ -715,12 +723,12 @@ flowchart LR
 | ID | Risk | Probability | Impact | Level | Status |
 |----|------|-------------|--------|-------|--------|
 | R001 | Protocol Changes | High | High | 🔴 Critical | Monitoring |
-| R002 | Account Ban | Medium | Medium | 🟡 Medium | Mitigated |
+| R002 | Account Ban | Medium | Medium | 🟡 Medium | Partially mitigated |
 | R003 | Security Breach | Low | Critical | 🟡 Medium | Mitigated |
 | R004 | Maintainer Burnout | Medium | Medium | 🟡 Medium | Planning |
 | R005 | Dependency Issues | High | Medium | 🟡 Medium | Automated |
 | R006 | Legal Issues | Low | Critical | 🟡 Medium | Mitigated |
-| R007 | Rate Limiting | High | Medium | 🟡 Medium | Mitigated |
+| R007 | Rate Limiting | High | Medium | 🟡 Medium | Partially mitigated |
 | R008 | Data Loss | Low | High | 🟡 Medium | Mitigated |
 
 ### Risk Trend
