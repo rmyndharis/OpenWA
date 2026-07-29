@@ -297,6 +297,7 @@
       "start": "시작",
       "stop": "중지",
       "reconnect": "재연결",
+      "unlink": "연결 해제",
       "delete": "삭제",
       "killStuck": "강제 종료"
     },
@@ -325,6 +326,18 @@
       "success": "세션이 강제로 종료되었습니다. 지금 다시 시작할 수 있습니다.",
       "failedTitle": "강제 종료 실패",
       "failed": "세션을 강제로 종료하지 못했습니다."
+    },
+    "unlink": {
+      "title": "기기 연결 해제",
+      "message": "세션 <strong>\"{{name}}\"</strong>을(를) WhatsApp 계정에서 연결 해제할까요?",
+      "warning": "WhatsApp이 이 기기를 계정의 연결된 기기 목록에서 제거하고 세션이 중지됩니다. 다시 연결하려면 새 QR 스캔 또는 페어링 코드가 필요합니다. 로컬 데이터까지 모두 지우려면 이후 세션을 삭제하세요.",
+      "confirm": "연결 해제",
+      "successTitle": "기기 연결 해제됨",
+      "success": "WhatsApp이 계정의 연결된 기기 목록에서 기기를 제거했습니다. 다시 연결하려면 새 QR 스캔 또는 페어링 코드가 필요합니다.",
+      "unconfirmedTitle": "연결 해제 미확인",
+      "unconfirmed": "세션이 로컬에서 중지되었지만 WhatsApp이 연결 해제를 확인하지 않았습니다. 기기가 연결된 기기 목록에 남아 있을 수 있습니다. 세션을 시작하고 다시 시도하세요.",
+      "failedTitle": "연결 해제 실패",
+      "failed": "세션 연결 해제에 실패했습니다."
     },
     "pairing": {
       "tabQr": "QR 코드",

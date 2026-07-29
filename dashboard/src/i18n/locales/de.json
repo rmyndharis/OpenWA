@@ -297,6 +297,7 @@
       "start": "Starten",
       "stop": "Stoppen",
       "reconnect": "Erneut verbinden",
+      "unlink": "Trennen",
       "delete": "Löschen",
       "killStuck": "Hängende Sitzung beenden"
     },
@@ -325,6 +326,18 @@
       "success": "Die Sitzung wurde zwangsweise beendet. Du kannst sie jetzt neu starten.",
       "failedTitle": "Zwangsbeendigung fehlgeschlagen",
       "failed": "Die Sitzung konnte nicht zwangsweise beendet werden."
+    },
+    "unlink": {
+      "title": "Gerät trennen",
+      "message": "Sitzung <strong>\"{{name}}\"</strong> vom WhatsApp-Konto trennen?",
+      "warning": "WhatsApp entfernt dieses Gerät aus den verknüpften Geräten des Kontos und die Sitzung wird beendet. Für eine erneute Verbindung ist ein neuer QR-Code oder Kopplungscode erforderlich. Um auch alle lokalen Daten zu löschen, löschen Sie die Sitzung anschließend.",
+      "confirm": "Trennen",
+      "successTitle": "Gerät getrennt",
+      "success": "WhatsApp hat das Gerät aus den verknüpften Geräten des Kontos entfernt. Für eine erneute Verbindung ist ein neuer QR-Code oder Kopplungscode erforderlich.",
+      "unconfirmedTitle": "Trennung nicht bestätigt",
+      "unconfirmed": "Die Sitzung wurde lokal beendet, aber WhatsApp hat die Trennung nicht bestätigt — das Gerät könnte noch unter den verknüpften Geräten aufgeführt sein. Starten Sie die Sitzung und versuchen Sie es erneut.",
+      "failedTitle": "Trennen fehlgeschlagen",
+      "failed": "Die Sitzung konnte nicht getrennt werden."
     },
     "pairing": {
       "tabQr": "QR-Code",

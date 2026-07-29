@@ -1,10 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, Search, Filter, Skull } from 'lucide-react';
+import {
+  Plus,
+  QrCode,
+  RefreshCw,
+  Trash2,
+  Eye,
+  Loader2,
+  Play,
+  Square,
+  Search,
+  Filter,
+  Skull,
+  Unlink,
+} from 'lucide-react';
 import { sessionApi, type Session } from '../services/api';
 import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { canUnlinkSession, classifyUnlinkError } from '../utils/sessionUnlink';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
@@ -41,6 +55,7 @@ export function Sessions() {
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
+  const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async (): Promise<Session[]> => {
     try {
@@ -346,6 +361,27 @@ export function Sessions() {
       fetchSessions();
     } finally {
       setKillConfirmId(null);
+    }
+  };
+
+  const handleUnlink = async (id: string) => {
+    try {
+      await sessionApi.logout(id);
+      setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'disconnected' } : s)));
+      if (qrData?.sessionId === id) setQrData(null);
+      toast.success(t('sessions.unlink.successTitle'), t('sessions.unlink.success'));
+    } catch (err) {
+      console.error('Failed to unlink:', err);
+      if (classifyUnlinkError(err) === 'unconfirmed') {
+        // 502 — the session DID stop locally, but WhatsApp has not confirmed the unlink. Not a
+        // plain failure, so warn with retry guidance instead of raising an error toast.
+        toast.warning(t('sessions.unlink.unconfirmedTitle'), t('sessions.unlink.unconfirmed'));
+      } else {
+        toast.error(t('sessions.unlink.failedTitle'), t('sessions.unlink.failed'));
+      }
+      fetchSessions();
+    } finally {
+      setUnlinkConfirmId(null);
     }
   };
 
@@ -752,6 +788,35 @@ export function Sessions() {
         </Modal>
       )}
 
+      {unlinkConfirmId && (
+        <Modal
+          open
+          onClose={() => setUnlinkConfirmId(null)}
+          title={t('sessions.unlink.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setUnlinkConfirmId(null)}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn-danger" onClick={() => handleUnlink(unlinkConfirmId)}>
+                {t('sessions.unlink.confirm')}
+              </button>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.unlink.message"
+              values={{ name: sessions.find(s => s.id === unlinkConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.unlink.warning')}</p>
+        </Modal>
+      )}
+
       <div className="sessions-grid">
         {filteredSessions.length === 0 ? (
           <div className="empty-state">
@@ -826,6 +891,12 @@ export function Sessions() {
                     {t('sessions.actions.reconnect')}
                   </button>
                 ) : null}
+                {canUnlinkSession(session.status, canWrite) && (
+                  <button className="btn-action danger" onClick={() => setUnlinkConfirmId(session.id)}>
+                    <Unlink size={16} />
+                    {t('sessions.actions.unlink')}
+                  </button>
+                )}
                 {canWrite && (
                   <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>
                     <Trash2 size={16} />

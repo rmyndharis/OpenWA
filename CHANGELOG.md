@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the audit-action enumeration in `docs/05`, the method tables in `docs/18` and `sdk/README.md`) now
   include the route.
 
+- **The dashboard's Sessions page gains an Unlink action** (#984). Wired to the logout endpoint, it
+  is the only lifecycle button that tells WhatsApp anything: the device disappears from the account
+  holder's Linked Devices list, and reconnecting requires a fresh QR scan or pairing code. It is
+  labelled "Unlink" rather than "Logout" so it cannot be confused with the sidebar's own
+  (authentication) logout, and it appears for exactly the states that have a live engine — the same
+  visibility as Stop. The confirmation dialog spells out both consequences (fresh QR to reconnect;
+  delete the session separately if local data should go too), and the 502 case — session stopped
+  locally but the unlink unconfirmed by WhatsApp — surfaces as a warning toast with retry guidance
+  instead of a plain error. Localized across all twelve dashboard locales.
+
 ### Fixed
 
 - **A wedged logout can no longer delete a freshly re-paired profile** (#994). `teardownEngineSafely`

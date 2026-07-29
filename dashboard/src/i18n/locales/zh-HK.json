@@ -297,6 +297,7 @@
       "start": "啟動",
       "stop": "停止",
       "reconnect": "重新連線",
+      "unlink": "解除連結",
       "delete": "刪除",
       "killStuck": "強制終止"
     },
@@ -325,6 +326,18 @@
       "success": "工作階段已強制終止。你現在可以重新啟動它。",
       "failedTitle": "強制終止失敗",
       "failed": "無法強制終止工作階段。"
+    },
+    "unlink": {
+      "title": "解除裝置連結",
+      "message": "要將工作階段 <strong>\"{{name}}\"</strong> 從 WhatsApp 帳戶解除連結嗎？",
+      "warning": "WhatsApp 會將此裝置從帳戶的已連結裝置列表中移除，工作階段將停止。重新連接需要重新掃描 QR 碼或使用配對碼。如需同時清除所有本地資料，請隨後刪除該工作階段。",
+      "confirm": "解除連結",
+      "successTitle": "裝置已解除連結",
+      "success": "WhatsApp 已將裝置從帳戶的已連結裝置列表中移除。重新連接需要重新掃描 QR 碼或使用配對碼。",
+      "unconfirmedTitle": "解除連結未確認",
+      "unconfirmed": "工作階段已在本地停止，但 WhatsApp 未確認解除連結——裝置可能仍列於已連結裝置中。請啟動工作階段後重試。",
+      "failedTitle": "解除連結失敗",
+      "failed": "無法解除該工作階段的連結。"
     },
     "pairing": {
       "tabQr": "QR 碼",

@@ -297,6 +297,7 @@
       "start": "Avvia",
       "stop": "Ferma",
       "reconnect": "Riconnetti",
+      "unlink": "Scollega",
       "delete": "Elimina",
       "killStuck": "Termina sessione bloccata"
     },
@@ -325,6 +326,18 @@
       "success": "La sessione è stata terminata forzatamente. Puoi riavviarla ora.",
       "failedTitle": "Terminazione forzata non riuscita",
       "failed": "Impossibile terminare forzatamente la sessione."
+    },
+    "unlink": {
+      "title": "Scollega dispositivo",
+      "message": "Scollegare la sessione <strong>\"{{name}}\"</strong> dall'account WhatsApp?",
+      "warning": "WhatsApp rimuove questo dispositivo dai Dispositivi collegati dell'account e la sessione si interrompe. Per riconnettersi è necessaria una nuova scansione del QR o un codice di abbinamento. Per cancellare anche tutti i dati locali, elimina la sessione in seguito.",
+      "confirm": "Scollega",
+      "successTitle": "Dispositivo scollegato",
+      "success": "WhatsApp ha rimosso il dispositivo dai Dispositivi collegati dell'account. Per riconnettersi è necessaria una nuova scansione del QR o un codice di abbinamento.",
+      "unconfirmedTitle": "Scollegamento non confermato",
+      "unconfirmed": "La sessione si è interrotta localmente, ma WhatsApp non ha confermato lo scollegamento — il dispositivo potrebbe essere ancora elencato tra i Dispositivi collegati. Avvia la sessione e riprova.",
+      "failedTitle": "Scollegamento non riuscito",
+      "failed": "Impossibile scollegare la sessione."
     },
     "pairing": {
       "tabQr": "Codice QR",

@@ -297,6 +297,7 @@
       "start": "Iniciar",
       "stop": "Detener",
       "reconnect": "Reconectar",
+      "unlink": "Desvincular",
       "delete": "Eliminar",
       "killStuck": "Cerrar bloqueada"
     },
@@ -325,6 +326,18 @@
       "success": "La sesión se cerró de forma forzada. Ya puedes reiniciarla.",
       "failedTitle": "Error al forzar el cierre",
       "failed": "No se pudo forzar el cierre de la sesión."
+    },
+    "unlink": {
+      "title": "Desvincular dispositivo",
+      "message": "¿Desvincular la sesión <strong>\"{{name}}\"</strong> de la cuenta de WhatsApp?",
+      "warning": "WhatsApp elimina este dispositivo de los Dispositivos vinculados de la cuenta y la sesión se detiene. Para reconectar se requiere un nuevo código QR o código de emparejamiento. Para borrar también todos los datos locales, elimine la sesión después.",
+      "confirm": "Desvincular",
+      "successTitle": "Dispositivo desvinculado",
+      "success": "WhatsApp eliminó el dispositivo de los Dispositivos vinculados de la cuenta. Se requiere un nuevo código QR o código de emparejamiento para reconectar.",
+      "unconfirmedTitle": "Desvinculación no confirmada",
+      "unconfirmed": "La sesión se detuvo localmente, pero WhatsApp no confirmó la desvinculación — es posible que el dispositivo siga apareciendo en Dispositivos vinculados. Inicie la sesión e inténtelo de nuevo.",
+      "failedTitle": "Error al desvincular",
+      "failed": "No se pudo desvincular la sesión."
     },
     "pairing": {
       "tabQr": "Código QR",

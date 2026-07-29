@@ -297,6 +297,7 @@
       "start": "启动",
       "stop": "停止",
       "reconnect": "重新连接",
+      "unlink": "取消关联",
       "delete": "删除",
       "killStuck": "终止卡死会话"
     },
@@ -325,6 +326,18 @@
       "success": "会话已被强制终止。您现在可以重新启动它。",
       "failedTitle": "强制终止失败",
       "failed": "强制终止会话失败。"
+    },
+    "unlink": {
+      "title": "取消关联设备",
+      "message": "要将会话 <strong>\"{{name}}\"</strong> 从 WhatsApp 账号取消关联吗？",
+      "warning": "WhatsApp 会将此设备从账号的已关联设备列表中移除，会话将停止。重新连接需要重新扫描二维码或使用配对码。如需同时清除所有本地数据，请随后删除该会话。",
+      "confirm": "取消关联",
+      "successTitle": "设备已取消关联",
+      "success": "WhatsApp 已将设备从账号的已关联设备列表中移除。重新连接需要重新扫描二维码或使用配对码。",
+      "unconfirmedTitle": "取消关联未确认",
+      "unconfirmed": "会话已在本地停止，但 WhatsApp 未确认取消关联——设备可能仍列在已关联设备中。请启动会话后重试。",
+      "failedTitle": "取消关联失败",
+      "failed": "无法取消关联该会话。"
     },
     "pairing": {
       "tabQr": "QR 码",

@@ -297,6 +297,7 @@
       "start": "Démarrer",
       "stop": "Arrêter",
       "reconnect": "Reconnecter",
+      "unlink": "Dissocier",
       "delete": "Supprimer",
       "killStuck": "Arrêter (bloquée)"
     },
@@ -325,6 +326,18 @@
       "success": "L'arrêt forcé de la session a réussi. Vous pouvez la redémarrer maintenant.",
       "failedTitle": "Échec de l'arrêt forcé",
       "failed": "Échec de l'arrêt forcé de la session."
+    },
+    "unlink": {
+      "title": "Dissocier l'appareil",
+      "message": "Dissocier la session <strong>\"{{name}}\"</strong> du compte WhatsApp ?",
+      "warning": "WhatsApp retire cet appareil des Appareils associés du compte et la session s'arrête. La reconnexion nécessite un nouveau scan QR ou un code d'appairage. Pour effacer aussi toutes les données locales, supprimez ensuite la session.",
+      "confirm": "Dissocier",
+      "successTitle": "Appareil dissocié",
+      "success": "WhatsApp a retiré l'appareil des Appareils associés du compte. Un nouveau scan QR ou un code d'appairage est nécessaire pour se reconnecter.",
+      "unconfirmedTitle": "Dissociation non confirmée",
+      "unconfirmed": "La session s'est arrêtée localement, mais WhatsApp n'a pas confirmé la dissociation — l'appareil peut encore figurer dans les Appareils associés. Démarrez la session et réessayez.",
+      "failedTitle": "Échec de la dissociation",
+      "failed": "Impossible de dissocier la session."
     },
     "pairing": {
       "tabQr": "Code QR",

@@ -297,6 +297,7 @@
       "start": "Start",
       "stop": "Stop",
       "reconnect": "Reconnect",
+      "unlink": "Unlink",
       "delete": "Delete",
       "killStuck": "Kill Stuck"
     },
@@ -325,6 +326,18 @@
       "success": "Session has been force-killed. You can restart it now.",
       "failedTitle": "Force-Kill Failed",
       "failed": "Failed to force-kill the session."
+    },
+    "unlink": {
+      "title": "Unlink Device",
+      "message": "Unlink session <strong>\"{{name}}\"</strong> from the WhatsApp account?",
+      "warning": "WhatsApp removes this device from the account's Linked Devices and the session stops. Reconnecting requires a fresh QR scan or pairing code. To also erase all local data, delete the session afterwards.",
+      "confirm": "Unlink",
+      "successTitle": "Device Unlinked",
+      "success": "WhatsApp removed the device from the account's Linked Devices. A fresh QR scan or pairing code is required to reconnect.",
+      "unconfirmedTitle": "Unlink Not Confirmed",
+      "unconfirmed": "The session stopped locally, but WhatsApp did not confirm the unlink — the device may still be listed under Linked Devices. Start the session and try again.",
+      "failedTitle": "Unlink Failed",
+      "failed": "Failed to unlink the session."
     },
     "pairing": {
       "tabQr": "QR Code",

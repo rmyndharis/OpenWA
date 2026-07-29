@@ -195,8 +195,14 @@ a non-admin hitting the path falls through to the `*` redirect.
 │  │  │         │  Status: 🟢 Connected                          │    │
 │  │  └─────────┘  Platform: Android                             │    │
 │  │                                                              │    │
-│  │  [Restart Session] [Logout] [Delete]                        │    │
+│  │  [Restart Session] [Unlink Device] [Delete]                  │    │
 │  └─────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│  Unlink Device asks WhatsApp to remove this companion device from   │
+│  the account's Linked Devices (POST /sessions/:id/logout), then     │
+│  stops the session — reconnecting requires a fresh QR scan or       │
+│  pairing code. Delete only clears the local data; it does NOT       │
+│  unlink.                                                            │
 │                                                                      │
 │  ┌─────────────────────┬─────────────────────┐                      │
 │  │  📊 Statistics      │  ⚙️ Configuration    │                      │
