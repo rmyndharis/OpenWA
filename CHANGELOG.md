@@ -192,6 +192,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   These routes act on the whole deployment, so a key confined to a subset of sessions must not
   reach them regardless of its role. Unrestricted ADMIN keys are unaffected.
 
+- Plugin installation and lifecycle routes (`/api/plugins/*`) now reject API keys restricted to
+  specific sessions. Installing or enabling a plugin runs its code in the gateway process, which is
+  a deployment-wide action. Per-session plugin activation (`PUT /api/plugins/:id/sessions`) and
+  per-session config (`PUT /api/plugins/:id/config/:sessionId`) continue to accept restricted keys
+  and remain scoped to the sessions the key allows.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
