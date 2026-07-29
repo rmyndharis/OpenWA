@@ -14,11 +14,12 @@ class ResourcesTest extends TestCase
     public function testSessionLifecyclePaths(): void
     {
         $backend = new MockBackend();
-        // Queue responses in CALL order: list, get, create, start, stop, forceKill, delete.
+        // Queue responses in CALL order: list, get, create, start, stop, logout, forceKill, delete.
         $backend->on(200, []);
         $backend->on(200, ['id' => 's1', 'name' => 'n', 'status' => 'ready']);
         $backend->on(201, ['id' => 's1', 'name' => 'n', 'status' => 'created']);
         $backend->on(200, ['id' => 's1', 'status' => 'initializing']);
+        $backend->on(200, ['id' => 's1', 'status' => 'disconnected']);
         $backend->on(200, ['id' => 's1', 'status' => 'disconnected']);
         $backend->on(200, ['id' => 's1', 'status' => 'disconnected']);
         $backend->on(204);
@@ -31,6 +32,8 @@ class ResourcesTest extends TestCase
         $client->sessions->start('s1');
         $this->assertStringContainsString('/sessions/s1/start', $backend->lastCall()['path']);
         $client->sessions->stop('s1');
+        $client->sessions->logout('s1');
+        $this->assertStringContainsString('/sessions/s1/logout', $backend->lastCall()['path']);
         $client->sessions->forceKill('s1');
         $this->assertStringContainsString('/sessions/s1/force-kill', $backend->lastCall()['path']);
         $client->sessions->delete('s1');

@@ -43,6 +43,9 @@ class SessionsResource:
     def stop(self, session_id: str) -> SessionResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/stop")
 
+    def logout(self, session_id: str) -> SessionResponse:
+        return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/logout")
+
     def force_kill(self, session_id: str) -> SessionResponse:
         return self._http.request("POST", f"/api/sessions/{quote_segment(session_id)}/force-kill")
 

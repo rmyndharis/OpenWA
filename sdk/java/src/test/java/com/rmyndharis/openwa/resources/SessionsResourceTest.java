@@ -39,6 +39,14 @@ class SessionsResourceTest {
     }
 
     @Test
+    void logoutHitsLogoutPath() {
+        tx.respond(200, "{\"id\":\"s\",\"name\":\"n\",\"status\":\"disconnected\"}");
+        client.sessions.logout("s");
+        assertEquals("http://h/api/sessions/s/logout", tx.lastRequest().url());
+        assertEquals(HttpMethod.POST, tx.lastRequest().method());
+    }
+
+    @Test
     void requestPairingCodeSendsBody() {
         tx.respond(200, "{\"pairingCode\":\"ABCD1234\",\"status\":\"qr_ready\"}");
         client.sessions.requestPairingCode("s", RequestPairingCodeRequest.builder().phoneNumber("628123").build());

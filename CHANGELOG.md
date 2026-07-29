@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which treats an already-stopped session as a successful no-op). It is additive: the stop, delete,
   and force-kill semantics are unchanged.
 
+- **All five SDKs and the dashboard's API client gain the session logout operation** (#984). The
+  JavaScript, Python, Go, PHP, and Java SDKs each expose a `logout` method mirroring the neighbouring
+  `forceKill`, and the dashboard's `sessionApi` gains a matching `logout(id)`, so every client covers
+  the full session lifecycle again. The reference docs (`docs/06`, the curl collection in `docs/07`,
+  the audit-action enumeration in `docs/05`, the method tables in `docs/18` and `sdk/README.md`) now
+  include the route.
+
 ### Fixed
 
 - **`npm install` from source no longer fails on native Windows, and the whatsapp-web.js backport

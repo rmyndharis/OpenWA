@@ -261,6 +261,7 @@ class TestSessions:
         backend.on("DELETE", "/sessions/s1", status=204)
         backend.on("POST", "/start", body={"id": "s1", "status": "initializing"})
         backend.on("POST", "/stop", body={"id": "s1", "status": "disconnected"})
+        backend.on("POST", "/logout", body={"id": "s1", "status": "disconnected"})
         backend.on("POST", "/force-kill", body={"id": "s1", "status": "disconnected"})
         client = make_client(backend)
         client.sessions.list()
@@ -272,6 +273,8 @@ class TestSessions:
         client.sessions.start("s1")
         assert "/sessions/s1/start" in backend.calls[-1].url
         client.sessions.stop("s1")
+        client.sessions.logout("s1")
+        assert "/sessions/s1/logout" in backend.calls[-1].url
         client.sessions.force_kill("s1")
         assert "/sessions/s1/force-kill" in backend.calls[-1].url
         client.sessions.delete("s1")

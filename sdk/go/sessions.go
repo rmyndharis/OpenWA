@@ -58,6 +58,18 @@ func (s *SessionsService) Stop(ctx context.Context, sessionID string) (*SessionR
 	return &out, nil
 }
 
+// Logout unlinks this device from the WhatsApp account, then tears the session down. Unlike Stop
+// and Delete, it removes the device from the account holder's Linked Devices list, so a later
+// Start requires a fresh QR scan or pairing code. Requires a running session.
+func (s *SessionsService) Logout(ctx context.Context, sessionID string) (*SessionResponse, error) {
+	var out SessionResponse
+	err := s.client.do(ctx, "POST", "/api/sessions/"+pathEscape(sessionID)+"/logout", nil, nil, &out)
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ForceKill terminates a stuck session immediately.
 func (s *SessionsService) ForceKill(ctx context.Context, sessionID string) (*SessionResponse, error) {
 	var out SessionResponse

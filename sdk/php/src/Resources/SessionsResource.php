@@ -58,6 +58,18 @@ class SessionsResource
         return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/stop");
     }
 
+    /**
+     * Unlink this device from the WhatsApp account, then stop the session. Unlike stop() and
+     * delete(), this removes the device from the account holder's Linked Devices list, so a later
+     * start() requires a fresh QR scan or pairing code. Requires a running session.
+     *
+     * @return array<string,mixed>
+     */
+    public function logout(string $id): array
+    {
+        return $this->http->request('POST', "/api/sessions/{$this->http->encodeSegment($id)}/logout");
+    }
+
     /** @return array<string,mixed> */
     public function forceKill(string $id): array
     {

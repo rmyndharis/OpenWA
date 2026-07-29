@@ -502,6 +502,52 @@ Returned via `transformSession`; status typically becomes `disconnected`.
 
 **Errors:** `401` · `403` · `404` not found
 
+#### POST /api/sessions/:id/logout
+
+Log out of WhatsApp — unlinking this device from the account — and tear the session down.
+
+`stop` disconnects while keeping the stored credentials, and `delete` additionally purges the
+on-disk auth directories and the session row, but neither tells WhatsApp anything: the device stays
+listed under the account holder's **Linked Devices** on the phone until they remove it by hand.
+`logout` asks WhatsApp to remove the companion device itself. Both engines perform a real
+protocol-level unlink and clear that session's stored credentials, so a later `start` requires a
+fresh QR scan or pairing code.
+
+The session must be running — the unlink is a network round-trip that needs a live engine, so a
+stopped session is rejected rather than reported as a success that never reached WhatsApp.
+
+**Auth:** API key (OPERATOR)  ·  **Scope:** session-scoped
+
+**Path parameters**
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `id` | string | Session UUID |
+
+No request body.
+
+**Response** `200`
+
+```json
+{
+  "id": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+  "name": "my-bot",
+  "status": "disconnected",
+  "phone": "6281234567890",
+  "pushName": "My Bot",
+  "connectedAt": null,
+  "lastActive": "2026-06-25T09:01:55.000Z",
+  "createdAt": "2026-06-20T11:30:00.000Z",
+  "updatedAt": "2026-06-25T09:11:00.000Z",
+  "lastError": null
+}
+```
+
+Returned via `transformSession`; status becomes `disconnected`. Recorded in the audit log as
+`session_logged_out`, distinguishing an intentional unlink from a plain stop.
+
+**Errors:** `400` session is not started · `401` · `403` · `404` not found
+
 #### POST /api/sessions/:id/force-kill
 
 Force-kill a stuck session (SIGKILL the wedged engine, then tear it down).

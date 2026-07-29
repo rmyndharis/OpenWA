@@ -7,7 +7,7 @@ function client(t: MockTransport): OpenWAClient {
 }
 
 describe('SessionsResource — exact paths', () => {
-  it('list/get/create/delete/start/stop/forceKill', async () => {
+  it('list/get/create/delete/start/stop/logout/forceKill', async () => {
     const t = new MockTransport()
       .on('GET', /\/sessions$/, { body: [] })
       .on('GET', /\/sessions\/s1$/, { body: { id: 's1', name: 'n', status: 'ready' } })
@@ -15,6 +15,7 @@ describe('SessionsResource — exact paths', () => {
       .on('DELETE', /\/sessions\/s1$/, { status: 204 })
       .on('POST', /\/sessions\/s1\/start$/, { body: { id: 's1', name: 'n', status: 'initializing' } })
       .on('POST', /\/sessions\/s1\/stop$/, { body: { id: 's1', name: 'n', status: 'disconnected' } })
+      .on('POST', /\/sessions\/s1\/logout$/, { body: { id: 's1', name: 'n', status: 'disconnected' } })
       .on('POST', /\/sessions\/s1\/force-kill$/, { body: { id: 's1', name: 'n', status: 'disconnected' } });
     const c = client(t);
     await c.sessions.list();
@@ -26,6 +27,8 @@ describe('SessionsResource — exact paths', () => {
     await c.sessions.start('s1');
     expect(t.lastCall!.url).toBe('http://x/api/sessions/s1/start');
     await c.sessions.stop('s1');
+    await c.sessions.logout('s1');
+    expect(t.lastCall!.url).toBe('http://x/api/sessions/s1/logout');
     await c.sessions.forceKill('s1');
     expect(t.lastCall!.url).toBe('http://x/api/sessions/s1/force-kill');
     await c.sessions.delete('s1');

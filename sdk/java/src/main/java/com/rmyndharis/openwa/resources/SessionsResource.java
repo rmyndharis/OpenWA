@@ -50,6 +50,15 @@ public final class SessionsResource {
         return client.request(HttpMethod.POST, "/api/sessions/" + encodeSegment(id) + "/stop", null, null, SessionResponse.class);
     }
 
+    /**
+     * Unlink this device from the WhatsApp account, then stop the session. Unlike {@code stop} and
+     * {@code delete}, this removes the device from the account holder's Linked Devices list, so a
+     * later {@code start} requires a fresh QR scan or pairing code. Requires a running session.
+     */
+    public SessionResponse logout(String id) {
+        return client.request(HttpMethod.POST, "/api/sessions/" + encodeSegment(id) + "/logout", null, null, SessionResponse.class);
+    }
+
     /** Force-kill a stuck session (SIGKILL + teardown). */
     public SessionResponse forceKill(String id) {
         return client.request(HttpMethod.POST, "/api/sessions/" + encodeSegment(id) + "/force-kill", null, null, SessionResponse.class);

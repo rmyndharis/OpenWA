@@ -24,7 +24,7 @@ All five SDKs expose the same fluent resource surface:
 
 | Resource   | Methods                                                                                                                                                                                |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sessions` | list, get, create, delete, start, stop, forceKill, getQrCode, requestPairingCode, stats                                                                                                |
+| `sessions` | list, get, create, delete, start, stop, logout, forceKill, getQrCode, requestPairingCode, stats                                                                                        |
 | `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, forward, react, delete, editMessage, history, reactions, sendBulk, batchStatus, cancelBatch |
 | `contacts` | list, get, check, profilePicture, profilePictures, phone, block, unblock                                                                                                                                |
 | `groups`   | list, get, create, joinGroup, add/remove/promote/demoteParticipants, setSubject, setDescription, get/updateGroupSettings, leave, inviteCode, revokeInviteCode                          |

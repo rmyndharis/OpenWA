@@ -28,7 +28,7 @@ All five SDKs expose the same fluent surface:
 
 | Resource | Methods |
 | --- | --- |
-| `sessions` | list, get, create, delete, start, stop, forceKill, getQrCode, requestPairingCode, stats |
+| `sessions` | list, get, create, delete, start, stop, logout, forceKill, getQrCode, requestPairingCode, stats |
 | `messages` | list, sendText, sendImage/Video/Audio/Document/Sticker, sendLocation, sendContact, sendTemplate, sendPoll, reply, forward, react, delete, editMessage, history, reactions, sendBulk, batchStatus, cancelBatch |
 | `contacts` | list, get, check, profilePicture, profilePictures, phone, block, unblock |
 | `groups` | list, get, create, joinGroup, add/remove/promote/demoteParticipants, setSubject, setDescription, getGroupSettings, updateGroupSettings, leave, inviteCode, revokeInviteCode |
@@ -131,6 +131,7 @@ The top-level client also exposes:
 | `delete` | `delete(id)` | Delete a session. **OPERATOR** |
 | `start` | `start(id)` | Start a session and initialize the WhatsApp connection. **OPERATOR** |
 | `stop` | `stop(id)` | Stop a session and disconnect gracefully. **OPERATOR** |
+| `logout` | `logout(id)` | Unlink this device from the WhatsApp account, then stop the session; a later `start` needs a fresh QR. Requires a running session. **OPERATOR** |
 | `forceKill` | `forceKill(id)` | Force-kill a stuck session (SIGKILL + teardown). **OPERATOR** |
 | `getQrCode` | `getQrCode(id)` | Get the current QR code for authentication (live from the engine). **OPERATOR** |
 | `requestPairingCode` | `requestPairingCode(id, body)` | Request an 8-character pairing code for phone-based login. **OPERATOR** |
@@ -456,6 +457,7 @@ Resources are accessed as properties on the client (e.g. `client.messages`). All
 | `delete` | `delete(session_id) -> None` | Delete a session. **OPERATOR** |
 | `start` | `start(session_id) -> SessionResponse` | Start (connect) a session. **OPERATOR** |
 | `stop` | `stop(session_id) -> SessionResponse` | Stop a session. **OPERATOR** |
+| `logout` | `logout(session_id) -> SessionResponse` | Unlink this device from the WhatsApp account, then stop the session. Requires a running session. **OPERATOR** |
 | `force_kill` | `force_kill(session_id) -> SessionResponse` | Force-terminate a session. **OPERATOR** |
 | `get_qr_code` | `get_qr_code(session_id) -> QrCodeResponse` | Fetch the login QR code. **OPERATOR** |
 | `request_pairing_code` | `request_pairing_code(session_id, body) -> PairingCodeResponse` | Request a phone-number pairing code. **OPERATOR** |
@@ -752,6 +754,7 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 | `delete` | `delete(string $id): void` | Delete a session. **OPERATOR** |
 | `start` | `start(string $id): array` | Start a session. **OPERATOR** |
 | `stop` | `stop(string $id): array` | Stop a session. **OPERATOR** |
+| `logout` | `logout(string $id): array` | Unlink this device from the WhatsApp account, then stop the session. Requires a running session. **OPERATOR** |
 | `forceKill` | `forceKill(string $id): array` | Force-kill a session. **OPERATOR** |
 | `getQrCode` | `getQrCode(string $id): array` | Fetch the current QR code. **OPERATOR** |
 | `requestPairingCode` | `requestPairingCode(string $id, array $body): array` | Request a phone-pairing code. **OPERATOR** |

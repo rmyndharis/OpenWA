@@ -49,6 +49,15 @@ export class SessionsResource {
     return this.client.request<SessionResponse>({ method: 'POST', path: `/api/sessions/${encodeSegment(id)}/stop` });
   }
 
+  /**
+   * Unlink this device from the WhatsApp account, then stop the session. Unlike `stop` and
+   * `delete`, this removes the device from the account holder's Linked Devices list, so a later
+   * `start` requires a fresh QR scan or pairing code. Requires a running session.
+   */
+  logout(id: string): Promise<SessionResponse> {
+    return this.client.request<SessionResponse>({ method: 'POST', path: `/api/sessions/${encodeSegment(id)}/logout` });
+  }
+
   /** Force-kill a stuck session (SIGKILL + teardown). */
   forceKill(id: string): Promise<SessionResponse> {
     return this.client.request<SessionResponse>({ method: 'POST', path: `/api/sessions/${encodeSegment(id)}/force-kill` });

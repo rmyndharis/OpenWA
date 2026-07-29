@@ -136,6 +136,16 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/stop" \
   -H "X-API-Key: $API_KEY"
 ```
 
+#### POST /api/sessions/:id/logout
+
+Unlink this device from the WhatsApp account and stop the session (OPERATOR). Requires a running
+session; a later start needs a fresh QR scan or pairing code.
+
+```bash
+curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/logout" \
+  -H "X-API-Key: $API_KEY"
+```
+
 #### POST /api/sessions/:id/force-kill
 
 Force-kill a stuck session (OPERATOR).

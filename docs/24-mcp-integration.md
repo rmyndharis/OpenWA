@@ -127,7 +127,8 @@ declares a `tier` (`read` | `write`) and, for writes, a required role.
 | **Webhook** | list, get (read-only) | — |
 
 **Deliberately excluded from the surface** (not exposed as tools): session lifecycle
-(create/delete/start/stop/force-kill), chat delete, bulk send, message delete, message edit, group
+(create/delete/start/stop/logout/force-kill), chat delete, bulk send, message delete, message edit,
+group
 leave/remove/promote/demote/invite-revoke/join, group settings writes, all own-profile writes
 (name/status/picture), call reject, all API-key management, all plugin management,
 infrastructure import/export/restart, settings writes, and webhook create/update/delete.
