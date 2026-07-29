@@ -2695,6 +2695,16 @@ describe('outbound document mode (#989)', () => {
     );
   });
 
+  it('defaults a nameless document to "file" (WA Web would otherwise label it "undefined")', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendDocumentMessage('628@c.us', { mimetype: 'application/pdf', data: bytes });
+    expect(sendMessage).toHaveBeenCalledWith(
+      '628@c.us',
+      expect.objectContaining({ filename: 'file' }),
+      expect.objectContaining({ sendMediaAsDocument: true }),
+    );
+  });
+
   it('leaves the other media senders off the document path', async () => {
     const sendMessage = jest.fn().mockResolvedValue(sentMessage);
     await ready({ sendMessage }).sendImageMessage('628@c.us', { mimetype: 'image/png', data: bytes });

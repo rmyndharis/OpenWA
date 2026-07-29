@@ -1736,6 +1736,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     // Build the media once (a remote URL is fetched here); sendResolved may retry the send itself.
     const messageMedia = await this.toMessageMedia(media);
+    // A nameless document reaches WA Web as `new File([blob], undefined)` and is labelled literally
+    // "undefined". Only documents render a filename, so default just this path — as Baileys does.
+    if (extraOptions?.sendMediaAsDocument && !messageMedia.filename) {
+      messageMedia.filename = 'file';
+    }
     const msg = await this.sendResolved(chatId, to =>
       this.client!.sendMessage(to, messageMedia, {
         caption: media.caption,
@@ -1885,17 +1890,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
     // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
     this.ensureNotChannelRecipient(chatId);
-    let messageMedia: MessageMedia;
-
-    if (typeof media.data === 'string') {
-      if (isHttpUrl(media.data)) {
-        messageMedia = await loadRemoteMedia(media.data);
-      } else {
-        messageMedia = new MessageMedia(media.mimetype, media.data, media.filename);
-      }
-    } else {
-      messageMedia = new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
-    }
+    const messageMedia = await this.toMessageMedia(media);
 
     const msg = await this.sendResolved(chatId, to =>
       this.client!.sendMessage(to, messageMedia, {
@@ -2831,11 +2826,22 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   /** Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped). */
   private async toMessageMedia(media: MediaInput): Promise<MessageMedia> {
-    if (typeof media.data === 'string') {
-      if (isHttpUrl(media.data)) return loadRemoteMedia(media.data);
-      return new MessageMedia(media.mimetype, media.data, media.filename);
+    if (typeof media.data === 'string' && isHttpUrl(media.data)) {
+      const fetched = await loadRemoteMedia(media.data);
+      // `loadRemoteMedia` derives both fields from the response (content-type, URL basename) because
+      // that is all it has. The caller usually knows better, so let an explicit `mimetype`/`filename`
+      // win — matching `resolveMediaBuffer` on the Baileys adapter, which already prefers the caller's.
+      // `application/octet-stream` is the DTO's own placeholder, not a statement about the bytes.
+      if (media.mimetype && media.mimetype !== 'application/octet-stream') {
+        fetched.mimetype = media.mimetype;
+      }
+      if (media.filename) {
+        fetched.filename = media.filename;
+      }
+      return fetched;
     }
-    return new MessageMedia(media.mimetype, media.data.toString('base64'), media.filename);
+    const data = typeof media.data === 'string' ? media.data : media.data.toString('base64');
+    return new MessageMedia(media.mimetype, data, media.filename);
   }
 
   /**
