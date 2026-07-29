@@ -1,4 +1,4 @@
-import { registerUncaughtExceptionMonitor } from './process-error-monitor';
+import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './process-error-monitor';
 
 const EVENT = 'uncaughtExceptionMonitor';
 
@@ -46,5 +46,56 @@ describe('registerUncaughtExceptionMonitor', () => {
     const handler = register({ error: (m, d) => calls.push([m, d]) });
     expect(() => handler('a bare string', 'uncaughtException')).not.toThrow();
     expect(calls[0][1]).toContain('a bare string');
+  });
+});
+
+describe('registerUnhandledRejectionHandler', () => {
+  const EVENT = 'unhandledRejection';
+  const added: Array<(...args: unknown[]) => void> = [];
+
+  type Call = [string, string | undefined];
+  const register = (): { handler: (r: unknown) => void; errors: Call[]; warns: Call[] } => {
+    const errors: Call[] = [];
+    const warns: Call[] = [];
+    const before = process.listeners(EVENT);
+    registerUnhandledRejectionHandler({
+      error: (m, d) => errors.push([m, d]),
+      warn: (m, d) => warns.push([m, d]),
+    });
+    const fresh = process.listeners(EVENT).filter(l => !before.includes(l)) as Array<(...a: unknown[]) => void>;
+    added.push(...fresh);
+    return { handler: fresh[fresh.length - 1], errors, warns };
+  };
+
+  afterEach(() => {
+    added.splice(0).forEach(l => process.removeListener(EVENT, l));
+  });
+
+  it('logs an ordinary rejection as an error carrying its stack', () => {
+    const { handler, errors, warns } = register();
+    handler(new Error('something genuinely broke'));
+    expect(warns).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(errors[0][1]).toContain('something genuinely broke');
+  });
+
+  // #982: whatsapp-web.js re-runs inject() from an async 'framenavigated' listener it never awaits, so
+  // when the lifecycle closes that browser the pending page evaluate rejects with nowhere to be caught.
+  // It is expected and self-healing, and logging it as an error with a raw Puppeteer stack reads like a
+  // crash. The actionable variant of this message (#708, a stale browser profile) is thrown from inside
+  // initialize() and caught by the adapter, so it never reaches this handler.
+  it('downgrades the Puppeteer teardown rejection to a warning that explains it', () => {
+    const { handler, errors, warns } = register();
+    handler(new Error('Execution context was destroyed'));
+    expect(errors).toHaveLength(0);
+    expect(warns).toHaveLength(1);
+    expect(warns[0][0]).toMatch(/engine teardown/i);
+    expect(warns[0][1]).toContain('Execution context was destroyed'); // nothing is hidden, only the severity drops
+  });
+
+  it('stringifies a non-Error rejection without throwing', () => {
+    const { handler, errors } = register();
+    expect(() => handler('a bare string')).not.toThrow();
+    expect(errors[0][1]).toContain('a bare string');
   });
 });

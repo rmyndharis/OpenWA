@@ -11,7 +11,7 @@ import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPrese
 import { ShutdownService } from './common/services/shutdown.service';
 import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
-import { registerUncaughtExceptionMonitor } from './config/process-error-monitor';
+import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { createInflightBodyBudget, resolveInflightBodyBudgetBytes } from './config/inflight-body-budget';
@@ -48,12 +48,9 @@ async function bootstrap() {
   }
 
   // Backstop for promise rejections that escaped a local handler (e.g. a fire-and-forget engine-event
-  // dispatch). Node terminates the process on an unhandled rejection by default; for a long-running
-  // self-hosted gateway we'd rather log it and stay up than let one stray rejection kill all sessions.
+  // dispatch), including the expected engine-teardown case it downgrades to a warning (see the helper).
   const bootstrapLogger = createLogger('Bootstrap');
-  process.on('unhandledRejection', (reason: unknown) => {
-    bootstrapLogger.error('Unhandled promise rejection', reason instanceof Error ? reason.stack : String(reason));
-  });
+  registerUnhandledRejectionHandler(bootstrapLogger);
 
   // A synchronous throw from a non-promise context (e.g. a sync timer callback) is fatal — Node prints a
   // raw stack to stderr, bypassing the structured log pipeline, and exits(1). Route the stack through the

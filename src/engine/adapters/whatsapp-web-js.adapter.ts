@@ -366,6 +366,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // Set once teardown begins so a late 'authenticated' can't resurrect a disconnecting adapter. Not
   // reset — an adapter is single-use after teardown (the session creates a fresh one to reconnect).
   private tearingDown = false;
+  // Set once the adapter ACTIVELY transitions to DISCONNECTED (engine disconnect, puppeteer death,
+  // stuck-auth recovery, teardown). Same single-use contract as `tearingDown`, but it latches earlier:
+  // on LOGOUT whatsapp-web.js keeps the browser and re-runs inject(), while the lifecycle only replaces
+  // the engine after the reconnect backoff — so for those seconds the old client can still emit a QR or
+  // re-authenticate, and neither belongs to the session any more (#982).
+  private disconnectReported = false;
 
   constructor(private readonly config: WhatsAppWebJsConfig) {
     super();
@@ -609,11 +615,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('qr', async (qr: string) => {
-      // A 'qr' buffered by a wedged page can flush during the awaited client.destroy() (teardown sets
-      // tearingDown + DISCONNECTED first) or after recoverFromStuckAuth() nulls this.client. Ignore it so a
-      // late event can't resurrect a disconnecting adapter to QR_READY and re-emit a stale QR. Mirrors the
-      // 'authenticated' guard below; the normal first QR is unaffected (not tearing down, not FAILED, client set).
-      if (this.tearingDown || this.status === EngineStatus.FAILED || !this.client) {
+      // A 'qr' buffered by a wedged page can flush during the awaited client.destroy(), after
+      // recoverFromStuckAuth() nulls this.client, or from a client that whatsapp-web.js re-injected
+      // after a LOGOUT (#982) — in the last case the browser is still alive and will keep serving QRs
+      // until the lifecycle replaces the engine. Ignore all of them so a late event can't resurrect a
+      // finished adapter to QR_READY and publish a QR that links a phantom device. Mirrors the
+      // 'authenticated' guard below; the normal first QR is unaffected (initialize() moves the status to
+      // INITIALIZING before any client exists, so the latch is still clear).
+      if (this.tearingDown || this.disconnectReported || this.status === EngineStatus.FAILED || !this.client) {
         return;
       }
       try {
@@ -628,10 +637,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('authenticated', () => {
       // Only the first authentication starts the reconcile window. Ignore a re-fired 'authenticated'
       // while already AUTHENTICATING (so it can't restart the 90s deadline), once READY/FAILED, or any
-      // time during/after teardown (so a late event can't resurrect a disconnecting adapter). The
-      // initial status is DISCONNECTED, so teardown is distinguished by the flag, not by DISCONNECTED.
+      // time after the adapter is finished — teardown, or a reported disconnect the lifecycle has not
+      // replaced the engine for yet (#982). The initial status is DISCONNECTED too, so "finished" is
+      // carried by the flags, never by the status alone.
       if (
         this.tearingDown ||
+        this.disconnectReported ||
         this.status === EngineStatus.AUTHENTICATING ||
         this.status === EngineStatus.READY ||
         this.status === EngineStatus.FAILED
@@ -859,6 +870,19 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
     this.client.on('disconnected', reason => {
       this.clearReadyReconcile();
+      // #982: LOGOUT is not a transient drop. whatsapp-web.js emits it when WhatsApp Web itself ran a
+      // logout (its in-page `Cmd` logout bus), and by then it has ALREADY deleted this session's
+      // credentials — LocalAuth.logout() removes the profile dir before the event reaches us. So the
+      // lifecycle's reconnect cannot restore the link; it can only come back with a fresh QR. Say that
+      // here rather than leaving the operator with an opaque engine token that reads like any other drop.
+      if (reason === 'LOGOUT') {
+        this.logger.warn(
+          'WhatsApp unlinked this device (LOGOUT). whatsapp-web.js has already deleted the stored ' +
+            'credentials for this session, so reconnecting cannot restore the link — the session comes ' +
+            'back with a fresh QR and must be re-scanned. If this was not expected, check Linked devices ' +
+            'on the phone.',
+        );
+      }
       this.setStatus(EngineStatus.DISCONNECTED);
       this.callbacks.onDisconnected?.(reason);
     });
@@ -1253,6 +1277,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   private setStatus(status: EngineStatus): void {
+    // Latch before anything observes the transition. The constructor's initial DISCONNECTED is a field
+    // initializer and never reaches here, so this only ever fires on a real transition — startup is
+    // unaffected while a finished adapter is marked finished for good.
+    if (status === EngineStatus.DISCONNECTED) {
+      this.disconnectReported = true;
+    }
     this.status = status;
     this.callbacks.onStateChanged?.(status);
     this.emit('stateChanged', status);

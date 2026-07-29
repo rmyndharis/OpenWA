@@ -1200,6 +1200,79 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(onQRCode).toHaveBeenCalledTimes(1);
   });
 
+  // #982: whatsapp-web.js does NOT destroy the client on LOGOUT — it deletes the auth profile and
+  // re-runs inject() on the SAME browser, which re-arms the QR handler. The session lifecycle only
+  // tears the engine down after the reconnect backoff (~5s by default, operator-raisable to 300s), so
+  // there is a window where the adapter is DISCONNECTED but NOT tearing down. A QR emitted then belongs
+  // to a browser about to be killed: scanning it links a phantom device and the real QR arrives seconds
+  // later. Same short-circuit-before-encode check as the teardown case above.
+  it('ignores a qr event fired after a LOGOUT disconnect (before teardown starts)', async () => {
+    (qrcode.toDataURL as unknown as jest.Mock).mockClear();
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter);
+    const onQRCode = jest.fn();
+    (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+
+    client.emit('disconnected', 'LOGOUT');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    // The distinguishing property of this window: no teardown has begun, so `tearingDown` is still
+    // false and cannot be what suppresses the stale QR.
+    expect((adapter as unknown as { tearingDown: boolean }).tearingDown).toBe(false);
+
+    client.emit('qr', '2@stale-after-logout');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(qrcode.toDataURL as unknown as jest.Mock).not.toHaveBeenCalled(); // guard short-circuits before the encode
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(onQRCode).not.toHaveBeenCalled();
+  });
+
+  // #982: 'LOGOUT' is not a transient drop and the lifecycle cannot recover the link from it —
+  // whatsapp-web.js has already deleted the auth profile by the time the event arrives. The opaque
+  // engine token alone left operators reading it as an ordinary disconnect, so the adapter explains it.
+  it('explains a LOGOUT disconnect (credentials deleted, re-scan required)', () => {
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: (m: string) => void } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const { client } = attachFakeClient(adapter);
+
+    client.emit('disconnected', 'LOGOUT');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/re-scan/i);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/credential/i);
+  });
+
+  // Guards against over-explaining: an ordinary transient reason must not gain the re-scan advisory.
+  it('does not explain an ordinary transient disconnect reason', () => {
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: (m: string) => void } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const { client } = attachFakeClient(adapter);
+
+    client.emit('disconnected', 'CONFLICT');
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // The same #982 window for 'authenticated': the re-injected client can re-authenticate on the browser
+  // that is about to be replaced. Reviving to AUTHENTICATING would also re-arm the 90s ready-reconcile
+  // probe against it.
+  it('ignores an authenticated event fired after a LOGOUT disconnect (before teardown starts)', () => {
+    jest.useFakeTimers();
+
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter);
+
+    client.emit('disconnected', 'LOGOUT');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+
+    client.emit('authenticated');
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+    expect(jest.getTimerCount()).toBe(0); // no ready-reconcile armed on an engine about to be replaced
+  });
+
   // A wedged page can make getState() hang (the exact #251/#273 condition). The probe must keep its
   // own cadence (a hung probe can't stall the loop) and still honor the 90s give-up deadline.
   it('keeps probing and self-heals (clears auth + disconnects) when getState hangs past the deadline', async () => {

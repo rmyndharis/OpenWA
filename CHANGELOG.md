@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   npm registry tarball (published from the same commit previously fetched over Git SSH), avoiding
   npm 12's `EALLOWGIT` default without weakening its project security policy.
 
+- **A whatsapp-web.js session no longer publishes a QR belonging to the browser it is about to
+  replace** (#982). On `LOGOUT`, whatsapp-web.js deletes the auth profile and re-runs its injection
+  against the same browser, so the old client keeps serving QR codes while the session lifecycle waits
+  out the reconnect backoff before tearing it down. The adapter suppressed such events only once
+  teardown had begun, so throughout that window — five seconds by default, as long as the configured
+  `reconnectBaseDelay` at most — a stale QR reached the dashboard and the `session.qr` webhook seconds
+  ahead of the real one; scanning it linked a phantom device and left the session unauthenticated. An
+  adapter that has reported a disconnect is now treated as finished for `qr` and `authenticated`
+  alike, matching the guard that already covered teardown.
+
+- **A `LOGOUT` disconnect now says what it means in the logs** (#982). The reason reached operators as
+  the bare engine token, reading like any other transient drop, when in fact WhatsApp Web itself ran a
+  logout and whatsapp-web.js deleted the session's stored credentials before the event was even
+  handed over — so no reconnect can restore the link and the device must be re-scanned. The adapter
+  now states that once, alongside a pointer to check Linked devices on the phone. The
+  `session.disconnected` payload is unchanged.
+
+- **The expected Puppeteer rejection that follows an engine teardown no longer logs as an error with a
+  raw stack** (#982). whatsapp-web.js re-runs its injection from an async listener it never awaits, so
+  closing that browser leaves a pending page evaluate to reject with no owner. It is expected and
+  self-healing, so it is now a warning naming the cause instead of an `Unhandled promise rejection`
+  error that reads like a crash. Nothing is muted: the full reason is still logged, and the actionable
+  variant of the same message — a browser profile left stale by a Chromium-binary change (#663/#708) —
+  is raised inside `initialize()`, caught by the adapter, and keeps its existing advisory.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
