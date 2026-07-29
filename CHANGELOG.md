@@ -84,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`send-document` really sends a document on the whatsapp-web.js engine** (#989, #1003). Without an
+- **`send-document` really sends a document on the whatsapp-web.js engine** (#989, #996, #1000, #1003). Without an
   explicit document flag, WhatsApp Web classifies an attachment from its declared mimetype, so an
   `image/*`, `video/*` or `audio/*` payload posted to the document endpoint arrived as a photo, video
   or audio bubble — re-encoded, and with its filename dropped. Baileys has always forced the document
@@ -202,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-session config (`PUT /api/plugins/:id/config/:sessionId`) continue to accept restricted keys
   and remain scoped to the sessions the key allows.
 
-- The queue dashboard (`/admin/queues`, available when `QUEUE_ENABLED=true`) now refuses API keys
+- The queue dashboard (`/api/admin/queues`, available when `QUEUE_ENABLED=true`) now refuses API keys
   restricted to specific sessions. The dashboard exposes and mutates every queue in the deployment
   and has no session dimension to scope against.
 
@@ -214,6 +214,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Redriving a dead-lettered integration delivery now fails closed for session-restricted keys when
   the integration instance no longer exists. Previously the scope check was skipped for a missing
   instance, so retained dead-letter rows could be re-dispatched for sessions outside the key's scope.
+  **Breaking (behavior):** the session-restricted-key denials in this section change behavior for
+  existing API consumers — a key carrying an `allowedSessions` list that previously reached these
+  deployment-global routes is now refused. Unrestricted keys are unaffected.
 
 - Outbound downloads that follow redirects (plugin packages and the plugin catalog) now validate
   every redirect hop before connecting. Previously a redirect whose target was a bare IP address

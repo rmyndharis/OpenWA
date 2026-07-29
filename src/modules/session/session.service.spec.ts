@@ -1848,6 +1848,51 @@ describe('SessionService', () => {
     });
   });
 
+  // ── engine ACTION_REQUIRED wiring (#982) ──────────────────────────
+
+  describe('engine ACTION_REQUIRED', () => {
+    const startAndCapture = async (): Promise<EngineEventCallbacks> => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+      const calls = mockEngine.initialize.mock.calls as [EngineEventCallbacks][];
+      return calls[0][0];
+    };
+
+    it('maps EngineStatus.ACTION_REQUIRED to SessionStatus.ACTION_REQUIRED via onStateChanged', async () => {
+      const callbacks = await startAndCapture();
+      (repository.update as jest.Mock).mockClear();
+
+      callbacks.onStateChanged?.(EngineStatus.ACTION_REQUIRED);
+
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.ACTION_REQUIRED });
+    });
+
+    it('records the onActionRequired reason and runs the session:error hook', async () => {
+      const callbacks = await startAndCapture();
+
+      callbacks.onActionRequired?.('onboarding modal needs a manual dismissal');
+
+      const sessionErrors = (service as unknown as { sessionErrors: Map<string, string> }).sessionErrors;
+      expect(sessionErrors.get('sess-uuid-1')).toBe('onboarding modal needs a manual dismissal');
+      expect(hookManager.execute).toHaveBeenCalledWith(
+        'session:error',
+        expect.objectContaining({ reason: 'onboarding modal needs a manual dismissal' }),
+        expect.objectContaining({ sessionId: 'sess-uuid-1' }),
+      );
+    });
+
+    it('surfaces the reason via lastError while the session is ACTION_REQUIRED', async () => {
+      const callbacks = await startAndCapture();
+      callbacks.onActionRequired?.('onboarding modal needs a manual dismissal');
+
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.ACTION_REQUIRED }));
+      const result = await service.findOne('sess-uuid-1');
+
+      expect(result.lastError).toBe('onboarding modal needs a manual dismissal');
+    });
+  });
+
   // ── engine-identity guard: stale-callback isolation ───────────────
   // A callback can fire after its engine was torn down (post-stop) or after a newer engine
   // replaced it for the same id (post-restart / reconnect). Such a stale callback must not
@@ -4460,6 +4505,19 @@ describe('SessionService', () => {
       expect(repository.update).toHaveBeenCalledWith(expect.objectContaining({ status: expect.anything() as string }), {
         status: SessionStatus.DISCONNECTED,
       });
+    });
+
+    it('treats ACTION_REQUIRED as an active status that gets reset on startup', async () => {
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.onModuleInit();
+
+      // The reset targets the active-status set via In(...) — ACTION_REQUIRED must be a member, or a
+      // session waiting on operator action would survive a restart looking resumable while the engine
+      // that could observe the action is gone.
+      const calls = (repository.update as jest.Mock).mock.calls as Array<[{ status: { value: unknown } }]>;
+      const where = calls[0][0];
+      expect(where.status.value).toEqual(expect.arrayContaining([SessionStatus.ACTION_REQUIRED]));
     });
   });
 

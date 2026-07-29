@@ -2130,6 +2130,24 @@ describe('InfraController.requestRestart constrains teardown to managed profiles
     expect(orchestrateProfiles).toHaveBeenCalledTimes(1);
     expect(orchestrateProfiles).toHaveBeenCalledWith(['postgres']);
   });
+
+  it('writes only allowlisted profiles to the no-Docker signal file (symmetry with the Docker path)', async () => {
+    const writeFileSync = fs.writeFileSync as jest.Mock;
+    writeFileSync.mockClear();
+    const controller = buildController({ isDockerAvailable: () => false });
+
+    // The signal file is consumed by an external host script — it must never be handed a name the
+    // in-process Docker path would have refused.
+    await controller.requestRestart({ profiles: ['postgres', 'not-managed'], profilesToRemove: ['evil', 'redis'] });
+
+    const written = (writeFileSync.mock.calls as Array<[unknown, unknown]>).find(call =>
+      String(call[0]).endsWith('.orchestration-request.json'),
+    );
+    expect(written).toBeDefined();
+    const payload = JSON.parse(String(written![1])) as { profiles: string[]; profilesToRemove: string[] };
+    expect(payload.profiles).toEqual(['postgres']);
+    expect(payload.profilesToRemove).toEqual(['redis']);
+  });
 });
 
 // C002: the infra module exposed sensitive ADMIN operations (credential config write, restart/Docker

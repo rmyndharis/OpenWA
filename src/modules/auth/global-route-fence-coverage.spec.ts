@@ -57,19 +57,21 @@ export function handlersMissingGlobalFence(source: string): string[] {
 
   const offenders: string[] = [];
   // Capture each handler's decorator block plus its method name. Decorators are the contiguous run of
-  // `@...` lines immediately preceding a 2-space-indented method declaration.
-  const handlerRe = /((?:^ {2}@[\s\S]*?)?)^ {2}(?:async\s+)?([a-zA-Z0-9_]+)\s*\(/gm;
+  // `@...` lines immediately preceding an indented method declaration. Any indentation depth matches —
+  // a handler indented by something other than two spaces is still a route the fence decision covers.
+  const handlerRe = /((?:^ +@[\s\S]*?)?)^ +(?:async\s+)?([a-zA-Z0-9_]+)\s*\(/gm;
   for (let m = handlerRe.exec(source); m !== null; m = handlerRe.exec(source)) {
     const [, decorators, name] = m;
     if (name === 'constructor') continue;
-    // Only HTTP handlers matter; a private helper has no route decorator.
-    if (!/@(Get|Post|Put|Patch|Delete)\(/.test(decorators)) continue;
+    // Only HTTP handlers matter; a private helper has no route decorator. @All, @Sse and @Head bind
+    // routes too, so a handler using one is still an endpoint the fence decision applies to.
+    if (!/@(Get|Post|Put|Patch|Delete|All|Sse|Head)\(/.test(decorators)) continue;
     if (/@Public\(\)/.test(decorators)) continue;
     if (/@RequireUnscopedKey\(\)/.test(decorators)) continue;
     // A :sessionId route param gives the guard something to scope against.
-    if (/@(Get|Post|Put|Patch|Delete)\([^)]*:sessionId/.test(decorators)) continue;
+    if (/@(Get|Post|Put|Patch|Delete|All|Sse|Head)\([^)]*:sessionId/.test(decorators)) continue;
     // On a @SessionScoped controller the bare `:id` param is a session id, so it is scoped too.
-    if (classIsSessionScoped && /@(Get|Post|Put|Patch|Delete)\([^)]*:id/.test(decorators)) continue;
+    if (classIsSessionScoped && /@(Get|Post|Put|Patch|Delete|All|Sse|Head)\([^)]*:id/.test(decorators)) continue;
     offenders.push(name);
   }
   return offenders;
@@ -95,6 +97,32 @@ export class ThingController {
   findAll(): string[] {
     return [];
   }
+}
+`;
+    expect(handlersMissingGlobalFence(vulnerable)).toEqual(['findAll']);
+  });
+
+  it('flags an @All handler with no fence', () => {
+    const vulnerable = `
+export class ThingController {
+  @All('everything')
+  @RequireRole(ApiKeyRole.ADMIN)
+  handleAll(): string[] {
+    return [];
+  }
+}
+`;
+    expect(handlersMissingGlobalFence(vulnerable)).toEqual(['handleAll']);
+  });
+
+  it('flags a handler indented deeper than two spaces', () => {
+    const vulnerable = `
+export class ThingController {
+    @Get('everything')
+    @RequireRole(ApiKeyRole.ADMIN)
+    findAll(): string[] {
+        return [];
+    }
 }
 `;
     expect(handlersMissingGlobalFence(vulnerable)).toEqual(['findAll']);

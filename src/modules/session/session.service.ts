@@ -385,12 +385,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const raw = teardown(engine);
     if (label === 'logout') {
       // Settlement marker only — never rejects, so it can't drive the race below to a false
-      // "completed"; the race still observes the raw promise. Identity-checked on removal so a
-      // newer teardown's entry isn't evicted by an older one settling.
+      // "completed"; the race still observes the raw promise. A concurrent logout chains onto the
+      // previous entry instead of overwriting it, so start()/delete() keep waiting until EVERY
+      // in-flight teardown for this session has settled — otherwise the second logout's fast
+      // settlement would drop the entry while the first teardown's profile rm is still pending.
+      // Identity-checked on removal so a newer teardown's entry isn't evicted by an older one settling.
       const tracked = raw.catch(() => undefined);
-      this.pendingTeardowns.set(sessionId, tracked);
-      void tracked.finally(() => {
-        if (this.pendingTeardowns.get(sessionId) === tracked) {
+      const previous = this.pendingTeardowns.get(sessionId);
+      const entry: Promise<void> = previous ? Promise.allSettled([previous, tracked]).then(() => undefined) : tracked;
+      this.pendingTeardowns.set(sessionId, entry);
+      void entry.finally(() => {
+        if (this.pendingTeardowns.get(sessionId) === entry) {
           this.pendingTeardowns.delete(sessionId);
         }
       });
@@ -615,6 +620,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
       // again, so leaving it would grow the map without bound across create/fail/delete churn.
       this.sessionErrors.delete(id);
+      // Same for a wedged logout-teardown entry: the wait above is only bounded, so a teardown
+      // that never settles would otherwise pin its entry (and its promise chain) forever.
+      this.pendingTeardowns.delete(id);
     }
   }
 
@@ -1555,7 +1563,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         });
         // Record the reason so attachLastError surfaces it while the session is ACTION_REQUIRED,
         // then updateStatus (via onStateChanged above) has already written the status. Set here too
-        // to be defensive: the callback order is onActionRequired then onStateChanged, but persisting
+        // to be defensive: the callback order is onStateChanged then onActionRequired, but persisting
         // the reason here means it is available regardless.
         this.sessionErrors.set(id, reason);
         void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'Engine' });

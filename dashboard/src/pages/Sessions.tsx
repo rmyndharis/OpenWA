@@ -56,6 +56,7 @@ export function Sessions() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
   const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async (): Promise<Session[]> => {
     try {
@@ -365,6 +366,10 @@ export function Sessions() {
   };
 
   const handleUnlink = async (id: string) => {
+    // Guard against a second concurrent request: the button is disabled while in flight, but a
+    // rapid double-click would otherwise fire overlapping logouts and race the teardown tracking.
+    if (unlinkingId) return;
+    setUnlinkingId(id);
     try {
       await sessionApi.logout(id);
       setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'disconnected' } : s)));
@@ -382,6 +387,7 @@ export function Sessions() {
       fetchSessions();
     } finally {
       setUnlinkConfirmId(null);
+      setUnlinkingId(null);
     }
   };
 
@@ -800,7 +806,11 @@ export function Sessions() {
               <button className="btn-secondary" onClick={() => setUnlinkConfirmId(null)}>
                 {t('common.cancel')}
               </button>
-              <button className="btn-danger" onClick={() => handleUnlink(unlinkConfirmId)}>
+              <button
+                className="btn-danger"
+                onClick={() => handleUnlink(unlinkConfirmId)}
+                disabled={unlinkingId !== null}
+              >
                 {t('sessions.unlink.confirm')}
               </button>
             </>

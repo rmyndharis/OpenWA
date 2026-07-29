@@ -34,6 +34,7 @@ export interface MessageResult {
 export interface MediaInput {
   mimetype: string;
   data: Buffer | string; // Buffer or base64 or URL
+  /** Caller-supplied filename wins. Document sends fall back to 'file' when omitted (wwebjs first derives the URL basename); image/video/audio sends carry no filename. */
   filename?: string;
   caption?: string;
   /** Neutral WIDs (`<phone>@c.us`) to @mention in the caption. The adapter de-normalizes per engine. */
@@ -535,7 +536,9 @@ export interface EngineEventCallbacks {
    * linking that must be acknowledged, and the adapter dismisses it automatically; this fires only if
    * that dismissal fails, so a headless deployment is told (rather than left to be logged out ~5m
    * later). The engine has already moved to ACTION_REQUIRED; `reason` carries a human-readable cause.
-   * Distinct from `onError` (terminal) and `onDisconnected` (recoverable): intervention clears it.
+   * Distinct from `onError` (terminal) and `onDisconnected` (recoverable): it does NOT clear on its
+   * own — once the operator has acted, the session must be restarted (stop, then start) to return
+   * to READY.
    */
   onActionRequired?: (reason: string) => void;
   /**

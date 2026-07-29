@@ -4579,21 +4579,24 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
   type FakeEl = {
     tagName: string;
+    role: string | null;
     textContent: string;
     parentElement: FakeEl | null;
     offsetParent: unknown;
     getBoundingClientRect: () => { width: number; height: number };
-    matchesButton: boolean;
     click: jest.Mock;
   };
 
-  const el = (textContent: string, opts: { button?: boolean; hidden?: boolean } = {}): FakeEl => ({
+  const el = (
+    textContent: string,
+    opts: { button?: boolean; roleButton?: boolean; hidden?: boolean } = {},
+  ): FakeEl => ({
     tagName: opts.button ? 'BUTTON' : 'DIV',
+    role: opts.roleButton ? 'button' : null,
     textContent,
     parentElement: null,
     offsetParent: opts.hidden ? null : {},
     getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
-    matchesButton: !!opts.button,
     click: jest.fn(),
   });
 
@@ -4605,8 +4608,16 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
 
   const install = (all: FakeEl[]): void => {
     (globalThis as unknown as { document: unknown }).document = {
-      // The probe only ever queries for buttons, so honour that selector and ignore the rest.
-      querySelectorAll: (selector: string) => (selector.includes('button') ? all.filter(e => e.matchesButton) : []),
+      // The probe's selector is 'button, [role="button"]'. Mirror the DOM per branch: the tag branch
+      // matches BUTTON elements, the attribute branch matches anything carrying role="button".
+      querySelectorAll: (selector: string) => {
+        const branches = selector.split(',').map(branch => branch.trim());
+        return all.filter(
+          e =>
+            (branches.includes('button') && e.tagName === 'BUTTON') ||
+            (branches.includes('[role="button"]') && e.role === 'button'),
+        );
+      },
     };
   };
 
@@ -4628,6 +4639,18 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
   it('recognises the typographic apostrophe as well as the ASCII one', () => {
     const button = el('Continue', { button: true });
     nest(el('What’s new on WhatsApp Web'), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: true, dismissed: true });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  // The probe's selector covers ARIA buttons too ('button, [role="button"]'): WhatsApp Web has
+  // rendered the control as a div[role="button"] in some builds. A role-button carrying the exact
+  // label inside the modal is the same presence signal as a real <button>.
+  it('detects a div[role="button"] carrying the exact Continue label', () => {
+    const button = el('Continue', { roleButton: true });
+    nest(el("What's new on WhatsApp Web"), button);
     install([button]);
 
     expect(probeOnboardingModal()).toEqual({ modalPresent: true, dismissed: true });

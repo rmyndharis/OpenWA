@@ -1304,7 +1304,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         this.reportActionRequired(
           `WhatsApp is still showing its onboarding modal after ${this.onboardingDismissClicks} ` +
             "attempts to dismiss it. Open WhatsApp Web on the account holder's own browser and click " +
-            'through the "What\'s new" screen, or the companion device will be unlinked.',
+            'through the "What\'s new" screen, or the companion device will be unlinked. Then restart ' +
+            'the session (stop, then start) — acknowledging the modal does not return it to ready on its own.',
         );
       }
     } catch {

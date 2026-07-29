@@ -1,7 +1,7 @@
 import { isIPv4, isIPv6, type LookupFunction } from 'net';
 import { lookup } from 'dns/promises';
 import { type LookupAddress, type LookupOptions } from 'dns';
-import { Agent, fetch as undiciFetch, type RequestInit, type Response } from 'undici';
+import { Agent, fetch as undiciFetch, Headers, type RequestInit, type Response } from 'undici';
 
 /** Thrown when an outbound URL is blocked by the SSRF guard. */
 export class SsrfBlockedError extends Error {
@@ -338,52 +338,6 @@ export function pinnedLookup(addresses: LookupAddress[]): LookupFunction {
 }
 
 /**
- * A `connect.lookup` that resolves EVERY host it is asked to connect to and refuses any that resolve
- * to an internal/reserved address. Used by the redirect-following download path so that each hop —
- * the original URL AND every redirect target — is validated at connect time, not just the first one.
- * This closes the redirect-bypass hole a single-host pin can't: a 3xx to an internal host is rejected
- * at the socket. Allowlisted hosts (SSRF_ALLOWED_HOSTS) are resolved without the block check, matching
- * {@link resolveSafeFetchTarget}.
- */
-export function validatingLookup(): LookupFunction {
-  const fn = (hostname: string, options: LookupOptions, callback: (...args: unknown[]) => void): void => {
-    const host = hostname.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
-    const allowlisted = getAllowedHosts().has(host.toLowerCase());
-    const finish = (addrs: LookupAddress[]): void => {
-      if (options.all) callback(null, addrs);
-      else callback(null, addrs[0].address, addrs[0].family);
-    };
-
-    if (isIPv4(host) || isIPv6(host)) {
-      if (!allowlisted && isBlockedAddress(host)) {
-        callback(new SsrfBlockedError(`Blocked internal address: ${host}`));
-        return;
-      }
-      finish([{ address: host, family: isIPv6(host) ? 6 : 4 }]);
-      return;
-    }
-
-    lookupWithDeadline(host)
-      .then(resolved => {
-        if (resolved.length === 0) {
-          callback(new SsrfBlockedError(`Could not resolve host: ${host}`));
-          return;
-        }
-        if (!allowlisted) {
-          const bad = resolved.find(a => isBlockedAddress(a.address));
-          if (bad) {
-            callback(new SsrfBlockedError(`Host ${host} resolves to a blocked internal address: ${bad.address}`));
-            return;
-          }
-        }
-        finish(resolved);
-      })
-      .catch((err: unknown) => callback(err instanceof Error ? err : new Error(String(err))));
-  };
-  return fn as unknown as LookupFunction;
-}
-
-/**
  * Cancel an unread response body before the per-request dispatcher is destroyed.
  *
  * Status-only callers (webhook delivery) often leave `response.body` unread. When undici then
@@ -412,6 +366,42 @@ async function useAndSettleBody<T>(response: Response, use: (response: Response)
   } finally {
     await settleUnreadResponseBody(response);
   }
+}
+
+/**
+ * Escape hatch for deployments whose plugin vendor / release host legitimately redirects an https
+ * URL to a plain-http hop (e.g. behind TLS-terminating infrastructure). Default OFF: an https→http
+ * downgrade hop is refused because the payload on this path is executable code and an http hop
+ * exposes it to on-path substitution. Set PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS=true to allow.
+ */
+function isInsecureRedirectHopAllowed(): boolean {
+  return process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS === 'true';
+}
+
+/**
+ * undici's native redirector strips credentials on cross-origin hops and rewrites 301/302/303 to a
+ * bodiless GET — the manual loop must do the same, or a redirect target would receive the original
+ * request's Authorization/Cookie headers and body.
+ */
+function nextRedirectHopInit(init: RequestInit, status: number, nextUrl: string, initialOrigin: string): RequestInit {
+  let next = init;
+  if (
+    status !== 307 &&
+    status !== 308 &&
+    next.method !== undefined &&
+    next.method !== 'GET' &&
+    next.method !== 'HEAD'
+  ) {
+    next = { ...next, method: 'GET' };
+    delete next.body;
+  }
+  if (new URL(nextUrl).origin !== initialOrigin && next.headers !== undefined) {
+    const headers = new Headers(next.headers);
+    headers.delete('authorization');
+    headers.delete('cookie');
+    next = { ...next, headers };
+  }
+  return next;
 }
 
 /**
@@ -450,11 +440,23 @@ export async function withSafeFetch<T>(
     // IP-literal host, so a custom lookup is never invoked for `Location: http://127.0.0.1/` and the
     // hop goes unchecked. Each hop below is validated BEFORE its socket is opened.
     let currentUrl = rawUrl;
+    let initialOrigin: string | undefined;
+    let hopInit = init;
+    let sawSecureHop = false;
     for (let hop = 0; ; hop++) {
       const target = await resolveSafeFetchTarget(currentUrl);
+      // Parsed already by resolveSafeFetchTarget above, so this cannot throw.
+      const current = new URL(currentUrl);
+      initialOrigin ??= current.origin;
+      // A hop that downgrades https→http exposes the (executable) download to on-path substitution.
+      // Chains that STARTED on plain http are unaffected — they were never secure to begin with.
+      if (current.protocol === 'http:' && sawSecureHop && !isInsecureRedirectHopAllowed()) {
+        throw new Error(`Refusing redirect that downgrades from https to http: ${currentUrl}`);
+      }
+      if (current.protocol === 'https:') sawSecureHop = true;
       const dispatcher = target ? new Agent({ connect: { lookup: pinnedLookup(target) } }) : undefined;
       try {
-        const response = await undiciFetch(currentUrl, { ...init, redirect: 'manual', dispatcher });
+        const response = await undiciFetch(currentUrl, { ...hopInit, redirect: 'manual', dispatcher });
         if (!REDIRECT_STATUSES.has(response.status)) {
           return await useAndSettleBody(response, use);
         }
@@ -464,9 +466,13 @@ export async function withSafeFetch<T>(
           throw new SsrfBlockedError(`Redirect from ${currentUrl} carried no Location header`);
         }
         if (hop >= MAX_REDIRECT_HOPS) {
-          throw new SsrfBlockedError(`Too many redirects while fetching ${rawUrl}`);
+          // Deliberately NOT an SsrfBlockedError: this is an actionable operator error, not a
+          // blocked-address rejection, so it must survive redactSsrfError verbatim.
+          throw new Error(`Too many redirects while fetching ${rawUrl}`);
         }
-        currentUrl = new URL(location, currentUrl).toString();
+        const nextUrl = new URL(location, currentUrl).toString();
+        hopInit = nextRedirectHopInit(hopInit, response.status, nextUrl, initialOrigin);
+        currentUrl = nextUrl;
       } finally {
         if (dispatcher) await dispatcher.destroy().catch(() => undefined);
       }

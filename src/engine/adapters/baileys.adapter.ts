@@ -562,6 +562,9 @@ export class BaileysAdapter implements IWhatsAppEngine {
     }
 
     try {
+      // Baileys' sock.logout() resolves once the WebSocket write has flushed — WhatsApp sends no
+      // iq ack for the unlink — and it transmits nothing at all when authState.creds.me is unset.
+      // A resolved promise therefore means "sent (or nothing to send)", not "unlink acknowledged".
       await this.sock.logout();
     } catch (err) {
       // End the socket so the session still dies locally, but keep the on-disk creds: wiping

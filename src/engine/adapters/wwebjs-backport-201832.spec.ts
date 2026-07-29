@@ -150,6 +150,15 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched/);
   });
 
+  it('fails with a curated version-skew error when Message.js is missing', () => {
+    const dir = copyWwjs();
+    // A future whatsapp-web.js could keep Base.js but drop or rename Message.js — the patcher must
+    // diagnose that as version skew, not die on a raw ENOENT.
+    fs.rmSync(path.join(dir, 'src', 'structures', 'Message.js'));
+
+    expect(() => applyBackport(dir)).toThrow(/version skew/);
+  });
+
   it('applies the backport across every id-normalization site', () => {
     const dir = copyWwjs();
 

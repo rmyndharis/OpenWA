@@ -342,7 +342,8 @@ export class PluginsService {
 
   /**
    * Install a plugin from an HTTPS URL: download the .zip through the SSRF guard (host validated,
-   * connection pinned, redirects refused, size-capped), then run the exact same validate-write-load
+   * connection pinned, redirects followed with every hop re-validated through the guard and the
+   * chain capped at 5 hops, size-capped), then run the exact same validate-write-load
    * pipeline as an uploaded package. The downloaded buffer is treated as untrusted, identical to an
    * upload. When the URL pins a digest (`#sha256=<hex>` fragment — the only honored marker; query
    * params are deliberately ignored, see plugin-download.ts), the bytes MUST match it: a mismatch

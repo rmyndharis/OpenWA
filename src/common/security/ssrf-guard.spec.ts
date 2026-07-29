@@ -4,13 +4,13 @@ import {
   assertNoRedirect,
   SsrfBlockedError,
   isSsrfProtectionEnabled,
+  redactSsrfError,
   resolveSafeFetchTarget,
   pinnedLookup,
-  validatingLookup,
   withSafeFetch,
 } from './ssrf-guard';
 import * as dnsPromises from 'dns/promises';
-import { fetch as undiciFetch, Agent } from 'undici';
+import { fetch as undiciFetch, Agent, Headers } from 'undici';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -328,6 +328,159 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     expect(use).not.toHaveBeenCalled();
   });
 
+  it('refuses a redirect hop that downgrades from https to http', async () => {
+    // The payload on this path is executable code, so the caller forces https on the initial URL;
+    // a 302 to a plain-http hop would expose the bytes to on-path substitution. The refusal must
+    // happen BEFORE that hop's socket opens.
+    const savedHatch = process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS;
+    delete process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS; // pin the secure default
+    try {
+      (dnsPromises.lookup as jest.Mock)
+        .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+        .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+      (undiciFetch as jest.Mock).mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', 'http://cdn.example.com/p.zip']]),
+      });
+      const use = jest.fn();
+
+      await expect(
+        withSafeFetch('https://github.com/x/releases/p.zip', {}, use, { followRedirects: true }),
+      ).rejects.toThrow(/downgrades from https to http/);
+      expect(use).not.toHaveBeenCalled();
+      expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (savedHatch === undefined) delete process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS;
+      else process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS = savedHatch;
+    }
+  });
+
+  it('allows a chain that started on plain http (no downgrade — it never was secure)', async () => {
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', 'http://mirror.example.com/catalog.json']]),
+      })
+      .mockResolvedValueOnce({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'catalog');
+
+    const result = await withSafeFetch('http://plugins.internal.example/catalog.json', {}, use, {
+      followRedirects: true,
+    });
+
+    expect(result).toBe('catalog');
+    expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows an https→http hop only when the insecure-redirect escape hatch is enabled', async () => {
+    const savedHatch = process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS;
+    process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS = 'true';
+    try {
+      (dnsPromises.lookup as jest.Mock)
+        .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+        .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+      (undiciFetch as jest.Mock)
+        .mockResolvedValueOnce({
+          status: 302,
+          type: 'basic',
+          headers: new Map([['location', 'http://cdn.example.com/p.zip']]),
+        })
+        .mockResolvedValueOnce({ status: 200, type: 'basic' });
+      const use = jest.fn(() => 'downloaded');
+
+      const result = await withSafeFetch('https://github.com/x/releases/p.zip', {}, use, {
+        followRedirects: true,
+      });
+
+      expect(result).toBe('downloaded');
+      expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(2);
+    } finally {
+      if (savedHatch === undefined) delete process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS;
+      else process.env.PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS = savedHatch;
+    }
+  });
+
+  it('strips credentials on a cross-origin hop and rewrites 303 to a bodiless GET', async () => {
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        status: 303,
+        type: 'basic',
+        headers: new Map([['location', 'https://cdn.example.com/p']]),
+      })
+      .mockResolvedValueOnce({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'ok');
+    const init = {
+      method: 'POST',
+      body: 'payload',
+      headers: { authorization: 'Bearer secret', 'x-custom': 'keep' },
+    };
+
+    await withSafeFetch('https://api.example.com/upload', init, use, { followRedirects: true });
+
+    const calls = (undiciFetch as jest.Mock).mock.calls as Array<
+      [string, { method?: string; body?: unknown; headers?: Headers }]
+    >;
+    const hop2 = calls[1][1];
+    expect(hop2.method).toBe('GET');
+    expect(hop2.body).toBeUndefined();
+    expect(hop2.headers?.get('authorization')).toBeNull();
+    expect(hop2.headers?.get('x-custom')).toBe('keep');
+  });
+
+  it('keeps credentials on a same-origin hop', async () => {
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', 'https://api.example.com/other']]),
+      })
+      .mockResolvedValueOnce({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'ok');
+    const init = { headers: { authorization: 'Bearer secret' } };
+
+    await withSafeFetch('https://api.example.com/first', init, use, { followRedirects: true });
+
+    const calls = (undiciFetch as jest.Mock).mock.calls as Array<
+      [string, { headers?: Headers | Record<string, string> }]
+    >;
+    const hop2Headers = calls[1][1].headers;
+    const auth = hop2Headers instanceof Headers ? hop2Headers.get('authorization') : hop2Headers?.authorization;
+    expect(auth).toBe('Bearer secret');
+  });
+
+  it('surfaces the hop-cap error verbatim (not redacted to the generic SSRF message)', async () => {
+    // A legit >5-hop chain must be distinguishable from an SSRF block: the operator needs the real
+    // cause, and the message carries only the caller-supplied URL — nothing internal to redact.
+    for (let i = 0; i < 6; i++) {
+      (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    }
+    (undiciFetch as jest.Mock).mockResolvedValue({
+      status: 302,
+      type: 'basic',
+      headers: new Map([['location', 'https://cdn.example.com/next']]),
+    });
+    const use = jest.fn(() => 'ok');
+
+    const error: unknown = await withSafeFetch('https://github.com/x/releases/p.zip', {}, use, {
+      followRedirects: true,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Too many redirects');
+    expect(redactSsrfError(error)).toContain('Too many redirects');
+  });
+
   it('cancels an unread response body before tearing down the dispatcher (#887)', async () => {
     // Status-only callers leave the body unread; if we destroy the Agent while the stream is still
     // open, undici can emit TypeError: terminated / ECONNRESET as an uncaughtException. Cancelling
@@ -486,69 +639,6 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
   });
 });
 
-describe('validatingLookup (standalone validating resolver)', () => {
-  const run = (hostname: string): Promise<{ err: unknown; rest: unknown[] }> =>
-    new Promise(resolve => {
-      const lookup = validatingLookup() as unknown as (
-        h: string,
-        o: { all: boolean },
-        cb: (err: unknown, ...rest: unknown[]) => void,
-      ) => void;
-      lookup(hostname, { all: true }, (err, ...rest) => resolve({ err, rest }));
-    });
-
-  it('passes a public IP literal through', async () => {
-    const { err, rest } = await run('93.184.216.34');
-    expect(err).toBeNull();
-    expect(rest[0]).toEqual([{ address: '93.184.216.34', family: 4 }]);
-  });
-
-  it('refuses an internal IPv4 literal (a redirect target cannot be loopback/private)', async () => {
-    expect((await run('127.0.0.1')).err).toBeInstanceOf(SsrfBlockedError);
-    expect((await run('169.254.169.254')).err).toBeInstanceOf(SsrfBlockedError); // cloud metadata
-    expect((await run('10.0.0.5')).err).toBeInstanceOf(SsrfBlockedError);
-  });
-
-  it('refuses an internal IPv6 literal', async () => {
-    expect((await run('::1')).err).toBeInstanceOf(SsrfBlockedError);
-  });
-
-  it('refuses a hostname that resolves to an internal address', async () => {
-    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '10.0.0.9', family: 4 }]);
-    expect((await run('rebind.evil.example')).err).toBeInstanceOf(SsrfBlockedError);
-  });
-
-  it('passes a hostname that resolves to a public address', async () => {
-    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
-    const { err, rest } = await run('cdn.example.com');
-    expect(err).toBeNull();
-    expect(rest[0]).toEqual([{ address: '93.184.216.34', family: 4 }]);
-  });
-
-  it('returns a single (address, family) pair in non-all form', async () => {
-    const single = await new Promise<{ err: unknown; rest: unknown[] }>(resolve => {
-      const lookup = validatingLookup() as unknown as (
-        h: string,
-        o: { all: boolean },
-        cb: (err: unknown, ...rest: unknown[]) => void,
-      ) => void;
-      lookup('93.184.216.34', { all: false }, (err, ...rest) => resolve({ err, rest }));
-    });
-    expect(single.err).toBeNull();
-    expect(single.rest).toEqual(['93.184.216.34', 4]);
-  });
-
-  it('surfaces a DNS resolution failure to the callback (does not hang the connect)', async () => {
-    (dnsPromises.lookup as jest.Mock).mockRejectedValueOnce(new Error('ENOTFOUND'));
-    expect((await run('nope.example')).err).toBeInstanceOf(Error);
-  });
-
-  it('refuses a host that resolves to no addresses', async () => {
-    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([]);
-    expect((await run('empty.example')).err).toBeInstanceOf(SsrfBlockedError);
-  });
-});
-
 describe('isSsrfProtectionEnabled', () => {
   const orig = process.env.WEBHOOK_SSRF_PROTECT;
   afterEach(() => {
@@ -655,11 +745,12 @@ describe('withSafeFetch followRedirects validates every hop over real sockets', 
     const port = (server.address() as AddressInfo).port;
 
     try {
+      // An actionable operator error (not a blocked address), so it is not an SsrfBlockedError.
       await expect(
         withSafeFetch(`http://localhost:${port}/`, {}, async response => await response.text(), {
           followRedirects: true,
         }),
-      ).rejects.toBeInstanceOf(SsrfBlockedError);
+      ).rejects.toThrow(/Too many redirects/);
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()));
     }

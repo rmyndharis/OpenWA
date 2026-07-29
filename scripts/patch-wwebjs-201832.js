@@ -201,6 +201,16 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   // as "already fixed" and ship it. Matched loosely (`Base._normalizeId(` OR an inline `$1` fallback)
   // so a future upstream release that fixes this differently still stands the patcher down.
   const msgJs = path.join(wwjsDir, 'src', 'structures', 'Message.js');
+  if (!fs.existsSync(msgJs)) {
+    // A dep tree with Base.js but no Message.js is version skew vs the backport base — say so,
+    // instead of dying on a raw ENOENT from the read below. A plain Error, NOT partialTree:
+    // nothing has been written yet, so `--best-effort` may still degrade on a pristine tree.
+    throw new Error(
+      `whatsapp-web.js at ${wwjsDir} has src/structures/Base.js but no src/structures/Message.js — ` +
+        'version skew vs the backport base. Reinstall the dependency, or drop this backport if the ' +
+        'installed version restructured these files.',
+    );
+  }
   const msgSrc = fs.readFileSync(msgJs, 'utf8');
   if (/_normalizeId\(|\.\$1/.test(msgSrc)) {
     // Message.js normalizing is necessary but NOT sufficient to stand down. `patch` writes as it goes and

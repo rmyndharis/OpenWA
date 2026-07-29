@@ -82,7 +82,8 @@ export class SendMediaMessageDto {
   mimetype?: string;
 
   @ApiPropertyOptional({
-    description: 'Filename for the media',
+    description:
+      "Filename for the media. Only rendered on document sends — defaults to 'file' when omitted (a URL-based document send on whatsapp-web.js first derives the URL basename)",
     example: 'image.jpg',
   })
   @IsOptional()

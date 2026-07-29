@@ -1076,13 +1076,21 @@ export class InfraController implements OnApplicationBootstrap {
       }
     } else {
       this.logger.warn('Docker not available, writing signal file instead');
-      // Fallback: write signal file for host script
+      // Fallback: write signal file for host script — but apply the SAME managed-profile
+      // constraint as the Docker path above: the external consumer of this file must never be
+      // handed a profile name the in-process path would have refused.
       try {
         const signalFile = path.resolve(process.cwd(), 'data', '.orchestration-request.json');
+        const toStart = profiles.filter(p => MANAGED_DOCKER_PROFILES.includes(p));
+        const toRemove = profilesToRemove.filter(p => !profiles.includes(p) && MANAGED_DOCKER_PROFILES.includes(p));
+        const ignored = [...profiles, ...profilesToRemove].filter(p => !MANAGED_DOCKER_PROFILES.includes(p));
+        if (ignored.length > 0) {
+          this.logger.warn('Ignoring non-managed profiles in the signal-file request', { ignored });
+        }
         const orchestrationRequest = {
           timestamp: new Date().toISOString(),
-          profiles,
-          profilesToRemove,
+          profiles: toStart,
+          profilesToRemove: toRemove,
           action: 'restart-with-profiles',
         };
         fs.writeFileSync(signalFile, JSON.stringify(orchestrationRequest, null, 2), 'utf8');
