@@ -186,6 +186,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant of the same message — a browser profile left stale by a Chromium-binary change (#663/#708) —
   is raised inside `initialize()`, caught by the adapter, and keeps its existing advisory.
 
+### Security
+
+- Infrastructure routes (`/api/infra/*`) now reject API keys restricted to specific sessions.
+  These routes act on the whole deployment, so a key confined to a subset of sessions must not
+  reach them regardless of its role. Unrestricted ADMIN keys are unaffected.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
