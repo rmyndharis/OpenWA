@@ -265,6 +265,25 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  // With no socket the unlink cannot be sent, and an optional-chained call would resolve as though it
+  // had been — reporting a confirmed unlink, writing the audit row, and wiping the credentials, all
+  // while the device stayed linked server-side with nothing left to retry with. Reachable whenever the
+  // socket is gone but the engine is still registered, e.g. inside a reconnect backoff.
+  it('logout() rejects and keeps the on-disk auth dir when there is no socket at all', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({}));
+      (adapter as unknown as { sock: unknown }).sock = null;
+
+      await expect(adapter.logout()).rejects.toThrow(/no live whatsapp socket/i);
+      expect(fakeSock.logout).not.toHaveBeenCalled();
+      expect(rmSpy).not.toHaveBeenCalled();
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it('on a recoverable close: reconnects (re-creates the socket) and does NOT fire onDisconnected', async () => {
     const onDisconnected = jest.fn();
     const adapter = newAdapter();

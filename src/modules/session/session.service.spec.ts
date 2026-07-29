@@ -395,6 +395,40 @@ describe('SessionService', () => {
       }
     });
 
+    // delete() purges the same on-disk dirs a losing logout teardown is still about to remove. Racing
+    // them lets the purge run against a directory the stale rm then re-enters, so delete waits too.
+    it('delete() waits for a logout teardown that lost its deadline race before purging', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ id: 'sess-uuid-1', name: 'test-session' }),
+      );
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      let releaseLogout!: () => void;
+      const wedgedLogout = new Promise<void>(res => {
+        releaseLogout = res;
+      });
+      enginesOf().set('sess-uuid-1', { logout: jest.fn().mockReturnValue(wedgedLogout) });
+
+      jest.useFakeTimers();
+      try {
+        const logoutCall = service.logout('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(10_000);
+        await expect(logoutCall).rejects.toBeInstanceOf(BadGatewayException);
+        expect(pendingTeardownsOf().has('sess-uuid-1')).toBe(true);
+
+        const deleteCall = service.delete('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(1_000); // inside the bounded wait
+        expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
+
+        releaseLogout();
+        await deleteCall;
+        expect(engineFactory.purgeSessionData).toHaveBeenCalledWith('test-session');
+        expect(pendingTeardownsOf().has('sess-uuid-1')).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('start() proceeds after the bounded wait when the teardown stays wedged', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

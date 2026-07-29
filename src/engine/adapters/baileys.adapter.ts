@@ -552,8 +552,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    // Without a socket the unlink cannot be sent, and `this.sock?.logout()` would resolve as though it
+    // had been — reporting a confirmed unlink, writing the audit row, and then wiping the on-disk
+    // credentials below, leaving the device linked server-side with no way left to retry. Fail instead
+    // so the caller surfaces it and the credentials survive. Reachable: a WhatsApp-side logout nulls
+    // the socket while the engine stays registered for the whole reconnect backoff.
+    if (!this.sock) {
+      throw new Error('No live WhatsApp socket — the unlink was not sent');
+    }
+
     try {
-      await this.sock?.logout();
+      await this.sock.logout();
     } catch (err) {
       // End the socket so the session still dies locally, but keep the on-disk creds: wiping
       // them now would leave the device linked server-side with no local way to retry the

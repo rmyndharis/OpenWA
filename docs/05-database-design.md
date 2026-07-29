@@ -295,20 +295,30 @@ stateDiagram-v2
     authenticating --> ready: Auth success
     authenticating --> failed: Auth failed
     ready --> disconnected: Connection lost
+    ready --> action_required: Needs an operator
+    action_required --> disconnected: stop() / logout()
     disconnected --> initializing: reconnect()
     ready --> [*]: DELETE
     failed --> [*]: DELETE
 ```
 
-| Status           | Description                  |
-| ---------------- | ---------------------------- |
-| `created`        | Session created, not started |
-| `initializing`   | Starting browser & WhatsApp  |
-| `qr_ready`       | QR code ready for scanning   |
-| `authenticating` | QR scanned, authenticating   |
-| `ready`          | Connected and ready          |
-| `disconnected`   | Disconnected, can reconnect  |
-| `failed`         | Failed, needs recreation     |
+| Status            | Description                                                       |
+| ----------------- | ----------------------------------------------------------------- |
+| `created`         | Session created, not started                                      |
+| `initializing`    | Starting browser & WhatsApp                                       |
+| `qr_ready`        | QR code ready for scanning                                        |
+| `authenticating`  | QR scanned, authenticating                                        |
+| `ready`           | Connected and ready                                               |
+| `disconnected`    | Disconnected, can reconnect                                       |
+| `action_required` | Engine running, but it needs an operator before it can work again |
+| `failed`          | Failed, needs recreation                                          |
+
+`action_required` differs from `failed` in that the engine is still loaded and still holds its
+WhatsApp connection — nothing is broken, but something outside the gateway has to change before the
+session is usable. The reason is carried on `lastError`, and every engine-backed action (`stop`,
+`logout`) still applies; sending is refused until the session returns to `ready`. Reaching it always
+takes deliberate evidence, never a single failed probe, precisely because it stops sends. A restart
+clears it, and so does a gateway restart.
 
 **Config Schema:**
 

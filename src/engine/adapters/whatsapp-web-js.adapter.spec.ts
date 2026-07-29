@@ -8,6 +8,7 @@ import {
   isExecutionContextDestroyedError,
   buildProxyLaunchConfig,
   loadRemoteMedia,
+  probeOnboardingModal,
   resolveAuthTimeoutMs,
   wwebjsAckToDeliveryStatus,
   extractWwebjsCall,
@@ -1105,6 +1106,17 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     await expect(adapter.logout()).rejects.toBe(unlinkError);
     expect(client.destroy).toHaveBeenCalledTimes(1); // local teardown still happened
     expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
+  // The session layer's "is it started?" check only sees that an engine is registered. An engine can
+  // outlive its client — a stuck-auth recovery nulls it and then waits out the reconnect backoff — and
+  // resolving here would report a confirmed unlink for a request that never left the process, complete
+  // with a SESSION_LOGGED_OUT audit row, while the device stayed listed under Linked Devices.
+  it('logout() rejects when there is no live client rather than reporting a phantom unlink', async () => {
+    const adapter = newAdapter();
+    (adapter as unknown as { client: unknown }).client = null;
+
+    await expect(adapter.logout()).rejects.toThrow(/no live whatsapp web client/i);
   });
 
   it('disables ready reconciliation before destroy awaits client teardown', async () => {
@@ -2710,6 +2722,92 @@ describe('outbound document mode (#989)', () => {
     await ready({ sendMessage }).sendImageMessage('628@c.us', { mimetype: 'image/png', data: bytes });
     expect(sendMessage).toHaveBeenCalledWith('628@c.us', expect.anything(), { caption: undefined });
   });
+
+  // A URL fetch can only describe the bytes from the response — content-type and the URL basename —
+  // so it used to overwrite whatever the request actually said. The caller knows better.
+  describe('remote-URL sends honour the metadata the caller declared', () => {
+    const remoteResponse = (headers: Record<string, string>) => ({
+      ok: true,
+      status: 200,
+      headers: { get: (k: string) => headers[k.toLowerCase()] ?? null },
+      body: {
+        getReader: () => {
+          let done = false;
+          return {
+            read: () =>
+              done
+                ? Promise.resolve({ done: true, value: undefined })
+                : ((done = true), Promise.resolve({ done: false, value: new Uint8Array([1, 2]) })),
+            cancel: () => Promise.resolve(),
+          };
+        },
+        cancel: () => Promise.resolve(),
+      },
+    });
+
+    beforeEach(() => {
+      (undiciFetch as jest.Mock).mockReset();
+      process.env.SSRF_ALLOWED_HOSTS = 'files.example.com';
+    });
+    afterEach(() => {
+      (undiciFetch as jest.Mock).mockReset();
+      delete process.env.SSRF_ALLOWED_HOSTS;
+    });
+
+    it('prefers the declared mimetype and filename over what the response advertised', async () => {
+      (undiciFetch as jest.Mock).mockResolvedValue(remoteResponse({ 'content-type': 'image/jpeg' }));
+      const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+
+      await ready({ sendMessage }).sendDocumentMessage('628@c.us', {
+        mimetype: 'application/pdf',
+        filename: 'report.pdf',
+        data: 'https://files.example.com/generated',
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        '628@c.us',
+        expect.objectContaining({ mimetype: 'application/pdf', filename: 'report.pdf' }),
+        expect.objectContaining({ sendMediaAsDocument: true }),
+      );
+    });
+
+    // A sticker's mimetype is an instruction, not a label: whatsapp-web.js returns the media
+    // unconverted once it reads as webp, so trusting a declared image/webp over bytes that are not
+    // webp ships raw bytes as a sticker. The response saw the bytes; the caller did not.
+    it('keeps the fetched type for a sticker, where the mimetype selects the conversion', async () => {
+      (undiciFetch as jest.Mock).mockResolvedValue(remoteResponse({ 'content-type': 'image/png' }));
+      const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+
+      await ready({ sendMessage }).sendStickerMessage('628@c.us', {
+        mimetype: 'image/webp',
+        data: 'https://files.example.com/not-really-a-webp',
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        '628@c.us',
+        expect.objectContaining({ mimetype: 'image/png' }),
+        expect.objectContaining({ sendMediaAsSticker: true }),
+      );
+    });
+
+    // The DTO fills this in when the client said nothing, so it is a placeholder rather than a claim
+    // about the bytes — the response has to win, or every URL send would go out as a generic blob.
+    it('lets the response win when the declared mimetype is the octet-stream placeholder', async () => {
+      (undiciFetch as jest.Mock).mockResolvedValue(remoteResponse({ 'content-type': 'image/jpeg' }));
+      const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+
+      await ready({ sendMessage }).sendImageMessage('628@c.us', {
+        mimetype: 'application/octet-stream',
+        data: 'https://files.example.com/photo.jpg',
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        '628@c.us',
+        expect.objectContaining({ mimetype: 'image/jpeg' }),
+        expect.anything(),
+      );
+    });
+  });
 });
 
 describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid migration)', () => {
@@ -4311,7 +4409,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       }
     });
 
-    it('falls back to ACTION_REQUIRED when the modal is present but Continue cannot be clicked', async () => {
+    it('only falls back to ACTION_REQUIRED once repeated clicks have failed to dismiss the modal', async () => {
       jest.useFakeTimers();
       try {
         const { adapter, evaluate, onActionRequired } = promoteToReady();
@@ -4320,7 +4418,20 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         await jest.advanceTimersByTimeAsync(2100);
         expect(adapter.getStatus()).toBe(EngineStatus.READY);
 
-        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: false } satisfies ModalProbe);
+        // A modal that really goes away is clicked once, so a single click must NOT move the session:
+        // the whole point of the threshold is that only a click which fails to land is evidence.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // Third click on a modal that is still there — the click is not landing, a human must act.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
         await jest.advanceTimersByTimeAsync(5100);
 
         expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
@@ -4331,7 +4442,10 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
       }
     });
 
-    it('falls back to ACTION_REQUIRED when the page evaluate rejects (selector moved / page closed)', async () => {
+    // A rejected probe means the page went away (reload, teardown, timeout) — it says nothing about
+    // the modal. Moving the session out of READY on that signal would block every send on a HEALTHY
+    // session for a reason the operator cannot act on, so the probe failure must be inert.
+    it('keeps the session READY when the page evaluate rejects', async () => {
       jest.useFakeTimers();
       try {
         const { adapter, evaluate, onActionRequired } = promoteToReady();
@@ -4341,9 +4455,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
 
         evaluate.mockRejectedValueOnce(new Error('Execution context was destroyed'));
         await jest.advanceTimersByTimeAsync(5100);
+        evaluate.mockRejectedValueOnce(new Error('Target closed'));
+        await jest.advanceTimersByTimeAsync(5100);
 
-        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
-        expect(onActionRequired).toHaveBeenCalledTimes(1);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
       } finally {
         jest.useRealTimers();
       }
@@ -4437,8 +4553,11 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         (client as EventEmitter).emit('authenticated');
         await jest.advanceTimersByTimeAsync(2100);
 
-        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: false } satisfies ModalProbe);
-        await jest.advanceTimersByTimeAsync(5100);
+        // Drive it to the fallback the only way that reaches it: clicks that keep failing to land.
+        for (let i = 0; i < 3; i++) {
+          evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+          await jest.advanceTimersByTimeAsync(5100);
+        }
         expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
 
         // A stray ready event must not resurrect READY from the action-required state.
@@ -4449,5 +4568,120 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         jest.useRealTimers();
       }
     });
+  });
+});
+
+// The in-page half of the onboarding watcher. Every other test in this file drives the watcher with a
+// mocked `pupPage.evaluate`, which proves the loop but says nothing about the matching that runs
+// inside the browser — the part that is actually fragile, and the part that decides whether a healthy
+// session keeps working. `probeOnboardingModal` is a self-contained function precisely so it can be
+// executed here against representative DOM shapes.
+describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
+  type FakeEl = {
+    tagName: string;
+    textContent: string;
+    parentElement: FakeEl | null;
+    offsetParent: unknown;
+    getBoundingClientRect: () => { width: number; height: number };
+    matchesButton: boolean;
+    click: jest.Mock;
+  };
+
+  const el = (textContent: string, opts: { button?: boolean; hidden?: boolean } = {}): FakeEl => ({
+    tagName: opts.button ? 'BUTTON' : 'DIV',
+    textContent,
+    parentElement: null,
+    offsetParent: opts.hidden ? null : {},
+    getBoundingClientRect: () => (opts.hidden ? { width: 0, height: 0 } : { width: 200, height: 40 }),
+    matchesButton: !!opts.button,
+    click: jest.fn(),
+  });
+
+  /** Wire children to a parent and return the parent, so ancestor walks have something to walk. */
+  const nest = (parent: FakeEl, ...children: FakeEl[]): FakeEl => {
+    for (const child of children) child.parentElement = parent;
+    return parent;
+  };
+
+  const install = (all: FakeEl[]): void => {
+    (globalThis as unknown as { document: unknown }).document = {
+      // The probe only ever queries for buttons, so honour that selector and ignore the rest.
+      querySelectorAll: (selector: string) => (selector.includes('button') ? all.filter(e => e.matchesButton) : []),
+    };
+  };
+
+  afterEach(() => {
+    delete (globalThis as unknown as { document?: unknown }).document;
+  });
+
+  it('clicks Continue when it sits inside the onboarding modal', () => {
+    const button = el('Continue', { button: true });
+    nest(el("What's new on WhatsApp Web"), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: true, dismissed: true });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  // WhatsApp Web renders the typographic apostrophe. Matching only the ASCII form meant the real
+  // modal was never recognised — the fix silently doing nothing at all.
+  it('recognises the typographic apostrophe as well as the ASCII one', () => {
+    const button = el('Continue', { button: true });
+    nest(el('What’s new on WhatsApp Web'), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: true, dismissed: true });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  // The regression that matters: an element's text includes all of its descendants, so a chat row
+  // previewing an ordinary message matches a heading-only test. Reporting a modal here took a healthy
+  // session out of READY, which refuses every send.
+  it.each([
+    ['a chat preview of the message "What\'s new?"', "Alice12:34What's new?"],
+    ['a chat preview without an apostrophe', 'Bob09:15whats new with you'],
+    ['a group named after the phrase', "What's New at Acme  09:15  Hi team"],
+    ['the typographic form in a message', 'Carol11:02What’s new?'],
+  ])('reports no modal for %s', (_label, text) => {
+    install([el(text)]); // a div, never a button — the chat list has no "Continue" control
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+  });
+
+  it('ignores a Continue button that belongs to something other than the onboarding modal', () => {
+    const button = el('Continue', { button: true });
+    nest(el('Update your payment method'), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  it('ignores an offscreen Continue button', () => {
+    const button = el('Continue', { button: true, hidden: true });
+    nest(el("What's new on WhatsApp Web"), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  // The ancestor walk is bounded so a match against <body> — i.e. the words appearing anywhere on the
+  // page — can never qualify a button that is nowhere near the modal.
+  it('does not match a heading further up the tree than the bounded walk reaches', () => {
+    const button = el('Continue', { button: true });
+    let node = button;
+    for (let i = 0; i < 9; i++) {
+      node = nest(el('wrapper'), node);
+    }
+    node.textContent = "What's new on WhatsApp Web";
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  it('reports no modal on a page with nothing to click', () => {
+    install([]);
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
   });
 });

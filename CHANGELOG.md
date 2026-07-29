@@ -10,20 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **The whatsapp-web.js engine auto-dismisses a new account's "What's new on WhatsApp Web" onboarding
-  modal** (#982). A freshly-linked account shows this modal after `ready`, and left unacknowledged it
+  modal** (#982, #1003). A freshly-linked account shows this modal after `ready`, and left unacknowledged it
   gets the companion unlinked roughly five minutes later — surfacing as `disconnected: LOGOUT`.
   whatsapp-web.js exposes no API for the modal (its own #3550 is still open), so the adapter reaches
-  the underlying page directly and clicks Continue best-effort, matching by the visible button/modal
-  text (stable across WhatsApp Web builds, unlike class selectors). The watcher starts on `ready` and
-  self-terminates after a lifetime cap since the modal is one-shot per account. When the dismissal
-  cannot be performed — the selector has moved, the page is unreachable, or no Continue button was
-  found — the session moves to a new **`action_required`** status instead of being silently logged
-  out. That status carries a human-readable reason via `lastError` (relaxed from FAILED-only to also
-  cover ACTION_REQUIRED) and flows through the existing `session.status` webhook and WebSocket
-  channels, the dashboard status pill, and all five SDKs. The watcher's interval, lifetime cap, and
-  probe timeout are bounded and `.unref()`'d, and it is cleared on every teardown path.
+  the underlying page directly and clicks Continue best-effort, matching by visible text rather than
+  class selectors, which WhatsApp Web rebuilds across releases. The watcher starts on `ready` and
+  self-terminates after a lifetime cap since the modal is one-shot per account; its interval, cap and
+  probe timeout are all bounded and `.unref()`'d, and it is cleared on every teardown path.
 
-- **`POST /sessions/:id/logout` unlinks the device from the WhatsApp account** (#984). Both engines
+  Detection keys on the **Continue button**, within a bounded number of levels of an element that also
+  carries the heading — not on the heading text alone. An element's text content includes all of its
+  descendants, so a chat-list row previewing the words "what's new", an entirely ordinary English
+  message, satisfies a heading-only test; a control whose exact label is "Continue" sitting inside
+  that same subtree is a shape the chat list does not produce. The heading match accepts the
+  typographic apostrophe WhatsApp Web actually renders as well as the ASCII one.
+
+  A session leaves `ready` only when Continue has been clicked repeatedly and the modal is still
+  there — evidence the click is not landing and a human has to acknowledge it on the phone. It then
+  moves to a new **`action_required`** status carrying a human-readable reason via `lastError`
+  (relaxed from FAILED-only to also cover this status), which flows through the existing
+  `session.status` webhook and WebSocket channels, the dashboard status pill, and all five SDKs. A
+  probe that cannot reach the page — a reload, a teardown, a timeout — is logged and otherwise
+  ignored: it says nothing about the modal, and taking a working session out of `ready` blocks every
+  send for a reason the operator cannot act on. The status is deliberately expensive to reach for
+  that reason.
+
+- **`POST /sessions/:id/logout` unlinks the device from the WhatsApp account** (#984, #1003). Both engines
   already implemented a real protocol-level unlink — whatsapp-web.js calls `WAWebSocketModel.Socket.logout()`
   and Baileys sends `<remove-companion-device reason="user_initiated"/>` — but the method had no caller,
   so it was unreachable over the API. `stop()` disconnects while keeping the stored credentials (a later
@@ -35,11 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit action so an intentional unlink is distinguishable from a plain stop or a WhatsApp-side eviction.
   The route requires a started session: with no engine loaded there is nothing to send the unlink
   through, so it returns 400 instead of reporting an unlink that never happened (unlike `stop()`,
-  which treats an already-stopped session as a successful no-op). If the engine's logout does not
-  complete, the session is still torn down locally but the route returns 502 — the unlink was not
-  confirmed, no `SESSION_LOGGED_OUT` audit row is written, and the stored credentials survive so
-  the retry needs no QR scan (#993). It is additive: the stop, delete, and force-kill semantics
-  are unchanged.
+  which treats an already-stopped session as a successful no-op). The engines enforce the same rule
+  one level down — a loaded engine whose browser or socket has gone (a stuck-auth recovery, or a
+  WhatsApp-side logout still inside its reconnect backoff) refuses the unlink rather than resolving
+  as though it had sent one, which would have produced a success response and a `SESSION_LOGGED_OUT`
+  audit row for a device still listed under Linked Devices.
+
+  If the engine's logout does not complete, the session is still torn down locally but the route
+  returns 502 — the unlink was not confirmed and no `SESSION_LOGGED_OUT` audit row is written
+  (#993). Whether the retry needs a QR scan depends on how it failed: an engine that refused the
+  logout sent and deleted nothing, so the credentials survive; an attempt that ran past the 10s
+  teardown deadline is still running, and on whatsapp-web.js it ends in the profile deletion a
+  successful unlink performs, so that session comes back with a fresh QR. `docs/06` spells both out.
+  It is additive: the stop, delete, and force-kill semantics are unchanged.
 
 - **All five SDKs and the dashboard's API client gain the session logout operation** (#984). The
   JavaScript, Python, Go, PHP, and Java SDKs each expose a `logout` method mirroring the neighbouring
@@ -48,17 +68,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the audit-action enumeration in `docs/05`, the method tables in `docs/18` and `sdk/README.md`) now
   include the route.
 
-- **The dashboard's Sessions page gains an Unlink action** (#984). Wired to the logout endpoint, it
+- **The dashboard's Sessions page gains an Unlink action** (#984, #1003). Wired to the logout endpoint, it
   is the only lifecycle button that tells WhatsApp anything: the device disappears from the account
   holder's Linked Devices list, and reconnecting requires a fresh QR scan or pairing code. It is
   labelled "Unlink" rather than "Logout" so it cannot be confused with the sidebar's own
-  (authentication) logout, and it appears for exactly the states that have a live engine — the same
-  visibility as Stop. The confirmation dialog spells out both consequences (fresh QR to reconnect;
+  (authentication) logout. Unlink and Stop now derive their visibility from one shared definition of
+  "this session has a live engine", so the card can never offer an action the API rejects — and, in
+  the other direction, never offers Start to a session that is already started, which answers 400 and
+  then leaves a QR dialog open that cannot resolve. That definition now includes `authenticating`
+  (the whatsapp-web.js engine can hold it for 90 seconds) and `action_required`, neither of which
+  previously offered any working action. The confirmation dialog spells out both consequences (fresh QR to reconnect;
   delete the session separately if local data should go too), and the 502 case — session stopped
   locally but the unlink unconfirmed by WhatsApp — surfaces as a warning toast with retry guidance
   instead of a plain error. Localized across all twelve dashboard locales.
 
 ### Fixed
+
+- **`send-document` really sends a document on the whatsapp-web.js engine** (#989, #1003). Without an
+  explicit document flag, WhatsApp Web classifies an attachment from its declared mimetype, so an
+  `image/*`, `video/*` or `audio/*` payload posted to the document endpoint arrived as a photo, video
+  or audio bubble — re-encoded, and with its filename dropped. Baileys has always forced the document
+  form, so the two engines disagreed on the same request. The flag is withheld for `status@broadcast`
+  and broadcast lists, where whatsapp-web.js refuses every recipient once it is set: setting it there
+  would turn a working send into a failure rather than improve it, so those recipients keep the
+  classification they have today. A document with no filename now defaults to `file` instead of
+  reaching the recipient labelled literally `undefined`.
+
+- **A remote-URL send keeps the mimetype and filename the caller declared.** Media fetched from a URL
+  derived both from the response — content-type and URL basename — because that is all the fetch has
+  to go on, and it overrode what the request actually said. The caller's values now win, matching what
+  the Baileys engine already did; `application/octet-stream` is treated as the placeholder it is
+  rather than a statement about the bytes, so omitting the mimetype still falls back to the response.
+
+  Stickers are the one exception, and keep the fetched content-type. There the mimetype is not a label
+  but an instruction: whatsapp-web.js picks the conversion from it and returns the media untouched once
+  it reads as `image/webp`. A URL sticker declared `image/webp` over bytes that are not webp would
+  therefore be sent unconverted. The response saw those bytes and the caller did not, so for that one
+  decision it is the better source. A declared filename still wins everywhere — nothing branches on it.
 
 - **A wedged logout can no longer delete a freshly re-paired profile** (#994). `teardownEngineSafely`
   races an engine teardown against a 10s deadline, but the losing promise kept running — and
@@ -70,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window is logged.
 
 - **`npm install` from source no longer fails on native Windows, and the whatsapp-web.js backport
-  actually applies there** (#889). A unified diff's lines must begin with a space, `+`, `-` or `@`, so
+  actually applies there** (#889, #1003). A unified diff's lines must begin with a space, `+`, `-` or `@`, so
   neither applier accepts one whose lines end CRLF — both stop at this patch's first empty context
   line (`git apply`: "corrupt patch at line 7"; `patch`: "malformed patch at line 7"). Windows checks
   the file out exactly that way whenever `core.autocrlf` is on, which is its default, so the `git
@@ -79,8 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Three changes: the patch is normalized to LF before either applier sees it, which also repairs
   clones already on disk with CRLF; a `.gitattributes` rule keeps fresh clones on LF; and a refusal to
   parse the patch is now correctly treated as "nothing was written", so `--best-effort` degrades
-  instead of aborting the install. Only source installs on Windows were affected — the published
-  Docker image and every platform with the `patch` binary applied the backport normally.
+  instead of aborting the install. That last one is matched on the messages `git apply` emits before
+  it writes anything, not on its exit code alone — the code is shared with fatals raised part-way
+  through writing results, and calling one of those a pristine tree would let `--best-effort` wave a
+  half-patched dependency through as a clean skip, which is the one outcome it must never produce.
+  Only source installs on Windows were affected — the published Docker image and every platform with
+  the `patch` binary applied the backport normally.
 
 - **Native Windows and npm 12 source installs no longer fail during dependency setup.** The
   whatsapp-web.js backport now normalizes reject-file paths before comparing them, so Windows'

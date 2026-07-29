@@ -218,7 +218,7 @@ List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt
 ]
 ```
 
-`lastError` is non-null only when `status` is `failed`. `config`/`proxyUrl`/`proxyType` are not present (stripped by `fromEntity`).
+`lastError` is non-null only when `status` is `failed` or `action_required`; any other status clears it. `config`/`proxyUrl`/`proxyType` are not present (stripped by `fromEntity`).
 
 **Errors:** `401` missing/invalid `X-API-Key`
 
@@ -514,12 +514,25 @@ protocol-level unlink and clear that session's stored credentials, so a later `s
 fresh QR scan or pairing code.
 
 The session must be running — the unlink is a network round-trip that needs a live engine, so a
-stopped session is rejected rather than reported as a success that never reached WhatsApp. If the
-engine's logout does not complete (socket already gone, teardown deadline hit), the session is
-still torn down locally but the route returns `502`: the unlink was not confirmed, the device may
-still be listed under Linked Devices, and no `session_logged_out` audit row is written. Start the
-session again and retry to confirm the unlink — the stored credentials survive a failed attempt,
-so the retry needs no QR scan.
+stopped session is rejected rather than reported as a success that never reached WhatsApp. The same
+applies one level down: a session whose engine is loaded but whose underlying browser or socket has
+gone (a stuck-auth recovery, a WhatsApp-side logout still inside its reconnect backoff) also answers
+`502` rather than reporting an unlink it never sent.
+
+If the engine's logout does not complete, the session is still torn down locally but the route
+returns `502`: the unlink was not confirmed, the device may still be listed under Linked Devices, and
+no `session_logged_out` audit row is written. Start the session again and retry.
+
+Whether that retry needs a QR scan depends on how the attempt failed, and the route cannot tell you
+which happened:
+
+- **The engine rejected the logout** (no live client, socket already gone). Nothing was sent and
+  nothing was deleted, so the stored credentials survive and the retry reconnects without a QR.
+- **The logout ran past the teardown deadline.** The 10s deadline bounds the *response*, not the
+  work: on whatsapp-web.js the still-running attempt ends in `LocalAuth.logout()`, which deletes the
+  profile directory. Once that lands the session comes back with a fresh QR, exactly as a successful
+  unlink would. `start` waits for that cleanup to settle before re-creating the profile, so the
+  outcome is consistent either way — but plan for a re-scan after a deadline-hit 502.
 
 **Auth:** API key (OPERATOR)  ·  **Scope:** session-scoped
 

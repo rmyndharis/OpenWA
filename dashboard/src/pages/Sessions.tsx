@@ -18,7 +18,7 @@ import {
 import { sessionApi, type Session } from '../services/api';
 import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { canUnlinkSession, classifyUnlinkError } from '../utils/sessionUnlink';
+import { canUnlinkSession, classifyUnlinkError, isSessionStarted } from '../utils/sessionActions';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
@@ -874,16 +874,16 @@ export function Sessions() {
                   <Eye size={16} />
                   {t('sessions.actions.view')}
                 </button>
-                {canWrite &&
-                (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <Play size={16} />
-                    {t('sessions.actions.start')}
-                  </button>
-                ) : canWrite && ['ready', 'initializing', 'connecting', 'qr_ready'].includes(session.status) ? (
+                {canWrite && isSessionStarted(session.status) ? (
                   <button className="btn-action" onClick={() => handleStop(session.id)}>
                     <Square size={16} />
                     {t('sessions.actions.stop')}
+                  </button>
+                ) : canWrite &&
+                  (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
+                  <button className="btn-action" onClick={() => handleStart(session.id)}>
+                    <Play size={16} />
+                    {t('sessions.actions.start')}
                   </button>
                 ) : canWrite ? (
                   <button className="btn-action" onClick={() => handleStart(session.id)}>

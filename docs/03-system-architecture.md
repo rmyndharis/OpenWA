@@ -219,6 +219,7 @@ export enum EngineStatus {
   QR_READY = 'qr_ready',
   AUTHENTICATING = 'authenticating',
   READY = 'ready',
+  ACTION_REQUIRED = 'action_required',
   FAILED = 'failed',
 }
 ```
@@ -886,6 +887,7 @@ export enum EngineStatus {
   QR_READY = 'qr_ready',
   AUTHENTICATING = 'authenticating',
   READY = 'ready',
+  ACTION_REQUIRED = 'action_required',
   FAILED = 'failed',
 }
 
@@ -904,6 +906,7 @@ export interface EngineEventCallbacks {
   onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
   onStateChanged?: (state: EngineStatus) => void;
+  onActionRequired?: (reason: string) => void; // engine alive, but an operator must act
   onError?: (reason: string) => void; // terminal init/auth failure
 }
 

@@ -147,6 +147,28 @@ function withLfPatch(patchFile, run) {
   }
 }
 
+/**
+ * `git apply` exit 128 is its generic "fatal", and only SOME fatals happen before anything is written.
+ * It parses the whole patch up front, so a diff it cannot read — or a bad invocation — is refused with
+ * the tree untouched; that is the case the Windows CRLF handling needs to degrade cleanly. A fatal
+ * raised while writing results (read-only tree, full disk) leaves the files already written in place,
+ * and classifying THAT as pristine lets `--best-effort` wave a half-patched dependency through with
+ * exit 0 — which is exactly what the flag must never do, because a half-patched tree reads as healthy
+ * afterwards. So match the messages git emits before it writes, not the exit code on its own.
+ */
+// Verified against the messages git actually emits: a CRLF patch gives "corrupt patch at line N" and a
+// non-diff gives "No valid patches in input" (older builds: "unrecognized input"). Both are refusals
+// raised while parsing, before a single file is touched.
+const GIT_APPLY_REFUSED_INPUT =
+  /corrupt patch|unrecognized input|no valid patches in input|only garbage|usage: git apply|not a git repository|No such file or directory/i;
+
+/** True only when a `git apply` failure provably happened before anything was written. */
+function gitApplyLeftTreeUntouched(e) {
+  if (e.code === 'ENOENT') return true; // git never executed at all
+  if (e.status !== 128) return false; // any other failure may have written
+  return GIT_APPLY_REFUSED_INPUT.test(e.stderr ? String(e.stderr) : e.message || '');
+}
+
 function applyWithGit(wwjsDir, patchFile) {
   try {
     execFileSync('git', ['-c', 'core.autocrlf=false', 'apply', '-p1', '--reject', '--ignore-whitespace', patchFile], {
@@ -159,10 +181,11 @@ function applyWithGit(wwjsDir, patchFile) {
     if (e.status === 1) return;
     const detail = e.stderr ? String(e.stderr).trim() : e.message;
     const err = new Error(`neither \`patch\` nor \`git apply\` could run (${e.code ?? `exit ${e.status}`}): ${detail}`);
-    // Neither of these touched a file, so the tree is untouched and degrading is still safe: ENOENT
-    // means git never executed, and 128 means it refused the input (bad usage, or a diff it could not
-    // parse) before applying anything. A partial write shows up as exit 1, which returned above.
-    throw e.code === 'ENOENT' || e.status === 128 ? err : partialTree(err);
+    // Degrade only when nothing can have been written: ENOENT means git never executed at all, and a
+    // 128 whose message is one of git's pre-write refusals means it rejected the input before applying
+    // anything. Any other failure — including a 128 raised midway through writing results — has to be
+    // treated as a partial tree. A rejected hunk is exit 1, which returned above.
+    throw gitApplyLeftTreeUntouched(e) ? err : partialTree(err);
   }
 }
 
@@ -296,4 +319,11 @@ if (require.main === module) {
   }
 }
 
-module.exports = { applyBackport, normalizeArtifactPath, DEFAULT_WWJS, DEFAULT_PATCH, EXPECTED_REJECTS };
+module.exports = {
+  applyBackport,
+  normalizeArtifactPath,
+  gitApplyLeftTreeUntouched,
+  DEFAULT_WWJS,
+  DEFAULT_PATCH,
+  EXPECTED_REJECTS,
+};

@@ -296,12 +296,53 @@ const READY_RECONCILE_TIMEOUT_MS = 90_000;
 // Onboarding-modal watcher (#982). A freshly-linked account shows a "What's new on WhatsApp Web"
 // modal with a Continue button that must be acknowledged, or WhatsApp unlinks the companion ~5m
 // later (surfacing as disconnected: LOGOUT). whatsapp-web.js exposes no API for this (#3550 open),
-// so the watcher reaches the page directly, dismisses it best-effort, and falls back to
-// ACTION_REQUIRED if that fails. The modal is one-shot per account, so the watcher self-terminates
-// after the lifetime cap rather than polling forever.
+// so the watcher reaches the page directly and clicks it best-effort. The modal is one-shot per
+// account, so the watcher self-terminates after the lifetime cap rather than polling forever.
 const ONBOARDING_MODAL_INTERVAL_MS = 5_000;
 const ONBOARDING_MODAL_MAX_LIFETIME_MS = 5 * 60_000;
 const ONBOARDING_MODAL_PROBE_TIMEOUT_MS = 5_000;
+// Clicking Continue dismisses the modal, so one click is the normal case and the next tick finds
+// nothing. Repeated clicks mean the click is not landing — the only evidence that actually justifies
+// asking a human to intervene.
+const ONBOARDING_MODAL_MAX_DISMISS_CLICKS = 3;
+
+/**
+ * In-page probe for the onboarding modal: click its Continue button if it is on screen.
+ *
+ * Exported and self-contained on purpose. `page.evaluate` stringifies this into the browser, so it
+ * may not close over anything in this module — and being a plain function means the DOM matching can
+ * be unit-tested directly, rather than only through a mocked `evaluate` that proves nothing about the
+ * matching itself.
+ *
+ * The BUTTON is the presence signal, never the heading text on its own. `textContent` on a `div`
+ * concatenates every descendant, so a chat-list row previewing the words "what's new" — an ordinary
+ * English message — satisfies a heading-only test. Treating that as a stuck modal would take a
+ * perfectly healthy session out of READY and block every send. A visible control whose exact label is
+ * "Continue", sitting within a few levels of an element that also carries the heading, is a shape the
+ * chat list does not produce. The ancestor walk is bounded for the same reason: matching against
+ * `<body>` would just be the loose text test again.
+ */
+export function probeOnboardingModal(): { modalPresent: boolean; dismissed: boolean } {
+  const isVisible = (el: Element): boolean => {
+    const rect = (el as HTMLElement).getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
+  };
+  // Both apostrophes: WhatsApp Web renders the typographic U+2019, and an ASCII quote appears in
+  // older builds. Matching only the ASCII form means never recognising the real modal.
+  const heading = /what[’']?s new/i;
+  const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(
+    el => isVisible(el) && (el.textContent || '').trim() === 'Continue',
+  );
+  for (const button of buttons.reverse()) {
+    let scope: Element | null = button;
+    for (let depth = 0; depth < 8 && scope; depth++, scope = scope.parentElement) {
+      if (!heading.test(scope.textContent || '')) continue;
+      (button as HTMLElement).click();
+      return { modalPresent: true, dismissed: true };
+    }
+  }
+  return { modalPresent: false, dismissed: false };
+}
 
 // WhatsApp Web version resolution (the #488 auto-resolve) lives in a dependency-free module so infra
 // status can import it without loading whatsapp-web.js (engine lazy-loading). The adapter imports
@@ -369,6 +410,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private onboardingWatcherTimer: ReturnType<typeof setTimeout> | null = null;
   private onboardingWatcherStartedAt = 0;
   private onboardingWatcherStarted = false;
+  // How many times we have clicked the modal's Continue button. Not reset by clearOnboardingWatcher:
+  // it counts for the engine's lifetime, which is what makes "the click is not landing" detectable.
+  private onboardingDismissClicks = 0;
   /** How long a received call's handle stays rejectable. Calls ring for roughly a minute, so
    *  two minutes covers the ringing window with margin without pinning dead calls for long. */
   private static readonly LIVE_CALL_TTL_MS = 2 * 60_000;
@@ -1181,8 +1225,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    * has a Continue button that must be acknowledged or WhatsApp unlinks the companion ~5m later
    * (surfacing as disconnected: LOGOUT). whatsapp-web.js exposes no API for this (#3550 open), so the
    * watcher reaches the page directly. Idempotent and one-shot per engine: the modal appears once per
-   * account, so the loop self-terminates at the lifetime cap instead of polling forever. On any probe
-   * failure the session moves to ACTION_REQUIRED and surfaces the reason — never silently.
+   * account, so the loop self-terminates at the lifetime cap instead of polling forever.
+   *
+   * The watcher only ever moves the session out of READY when it has clicked Continue repeatedly and
+   * the modal is still there — real evidence a human must acknowledge it. A probe that cannot reach
+   * the page, or a page with no such modal, leaves the session exactly where it was: blocking sends
+   * over a best-effort DOM guess would be a worse outcome than the problem being guarded against.
    */
   private startOnboardingWatcher(): void {
     if (this.onboardingWatcherStarted) return; // idempotent: ready event + reconcile path share one funnel
@@ -1219,10 +1267,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   /**
-   * One watcher tick: detect the onboarding modal and click Continue. Returns/throws rather than
-   * mutating state directly so the loop stays the single owner of the ACTION_REQUIRED transition.
-   * `undefined` = no modal (nothing to do); the page evaluating to a click is the success path; any
-   * thrown/rejected evaluate (selector moved, page closed, timeout) is treated as "needs attention".
+   * One watcher tick: click the onboarding modal's Continue button if it is on screen. Returns the
+   * probe verdict rather than mutating state so the loop stays the single owner of the
+   * ACTION_REQUIRED transition. A rejected evaluate is NOT an operator signal — see the catch.
    */
   private async dismissOnboardingModalIfNeeded(): Promise<void> {
     if (!this.client) return;
@@ -1231,25 +1278,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
-        page?.evaluate(() => {
-          // Match by visible text rather than class selectors — WhatsApp Web rebuilds its DOM across
-          // builds, but the button label ("Continue") and modal heading ("What's new") are stable.
-          const isVisible = (el: Element): boolean => {
-            const rect = (el as HTMLElement).getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
-          };
-          const candidates = Array.from(document.querySelectorAll('button, [role="button"], div'));
-          const heading = candidates.some(
-            el => isVisible(el) && /what'?s new/i.test((el.textContent || '').trim().slice(0, 64)),
-          );
-          if (!heading) return { modalPresent: false, dismissed: false };
-          const button = candidates
-            .filter(el => isVisible(el) && (el.textContent || '').trim() === 'Continue')
-            .slice(-1)[0];
-          if (!button) return { modalPresent: true, dismissed: false };
-          (button as HTMLElement).click();
-          return { modalPresent: true, dismissed: true };
-        }),
+        page?.evaluate(probeOnboardingModal),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(
             () => reject(new Error('onboarding modal probe timed out')),
@@ -1259,24 +1288,35 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         }),
       ]);
 
-      if (result?.modalPresent && !result.dismissed) {
-        // The modal is there but no clickable Continue was found — the account needs a human.
+      if (!result?.dismissed) return;
+
+      // We clicked. A modal that is really dismissed is gone by the next tick, so a click here is
+      // normally a one-off. Repeated clicks mean the click is not taking effect (an overlay is
+      // swallowing it, or WhatsApp keeps re-showing the modal) — that, and only that, is evidence a
+      // human has to acknowledge it on the phone before the companion is unlinked.
+      this.onboardingDismissClicks += 1;
+      this.logger.log('Dismissed the WhatsApp Web onboarding modal', {
+        sessionId: this.config.sessionId,
+        attempt: this.onboardingDismissClicks,
+        action: 'onboarding_modal_dismissed',
+      });
+      if (this.onboardingDismissClicks >= ONBOARDING_MODAL_MAX_DISMISS_CLICKS) {
         this.reportActionRequired(
-          'WhatsApp is showing an onboarding modal ("What\'s new") that could not be dismissed ' +
-            "automatically. Acknowledge it (e.g. link a normal WhatsApp Web session on the phone's " +
-            'number and click through) or the companion will be unlinked.',
+          `WhatsApp is still showing its onboarding modal after ${this.onboardingDismissClicks} ` +
+            "attempts to dismiss it. Open WhatsApp Web on the account holder's own browser and click " +
+            'through the "What\'s new" screen, or the companion device will be unlinked.',
         );
       }
-    } catch (error) {
-      // A page.evaluate failure after READY usually means the page navigated/closed mid-probe, but it
-      // also covers the modal having moved beyond recognition — surface ACTION_REQUIRED rather than
-      // letting the session be silently logged out at the five-minute mark.
-      this.reportActionRequired(
-        `Could not reach the WhatsApp Web page to dismiss the onboarding modal: ${
-          error instanceof Error ? error.message : String(error)
-        }. The session may be logged out shortly; acknowledge the onboarding on a normal WhatsApp Web ` +
-          'session if the companion gets unlinked.',
-      );
+    } catch {
+      // The page navigated, closed, or the probe timed out. This is expected around a reload or a
+      // teardown and says nothing about the modal, so it must not move the session: a status change
+      // here would take a HEALTHY session out of READY, which blocks every send (ensureReady) for a
+      // reason the operator cannot act on. A page that is genuinely gone surfaces through the
+      // puppeteer lifecycle listeners as a disconnect, which is where that belongs.
+      this.logger.debug('Onboarding modal probe could not reach the page; ignoring', {
+        sessionId: this.config.sessionId,
+        action: 'onboarding_modal_probe_skipped',
+      });
     } finally {
       if (timeout) clearTimeout(timeout);
     }
@@ -1489,7 +1529,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
 
   async logout(): Promise<void> {
     const client = this.beginClientTeardown();
-    if (!client) return;
+    // No live client means there is nothing to send the unlink through. Resolving here would report a
+    // confirmed unlink for a request that never reached WhatsApp — the caller writes an audit row on
+    // success, and the device would stay listed under the account holder's Linked Devices. The
+    // session-level "is it started?" check cannot catch this: an engine stays registered while its
+    // client is gone (a stuck-auth recovery nulls it, then waits out the reconnect backoff).
+    if (!client) {
+      throw new Error('No live WhatsApp Web client — the unlink was not sent');
+    }
 
     try {
       // Logout clears session data - user will need to scan QR again
@@ -1890,7 +1937,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     // hits the same channel crash: for a channel wwjs drops the sticker form and runs processMediaData
     // with sendToChannel, which still ends at msg.avParams() (Utils.js:518). Guard it too (#673).
     this.ensureNotChannelRecipient(chatId);
-    const messageMedia = await this.toMessageMedia(media);
+    // Keep the fetched content-type for a remote URL: here the mimetype selects the conversion, and
+    // whatsapp-web.js returns the media unconverted once it reads as webp (Util.formatImageToWebpSticker).
+    const messageMedia = await this.toMessageMedia(media, { trustDeclaredType: false });
 
     const msg = await this.sendResolved(chatId, to =>
       this.client!.sendMessage(to, messageMedia, {
@@ -2824,15 +2873,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.toStatusResult(msg);
   }
 
-  /** Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped). */
-  private async toMessageMedia(media: MediaInput): Promise<MessageMedia> {
+  /**
+   * Build a MessageMedia from a MediaInput (URL → fetched, base64/Buffer → wrapped).
+   *
+   * `trustDeclaredType: false` keeps the fetched response's content-type for a remote URL. Use it
+   * wherever the mimetype is an INSTRUCTION rather than a label: whatsapp-web.js decides how to
+   * convert a sticker from it, and `Util.formatImageToWebpSticker` returns the media untouched when it
+   * already says webp. A caller that declares `image/webp` over bytes that are not webp would then
+   * have raw bytes shipped as a sticker. The response describes bytes the caller never saw, so for
+   * that one decision it is the better source. The declared filename still wins either way — that is
+   * a label, and nothing branches on it.
+   */
+  private async toMessageMedia(media: MediaInput, opts?: { trustDeclaredType?: boolean }): Promise<MessageMedia> {
     if (typeof media.data === 'string' && isHttpUrl(media.data)) {
       const fetched = await loadRemoteMedia(media.data);
       // `loadRemoteMedia` derives both fields from the response (content-type, URL basename) because
       // that is all it has. The caller usually knows better, so let an explicit `mimetype`/`filename`
       // win — matching `resolveMediaBuffer` on the Baileys adapter, which already prefers the caller's.
       // `application/octet-stream` is the DTO's own placeholder, not a statement about the bytes.
-      if (media.mimetype && media.mimetype !== 'application/octet-stream') {
+      if (opts?.trustDeclaredType !== false && media.mimetype && media.mimetype !== 'application/octet-stream') {
         fetched.mimetype = media.mimetype;
       }
       if (media.filename) {

@@ -645,9 +645,12 @@
   color: var(--info);
 }
 
+/* Same amber token as the transient states above — a literal here was the only pill not on a theme
+   variable, and it lost contrast on the dark card. The heavier tint is what separates "needs a human"
+   from the in-progress amber, since the two must not read alike. */
 .sessions-page .status-pill.action_required {
-  background: rgba(245, 158, 11, 0.1);
-  color: #d97706;
+  background: rgba(245, 158, 11, 0.22);
+  color: var(--warning);
 }
 
 .sessions-page .status-pill.ready {

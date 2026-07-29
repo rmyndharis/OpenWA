@@ -53,14 +53,15 @@ describe('registerUnhandledRejectionHandler', () => {
   const EVENT = 'unhandledRejection';
   const added: Array<(...args: unknown[]) => void> = [];
 
-  type Call = [string, string | undefined];
-  const register = (): { handler: (r: unknown) => void; errors: Call[]; warns: Call[] } => {
-    const errors: Call[] = [];
-    const warns: Call[] = [];
+  type ErrorCall = [string, string | undefined];
+  type WarnCall = [string, Record<string, unknown> | undefined];
+  const register = (): { handler: (r: unknown) => void; errors: ErrorCall[]; warns: WarnCall[] } => {
+    const errors: ErrorCall[] = [];
+    const warns: WarnCall[] = [];
     const before = process.listeners(EVENT);
     registerUnhandledRejectionHandler({
       error: (m, d) => errors.push([m, d]),
-      warn: (m, d) => warns.push([m, d]),
+      warn: (m, c) => warns.push([m, c]),
     });
     const fresh = process.listeners(EVENT).filter(l => !before.includes(l)) as Array<(...a: unknown[]) => void>;
     added.push(...fresh);
@@ -84,13 +85,17 @@ describe('registerUnhandledRejectionHandler', () => {
   // It is expected and self-healing, and logging it as an error with a raw Puppeteer stack reads like a
   // crash. The actionable variant of this message (#708, a stale browser profile) is thrown from inside
   // initialize() and caught by the adapter, so it never reaches this handler.
-  it('downgrades the Puppeteer teardown rejection to a warning that explains it', () => {
+  it('downgrades the Puppeteer page-context rejection to a warning that explains it', () => {
     const { handler, errors, warns } = register();
     handler(new Error('Execution context was destroyed'));
     expect(errors).toHaveLength(0);
     expect(warns).toHaveLength(1);
-    expect(warns[0][0]).toMatch(/engine teardown/i);
-    expect(warns[0][1]).toContain('Execution context was destroyed'); // nothing is hidden, only the severity drops
+    expect(warns[0][0]).toMatch(/navigation or engine teardown/i);
+    // Nothing is hidden, only the severity drops — and the stack goes in the CONTEXT object. Passed
+    // positionally it would type-check and then replace the logger name for the whole line, which is
+    // where a reader looks for the scope, not for a Puppeteer stack.
+    expect(typeof warns[0][1]).toBe('object');
+    expect(String(warns[0][1]?.reason)).toContain('Execution context was destroyed');
   });
 
   it('stringifies a non-Error rejection without throwing', () => {

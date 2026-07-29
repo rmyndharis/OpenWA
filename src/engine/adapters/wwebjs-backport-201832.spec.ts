@@ -8,11 +8,13 @@ import * as path from 'path';
 const {
   applyBackport,
   normalizeArtifactPath,
+  gitApplyLeftTreeUntouched,
   DEFAULT_PATCH: PATCH_FILE,
   // eslint-disable-next-line @typescript-eslint/no-require-imports
 } = require('../../../scripts/patch-wwebjs-201832') as {
   applyBackport: (wwjsDir: string, patchFile?: string) => { skipped: boolean; reason?: string; note?: string };
   normalizeArtifactPath: (rel: string) => string;
+  gitApplyLeftTreeUntouched: (e: { code?: string; status?: number; stderr?: string; message?: string }) => boolean;
   DEFAULT_PATCH: string;
 };
 
@@ -34,6 +36,33 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
 
   it('normalizes Windows reject paths before matching expected artifacts', () => {
     expect(normalizeArtifactPath('src\\structures\\Contact.js.rej')).toBe('src/structures/Contact.js.rej');
+  });
+
+  // `git apply` uses exit 128 for every fatal, and only some of those happen before it writes. Treating
+  // the code alone as "pristine" lets `--best-effort` report a clean skip over a HALF-patched tree,
+  // which reads as healthy forever after. Only the refusals git emits before applying may degrade.
+  describe('gitApplyLeftTreeUntouched', () => {
+    it.each([
+      ['git never executed', { code: 'ENOENT' as const, status: undefined }],
+      ['a diff git could not parse', { status: 128, stderr: 'error: corrupt patch at line 7' }],
+      ['input git did not recognise', { status: 128, stderr: 'error: unrecognized input' }],
+      ['a non-diff file', { status: 128, stderr: 'error: No valid patches in input (allow with "--allow-empty")' }],
+      ['a bad invocation', { status: 128, stderr: 'usage: git apply [<options>] [<patch>...]' }],
+      ['a missing patch file', { status: 128, stderr: 'error: cannot open patch: No such file or directory' }],
+      ['running outside a repo', { status: 128, stderr: 'fatal: not a git repository' }],
+    ])('treats %s as untouched', (_label, e) => {
+      expect(gitApplyLeftTreeUntouched(e)).toBe(true);
+    });
+
+    it.each([
+      ['a fatal raised while writing results', { status: 128, stderr: 'fatal: unable to write file Base.js' }],
+      ['a read-only checkout', { status: 128, stderr: 'error: Base.js: Permission denied' }],
+      ['a full disk mid-write', { status: 128, stderr: 'fatal: write error: No space left on device' }],
+      ['an unknown non-zero exit', { status: 2, stderr: 'something else entirely' }],
+      ['a signal kill with no status', { status: undefined, message: 'Killed' }],
+    ])('refuses to call %s untouched', (_label, e) => {
+      expect(gitApplyLeftTreeUntouched(e)).toBe(false);
+    });
   });
 
   /**
