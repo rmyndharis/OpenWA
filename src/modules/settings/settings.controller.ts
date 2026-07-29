@@ -1,7 +1,7 @@
 import { Controller, Get, Put, NotImplementedException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { isSwaggerEnabled } from '../../config/bootstrap-security';
 
@@ -60,12 +60,14 @@ export class SettingsController {
 
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get application settings' })
   @ApiResponse({ status: 200, description: 'Current settings' })
   get(): Settings {
     // Settings expose environment-derived configuration (debug flag, reconnect policy, rate-limit
-    // thresholds, base URL). Gate the read at ADMIN, matching the PUT below and the rest of the
-    // admin-config surface — a VIEWER or session-scoped key has no business reading server config.
+    // thresholds, base URL) that describes the deployment rather than any one session. Gate the read
+    // at ADMIN and require an unrestricted key: the role check alone does not exclude a key confined
+    // to specific sessions, which has no claim on deployment-wide configuration.
     return this.settings;
   }
 

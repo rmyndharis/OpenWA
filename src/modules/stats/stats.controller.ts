@@ -2,7 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { StatsService } from './stats.service';
 import { StatsQueryDto } from './dto/stats-query.dto';
-import { RequireRole } from '../auth/decorators/auth.decorators';
+import { RequireRole, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('statistics')
@@ -10,10 +10,12 @@ import { ApiKeyRole } from '../auth/entities/api-key.entity';
 export class StatsController {
   constructor(private readonly statsService: StatsService) {}
 
-  // Global, cross-session aggregates with no scope param — ADMIN-only so a VIEWER / session-
-  // restricted key can't read cross-tenant activity. (Per-session stats below stays scope-gated.)
+  // Global, cross-session aggregates with no scope param. The ADMIN role gate alone does not keep a
+  // session-restricted key out — role and session scope are independent — so these also require an
+  // unrestricted key. (Per-session stats below stays scope-gated by its :sessionId route param.)
   @Get('overview')
   @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get overall statistics' })
   @ApiResponse({ status: 200, description: 'Cross-session aggregate statistics (sessions, messages, etc.).' })
   async getOverview() {
@@ -22,6 +24,7 @@ export class StatsController {
 
   @Get('messages')
   @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Get message statistics with time series' })
   @ApiResponse({ status: 200, description: 'Message statistics with a time series for the requested period.' })
   async getMessageStats(@Query() query: StatsQueryDto) {

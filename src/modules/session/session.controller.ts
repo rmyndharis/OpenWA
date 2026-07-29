@@ -16,7 +16,7 @@ import { Session } from './entities/session.entity';
 import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
-import { RequireRole, CurrentApiKey, SessionScoped } from '../auth/decorators/auth.decorators';
+import { RequireRole, CurrentApiKey, SessionScoped, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 
 @ApiTags('sessions')
@@ -36,6 +36,10 @@ export class SessionController {
 
   @Post()
   @RequireRole(ApiKeyRole.OPERATOR)
+  // Creating a session has no existing session id for the class-level @SessionScoped fence to check,
+  // and the new session is outside the caller's allowlist by construction — so a key restricted to
+  // specific sessions cannot create one. Different metadata key from @SessionScoped; they coexist.
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Create a new WhatsApp session' })
   @ApiResponse({
     status: 201,

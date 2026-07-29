@@ -202,6 +202,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restricted to specific sessions. The dashboard exposes and mutates every queue in the deployment
   and has no session dimension to scope against.
 
+- Cross-session statistics (`GET /api/stats/overview`, `GET /api/stats/messages`), application
+  settings (`GET /api/settings`), and session creation (`POST /api/sessions`) now require an API key
+  that is not restricted to specific sessions. Per-session statistics remain available to restricted
+  keys for the sessions they allow.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
