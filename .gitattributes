@@ -1,3 +1,6 @@
 # Force LF line endings for files that must run inside Linux containers
 *.sh        text eol=lf
 Dockerfile* text eol=lf
+# A unified diff must keep LF: a CRLF context line is not a marker any applier accepts, so a Windows
+# checkout would hand `git apply`/`patch` a diff both call corrupt (#889).
+*.patch     text eol=lf
