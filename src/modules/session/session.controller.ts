@@ -148,6 +148,33 @@ export class SessionController {
     return this.transformSession(session);
   }
 
+  @Post(':id/logout')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Log out of WhatsApp (unlinks this device) and stop the session',
+    description:
+      "Asks WhatsApp to remove this companion device, so it disappears from the account holder's " +
+      'Linked Devices list, then tears the session down. Unlike stop and delete — which only ' +
+      'release the session locally and leave the device linked on the phone — reconnecting after ' +
+      'a logout always requires a fresh QR scan or pairing code.',
+  })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session logged out',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async logout(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.logout(id);
+    await this.auditService.logInfo(AuditAction.SESSION_LOGGED_OUT, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
   @Post(':id/force-kill')
   @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)

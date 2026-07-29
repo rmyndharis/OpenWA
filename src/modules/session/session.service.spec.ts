@@ -297,6 +297,48 @@ describe('SessionService', () => {
       expect(stoppingOf().has('sess-uuid-1')).toBe(false); // mark still cleared on failure
     });
 
+    it('logout() calls the engine logout (not disconnect), reconciles the map, and marks the session stopping', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = {
+        logout: jest.fn().mockResolvedValue(undefined),
+        disconnect: jest.fn().mockResolvedValue(undefined),
+      };
+      enginesOf().set('sess-uuid-1', engine);
+
+      const result = await service.logout('sess-uuid-1');
+
+      // The distinction that matters: disconnect() leaves the device linked on the
+      // phone, logout() asks WhatsApp to remove it.
+      expect(engine.logout).toHaveBeenCalledTimes(1);
+      expect(engine.disconnect).not.toHaveBeenCalled();
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // map reconciled
+      // Stop-mark stays set, like stop()/forceKill(): it blocks an in-flight reconnect
+      // from resurrecting a session we just unlinked; a later start() clears it.
+      expect(stoppingOf().has('sess-uuid-1')).toBe(true);
+      expect(result).toBeDefined();
+    });
+
+    it('logout() completes when engine.logout() rejects — map reconciled, status updated', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { logout: jest.fn().mockRejectedValue(new Error('socket already gone')) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      await expect(service.logout('sess-uuid-1')).resolves.toBeDefined();
+
+      expect(engine.logout).toHaveBeenCalledTimes(1);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+    });
+
+    it('logout() is a no-op teardown when no engine is loaded (session already stopped)', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      enginesOf().delete('sess-uuid-1');
+
+      await expect(service.logout('sess-uuid-1')).resolves.toBeDefined();
+    });
+
     it('forceKill() force-destroys the engine, reconciles the map, and marks the session stopping', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

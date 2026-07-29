@@ -367,7 +367,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     sessionId: string,
     engine: IWhatsAppEngine,
     teardown: (e: IWhatsAppEngine) => Promise<void>,
-    label: 'destroy' | 'disconnect' | 'force-destroy',
+    label: 'destroy' | 'disconnect' | 'force-destroy' | 'logout',
   ): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -2130,6 +2130,45 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     this.logger.log(`Session stopped: ${session.name}`, {
       sessionId: id,
       action: 'stop',
+    });
+    await this.updateStatus(id, SessionStatus.DISCONNECTED);
+    return this.findOne(id);
+  }
+
+  /**
+   * Log out of WhatsApp — unlinks this device from the account — then tear the session down.
+   *
+   * Differs from stop() in the one way that matters to a user: logout() asks WhatsApp to remove
+   * the companion device, so the entry disappears from the phone's Linked Devices list. stop() and
+   * delete() only release things locally (delete also purges the on-disk auth dirs), which leaves
+   * the device listed on the phone indefinitely — there is currently no way to clear it from the
+   * API, only by hand on the handset.
+   *
+   * Both engines implement a real unlink, so this is not a best-effort approximation: Baileys sends
+   * <remove-companion-device reason="user_initiated"/> to s.whatsapp.net, and whatsapp-web.js calls
+   * WAWebSocketModel.Socket.logout() in the page.
+   *
+   * Must run while the engine is still live — logout is a network round-trip to WhatsApp, so it
+   * cannot be performed after destroy()/forceDestroy(). Mirrors stop()'s lifecycle otherwise
+   * (stop-mark + cancel-reconnect + bounded, isolated teardown + Map reconciliation).
+   */
+  async logout(id: string): Promise<Session> {
+    const session = await this.findOne(id);
+
+    // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
+    this.stoppingSessions.add(id);
+    // Cancel any reconnection attempts
+    this.cancelReconnect(id);
+
+    const engine = this.engines.get(id);
+    if (engine) {
+      await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout');
+      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+    }
+
+    this.logger.log(`Session logged out: ${session.name}`, {
+      sessionId: id,
+      action: 'logout',
     });
     await this.updateStatus(id, SessionStatus.DISCONNECTED);
     return this.findOne(id);
