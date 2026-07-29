@@ -376,7 +376,10 @@ describe('SessionService', () => {
       try {
         const logoutCall = service.logout('sess-uuid-1');
         await jest.advanceTimersByTimeAsync(10_000); // deadline fires; the race is lost
-        await logoutCall;
+        // The deadline loss means the unlink is unconfirmed, so logout() rejects 502 — but the
+        // local teardown already ran and the losing promise is still tracked in pendingTeardowns
+        // (it settles only when releaseLogout() fires below).
+        await expect(logoutCall).rejects.toBeInstanceOf(BadGatewayException);
         expect(pendingTeardownsOf().has('sess-uuid-1')).toBe(true); // still running past the race
 
         const startCall = service.start('sess-uuid-1');
@@ -402,7 +405,9 @@ describe('SessionService', () => {
       try {
         const logoutCall = service.logout('sess-uuid-1');
         await jest.advanceTimersByTimeAsync(10_000);
-        await logoutCall;
+        // The wedged logout never unlinks within the deadline, so it rejects 502; the losing
+        // promise keeps running and start()'s bounded wait eventually gives up on it below.
+        await expect(logoutCall).rejects.toBeInstanceOf(BadGatewayException);
 
         const startCall = service.start('sess-uuid-1');
         await jest.advanceTimersByTimeAsync(10_000); // bounded wait exhausted

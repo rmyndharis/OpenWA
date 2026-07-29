@@ -73,6 +73,8 @@ uploads/
 .remember/
 .agent/
 .claude/
+.zcode/
+.zcode-worktrees/
 docs/plans/
 docs/superpowers/
 CLAUDE.md
