@@ -73,6 +73,7 @@ export class SettingsController {
 
   @Put()
   @RequireRole(ApiKeyRole.ADMIN)
+  @RequireUnscopedKey()
   @ApiOperation({ summary: 'Settings are read-only at runtime (environment-derived)' })
   @ApiResponse({
     status: 501,

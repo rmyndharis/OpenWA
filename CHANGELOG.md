@@ -216,6 +216,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bypassed the destination check, because the platform skips name resolution for address literals.
   Redirect chains are also capped.
 
+- Added a build-time check that fails when a route acting on the whole deployment is added without
+  refusing session-restricted API keys, so this class of gap cannot be reintroduced silently.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
