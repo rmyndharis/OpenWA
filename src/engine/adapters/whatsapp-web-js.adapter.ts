@@ -1566,13 +1566,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    return this.sendMediaMessage(chatId, media, { sendMediaAsDocument: true });
   }
 
   private async sendMediaMessage(
     chatId: string,
     media: MediaInput,
-    extraOptions?: { sendAudioAsVoice?: boolean },
+    extraOptions?: { sendAudioAsVoice?: boolean; sendMediaAsDocument?: boolean },
   ): Promise<MessageResult> {
     this.ensureReady();
     this.ensureNotChannelRecipient(chatId);

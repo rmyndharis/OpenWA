@@ -2635,6 +2635,32 @@ describe('outbound voice note (PTT)', () => {
   });
 });
 
+describe('outbound document mode', () => {
+  it('sendDocumentMessage forces whatsapp-web.js to preserve the document attachment type', async () => {
+    const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 's',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = { sendMessage };
+
+    await adapter.sendDocumentMessage('628@c.us', {
+      mimetype: 'application/pdf',
+      data: Buffer.from([1]).toString('base64'),
+      filename: 'document.pdf',
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      '628@c.us',
+      expect.any(MessageMedia),
+      expect.objectContaining({ sendMediaAsDocument: true }),
+    );
+  });
+});
+
 describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid migration)', () => {
   const ready = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
