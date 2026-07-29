@@ -2635,6 +2635,55 @@ describe('outbound voice note (PTT)', () => {
   });
 });
 
+describe('outbound document mode (#989)', () => {
+  const ready = (client: unknown): WhatsAppWebJsAdapter => {
+    const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
+    (adapter as unknown as { status: EngineStatus }).status = EngineStatus.READY;
+    (adapter as unknown as { client: unknown }).client = client;
+    return adapter;
+  };
+  const sentMessage = { id: { _serialized: 'OUT1' }, timestamp: 1700000001 };
+  const bytes = Buffer.from([1]).toString('base64');
+
+  // The regression itself: an image mimetype is exactly what WA Web would reclassify into a photo
+  // bubble, so the flag — not the mimetype — has to decide that this is a document.
+  it('sendDocumentMessage forces sendMediaAsDocument even for an image mimetype', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendDocumentMessage('628@c.us', {
+      mimetype: 'image/png',
+      data: bytes,
+      filename: 'chart.png',
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      '628@c.us',
+      expect.objectContaining({ mimetype: 'image/png', filename: 'chart.png' }),
+      expect.objectContaining({ sendMediaAsDocument: true }),
+    );
+  });
+
+  // whatsapp-web.js returns null for ANY @broadcast recipient once the flag is set, and a null send
+  // throws — so these two must keep taking the unflagged path.
+  it.each(['status@broadcast', '1234567890@broadcast'])('withholds sendMediaAsDocument for %s', async chatId => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendDocumentMessage(chatId, {
+      mimetype: 'application/pdf',
+      data: bytes,
+      filename: 'report.pdf',
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      chatId,
+      expect.anything(),
+      expect.not.objectContaining({ sendMediaAsDocument: true }),
+    );
+  });
+
+  it('leaves the other media senders off the document path', async () => {
+    const sendMessage = jest.fn().mockResolvedValue(sentMessage);
+    await ready({ sendMessage }).sendImageMessage('628@c.us', { mimetype: 'image/png', data: bytes });
+    expect(sendMessage).toHaveBeenCalledWith('628@c.us', expect.anything(), { caption: undefined });
+  });
+});
+
 describe('LID resolution for individual sends (#573 — WhatsApp @c.us → @lid migration)', () => {
   const ready = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });

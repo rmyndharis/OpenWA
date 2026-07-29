@@ -1565,14 +1565,28 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.sendMediaMessage(chatId, media, media.ptt ? { sendAudioAsVoice: true } : undefined);
   }
 
+  /**
+   * Without `sendMediaAsDocument` whatsapp-web.js lets WA Web classify the attachment from its declared
+   * mimetype (`Injected/Utils.js` `processMediaData` -> `prepRawMedia`), so an `image/*`, `video/*` or
+   * `audio/*` payload posted here reached the recipient as a photo/video/audio bubble — re-encoded and
+   * stripped of its filename — instead of a document (#989). Baileys has always forced it via the
+   * explicit `document:` content key, so the two engines disagreed on the same request.
+   *
+   * The flag is withheld for `status@broadcast` and broadcast lists: whatsapp-web.js refuses every
+   * `@broadcast` recipient outright once it is set (`Client.js` returns `null`, which `toMessageResult`
+   * surfaces as a failed send), so setting it there would turn a working send into an error rather than
+   * improve it. Those recipients keep the classification they have today.
+   */
   async sendDocumentMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
-    return this.sendMediaMessage(chatId, media);
+    const kind = chatKind(chatId);
+    const asDocument = kind !== 'status' && kind !== 'broadcast';
+    return this.sendMediaMessage(chatId, media, asDocument ? { sendMediaAsDocument: true } : undefined);
   }
 
   private async sendMediaMessage(
     chatId: string,
     media: MediaInput,
-    extraOptions?: { sendAudioAsVoice?: boolean },
+    extraOptions?: { sendAudioAsVoice?: boolean; sendMediaAsDocument?: boolean },
   ): Promise<MessageResult> {
     this.ensureReady();
     this.ensureNotChannelRecipient(chatId);
@@ -1583,7 +1597,8 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.client!.sendMessage(to, messageMedia, {
         caption: media.caption,
         ...(media.mentions?.length ? { mentions: media.mentions } : {}),
-        // sendAudioAsVoice only for audio; {...undefined} contributes no keys.
+        // sendAudioAsVoice only for audio, sendMediaAsDocument only for documents;
+        // {...undefined} contributes no keys.
         ...extraOptions,
       }),
     );
