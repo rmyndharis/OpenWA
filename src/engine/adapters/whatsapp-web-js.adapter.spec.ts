@@ -1302,6 +1302,53 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     rmSpy.mockRestore();
   });
 
+  // #981: clearing the auth dir destroys the ONLY copy of the session's WhatsApp credentials, and the
+  // loss is permanent — every later start finds an empty profile and can only show a QR. Until now the
+  // adapter logged only the FAILURE to delete, so a successful wipe left no trace at all and triage
+  // could not tell an OpenWA self-heal apart from a WhatsApp-side logout or an untouched profile.
+  it('records the credential deletion, naming the session and the directory removed', async () => {
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    await (adapter as unknown as { clearLocalAuth: () => Promise<void> }).clearLocalAuth.call(adapter);
+
+    expect(rmSpy).toHaveBeenCalled();
+    const deletion = warnSpy.mock.calls.find(([message]) => /deleted/i.test(String(message)));
+    expect(deletion).toBeDefined();
+    expect(String(deletion?.[0])).toContain('session-sess-1'); // which profile is gone
+    expect(deletion?.[1]).toMatchObject({ sessionId: 'sess-1' }); // which session, for a multi-session host
+
+    warnSpy.mockRestore();
+    rmSpy.mockRestore();
+  });
+
+  // #981: the reporter saw "all sessions" come back as QR. Without a sessionId on the timeout warning
+  // there is no way to tell from the logs whether one session timed out or every one of them did.
+  it('identifies the session in the readiness-timeout warning that precedes the deletion', async () => {
+    jest.useFakeTimers();
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+
+    const adapter = newAdapter();
+    const logger = (adapter as unknown as { logger: { warn: jest.Mock } }).logger;
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const { client } = attachFakeClient(adapter, {
+      getState: jest.fn().mockReturnValue(new Promise<never>(() => {})),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+
+    client.emit('authenticated');
+    await jest.advanceTimersByTimeAsync(95_000); // past the 90s give-up deadline
+
+    const timeout = warnSpy.mock.calls.find(([message]) => /Timed out waiting/i.test(String(message)));
+    expect(timeout).toBeDefined();
+    expect(timeout?.[1]).toMatchObject({ sessionId: 'sess-1' });
+
+    warnSpy.mockRestore();
+    rmSpy.mockRestore();
+  });
+
   it('fails terminally on a second stuck-auth cycle (no QR -> timeout -> clear loop)', async () => {
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     const adapter = newAdapter();

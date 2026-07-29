@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neighbouring engine options, so an unset value still resolves to the documented opt-out default and
   only an explicit `true` starts sessions at boot.
 
+- **Deleting a session's stored WhatsApp credentials is now recorded when it happens** (#981). The
+  whatsapp-web.js adapter clears a session's auth directory to recover one that authenticated but never
+  reached runtime readiness within 90 seconds, and that directory holds the only copy of the
+  credentials — once removed, no restart can restore the link and every later start can do nothing but
+  present a fresh QR. The adapter logged only the *failure* to remove it, so a successful wipe left no
+  trace at all: the sole symptom was a session that quietly stopped reconnecting, indistinguishable in
+  the logs from a WhatsApp-side logout or a profile nothing had touched. The removal now logs a warning
+  naming the directory and the session, and the readiness-timeout warning that precedes it carries the
+  session id too — on a multi-session host that is what separates "one session timed out" from "every
+  session did", which have very different causes. No behaviour changes; this closes a blind spot that
+  made the destructive path impossible to confirm from a deployment's own logs.
+
 - **A whatsapp-web.js session no longer publishes a QR belonging to the browser it is about to
   replace** (#982). On `LOGOUT`, whatsapp-web.js deletes the auth profile and re-runs its injection
   against the same browser, so the old client keeps serving QR codes while the session lifecycle waits

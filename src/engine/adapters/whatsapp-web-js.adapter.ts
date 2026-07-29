@@ -1107,6 +1107,9 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
             'is stuck after the QR scan (usually the auto-selected WhatsApp Web build is incompatible). ' +
             'Clearing it to re-pair; pin a known-good version via WWEBJS_WEB_VERSION (see ' +
             'docs/12-troubleshooting-faq.md) if it keeps recurring.',
+          // Name the session: on a multi-session host this warning is the only way to tell whether one
+          // session timed out or every one of them did, and the two have very different causes.
+          { sessionId: this.config.sessionId, action: 'ready_reconcile_timeout' },
         );
         this.clearReadyReconcile();
         // Self-heal: don't leave the session stuck at "authenticating" forever — clear the broken auth
@@ -1180,9 +1183,26 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   /** Remove this session's LocalAuth directory so the next start re-pairs from a clean slate. */
   private async clearLocalAuth(): Promise<void> {
     const dir = path.join(path.resolve(this.config.sessionDataPath), `session-${this.config.sessionId}`);
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
-      this.logger.warn(`Could not clear stale auth at ${dir}`, { error: String(error) });
-    });
+    await fs.promises
+      .rm(dir, { recursive: true, force: true })
+      .then(() => {
+        // #981: this is the only copy of the session's WhatsApp credentials, and removing it is not
+        // recoverable — every later start finds an empty profile and can do nothing but show a QR. Say
+        // so at the moment it happens: otherwise the sole trace is a session that silently stops
+        // reconnecting, indistinguishable from a WhatsApp-side logout or an untouched profile.
+        this.logger.warn(
+          `Deleted this session's stored WhatsApp credentials at ${dir}. That was the only copy, so the ` +
+            'next start cannot restore the link and comes back with a fresh QR to scan.',
+          { sessionId: this.config.sessionId, dir, action: 'auth_cleared' },
+        );
+      })
+      .catch((error: unknown) => {
+        this.logger.warn(`Could not clear stale auth at ${dir}`, {
+          sessionId: this.config.sessionId,
+          dir,
+          error: String(error),
+        });
+      });
   }
 
   /**
