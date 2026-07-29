@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   npm registry tarball (published from the same commit previously fetched over Git SSH), avoiding
   npm 12's `EALLOWGIT` default without weakening its project security policy.
 
+- **`AUTO_START_SESSIONS` set in `.env` now reaches the container under the bundled production
+  compose.** `docker-compose.yml` never forwarded the variable — not in any revision of the file — so
+  on a stock Docker Compose deployment the flag was inert: previously authenticated sessions were
+  reset to `disconnected` at boot and left there, and the operator got no error to work from, because
+  nothing was misconfigured from the application's point of view. `.env.example` documents the
+  setting, and `docker-compose.dev.yml` did forward it, which made the omission read as a working
+  feature everywhere except where most deployments run. The forward is blank-defaulted like the
+  neighbouring engine options, so an unset value still resolves to the documented opt-out default and
+  only an explicit `true` starts sessions at boot.
+
 - **A whatsapp-web.js session no longer publishes a QR belonging to the browser it is about to
   replace** (#982). On `LOGOUT`, whatsapp-web.js deletes the auth profile and re-runs its injection
   against the same browser, so the old client keeps serving QR codes while the session lifecycle waits

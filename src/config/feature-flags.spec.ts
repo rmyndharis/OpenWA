@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { computeFeatureFlags, resolveFeatureFlags, FeatureFlags } from './feature-flags';
 
 describe('feature-flags', () => {
@@ -68,6 +70,16 @@ describe('feature-flags', () => {
       process.env.AUTO_START_SESSIONS = 'true';
       const configService = { get: jest.fn().mockImplementation((_k: string, def?: unknown) => def) };
       expect(resolveFeatureFlags(configService).autoStartSessions).toBe(true);
+    });
+  });
+
+  // A flag the app reads is useless if the bundled compose never hands it to the container: the
+  // operator sets it in .env, nothing happens, and there is no error to go on. That was the state of
+  // AUTO_START_SESSIONS until this guard landed, so assert the forward exists rather than trusting it.
+  describe('bundled production compose', () => {
+    it('forwards AUTO_START_SESSIONS to the container', () => {
+      const compose = fs.readFileSync(path.join(__dirname, '../../docker-compose.yml'), 'utf8');
+      expect(compose).toMatch(/^\s*- AUTO_START_SESSIONS=\$\{AUTO_START_SESSIONS:-\}$/m);
     });
   });
 });
