@@ -14,7 +14,14 @@ from typing import Any, Literal, Optional, TypedDict
 
 Jid = str
 SessionStatus = Literal[
-    "created", "initializing", "qr_ready", "authenticating", "ready", "disconnected", "failed"
+    "created",
+    "initializing",
+    "qr_ready",
+    "authenticating",
+    "ready",
+    "disconnected",
+    "action_required",
+    "failed",
 ]
 ChatState = Literal["typing", "recording", "paused"]
 MessageDirection = Literal["incoming", "outgoing"]

@@ -1066,7 +1066,9 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     client.emit('authenticated');
 
     expect(adapter.getStatus()).toBe(EngineStatus.READY);
-    expect(jest.getTimerCount()).toBe(0);
+    // Ready reconciliation is done (0 reconcile timers), but reaching READY arms the onboarding-modal
+    // watcher (#982), so one timer remains until it self-terminates or teardown clears it.
+    expect(jest.getTimerCount()).toBe(1);
     expect(onReady).toHaveBeenCalledTimes(1);
   });
 
@@ -4172,6 +4174,205 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         getProfilePicUrl: jest.fn().mockRejectedValue(new Error("Server returned error: couldn't get profile picture")),
       });
       await expect(adapter.getProfilePicture('12345@c.us')).resolves.toBeNull();
+    });
+  });
+
+  describe('WhatsAppWebJsAdapter onboarding modal watcher (#982)', () => {
+    type ModalProbe = { modalPresent: boolean; dismissed: boolean };
+
+    const newAdapter = (): WhatsAppWebJsAdapter =>
+      new WhatsAppWebJsAdapter({ sessionId: 'sess-1', sessionDataPath: './data/sessions', puppeteer: {} });
+
+    // Promote the adapter to READY the same way production does (authenticate then let the reconcile
+    // probe flip it), with a controllable pupPage.evaluate shared by both the reconcile probe and the
+    // watcher. Default `evaluate` returns true so the reconcile probe sees window.WWebJS and promotes
+    // to READY; individual tests override the return (mockResolvedValueOnce) for the next watcher tick.
+    const promoteToReady = (): {
+      adapter: WhatsAppWebJsAdapter;
+      client: EventEmitter & {
+        info?: { wid?: { user?: string }; pushname?: string };
+        getState: jest.Mock;
+        pupPage: { evaluate: jest.Mock };
+      };
+      evaluate: jest.Mock;
+      onActionRequired: jest.Mock;
+      onStateChanged: jest.Mock;
+    } => {
+      const adapter = newAdapter();
+      const evaluate = jest.fn();
+      const client = Object.assign(new EventEmitter(), {
+        info: { wid: { user: '628123' }, pushname: 'Tester' },
+        getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+        pupPage: { evaluate },
+      });
+      const onActionRequired = jest.fn();
+      const onStateChanged = jest.fn();
+      (adapter as unknown as { client: unknown }).client = client;
+      (adapter as unknown as { callbacks: unknown }).callbacks = { onActionRequired, onStateChanged };
+      (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+      // Default: window.WWebJS present (reconcile probe) AND no modal (watcher ticks that aren't
+      // overridden). mockResolvedValueOnce in a test takes precedence for exactly the next call.
+      evaluate.mockResolvedValue(true);
+      return { adapter, client, evaluate, onActionRequired, onStateChanged };
+    };
+
+    it('dismisses the modal when the Continue button is present and keeps the session ready (no fallback)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, onActionRequired, client } = promoteToReady();
+
+        (client as EventEmitter).emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100); // reconcile → READY → watcher armed
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        // Next watcher tick sees the modal and clicks Continue.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100); // ONBOARDING_MODAL_INTERVAL_MS
+
+        expect(onActionRequired).not.toHaveBeenCalled();
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('falls back to ACTION_REQUIRED when the modal is present but Continue cannot be clicked', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, onActionRequired } = promoteToReady();
+
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: false } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+        expect(onActionRequired).toHaveBeenCalledTimes(1);
+        expect(onActionRequired).toHaveBeenCalledWith(expect.stringMatching(/onboarding modal/i));
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('falls back to ACTION_REQUIRED when the page evaluate rejects (selector moved / page closed)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, onActionRequired } = promoteToReady();
+
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+
+        evaluate.mockRejectedValueOnce(new Error('Execution context was destroyed'));
+        await jest.advanceTimersByTimeAsync(5100);
+
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+        expect(onActionRequired).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not fire the fallback when no modal is present (over-suppression guard)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, onActionRequired } = promoteToReady();
+
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        // Several ticks, all reporting no modal — must stay READY and never call onActionRequired.
+        await jest.advanceTimersByTimeAsync(5100);
+        await jest.advanceTimersByTimeAsync(5100);
+        await jest.advanceTimersByTimeAsync(5100);
+
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('self-terminates after the lifetime cap with no dangling timer', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, onActionRequired } = promoteToReady();
+
+        (adapter as unknown as { client: EventEmitter }).client.emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+
+        // Walk just past the 5-minute lifetime cap; every tick sees no modal.
+        await jest.advanceTimersByTimeAsync(5 * 60_000 + 5100);
+
+        expect(adapter.getStatus()).toBe(EngineStatus.READY); // never fell back — the modal never appeared
+        expect(onActionRequired).not.toHaveBeenCalled();
+        expect(jest.getTimerCount()).toBe(0); // watcher self-terminated
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('is idempotent: a single watcher regardless of ready event vs reconcile path', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, client } = promoteToReady();
+
+        (client as EventEmitter).emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100); // reconcile promotes → watcher #1 armed
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(jest.getTimerCount()).toBe(1);
+
+        // A late 'ready' event runs markReadyFromClientInfo again — it must not arm a second watcher.
+        (client as EventEmitter).emit('ready');
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(jest.getTimerCount()).toBe(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('clears the watcher on teardown (no dangling timer across all teardown paths)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, client } = promoteToReady();
+        (client as EventEmitter & { destroy?: jest.Mock }).destroy = jest.fn().mockResolvedValue(undefined);
+
+        (client as EventEmitter).emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(jest.getTimerCount()).toBe(1); // watcher armed
+
+        await adapter.destroy();
+
+        expect(jest.getTimerCount()).toBe(0); // watcher cleared on teardown
+        expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not re-promote from ACTION_REQUIRED back to READY', async () => {
+      jest.useFakeTimers();
+      try {
+        const { adapter, evaluate, client, onActionRequired } = promoteToReady();
+
+        (client as EventEmitter).emit('authenticated');
+        await jest.advanceTimersByTimeAsync(2100);
+
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: false } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+
+        // A stray ready event must not resurrect READY from the action-required state.
+        (client as EventEmitter).emit('ready');
+        expect(adapter.getStatus()).toBe(EngineStatus.ACTION_REQUIRED);
+        expect(onActionRequired).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 });

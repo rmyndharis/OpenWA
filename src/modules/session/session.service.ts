@@ -267,6 +267,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       SessionStatus.INITIALIZING,
       SessionStatus.QR_READY,
       SessionStatus.AUTHENTICATING,
+      SessionStatus.ACTION_REQUIRED,
     ];
 
     const result = await this.sessionRepository.update(
@@ -469,12 +470,16 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   }
 
   /**
-   * Populate the transient `lastError` field from the in-memory error map. Only a
-   * FAILED session carries an error; any other status clears it so a recovered
-   * session never shows a stale failure reason.
+   * Populate the transient `lastError` field from the in-memory error map. A FAILED session always
+   * carries its failure reason, and an ACTION_REQUIRED session carries what the operator must do
+   * (e.g. the whatsapp-web.js onboarding-modal fallback, #982); any other status clears it so a
+   * recovered session never shows a stale reason.
    */
   private attachLastError(session: Session): Session {
-    session.lastError = session.status === SessionStatus.FAILED ? this.sessionErrors.get(session.id) : undefined;
+    session.lastError =
+      session.status === SessionStatus.FAILED || session.status === SessionStatus.ACTION_REQUIRED
+        ? this.sessionErrors.get(session.id)
+        : undefined;
     return session;
   }
 
@@ -1473,12 +1478,27 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           [EngineStatus.QR_READY]: SessionStatus.QR_READY,
           [EngineStatus.AUTHENTICATING]: SessionStatus.AUTHENTICATING,
           [EngineStatus.READY]: SessionStatus.READY,
+          [EngineStatus.ACTION_REQUIRED]: SessionStatus.ACTION_REQUIRED,
           [EngineStatus.FAILED]: SessionStatus.FAILED,
         };
         const newStatus = statusMap[engineState];
         if (newStatus) {
           void this.updateStatus(id, newStatus);
         }
+      },
+      onActionRequired: (reason: string): void => {
+        if (!this.isLiveEngine(id, engine)) return;
+        this.logger.warn(`Session requires operator action: ${reason}`, {
+          sessionId: id,
+          reason,
+          action: 'action_required',
+        });
+        // Record the reason so attachLastError surfaces it while the session is ACTION_REQUIRED,
+        // then updateStatus (via onStateChanged above) has already written the status. Set here too
+        // to be defensive: the callback order is onActionRequired then onStateChanged, but persisting
+        // the reason here means it is available regardless.
+        this.sessionErrors.set(id, reason);
+        void this.hookManager.execute('session:error', { reason }, { sessionId: id, source: 'Engine' });
       },
       onError: (reason: string): void => {
         if (!this.isLiveEngine(id, engine)) return;

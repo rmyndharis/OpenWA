@@ -228,6 +228,7 @@
     "qr_ready": "Scan QR",
     "ready": "Connected",
     "disconnected": "Disconnected",
+    "action_required": "Action required",
     "failed": "Failed",
     "authenticating": "Authenticating..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "WhatsApp session is now connected",
       "disconnectedTitle": "Session Disconnected",
       "disconnectedDesc": "WhatsApp session was disconnected",
+      "actionRequiredTitle": "Action required",
+      "actionRequiredDesc": "This session needs your attention. Open the session to see what to do.",
       "failedTitle": "Session Failed",
       "failedDesc": "The WhatsApp session failed to start. Open the session to see the reason."
     },

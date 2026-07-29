@@ -6245,6 +6245,7 @@
               "authenticating",
               "ready",
               "disconnected",
+              "action_required",
               "failed"
             ],
             "example": "ready"
@@ -6313,6 +6314,7 @@
               "authenticating",
               "ready",
               "disconnected",
+              "action_required",
               "failed"
             ],
             "example": "qr_ready"

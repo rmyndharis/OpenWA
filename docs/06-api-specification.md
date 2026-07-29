@@ -76,7 +76,7 @@ List endpoints return a bare array (some paginated list routes instead return a 
 ]
 ```
 
-Session `status` wire values are **lowercase**: `created | initializing | qr_ready | authenticating | ready | disconnected | failed`.
+Session `status` wire values are **lowercase**: `created | initializing | qr_ready | authenticating | ready | disconnected | action_required | failed`.
 
 ### Error Response
 
@@ -184,7 +184,7 @@ Every path below is prefixed with `/api`. Unless marked **public**, send `X-API-
 
 ### 6.4.1 Sessions
 
-Base path `/api/sessions`. All routes that return a session return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config`, `proxyUrl`, and `proxyType` and renames the entity field `lastActiveAt` to `lastActive`. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | failed`.
+Base path `/api/sessions`. All routes that return a session return data shaped by `SessionResponseDto.fromEntity` (via `transformSession`), which **strips** `config`, `proxyUrl`, and `proxyType` and renames the entity field `lastActiveAt` to `lastActive`. Session `status` wire values are lowercase: `created | initializing | qr_ready | authenticating | ready | disconnected | action_required | failed`.
 
 #### GET /api/sessions
 
@@ -5128,7 +5128,7 @@ These are the events OpenWA actually emits. A webhook is registered with an `eve
 | `session.authenticated` | The session pairs and becomes ready | `{ sessionId, phone, pushName }` |
 | `session.disconnected` | The session disconnects | `{ sessionId, reason }` |
 | `session.reconnect_loop` | Every 5th consecutive reconnect attempt is scheduled (attempt 5, 10, 15, …) — the session is failing to come back up | `{ sessionId, attempts, nextDelayMs }` |
-| `session.status` | The session status transitions | `{ sessionId, status }` where `status` is one of `created` / `initializing` / `qr_ready` / `authenticating` / `ready` / `disconnected` / `failed` |
+| `session.status` | The session status transitions | `{ sessionId, status }` where `status` is one of `created` / `initializing` / `qr_ready` / `authenticating` / `ready` / `disconnected` / `action_required` / `failed` |
 | `group.join` | Participant(s) are added to or join a group this session is in | `{ groupId, actorId?, participantIds, timestamp }` — `actorId` is the admin/inviter when known |
 | `group.leave` | Participant(s) leave or are removed from a group | `{ groupId, actorId?, participantIds, timestamp }` |
 | `group.update` | Group metadata changes (subject, description, announce/locked settings) | `{ groupId, actorId?, participantIds, changes?, timestamp }` — `changes` carries only the fields that changed: `subject?`, `description?`, `announce?`, `locked?` |

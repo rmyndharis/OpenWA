@@ -9,6 +9,7 @@ export enum SessionStatus {
   AUTHENTICATING = 'authenticating',
   READY = 'ready',
   DISCONNECTED = 'disconnected',
+  ACTION_REQUIRED = 'action_required',
   FAILED = 'failed',
 }
 

@@ -645,6 +645,11 @@
   color: var(--info);
 }
 
+.sessions-page .status-pill.action_required {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
 .sessions-page .status-pill.ready {
   background: rgba(34, 197, 94, 0.1);
   color: var(--success);

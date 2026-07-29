@@ -228,6 +228,7 @@
     "qr_ready": "掃描 QR",
     "ready": "已連線",
     "disconnected": "已中斷連線",
+    "action_required": "需要操作",
     "failed": "失敗",
     "authenticating": "正在驗證..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "WhatsApp 工作階段現已連線",
       "disconnectedTitle": "工作階段已中斷連線",
       "disconnectedDesc": "WhatsApp 工作階段已中斷連線",
+      "actionRequiredTitle": "需要操作",
+      "actionRequiredDesc": "此工作階段需要您的關注。開啟工作階段以查看需要做什麼。",
       "failedTitle": "工作階段失敗",
       "failedDesc": "WhatsApp 工作階段啟動失敗。開啟該工作階段以查看原因。"
     },

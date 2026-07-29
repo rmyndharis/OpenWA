@@ -239,6 +239,7 @@
     "qr_ready": "امسح رمز QR",
     "ready": "متصل",
     "disconnected": "غير متصل",
+    "action_required": "إجراء مطلوب",
     "failed": "فشل",
     "authenticating": "جارٍ المصادقة..."
   },
@@ -315,6 +316,8 @@
       "readyDesc": "جلسة واتساب متصلة الآن",
       "disconnectedTitle": "انقطع اتصال الجلسة",
       "disconnectedDesc": "انقطع اتصال جلسة واتساب",
+      "actionRequiredTitle": "إجراء مطلوب",
+      "actionRequiredDesc": "تتطلب هذه الجلسة انتباهك. افتح الجلسة لمعرفة ما يجب فعله.",
       "failedTitle": "فشلت الجلسة",
       "failedDesc": "فشل بدء جلسة واتساب. افتح الجلسة لمعرفة السبب."
     },

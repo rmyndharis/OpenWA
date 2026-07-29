@@ -235,6 +235,7 @@
     "qr_ready": "סריקת QR",
     "ready": "מחובר",
     "disconnected": "מנותק",
+    "action_required": "נדרשת פעולה",
     "failed": "נכשל",
     "authenticating": "מאמת..."
   },
@@ -311,6 +312,8 @@
       "readyDesc": "ה-Session של WhatsApp מחובר",
       "disconnectedTitle": "ה-Session נותק",
       "disconnectedDesc": "ה-Session של WhatsApp נותק",
+      "actionRequiredTitle": "נדרשת פעולה",
+      "actionRequiredDesc": "תקנת זו דורשת את תשומת לבך. פתח את התקנה כדי לראות מה לעשות.",
       "failedTitle": "ה-Session נכשל",
       "failedDesc": "ה-Session של WhatsApp נכשל באתחול. פתחו את ה-Session כדי לראות את הסיבה."
     },

@@ -228,6 +228,7 @@
     "qr_ready": "扫描 QR",
     "ready": "已连接",
     "disconnected": "已断开",
+    "action_required": "需要操作",
     "failed": "失败",
     "authenticating": "正在验证..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "WhatsApp 会话现已连接",
       "disconnectedTitle": "会话已断开",
       "disconnectedDesc": "WhatsApp 会话已断开连接",
+      "actionRequiredTitle": "需要操作",
+      "actionRequiredDesc": "此会话需要您的关注。打开会话以查看需要做什么。",
       "failedTitle": "会话失败",
       "failedDesc": "WhatsApp 会话启动失败。打开该会话以查看原因。"
     },

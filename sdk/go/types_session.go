@@ -16,7 +16,8 @@ func (q *ListSessionsQuery) values() url.Values {
 }
 
 // SessionResponse describes a WhatsApp session. Status is one of: created,
-// initializing, qr_ready, authenticating, ready, disconnected, failed.
+// initializing, qr_ready, authenticating, ready, disconnected, action_required,
+// failed.
 type SessionResponse struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`

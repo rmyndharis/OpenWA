@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The whatsapp-web.js engine auto-dismisses a new account's "What's new on WhatsApp Web" onboarding
+  modal** (#982). A freshly-linked account shows this modal after `ready`, and left unacknowledged it
+  gets the companion unlinked roughly five minutes later — surfacing as `disconnected: LOGOUT`.
+  whatsapp-web.js exposes no API for the modal (its own #3550 is still open), so the adapter reaches
+  the underlying page directly and clicks Continue best-effort, matching by the visible button/modal
+  text (stable across WhatsApp Web builds, unlike class selectors). The watcher starts on `ready` and
+  self-terminates after a lifetime cap since the modal is one-shot per account. When the dismissal
+  cannot be performed — the selector has moved, the page is unreachable, or no Continue button was
+  found — the session moves to a new **`action_required`** status instead of being silently logged
+  out. That status carries a human-readable reason via `lastError` (relaxed from FAILED-only to also
+  cover ACTION_REQUIRED) and flows through the existing `session.status` webhook and WebSocket
+  channels, the dashboard status pill, and all five SDKs. The watcher's interval, lifetime cap, and
+  probe timeout are bounded and `.unref()`'d, and it is cleared on every teardown path.
+
 - **`POST /sessions/:id/logout` unlinks the device from the WhatsApp account** (#984). Both engines
   already implemented a real protocol-level unlink — whatsapp-web.js calls `WAWebSocketModel.Socket.logout()`
   and Baileys sends `<remove-companion-device reason="user_initiated"/>` — but the method had no caller,

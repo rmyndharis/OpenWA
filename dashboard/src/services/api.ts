@@ -34,13 +34,15 @@ export interface Session {
     | 'qr_ready'
     | 'ready'
     | 'disconnected'
+    | 'action_required'
     | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;
   createdAt: string;
   updatedAt: string;
-  /** Human-readable reason for the most recent terminal engine failure (set only when status is 'failed'). */
+  /** Human-readable reason carried while the status is 'failed' (terminal failure) or
+   * 'action_required' (operator must intervene, e.g. acknowledge an onboarding modal). */
   lastError?: string | null;
 }
 

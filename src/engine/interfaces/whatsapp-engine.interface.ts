@@ -22,6 +22,7 @@ export enum EngineStatus {
   QR_READY = 'qr_ready',
   AUTHENTICATING = 'authenticating',
   READY = 'ready',
+  ACTION_REQUIRED = 'action_required',
   FAILED = 'failed',
 }
 
@@ -528,6 +529,15 @@ export interface EngineEventCallbacks {
   onHistoryMessages?: (messages: IncomingMessage[]) => void;
   onDisconnected?: (reason: string) => void;
   onStateChanged?: (state: EngineStatus) => void;
+  /**
+   * Fired when the engine needs an operator action to keep the session healthy — currently only the
+   * whatsapp-web.js onboarding-modal fallback (#982): a new account shows a "What's new" modal after
+   * linking that must be acknowledged, and the adapter dismisses it automatically; this fires only if
+   * that dismissal fails, so a headless deployment is told (rather than left to be logged out ~5m
+   * later). The engine has already moved to ACTION_REQUIRED; `reason` carries a human-readable cause.
+   * Distinct from `onError` (terminal) and `onDisconnected` (recoverable): intervention clears it.
+   */
+  onActionRequired?: (reason: string) => void;
   /**
    * Fired on a terminal initialization/authentication failure (e.g. Chromium
    * could not launch, or WhatsApp rejected the stored credentials). The engine

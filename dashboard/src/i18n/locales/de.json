@@ -228,6 +228,7 @@
     "qr_ready": "QR-Code scannen",
     "ready": "Verbunden",
     "disconnected": "Getrennt",
+    "action_required": "Handlung erforderlich",
     "failed": "Fehlgeschlagen",
     "authenticating": "Wird authentifiziert..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "Die WhatsApp-Sitzung ist jetzt verbunden",
       "disconnectedTitle": "Sitzung getrennt",
       "disconnectedDesc": "Die WhatsApp-Sitzung wurde getrennt",
+      "actionRequiredTitle": "Handlung erforderlich",
+      "actionRequiredDesc": "Diese Sitzung braucht deine Aufmerksamkeit. Öffne die Sitzung, um zu sehen, was zu tun ist.",
       "failedTitle": "Sitzung fehlgeschlagen",
       "failedDesc": "Die WhatsApp-Sitzung konnte nicht gestartet werden. Öffne die Sitzung, um den Grund anzuzeigen."
     },

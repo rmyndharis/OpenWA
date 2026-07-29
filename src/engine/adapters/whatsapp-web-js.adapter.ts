@@ -293,6 +293,16 @@ export interface WhatsAppWebJsConfig {
 const READY_RECONCILE_INTERVAL_MS = 2000;
 const READY_RECONCILE_TIMEOUT_MS = 90_000;
 
+// Onboarding-modal watcher (#982). A freshly-linked account shows a "What's new on WhatsApp Web"
+// modal with a Continue button that must be acknowledged, or WhatsApp unlinks the companion ~5m
+// later (surfacing as disconnected: LOGOUT). whatsapp-web.js exposes no API for this (#3550 open),
+// so the watcher reaches the page directly, dismisses it best-effort, and falls back to
+// ACTION_REQUIRED if that fails. The modal is one-shot per account, so the watcher self-terminates
+// after the lifetime cap rather than polling forever.
+const ONBOARDING_MODAL_INTERVAL_MS = 5_000;
+const ONBOARDING_MODAL_MAX_LIFETIME_MS = 5 * 60_000;
+const ONBOARDING_MODAL_PROBE_TIMEOUT_MS = 5_000;
+
 // WhatsApp Web version resolution (the #488 auto-resolve) lives in a dependency-free module so infra
 // status can import it without loading whatsapp-web.js (engine lazy-loading). The adapter imports
 // resolveWebVersionPin above for use in initialize().
@@ -354,6 +364,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   private readyReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private readyReconcileStartedAt = 0;
   private readyReconcileProbeInFlight = false;
+  // Onboarding-modal watcher handle (#982). Self-rescheduling setTimeout so a hung probe can't stall
+  // the loop; cleared on teardown exactly like readyReconcileTimer.
+  private onboardingWatcherTimer: ReturnType<typeof setTimeout> | null = null;
+  private onboardingWatcherStartedAt = 0;
+  private onboardingWatcherStarted = false;
   /** How long a received call's handle stays rejectable. Calls ring for roughly a minute, so
    *  two minutes covers the ringing window with margin without pinning dead calls for long. */
   private static readonly LIVE_CALL_TTL_MS = 2 * 60_000;
@@ -1074,7 +1089,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   private markReadyFromClientInfo(): void {
-    if ([EngineStatus.READY, EngineStatus.DISCONNECTED, EngineStatus.FAILED].includes(this.status)) return;
+    if (
+      [EngineStatus.READY, EngineStatus.DISCONNECTED, EngineStatus.FAILED, EngineStatus.ACTION_REQUIRED].includes(
+        this.status,
+      )
+    )
+      return;
     this.clearReadyReconcile();
     try {
       const info = this.client?.info;
@@ -1087,6 +1107,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.setStatus(EngineStatus.READY);
       this.callbacks.onReady?.('', '');
     }
+    // A freshly-linked account may show a "What's new" onboarding modal that, left unacknowledged,
+    // gets the companion unlinked (~5m later → disconnected: LOGOUT, #982). Dismiss it best-effort
+    // and fall back to ACTION_REQUIRED. Started after READY so a non-ready session never arms it.
+    this.startOnboardingWatcher();
   }
 
   private scheduleReadyReconcile(): void {
@@ -1150,6 +1174,120 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     }
     this.readyReconcileStartedAt = 0;
     this.readyReconcileProbeInFlight = false;
+  }
+
+  /**
+   * Dismiss a freshly-linked account's "What's new on WhatsApp Web" onboarding modal (#982). The modal
+   * has a Continue button that must be acknowledged or WhatsApp unlinks the companion ~5m later
+   * (surfacing as disconnected: LOGOUT). whatsapp-web.js exposes no API for this (#3550 open), so the
+   * watcher reaches the page directly. Idempotent and one-shot per engine: the modal appears once per
+   * account, so the loop self-terminates at the lifetime cap instead of polling forever. On any probe
+   * failure the session moves to ACTION_REQUIRED and surfaces the reason — never silently.
+   */
+  private startOnboardingWatcher(): void {
+    if (this.onboardingWatcherStarted) return; // idempotent: ready event + reconcile path share one funnel
+    this.onboardingWatcherStarted = true;
+    this.onboardingWatcherStartedAt = Date.now();
+
+    const tick = (): void => {
+      if (!this.client || this.status !== EngineStatus.READY || this.tearingDown || this.disconnectReported) {
+        this.clearOnboardingWatcher();
+        return;
+      }
+      // The modal is one-shot per account: stop after the lifetime cap rather than polling forever.
+      if (Date.now() - this.onboardingWatcherStartedAt >= ONBOARDING_MODAL_MAX_LIFETIME_MS) {
+        this.clearOnboardingWatcher();
+        return;
+      }
+      // Schedule the next tick up front so a hung page.evaluate can't stall the loop.
+      this.onboardingWatcherTimer = setTimeout(tick, ONBOARDING_MODAL_INTERVAL_MS);
+      this.onboardingWatcherTimer.unref?.();
+      // Fire-and-forget: a rejection is the fallback signal, not a crash.
+      void this.dismissOnboardingModalIfNeeded();
+    };
+
+    this.onboardingWatcherTimer = setTimeout(tick, ONBOARDING_MODAL_INTERVAL_MS);
+    this.onboardingWatcherTimer.unref?.();
+  }
+
+  private clearOnboardingWatcher(): void {
+    if (this.onboardingWatcherTimer) {
+      clearTimeout(this.onboardingWatcherTimer);
+      this.onboardingWatcherTimer = null;
+    }
+    this.onboardingWatcherStartedAt = 0;
+  }
+
+  /**
+   * One watcher tick: detect the onboarding modal and click Continue. Returns/throws rather than
+   * mutating state directly so the loop stays the single owner of the ACTION_REQUIRED transition.
+   * `undefined` = no modal (nothing to do); the page evaluating to a click is the success path; any
+   * thrown/rejected evaluate (selector moved, page closed, timeout) is treated as "needs attention".
+   */
+  private async dismissOnboardingModalIfNeeded(): Promise<void> {
+    if (!this.client) return;
+    const page = (this.client as unknown as { pupPage?: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        page?.evaluate(() => {
+          // Match by visible text rather than class selectors — WhatsApp Web rebuilds its DOM across
+          // builds, but the button label ("Continue") and modal heading ("What's new") are stable.
+          const isVisible = (el: Element): boolean => {
+            const rect = (el as HTMLElement).getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
+          };
+          const candidates = Array.from(document.querySelectorAll('button, [role="button"], div'));
+          const heading = candidates.some(
+            el => isVisible(el) && /what'?s new/i.test((el.textContent || '').trim().slice(0, 64)),
+          );
+          if (!heading) return { modalPresent: false, dismissed: false };
+          const button = candidates
+            .filter(el => isVisible(el) && (el.textContent || '').trim() === 'Continue')
+            .slice(-1)[0];
+          if (!button) return { modalPresent: true, dismissed: false };
+          (button as HTMLElement).click();
+          return { modalPresent: true, dismissed: true };
+        }),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('onboarding modal probe timed out')),
+            ONBOARDING_MODAL_PROBE_TIMEOUT_MS,
+          );
+          timeout.unref?.();
+        }),
+      ]);
+
+      if (result?.modalPresent && !result.dismissed) {
+        // The modal is there but no clickable Continue was found — the account needs a human.
+        this.reportActionRequired(
+          'WhatsApp is showing an onboarding modal ("What\'s new") that could not be dismissed ' +
+            "automatically. Acknowledge it (e.g. link a normal WhatsApp Web session on the phone's " +
+            'number and click through) or the companion will be unlinked.',
+        );
+      }
+    } catch (error) {
+      // A page.evaluate failure after READY usually means the page navigated/closed mid-probe, but it
+      // also covers the modal having moved beyond recognition — surface ACTION_REQUIRED rather than
+      // letting the session be silently logged out at the five-minute mark.
+      this.reportActionRequired(
+        `Could not reach the WhatsApp Web page to dismiss the onboarding modal: ${
+          error instanceof Error ? error.message : String(error)
+        }. The session may be logged out shortly; acknowledge the onboarding on a normal WhatsApp Web ` +
+          'session if the companion gets unlinked.',
+      );
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private reportActionRequired(reason: string): void {
+    this.clearOnboardingWatcher();
+    if (this.status !== EngineStatus.READY) return; // already leaving READY; don't override a teardown/failure
+    this.setStatus(EngineStatus.ACTION_REQUIRED);
+    this.callbacks.onActionRequired?.(reason);
+    this.logger.warn(reason, { sessionId: this.config.sessionId, action: 'onboarding_modal_fallback' });
   }
 
   /**
@@ -1317,6 +1455,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     if (!client) return null;
 
     this.clearReadyReconcile();
+    this.clearOnboardingWatcher();
     if (this.status !== EngineStatus.DISCONNECTED) {
       this.setStatus(EngineStatus.DISCONNECTED);
     }
@@ -1329,6 +1468,7 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       this.client = null;
     }
     this.clearReadyReconcile();
+    this.clearOnboardingWatcher();
   }
 
   async disconnect(): Promise<void> {

@@ -21,7 +21,14 @@ export type ChatKind = 'individual' | 'group' | 'channel' | 'status' | 'broadcas
 
 /** Session lifecycle status. */
 export type SessionStatus =
-  'created' | 'initializing' | 'qr_ready' | 'authenticating' | 'ready' | 'disconnected' | 'failed';
+  | 'created'
+  | 'initializing'
+  | 'qr_ready'
+  | 'authenticating'
+  | 'ready'
+  | 'disconnected'
+  | 'action_required'
+  | 'failed';
 
 /** Minimal success envelope returned by some state-changing endpoints. */
 export interface SuccessResult {
@@ -41,7 +48,7 @@ export interface SessionResponse {
   lastActive?: string | null;
   createdAt: string;
   updatedAt: string;
-  /** Only present when `status === 'failed'`. */
+  /** Only present when `status === 'failed'` (terminal failure) or `status === 'action_required'` (operator must intervene). */
   lastError?: string | null;
 }
 

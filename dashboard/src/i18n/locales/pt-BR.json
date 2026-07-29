@@ -228,6 +228,7 @@
     "qr_ready": "Escanear QR",
     "ready": "Conectada",
     "disconnected": "Desconectada",
+    "action_required": "Ação necessária",
     "failed": "Falha",
     "authenticating": "Autenticando..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "A sessão do WhatsApp está conectada",
       "disconnectedTitle": "Sessão desconectada",
       "disconnectedDesc": "A sessão do WhatsApp foi desconectada",
+      "actionRequiredTitle": "Ação necessária",
+      "actionRequiredDesc": "Esta sessão precisa de sua atenção. Abra a sessão para ver o que fazer.",
       "failedTitle": "Sessão falhou",
       "failedDesc": "A sessão do WhatsApp não pôde ser iniciada. Abra a sessão para ver o motivo."
     },

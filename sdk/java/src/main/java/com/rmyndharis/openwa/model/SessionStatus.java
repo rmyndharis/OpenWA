@@ -19,6 +19,8 @@ public enum SessionStatus {
     READY,
     @SerializedName("disconnected")
     DISCONNECTED,
+    @SerializedName("action_required")
+    ACTION_REQUIRED,
     @SerializedName("failed")
     FAILED
 }

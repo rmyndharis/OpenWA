@@ -99,6 +99,10 @@ export function Sessions() {
           toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
         } else if (event.status === 'disconnected') {
           toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
+        } else if (event.status === 'action_required') {
+          // Refresh so the card picks up the lastError reason (what the operator must do) from the API.
+          void fetchSessions();
+          toast.warning(t('sessions.toasts.actionRequiredTitle'), t('sessions.toasts.actionRequiredDesc'));
         } else if (event.status === 'failed') {
           // Refresh so the card picks up the lastError reason from the API.
           void fetchSessions();
@@ -362,7 +366,8 @@ export function Sessions() {
     const matchesStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
-      (statusFilter === 'inactive' && ['created', 'idle', 'disconnected', 'failed'].includes(s.status)) ||
+      (statusFilter === 'inactive' &&
+        ['created', 'idle', 'disconnected', 'action_required', 'failed'].includes(s.status)) ||
       (statusFilter === 'connecting' &&
         ['initializing', 'connecting', 'authenticating', 'qr_ready'].includes(s.status));
     return matchesSearch && matchesStatus;
@@ -788,7 +793,7 @@ export function Sessions() {
                     <span className="info-label">{t('sessions.card.lastActive')}</span>
                     <span className="info-value">{formatLastActive(session.lastActive)}</span>
                   </div>
-                  {session.status === 'failed' && session.lastError ? (
+                  {(session.status === 'failed' || session.status === 'action_required') && session.lastError ? (
                     <div className="info-row session-error">
                       <span className="info-label">{t('sessions.card.error')}</span>
                       <span className="info-value error-text" title={session.lastError}>

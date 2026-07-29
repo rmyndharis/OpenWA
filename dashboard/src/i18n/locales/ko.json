@@ -228,6 +228,7 @@
     "qr_ready": "QR 스캔",
     "ready": "연결됨",
     "disconnected": "연결 끊김",
+    "action_required": "조치 필요",
     "failed": "실패",
     "authenticating": "인증하는 중..."
   },
@@ -304,6 +305,8 @@
       "readyDesc": "WhatsApp 세션이 연결되었습니다",
       "disconnectedTitle": "세션 연결 끊김",
       "disconnectedDesc": "WhatsApp 세션 연결이 끊어졌습니다",
+      "actionRequiredTitle": "조치 필요",
+      "actionRequiredDesc": "이 세션에 주의가 필요합니다. 할 일을 확인하려면 세션을 여세요.",
       "failedTitle": "세션 실패",
       "failedDesc": "WhatsApp 세션을 시작하지 못했습니다. 세션을 열어 원인을 확인하세요."
     },
