@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifecycle — stop-mark, reconnection cancel, bounded and isolated teardown, engine-map reconciliation
   — while calling `engine.logout()` instead of `engine.disconnect()`, and records a `SESSION_LOGGED_OUT`
   audit action so an intentional unlink is distinguishable from a plain stop or a WhatsApp-side eviction.
-  It is additive: the stop, delete, and force-kill semantics are unchanged.
+  The route requires a started session: with no engine loaded there is nothing to send the unlink
+  through, so it returns 400 instead of reporting an unlink that never happened (unlike `stop()`,
+  which treats an already-stopped session as a successful no-op). It is additive: the stop, delete,
+  and force-kill semantics are unchanged.
 
 ### Fixed
 

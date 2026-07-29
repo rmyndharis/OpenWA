@@ -2151,20 +2151,27 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Must run while the engine is still live — logout is a network round-trip to WhatsApp, so it
    * cannot be performed after destroy()/forceDestroy(). Mirrors stop()'s lifecycle otherwise
    * (stop-mark + cancel-reconnect + bounded, isolated teardown + Map reconciliation).
+   *
+   * Requires a started session: with no engine loaded there is nothing to send the unlink through,
+   * so the request is rejected rather than reporting an unlink that never happened (the on-disk
+   * credentials would also survive, letting a later start() reconnect with no QR). To just release
+   * a stopped session locally, use stop()/delete().
    */
   async logout(id: string): Promise<Session> {
     const session = await this.findOne(id);
+    const engine = this.engines.get(id);
+
+    if (!engine) {
+      throw new BadRequestException('Session is not started. Call POST /sessions/:id/start first.');
+    }
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
     this.stoppingSessions.add(id);
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 
-    const engine = this.engines.get(id);
-    if (engine) {
-      await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout');
-      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
-    }
+    await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout');
+    if (this.isLiveEngine(id, engine)) this.engines.delete(id);
 
     this.logger.log(`Session logged out: ${session.name}`, {
       sessionId: id,

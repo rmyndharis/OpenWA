@@ -331,12 +331,15 @@ describe('SessionService', () => {
       expect(enginesOf().has('sess-uuid-1')).toBe(false);
     });
 
-    it('logout() is a no-op teardown when no engine is loaded (session already stopped)', async () => {
+    it('logout() rejects with 400 when no engine is loaded (session already stopped)', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
-      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
       enginesOf().delete('sess-uuid-1');
 
-      await expect(service.logout('sess-uuid-1')).resolves.toBeDefined();
+      // With no engine there is nothing to send the unlink through — reporting success
+      // would record a SESSION_LOGGED_OUT audit row for an unlink that never happened.
+      await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+      // The rejection happens before any teardown side effects: no stop-mark left behind.
+      expect(stoppingOf().has('sess-uuid-1')).toBe(false);
     });
 
     it('forceKill() force-destroys the engine, reconciles the map, and marks the session stopping', async () => {

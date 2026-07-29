@@ -165,6 +165,7 @@ export class SessionController {
     description: 'Session logged out',
     type: SessionResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async logout(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.logout(id);
