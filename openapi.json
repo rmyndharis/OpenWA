@@ -23,6 +23,7 @@
                 "session_started",
                 "session_stopped",
                 "session_force_killed",
+                "session_logged_out",
                 "session_deleted",
                 "session_qr_generated",
                 "session_connected",
@@ -525,6 +526,42 @@
           }
         },
         "summary": "Stop a session and disconnect WhatsApp",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{id}/logout": {
+      "post": {
+        "description": "Asks WhatsApp to remove this companion device, so it disappears from the account holder's Linked Devices list, then tears the session down. Unlike stop and delete — which only release the session locally and leave the device linked on the phone — reconnecting after a logout always requires a fresh QR scan or pairing code.",
+        "operationId": "SessionController_logout",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Log out of WhatsApp (unlinks this device) and stop the session",
         "tags": [
           "sessions"
         ]

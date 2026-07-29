@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`POST /sessions/:id/logout` unlinks the device from the WhatsApp account** (#984). Both engines
+  already implemented a real protocol-level unlink — whatsapp-web.js calls `WAWebSocketModel.Socket.logout()`
+  and Baileys sends `<remove-companion-device reason="user_initiated"/>` — but the method had no caller,
+  so it was unreachable over the API. `stop()` disconnects while keeping the stored credentials (a later
+  start reconnects without a QR), and `delete()` additionally purges the on-disk auth directories and the
+  session row, but neither tells WhatsApp anything, so the device stayed listed under the account
+  holder's Linked Devices on the phone until they removed it by hand. The new route mirrors `stop()`'s
+  lifecycle — stop-mark, reconnection cancel, bounded and isolated teardown, engine-map reconciliation
+  — while calling `engine.logout()` instead of `engine.disconnect()`, and records a `SESSION_LOGGED_OUT`
+  audit action so an intentional unlink is distinguishable from a plain stop or a WhatsApp-side eviction.
+  It is additive: the stop, delete, and force-kill semantics are unchanged.
+
 ### Fixed
 
 - **Native Windows and npm 12 source installs no longer fail during dependency setup.** The
