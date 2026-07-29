@@ -58,6 +58,56 @@ describe('BullBoardAuthMiddleware', () => {
     expect(authService.validateApiKey).toHaveBeenCalledWith('admin', '127.0.0.1');
   });
 
+  it('rejects an ADMIN key that is restricted to specific sessions', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      id: 'key-1',
+      name: 'scoped-admin',
+      role: ApiKeyRole.ADMIN,
+      allowedSessions: ['session-a'],
+    });
+    authService.hasPermission.mockReturnValue(true);
+
+    const req = reqWith({ 'x-api-key': 'raw-key' });
+    const next = jest.fn();
+
+    await mw.use(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    const forwarded = next.mock.calls[0][0];
+    expect(forwarded).toBeInstanceOf(ForbiddenException);
+    expect((forwarded as ForbiddenException).message).toContain('restricted');
+  });
+
+  it('admits an ADMIN key with an empty allowedSessions list', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      id: 'key-2',
+      name: 'unscoped-admin',
+      role: ApiKeyRole.ADMIN,
+      allowedSessions: [],
+    });
+    authService.hasPermission.mockReturnValue(true);
+
+    const next = jest.fn();
+    await mw.use(reqWith({ 'x-api-key': 'raw-key' }), res, next);
+
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it('admits an ADMIN key with a null allowedSessions list', async () => {
+    authService.validateApiKey.mockResolvedValue({
+      id: 'key-3',
+      name: 'null-scope-admin',
+      role: ApiKeyRole.ADMIN,
+      allowedSessions: null,
+    });
+    authService.hasPermission.mockReturnValue(true);
+
+    const next = jest.fn();
+    await mw.use(reqWith({ 'x-api-key': 'raw-key' }), res, next);
+
+    expect(next).toHaveBeenCalledWith();
+  });
+
   it('accepts a Bearer token', async () => {
     authService.validateApiKey.mockResolvedValue({ role: ApiKeyRole.ADMIN });
     authService.hasPermission.mockReturnValue(true);

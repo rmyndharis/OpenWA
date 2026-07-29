@@ -198,6 +198,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-session config (`PUT /api/plugins/:id/config/:sessionId`) continue to accept restricted keys
   and remain scoped to the sessions the key allows.
 
+- The queue dashboard (`/admin/queues`, available when `QUEUE_ENABLED=true`) now refuses API keys
+  restricted to specific sessions. The dashboard exposes and mutates every queue in the deployment
+  and has no session dimension to scope against.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added

@@ -31,6 +31,8 @@ import { resolveClientIp } from '../utils/ip';
  *    This is a boundary trace of queue-mutation attempts reaching the Bull Board router (the UI's
  *    retry/remove/pause actions are POSTs); it deliberately does NOT model Bull Board's internal
  *    per-action outcomes, which are invisible from middleware.
+ * Session-restricted keys are refused outright: the board is deployment-global, so a key confined to
+ * a subset of sessions has no scope to enforce against it.
  * Both are fire-and-forget: audit logging is best-effort and must never affect the auth decision.
  */
 @Injectable()
@@ -69,6 +71,14 @@ export class BullBoardAuthMiddleware implements NestMiddleware {
       const apiKey = await this.authService.validateApiKey(rawKey, clientIp);
       if (!this.authService.hasPermission(apiKey, ApiKeyRole.ADMIN)) {
         throw new ForbiddenException('Admin role required to access the queue dashboard');
+      }
+
+      // The board shows and mutates every queue in the deployment, and carries no session dimension
+      // to scope against. validateApiKey above is called without a session id, so a key restricted to
+      // specific sessions passes its scope check by default — reject it here instead. This mirrors
+      // @RequireUnscopedKey on the REST surface, which cannot reach this raw-Express mount.
+      if ((apiKey.allowedSessions?.length ?? 0) > 0) {
+        throw new ForbiddenException('API keys restricted to specific sessions cannot access the queue dashboard');
       }
 
       // Boundary trace of queue-mutation attempts. GET/HEAD are the UI's read/poll traffic; every
