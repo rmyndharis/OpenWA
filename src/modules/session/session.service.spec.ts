@@ -342,6 +342,65 @@ describe('SessionService', () => {
       expect(stoppingOf().has('sess-uuid-1')).toBe(false);
     });
 
+    const pendingTeardownsOf = () =>
+      (service as unknown as { pendingTeardowns: Map<string, Promise<void>> }).pendingTeardowns;
+
+    it('start() waits for a logout teardown that lost its deadline race before creating the engine', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      // A logout whose engine promise hangs past the 10s deadline loses the race but keeps
+      // running — and it ends in an fs.rm of the profile that start() is about to re-create.
+      let releaseLogout!: () => void;
+      const wedgedLogout = new Promise<void>(res => {
+        releaseLogout = res;
+      });
+      const engine = { logout: jest.fn().mockReturnValue(wedgedLogout) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      jest.useFakeTimers();
+      try {
+        const logoutCall = service.logout('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(10_000); // deadline fires; the race is lost
+        await logoutCall;
+        expect(pendingTeardownsOf().has('sess-uuid-1')).toBe(true); // still running past the race
+
+        const startCall = service.start('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(1_000); // inside the bounded wait
+        expect(engineFactory.create).not.toHaveBeenCalled(); // fresh profile not written yet
+
+        releaseLogout(); // the stale rm now lands BEFORE any fresh credentials exist
+        await startCall;
+        expect(engineFactory.create).toHaveBeenCalledTimes(1);
+        expect(pendingTeardownsOf().has('sess-uuid-1')).toBe(false); // self-removed on settlement
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('start() proceeds after the bounded wait when the teardown stays wedged', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const engine = { logout: jest.fn().mockReturnValue(new Promise<void>(() => undefined)) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      jest.useFakeTimers();
+      try {
+        const logoutCall = service.logout('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(10_000);
+        await logoutCall;
+
+        const startCall = service.start('sess-uuid-1');
+        await jest.advanceTimersByTimeAsync(10_000); // bounded wait exhausted
+        await startCall;
+        // The operator is not blocked indefinitely; the still-wedged teardown's stale rm sits
+        // behind the wedge, and the residual window is logged (pending_teardown_wait_exhausted).
+        expect(engineFactory.create).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('forceKill() force-destroys the engine, reconciles the map, and marks the session stopping', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });

@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A wedged logout can no longer delete a freshly re-paired profile** (#994). `teardownEngineSafely`
+  races an engine teardown against a 10s deadline, but the losing promise kept running — and
+  `logout()`'s ends in an `fs.rm` of the session's on-disk profile, the same deterministic path a
+  later `start()` re-creates. A `pupBrowser.close()` wedged past the deadline could therefore land
+  that `rm` on credentials written by a subsequent pairing. Losing `logout()` teardowns are now
+  tracked, and `start()`/`delete()` wait (bounded) for them to settle before touching the profile
+  path; a teardown still wedged past the bound no longer blocks the operator, and that residual
+  window is logged.
+
 - **`npm install` from source no longer fails on native Windows, and the whatsapp-web.js backport
   actually applies there** (#889). A unified diff's lines must begin with a space, `+`, `-` or `@`, so
   neither applier accepts one whose lines end CRLF — both stop at this patch's first empty context

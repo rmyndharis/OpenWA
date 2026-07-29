@@ -232,6 +232,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // order when different mutation kinds for the same message arrive together.
   private messageMutationChains: Map<string, Promise<void>> = new Map();
 
+  // Raw teardown promises that outlived their deadline race in teardownEngineSafely. A losing
+  // logout() promise keeps running and ends in an fs.rm of the session's on-disk profile — the
+  // same deterministic path a later start() re-creates — so start()/delete() consult this map and
+  // wait (bounded) for settlement before touching that path. Entries self-remove on settlement.
+  private readonly pendingTeardowns = new Map<string, Promise<void>>();
+
   constructor(
     @InjectRepository(Session, 'data')
     private readonly sessionRepository: Repository<Session>,
@@ -362,6 +368,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Resolves to whether the teardown actually completed: `false` means it threw or hit the 10s
    * deadline, so the underlying Chromium/socket may still be alive (a caller with an operator-facing
    * outcome, like stopOrphanEngines, must surface that instead of reporting a clean stop).
+   *
+   * A teardown that loses the deadline race keeps running past the caller's return. For 'logout'
+   * that leftover promise ends in an fs.rm of the session's on-disk profile — the same path a
+   * later start() re-creates — so the raw promise is registered in pendingTeardowns and start()/
+   * delete() wait (bounded) for it to settle before touching that path.
    */
   private async teardownEngineSafely(
     sessionId: string,
@@ -369,10 +380,23 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     teardown: (e: IWhatsAppEngine) => Promise<void>,
     label: 'destroy' | 'disconnect' | 'force-destroy' | 'logout',
   ): Promise<boolean> {
+    const raw = teardown(engine);
+    if (label === 'logout') {
+      // Settlement marker only — never rejects, so it can't drive the race below to a false
+      // "completed"; the race still observes the raw promise. Identity-checked on removal so a
+      // newer teardown's entry isn't evicted by an older one settling.
+      const tracked = raw.catch(() => undefined);
+      this.pendingTeardowns.set(sessionId, tracked);
+      void tracked.finally(() => {
+        if (this.pendingTeardowns.get(sessionId) === tracked) {
+          this.pendingTeardowns.delete(sessionId);
+        }
+      });
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        teardown(engine),
+        raw,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error(`engine.${label}() timed out`)), 10_000);
         }),
@@ -386,6 +410,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return false;
     } finally {
       if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Wait (bounded) for a teardown that lost its deadline race to settle. A losing logout() promise
+   * ends in an fs.rm of the on-disk profile — the same deterministic path start() re-creates and
+   * delete() purges — so those paths call this before touching disk. If the teardown is still
+   * wedged past the bound, proceed anyway: its rm sits behind the wedge, blocking the operator
+   * indefinitely is worse, and the residual window is logged.
+   */
+  private async awaitPendingTeardown(id: string): Promise<void> {
+    const pending = this.pendingTeardowns.get(id);
+    if (!pending) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      pending.then(() => true),
+      new Promise<boolean>(resolve => {
+        timer = setTimeout(() => resolve(false), 10_000);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!settled) {
+      this.logger.warn(
+        `Proceeding while a previous logout teardown for session ${id} is still wedged — its ` +
+          'stale profile cleanup may land late',
+        { sessionId: id, action: 'pending_teardown_wait_exhausted' },
+      );
     }
   }
 
@@ -546,7 +598,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // session NAME and live independently of the (now torn-down, and on delete often never-loaded)
       // engine instance, so the teardown above doesn't touch them. Without this, recreating a session
       // under the same name reloads a stale store. Best-effort inside the factory — never fails an
-      // otherwise-successful delete.
+      // otherwise-successful delete. A wedged logout teardown from before this delete may still hold
+      // a pending fs.rm of the same dirs — wait (bounded) for it to settle first.
+      await this.awaitPendingTeardown(id);
       await this.engineFactory.purgeSessionData(session.name);
     } finally {
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed.
@@ -614,6 +668,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // so a poisoned value can't drive a NaN/immediate-relaunch storm or an unbounded loop.
       const { maxAttempts, baseDelay } = resolveReconnectConfig(session.config);
       this.reconnectStates.set(id, { attempts: 0, timer: null, maxAttempts, baseDelay });
+
+      // A logout teardown that lost its deadline race may still be running, and it ends in an
+      // fs.rm of this session's on-disk profile — the same path initializeEngine is about to
+      // populate. Wait (bounded) for it to settle so the stale rm can't land on fresh credentials.
+      await this.awaitPendingTeardown(id);
 
       try {
         await this.initializeEngine(id, session);
