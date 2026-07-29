@@ -99,8 +99,11 @@ describe('PUBLIC_PATHS drift guard', () => {
   it('every controller using @Public() is accounted for in EXPECTED_PUBLIC_CONTROLLERS', () => {
     const srcRoot = path.resolve(__dirname, '..').replace(/\\/g, '/');
     // Match only a line that is exactly `@Public()` — ignores the decorator's doc comment
-    // (`@example @Public()`) and test/string occurrences.
+    // (`@example @Public()`) and test/string occurrences. *.spec.ts files are excluded: a real
+    // @Public() decorator only attaches to a controller class, while a spec may legitimately spell
+    // the decorator out as a string fixture (e.g. the global-route-fence structural guard).
     const usingPublic = listTsFiles(srcRoot)
+      .filter(f => !f.endsWith('.spec.ts'))
       .filter(f => /^\s*@Public\(\)\s*$/m.test(fs.readFileSync(f, 'utf8')))
       .map(f => f.replace(/^.*\/src\//, 'src/'))
       .sort();

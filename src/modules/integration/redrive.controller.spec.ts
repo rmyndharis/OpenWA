@@ -22,7 +22,7 @@ describe('RedriveController authz', () => {
 describe('RedriveController session-scope fence', () => {
   const scopedKey = { allowedSessions: ['sess-1'] } as ApiKey;
 
-  function build(sessionScope: string | null) {
+  function build(sessionScope: string | null | undefined) {
     const redrive = { redriveInstance: jest.fn().mockResolvedValue({ redriven: 0, remaining: 0, batchSize: 100 }) };
     const instances = {
       resolve: jest
