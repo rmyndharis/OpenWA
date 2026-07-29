@@ -562,6 +562,9 @@
           },
           "404": {
             "description": "Session not found"
+          },
+          "502": {
+            "description": "Session was stopped locally, but WhatsApp did not confirm the device unlink — retryable"
           }
         },
         "summary": "Log out of WhatsApp (unlinks this device) and stop the session",

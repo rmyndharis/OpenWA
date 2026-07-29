@@ -1089,6 +1089,22 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     );
   });
 
+  it('logout() rethrows after the destroy fallback so an unconfirmed unlink is observable', async () => {
+    // Swallowing the failure would report a successful unlink that never reached WhatsApp —
+    // and write a false SESSION_LOGGED_OUT audit row up-stack. The session must still die
+    // locally (destroy fallback), but the error must reach the caller.
+    const adapter = newAdapter();
+    const unlinkError = new Error('evaluate failed');
+    const { client } = attachFakeClient(adapter, {
+      logout: jest.fn().mockRejectedValue(unlinkError),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(adapter.logout()).rejects.toBe(unlinkError);
+    expect(client.destroy).toHaveBeenCalledTimes(1); // local teardown still happened
+    expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED);
+  });
+
   it('disables ready reconciliation before destroy awaits client teardown', async () => {
     await expectNoReadyDuringTeardown(
       (client, teardownWait) => {

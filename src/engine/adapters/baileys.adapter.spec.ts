@@ -248,6 +248,23 @@ describe('BaileysAdapter lifecycle & status', () => {
     }
   });
 
+  it('logout() rejects and keeps the on-disk auth dir when the server unlink fails', async () => {
+    // Wiping the auth dir on a failed unlink would leave the device linked server-side with no
+    // local way to retry — the worst of both worlds. Failure must surface and keep the creds.
+    const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+    try {
+      const adapter = newAdapter();
+      await adapter.initialize(noopCallbacks({}));
+      fakeSock.logout.mockRejectedValueOnce(new Error('stream errored out'));
+
+      await expect(adapter.logout()).rejects.toThrow('stream errored out');
+      expect(rmSpy).not.toHaveBeenCalled();
+      expect(adapter.getStatus()).toBe(EngineStatus.DISCONNECTED); // socket still ended locally
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it('on a recoverable close: reconnects (re-creates the socket) and does NOT fire onDisconnected', async () => {
     const onDisconnected = jest.fn();
     const adapter = newAdapter();

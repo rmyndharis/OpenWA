@@ -21,8 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit action so an intentional unlink is distinguishable from a plain stop or a WhatsApp-side eviction.
   The route requires a started session: with no engine loaded there is nothing to send the unlink
   through, so it returns 400 instead of reporting an unlink that never happened (unlike `stop()`,
-  which treats an already-stopped session as a successful no-op). It is additive: the stop, delete,
-  and force-kill semantics are unchanged.
+  which treats an already-stopped session as a successful no-op). If the engine's logout does not
+  complete, the session is still torn down locally but the route returns 502 — the unlink was not
+  confirmed, no `SESSION_LOGGED_OUT` audit row is written, and the stored credentials survive so
+  the retry needs no QR scan (#993). It is additive: the stop, delete, and force-kill semantics
+  are unchanged.
 
 - **All five SDKs and the dashboard's API client gain the session logout operation** (#984). The
   JavaScript, Python, Go, PHP, and Java SDKs each expose a `logout` method mirroring the neighbouring

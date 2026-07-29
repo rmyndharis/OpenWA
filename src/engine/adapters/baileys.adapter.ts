@@ -555,10 +555,17 @@ export class BaileysAdapter implements IWhatsAppEngine {
     try {
       await this.sock?.logout();
     } catch (err) {
+      // End the socket so the session still dies locally, but keep the on-disk creds: wiping
+      // them now would leave the device linked server-side with no local way to retry the
+      // unlink. Rethrow so the caller learns the unlink was not confirmed.
       this.logger.warn('Baileys logout failed; ending socket', {
         error: err instanceof Error ? err.message : String(err),
       });
       void this.sock?.end(undefined);
+      this.sock = null;
+      this.liveCalls.clear();
+      this.setStatus(EngineStatus.DISCONNECTED);
+      throw err;
     }
     this.sock = null;
     this.liveCalls.clear();

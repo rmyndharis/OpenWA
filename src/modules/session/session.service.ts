@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  BadGatewayException,
   HttpException,
   HttpStatus,
   OnModuleDestroy,
@@ -2156,6 +2157,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * so the request is rejected rather than reporting an unlink that never happened (the on-disk
    * credentials would also survive, letting a later start() reconnect with no QR). To just release
    * a stopped session locally, use stop()/delete().
+   *
+   * Throws BadGatewayException when the engine's logout does not complete: the session is still
+   * torn down locally (map reconciled, status updated), but the unlink was not confirmed by
+   * WhatsApp, so reporting success would record a SESSION_LOGGED_OUT audit row for an unlink
+   * that never happened. The operator can start the session and retry the logout.
    */
   async logout(id: string): Promise<Session> {
     const session = await this.findOne(id);
@@ -2170,14 +2176,26 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Cancel any reconnection attempts
     this.cancelReconnect(id);
 
-    await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout');
+    const unlinked = await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout');
     if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+    await this.updateStatus(id, SessionStatus.DISCONNECTED);
+
+    if (!unlinked) {
+      this.logger.warn(`Session stopped locally but the unlink was not confirmed: ${session.name}`, {
+        sessionId: id,
+        action: 'logout_unconfirmed',
+      });
+      throw new BadGatewayException(
+        'Session was stopped locally, but WhatsApp did not confirm the device unlink — the ' +
+          'device may still be listed under Linked Devices on the phone. Start the session and ' +
+          'retry the logout to confirm it.',
+      );
+    }
 
     this.logger.log(`Session logged out: ${session.name}`, {
       sessionId: id,
       action: 'logout',
     });
-    await this.updateStatus(id, SessionStatus.DISCONNECTED);
     return this.findOne(id);
   }
 

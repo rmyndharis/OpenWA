@@ -1356,12 +1356,15 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       await client.logout();
     } catch (error) {
       this.logger.warn('Logout failed:', { error: String(error) });
-      // Fall back to destroy if logout fails
+      // Fall back to destroy so the session still dies locally — but rethrow so the caller
+      // learns the unlink never reached WhatsApp: the device may still be listed under the
+      // account holder's Linked Devices, and reporting success would write a false audit row.
       try {
         await client.destroy();
       } catch (destroyError) {
         this.logger.warn('Client destroy also failed during logout fallback', { error: String(destroyError) });
       }
+      throw error;
     } finally {
       this.finishClientTeardown(client);
     }

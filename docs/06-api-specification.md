@@ -514,7 +514,12 @@ protocol-level unlink and clear that session's stored credentials, so a later `s
 fresh QR scan or pairing code.
 
 The session must be running — the unlink is a network round-trip that needs a live engine, so a
-stopped session is rejected rather than reported as a success that never reached WhatsApp.
+stopped session is rejected rather than reported as a success that never reached WhatsApp. If the
+engine's logout does not complete (socket already gone, teardown deadline hit), the session is
+still torn down locally but the route returns `502`: the unlink was not confirmed, the device may
+still be listed under Linked Devices, and no `session_logged_out` audit row is written. Start the
+session again and retry to confirm the unlink — the stored credentials survive a failed attempt,
+so the retry needs no QR scan.
 
 **Auth:** API key (OPERATOR)  ·  **Scope:** session-scoped
 
@@ -546,7 +551,7 @@ No request body.
 Returned via `transformSession`; status becomes `disconnected`. Recorded in the audit log as
 `session_logged_out`, distinguishing an intentional unlink from a plain stop.
 
-**Errors:** `400` session is not started · `401` · `403` · `404` not found
+**Errors:** `400` session is not started · `401` · `403` · `404` not found · `502` unlink not confirmed (session stopped locally; retryable)
 
 #### POST /api/sessions/:id/force-kill
 

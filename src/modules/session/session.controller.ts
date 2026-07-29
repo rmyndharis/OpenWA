@@ -167,6 +167,10 @@ export class SessionController {
   })
   @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiResponse({
+    status: 502,
+    description: 'Session was stopped locally, but WhatsApp did not confirm the device unlink — retryable',
+  })
   async logout(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.logout(id);
     await this.auditService.logInfo(AuditAction.SESSION_LOGGED_OUT, {

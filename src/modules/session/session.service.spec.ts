@@ -1,7 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
-import { NotFoundException, ConflictException, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+  BadGatewayException,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   SessionService,
@@ -319,16 +326,23 @@ describe('SessionService', () => {
       expect(result).toBeDefined();
     });
 
-    it('logout() completes when engine.logout() rejects — map reconciled, status updated', async () => {
+    it('logout() rejects with 502 when the unlink is unconfirmed — but the session is still torn down locally', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
       const engine = { logout: jest.fn().mockRejectedValue(new Error('socket already gone')) };
       enginesOf().set('sess-uuid-1', engine);
 
-      await expect(service.logout('sess-uuid-1')).resolves.toBeDefined();
+      // The distinction that matters: an unconfirmed unlink must surface as an error so the
+      // controller skips the SESSION_LOGGED_OUT audit row, instead of reporting a success
+      // that never reached WhatsApp. The local teardown still completes.
+      await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadGatewayException);
 
       expect(engine.logout).toHaveBeenCalledTimes(1);
-      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false); // map reconciled
+      expect(repository.update).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
+      );
     });
 
     it('logout() rejects with 400 when no engine is loaded (session already stopped)', async () => {
