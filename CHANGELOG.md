@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`npm install` from source no longer fails on native Windows, and the whatsapp-web.js backport
+  actually applies there** (#889). A unified diff's lines must begin with a space, `+`, `-` or `@`, so
+  neither applier accepts one whose lines end CRLF — both stop at this patch's first empty context
+  line (`git apply`: "corrupt patch at line 7"; `patch`: "malformed patch at line 7"). Windows checks
+  the file out exactly that way whenever `core.autocrlf` is on, which is its default, so the `git
+  apply` fallback introduced for Windows could never run on Windows, and its failure was additionally
+  misread as a half-written tree — which turned a skippable warning into a hard install failure.
+  Three changes: the patch is normalized to LF before either applier sees it, which also repairs
+  clones already on disk with CRLF; a `.gitattributes` rule keeps fresh clones on LF; and a refusal to
+  parse the patch is now correctly treated as "nothing was written", so `--best-effort` degrades
+  instead of aborting the install. Only source installs on Windows were affected — the published
+  Docker image and every platform with the `patch` binary applied the backport normally.
+
 - **Native Windows and npm 12 source installs no longer fail during dependency setup.** The
   whatsapp-web.js backport now normalizes reject-file paths before comparing them, so Windows'
   `src\structures\Contact.js.rej` is recognized as the same expected, harmless reject as the POSIX

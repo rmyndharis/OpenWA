@@ -269,4 +269,66 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain('this.id = data.id');
     });
   });
+
+  describe('a Windows checkout of the patch file', () => {
+    /** A PATH holding git and nothing else — the Windows shape: git.exe present, patch.exe absent. */
+    function gitOnlyPath(): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-gitonly-'));
+      tmpDirs.push(dir);
+      fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(dir, 'git'));
+      return dir;
+    }
+
+    /**
+     * A standalone copy of the patcher beside a patch file of our choosing. DEFAULT_PATCH is resolved
+     * as the script's sibling, so this is exactly how the patcher sees a working tree — including one
+     * git checked out with CRLF. The script pulls in nothing but stdlib, so the copy runs unmodified.
+     */
+    function stageScriptWith(patchContents: string): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwjs-scripts-'));
+      tmpDirs.push(dir);
+      fs.copyFileSync(SCRIPT, path.join(dir, 'patch-wwebjs-201832.js'));
+      fs.writeFileSync(path.join(dir, 'wwebjs-201832.patch'), patchContents);
+      return path.join(dir, 'patch-wwebjs-201832.js');
+    }
+
+    // #889: both appliers reject a patch whose lines end CRLF — a bare \r is not one of the
+    // ' '/'+'/'-'/'@' markers a unified diff allows, and line 7 of this patch is an empty context line,
+    // so both fail exactly there. On Windows core.autocrlf=true checks the file out that way, so the
+    // git fallback added FOR Windows could never run there and `npm install` died on the attempt.
+    it('applies even when the patch file was checked out with CRLF line endings', () => {
+      const dir = copyWwjs();
+      const script = stageScriptWith(fs.readFileSync(PATCH_FILE, 'utf8').replace(/\r?\n/g, '\r\n'));
+
+      const res = spawnSync(process.execPath, [script, dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: gitOnlyPath() },
+      });
+
+      expect(res.stderr).toBe('');
+      expect(res.status).toBe(0);
+      expect(applyBackport(dir)).toEqual({
+        skipped: true,
+        reason: 'installed whatsapp-web.js already normalizes message ids',
+      });
+    });
+
+    // A patch the applier refuses to parse fails BEFORE writing anything, so the tree is pristine and
+    // `--best-effort` must still degrade. Treating that as a half-patched tree is what turned a skippable
+    // install warning into a hard `npm install` failure on every native Windows source install.
+    it('degrades on an unparseable patch instead of failing the install', () => {
+      const dir = copyWwjs();
+      const script = stageScriptWith('this is not a diff\n');
+
+      const res = spawnSync(process.execPath, [script, '--best-effort', dir], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: gitOnlyPath() },
+      });
+
+      expect(res.status).toBe(0);
+      expect(res.stderr).toMatch(/skipped/);
+      // Nothing was written, which is what makes degrading safe.
+      expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain('this.id = data.id');
+    });
+  });
 });

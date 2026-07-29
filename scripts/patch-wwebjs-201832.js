@@ -29,6 +29,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -119,6 +120,33 @@ function findArtifacts(root, dir = root) {
  * apply unchanged. core.autocrlf is forced off because a Windows global config would otherwise
  * rewrite line endings in the files it touches, producing a tree no other platform generates.
  */
+/**
+ * Hand the appliers a patch with LF line endings, copying to a temp file only when the checked-out one
+ * has CRLF.
+ *
+ * Neither applier accepts CRLF: a unified diff line must start with ' ', '+', '-' or '@', and a bare
+ * \r is none of those, so both stop at line 7 of this patch — its first empty context line (`git
+ * apply`: "corrupt patch at line 7"; `patch`: "malformed patch at line 7"). Windows checks the file out
+ * that way whenever `core.autocrlf` is on, which is its default, so the git fallback added for Windows
+ * could never actually run there and took `npm install` down with it (#889).
+ *
+ * The `.gitattributes` rule keeps fresh clones on LF; this repairs the ones already on disk, which that
+ * rule cannot reach. Everywhere else the file is already LF and this is a single read with no temp file.
+ */
+function withLfPatch(patchFile, run) {
+  const raw = fs.readFileSync(patchFile, 'utf8');
+  if (!raw.includes('\r\n')) return run(patchFile);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wwebjs-201832-'));
+  try {
+    const lf = path.join(dir, path.basename(patchFile));
+    fs.writeFileSync(lf, raw.replace(/\r\n/g, '\n'));
+    return run(lf);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function applyWithGit(wwjsDir, patchFile) {
   try {
     execFileSync('git', ['-c', 'core.autocrlf=false', 'apply', '-p1', '--reject', '--ignore-whitespace', patchFile], {
@@ -131,8 +159,10 @@ function applyWithGit(wwjsDir, patchFile) {
     if (e.status === 1) return;
     const detail = e.stderr ? String(e.stderr).trim() : e.message;
     const err = new Error(`neither \`patch\` nor \`git apply\` could run (${e.code ?? `exit ${e.status}`}): ${detail}`);
-    // ENOENT means git never executed either, so the tree is untouched and degrading is still safe.
-    throw e.code === 'ENOENT' ? err : partialTree(err);
+    // Neither of these touched a file, so the tree is untouched and degrading is still safe: ENOENT
+    // means git never executed, and 128 means it refused the input (bad usage, or a diff it could not
+    // parse) before applying anything. A partial write shows up as exit 1, which returned above.
+    throw e.code === 'ENOENT' || e.status === 128 ? err : partialTree(err);
   }
 }
 
@@ -187,24 +217,26 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   //                            rather than be skipped silently.
   // With these, GNU and BSD patch produce byte-identical trees, so a local macOS run faithfully
   // reproduces the Debian image build.
-  try {
-    execFileSync(
-      'patch',
-      ['-p1', '-d', wwjsDir, '--no-backup-if-mismatch', '-N', '-f', '-F0', '--ignore-whitespace', '-i', patchFile],
-      { stdio: 'pipe' },
-    );
-  } catch (e) {
-    // `patch` exits 1 when hunks reject — expected here (Contact.js hunk #2), and the reject set is
-    // verified below. ENOENT means the binary is absent: apply with git instead of leaving the dep
-    // unpatched. Anything else (2 = serious trouble) is a real failure: rethrow it rather than let
-    // the assertions below misreport it as version skew.
-    if (e.code === 'ENOENT') {
-      applyWithGit(wwjsDir, patchFile);
-    } else if (e.status !== 1) {
-      const detail = e.stderr ? String(e.stderr).trim() : e.message;
-      throw partialTree(new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`));
+  withLfPatch(patchFile, lfPatch => {
+    try {
+      execFileSync(
+        'patch',
+        ['-p1', '-d', wwjsDir, '--no-backup-if-mismatch', '-N', '-f', '-F0', '--ignore-whitespace', '-i', lfPatch],
+        { stdio: 'pipe' },
+      );
+    } catch (e) {
+      // `patch` exits 1 when hunks reject — expected here (Contact.js hunk #2), and the reject set is
+      // verified below. ENOENT means the binary is absent: apply with git instead of leaving the dep
+      // unpatched. Anything else (2 = serious trouble) is a real failure: rethrow it rather than let
+      // the assertions below misreport it as version skew.
+      if (e.code === 'ENOENT') {
+        applyWithGit(wwjsDir, lfPatch);
+      } else if (e.status !== 1) {
+        const detail = e.stderr ? String(e.stderr).trim() : e.message;
+        throw partialTree(new Error(`\`patch\` failed (${e.code ?? `exit ${e.status}`}): ${detail}`));
+      }
     }
-  }
+  });
 
   const artifacts = findArtifacts(wwjsDir);
   const unexpected = artifacts.filter(a => !EXPECTED_REJECTS.has(a));
