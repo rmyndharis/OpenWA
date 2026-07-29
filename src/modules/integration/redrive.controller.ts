@@ -33,8 +33,11 @@ export class RedriveController {
   ): Promise<{ redriven: number; remaining: number; batchSize: number }> {
     // Session-scoped keys may only redrive instances bound inside their own fence; an out-of-scope
     // instance answers 404 (same as a missing one) so redrive can't be used to probe other sessions.
+    // A MISSING instance row is refused too: its retained DLQ rows still carry the deleted instance's
+    // sessionId and would be re-dispatched unscoped. Only an unrestricted key may drain those.
     const inst = await this.instances.resolve(pluginId, instanceId);
-    if (inst && !sessionScopeVisible(apiKey?.allowedSessions, inst.sessionScope)) {
+    const scoped = (apiKey?.allowedSessions?.length ?? 0) > 0;
+    if (scoped && (!inst || !sessionScopeVisible(apiKey?.allowedSessions, inst.sessionScope))) {
       throw new NotFoundException('instance not found');
     }
     const result = await this.redrive.redriveInstance(pluginId, instanceId);

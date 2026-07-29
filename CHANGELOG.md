@@ -207,6 +207,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is not restricted to specific sessions. Per-session statistics remain available to restricted
   keys for the sessions they allow.
 
+- Redriving a dead-lettered integration delivery now fails closed for session-restricted keys when
+  the integration instance no longer exists. Previously the scope check was skipped for a missing
+  instance, so retained dead-letter rows could be re-dispatched for sessions outside the key's scope.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added
