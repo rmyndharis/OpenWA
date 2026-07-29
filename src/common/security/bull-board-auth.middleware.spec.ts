@@ -73,7 +73,7 @@ describe('BullBoardAuthMiddleware', () => {
     await mw.use(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
-    const forwarded = next.mock.calls[0][0];
+    const forwarded = (next.mock.calls as Array<Array<unknown>>)[0]?.[0];
     expect(forwarded).toBeInstanceOf(ForbiddenException);
     expect((forwarded as ForbiddenException).message).toContain('restricted');
   });

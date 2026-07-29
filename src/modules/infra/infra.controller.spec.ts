@@ -2114,6 +2114,22 @@ describe('InfraController.requestRestart constrains teardown to managed profiles
     });
     expect(JSON.stringify(result.removal)).not.toContain('removed');
   });
+
+  it('starts only allowlisted profiles, never an unknown entry (symmetry with teardown)', async () => {
+    const orchestrateProfiles = jest.fn().mockResolvedValue({});
+    const controller = buildController({
+      isDockerAvailable: () => true,
+      stopManagedService: jest.fn().mockResolvedValue(true),
+      orchestrateProfiles,
+    });
+
+    // A non-managed name must be dropped before reaching orchestrateProfiles, exactly as teardown
+    // drops it before reaching stopManagedService — so start cannot select an unrelated container.
+    await controller.requestRestart({ profiles: ['postgres', 'not-managed'] });
+
+    expect(orchestrateProfiles).toHaveBeenCalledTimes(1);
+    expect(orchestrateProfiles).toHaveBeenCalledWith(['postgres']);
+  });
 });
 
 // C002: the infra module exposed sensitive ADMIN operations (credential config write, restart/Docker

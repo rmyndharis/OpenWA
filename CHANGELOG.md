@@ -186,6 +186,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant of the same message — a browser profile left stale by a Chromium-binary change (#663/#708) —
   is raised inside `initialize()`, caught by the adapter, and keeps its existing advisory.
 
+- Service start during Docker orchestration now applies the same managed-profile allowlist as
+  teardown. Non-managed profile names are dropped before reaching `DockerService` in both directions,
+  so the start path cannot select an unrelated host container any more than teardown can.
+
 ### Security
 
 - Infrastructure routes (`/api/infra/*`) now reject API keys restricted to specific sessions.

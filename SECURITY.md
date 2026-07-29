@@ -71,7 +71,8 @@ it as one:
 
 Mitigations in place: the proxy is unreachable except from `openwa-api` (dedicated
 `internal: true` network), the orchestration endpoints require an ADMIN-role API key,
-teardown is allowlisted to the three managed profiles (`postgres`, `redis`, `minio`),
+both teardown and start are constrained to the three managed profiles (`postgres`,
+`redis`, `minio`) — non-managed names are dropped before reaching `DockerService` —
 and OpenWA itself never issues deletes (profile teardown is stop-only). If you do not
 use the built-in datastore orchestration (Dashboard → Infrastructure built-in
 toggles), disable the proxy entirely — see the `docker-proxy` comments in
