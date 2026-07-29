@@ -211,6 +211,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the integration instance no longer exists. Previously the scope check was skipped for a missing
   instance, so retained dead-letter rows could be re-dispatched for sessions outside the key's scope.
 
+- Outbound downloads that follow redirects (plugin packages and the plugin catalog) now validate
+  every redirect hop before connecting. Previously a redirect whose target was a bare IP address
+  bypassed the destination check, because the platform skips name resolution for address literals.
+  Redirect chains are also capped.
+
 ## [0.11.1] - 2026-07-28
 
 ### Added

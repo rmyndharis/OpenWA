@@ -11,6 +11,8 @@ import {
 } from './ssrf-guard';
 import * as dnsPromises from 'dns/promises';
 import { fetch as undiciFetch, Agent } from 'undici';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 // Default to the real resolver (so the localhost/real-DNS cases below behave normally); individual
 // tests override a single call with mockResolvedValueOnce to simulate a specific resolution.
@@ -284,23 +286,38 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     expect(init.dispatcher).toBeUndefined();
   });
 
-  it('follows redirects through a validating dispatcher when followRedirects is set (download path)', async () => {
-    // GitHub Releases 302 to a CDN; the download path must follow (not refuse) redirects — but via a
-    // per-host validating lookup so every hop is still checked. Here the original host validates and a
-    // 302 is delivered to `use` (proving assertNoRedirect is NOT applied on this path).
-    (dnsPromises.lookup as jest.Mock).mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
-    (undiciFetch as jest.Mock).mockResolvedValue({ status: 302, type: 'basic' });
-    const use = jest.fn(() => 'followed');
+  it('follows redirects hop-by-hop, re-validating each target and delivering the final 200 (download path)', async () => {
+    // GitHub Releases 302 to a CDN; the download path must follow (not refuse) redirects — but by
+    // fetching each hop with `redirect: 'manual'` and re-running resolveSafeFetchTarget on the
+    // Location, so every hop is checked BEFORE its socket opens. Here hop 0 is a 302 to a second
+    // hostname, and hop 1 is the final 200 delivered to `use`.
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]) // github.com
+      .mockResolvedValueOnce([{ address: '185.199.108.153', family: 4 }]); // objects.githubusercontent.com
+    (undiciFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', 'https://objects.githubusercontent.com/cdn/p.zip']]),
+      })
+      .mockResolvedValueOnce({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'downloaded');
 
     const result = await withSafeFetch('https://github.com/x/releases/download/v1/p.zip', {}, use, {
       followRedirects: true,
     });
 
-    expect(result).toBe('followed');
+    expect(result).toBe('downloaded');
     expect(use).toHaveBeenCalledTimes(1);
-    const [, init] = (undiciFetch as jest.Mock).mock.calls[0] as [string, { redirect: string; dispatcher: unknown }];
-    expect(init.redirect).toBe('follow'); // not 'manual' — undici follows, our lookup guards each hop
-    expect(init.dispatcher).toBeDefined();
+    // Both hops are fetched manually (undici never follows on its own) and each carries a dispatcher.
+    const calls = (undiciFetch as jest.Mock).mock.calls as Array<[string, { redirect: string; dispatcher: unknown }]>;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0]).toBe('https://github.com/x/releases/download/v1/p.zip');
+    expect(calls[1][0]).toBe('https://objects.githubusercontent.com/cdn/p.zip');
+    for (const [, init] of calls) {
+      expect(init.redirect).toBe('manual');
+      expect(init.dispatcher).toBeDefined();
+    }
   });
 
   it('still rejects an internal ORIGINAL url even with followRedirects (scheme/host validated first)', async () => {
@@ -469,7 +486,7 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
   });
 });
 
-describe('validatingLookup (per-hop redirect guard)', () => {
+describe('validatingLookup (standalone validating resolver)', () => {
   const run = (hostname: string): Promise<{ err: unknown; rest: unknown[] }> =>
     new Promise(resolve => {
       const lookup = validatingLookup() as unknown as (
@@ -545,5 +562,106 @@ describe('isSsrfProtectionEnabled', () => {
     expect(isSsrfProtectionEnabled()).toBe(true);
     process.env.WEBHOOK_SSRF_PROTECT = 'false';
     expect(isSsrfProtectionEnabled()).toBe(false);
+  });
+});
+
+// Real-server proof that the followRedirects download path validates EVERY hop. The per-hop guard
+// runs resolveSafeFetchTarget on the Location before any socket opens to it, so a 302 whose target
+// is a blocked IP literal (which Node never sends through DNS, defeating a connect.lookup guard)
+// is refused before connecting.
+describe('withSafeFetch followRedirects validates every hop over real sockets', () => {
+  const realFetch = jest.requireActual<typeof import('undici')>('undici').fetch;
+  let savedAllowedHosts: string | undefined;
+
+  beforeEach(() => {
+    // Restore the real fetch so the redirect chain actually connects to the local test servers.
+    (undiciFetch as unknown as jest.Mock).mockImplementation(realFetch);
+    savedAllowedHosts = process.env.SSRF_ALLOWED_HOSTS;
+    process.env.SSRF_ALLOWED_HOSTS = 'localhost'; // the redirector host is reached over an allowed host
+  });
+
+  afterEach(() => {
+    process.env.SSRF_ALLOWED_HOSTS = savedAllowedHosts;
+    (undiciFetch as unknown as jest.Mock).mockReset();
+  });
+
+  it('refuses a redirect to a blocked IP literal before opening a socket to it', async () => {
+    const internal = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('INTERNAL-SECRET-DATA');
+    });
+    await new Promise<void>(resolve => internal.listen(0, '127.0.0.1', resolve));
+    const internalPort = (internal.address() as AddressInfo).port;
+
+    const redirector = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${internalPort}/` });
+      res.end();
+    });
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve));
+    const redirectorPort = (redirector.address() as AddressInfo).port;
+
+    try {
+      // The redirector is reached over an allowlisted host so the FIRST hop passes; the second hop
+      // is a blocked literal and must be refused before any socket is opened to it.
+      await expect(
+        withSafeFetch(`http://localhost:${redirectorPort}/`, {}, async response => await response.text(), {
+          followRedirects: true,
+        }),
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
+    } finally {
+      await new Promise<void>(resolve => internal.close(() => resolve()));
+      await new Promise<void>(resolve => redirector.close(() => resolve()));
+    }
+  });
+
+  it('still follows a redirect to an allowed destination', async () => {
+    const target = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('OK-PAYLOAD');
+    });
+    await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
+    const targetPort = (target.address() as AddressInfo).port;
+
+    const redirector = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://localhost:${targetPort}/` });
+      res.end();
+    });
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve));
+    const redirectorPort = (redirector.address() as AddressInfo).port;
+
+    try {
+      const body = await withSafeFetch(
+        `http://localhost:${redirectorPort}/`,
+        {},
+        async response => await response.text(),
+        {
+          followRedirects: true,
+        },
+      );
+      expect(body).toBe('OK-PAYLOAD');
+    } finally {
+      await new Promise<void>(resolve => target.close(() => resolve()));
+      await new Promise<void>(resolve => redirector.close(() => resolve()));
+    }
+  });
+
+  it('refuses a redirect chain longer than the hop cap', async () => {
+    const server = createServer((_req, res) => {
+      const port = (server.address() as AddressInfo).port;
+      res.writeHead(302, { location: `http://localhost:${port}/next` });
+      res.end();
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      await expect(
+        withSafeFetch(`http://localhost:${port}/`, {}, async response => await response.text(), {
+          followRedirects: true,
+        }),
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });

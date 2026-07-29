@@ -231,6 +231,12 @@ function resolveDnsTimeoutMs(): number {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_DNS_TIMEOUT_MS;
 }
 
+/** Redirect hops followed on the guarded download path before the chain is refused. */
+const MAX_REDIRECT_HOPS = 5;
+
+/** Status codes undici surfaces as a redirect when `redirect: 'manual'` is set. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
 /**
  * Resolve a host with `{ all: true }`, bounded by a deadline so a hanging/slow DNS resolver cannot
  * pin a worker indefinitely (the lookup is otherwise unbounded). The default deadline is generous
@@ -437,16 +443,33 @@ export async function withSafeFetch<T>(
 
   if (opts.followRedirects) {
     // Download path (plugin .zip / catalog JSON): public release hosts legitimately 302 to a CDN, so
-    // refusing every redirect breaks them. Follow redirects, but SECURELY — instead of pinning one
-    // host's IPs, route the connection through a lookup that resolves+validates EVERY host on demand,
-    // so each hop (original + every redirect target) is checked at connect time and a 3xx to an
-    // internal host is blocked at the socket. The scheme/host of the original URL is validated first.
-    await resolveSafeFetchTarget(rawUrl);
-    const dispatcher = new Agent({ connect: { lookup: validatingLookup() } });
-    try {
-      return await useAndSettleBody(await undiciFetch(rawUrl, { ...init, redirect: 'follow', dispatcher }), use);
-    } finally {
-      await dispatcher.destroy().catch(() => undefined);
+    // refusing every redirect breaks them. Follow them manually and re-validate EVERY hop with
+    // resolveSafeFetchTarget, which rejects blocked IP literals directly.
+    //
+    // Do NOT delegate hop checking to an Agent's `connect.lookup`: Node skips DNS entirely for an
+    // IP-literal host, so a custom lookup is never invoked for `Location: http://127.0.0.1/` and the
+    // hop goes unchecked. Each hop below is validated BEFORE its socket is opened.
+    let currentUrl = rawUrl;
+    for (let hop = 0; ; hop++) {
+      const target = await resolveSafeFetchTarget(currentUrl);
+      const dispatcher = target ? new Agent({ connect: { lookup: pinnedLookup(target) } }) : undefined;
+      try {
+        const response = await undiciFetch(currentUrl, { ...init, redirect: 'manual', dispatcher });
+        if (!REDIRECT_STATUSES.has(response.status)) {
+          return await useAndSettleBody(response, use);
+        }
+        const location = response.headers.get('location');
+        await settleUnreadResponseBody(response);
+        if (!location) {
+          throw new SsrfBlockedError(`Redirect from ${currentUrl} carried no Location header`);
+        }
+        if (hop >= MAX_REDIRECT_HOPS) {
+          throw new SsrfBlockedError(`Too many redirects while fetching ${rawUrl}`);
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+      } finally {
+        if (dispatcher) await dispatcher.destroy().catch(() => undefined);
+      }
     }
   }
 
