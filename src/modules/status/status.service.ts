@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService } from '../../common/storage/storage.service';
 import type { Status, StatusResult, StatusPostOptions } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -16,7 +16,7 @@ export class StatusService {
   // HookManager comes from the @Global() HooksModule, StorageService from the @Global()
   // StorageModule — neither needs a module import here.
   constructor(
-    private readonly sessionService: SessionService,
+    private readonly engines: EngineRegistry,
     private readonly hookManager: HookManager,
     private readonly store: StatusStoreService,
     private readonly storageService: StorageService,
@@ -82,10 +82,10 @@ export class StatusService {
   }
 
   async postTextStatus(sessionId: string, text: string, options: StatusPostOptions): Promise<StatusResult> {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new NotFoundException(`Session ${sessionId} not found or not connected`);
-    }
+    const engine = this.engines.require(
+      sessionId,
+      () => new NotFoundException(`Session ${sessionId} not found or not connected`),
+    );
     const gated = await this.gate(sessionId, 'status-text', { text, options });
     return engine.postTextStatus(gated.text, gated.options);
   }
@@ -102,10 +102,10 @@ export class StatusService {
       throw new BadRequestException('Either url or base64 must be provided');
     }
     assertBase64WithinMediaCap(base64);
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new NotFoundException(`Session ${sessionId} not found or not connected`);
-    }
+    const engine = this.engines.require(
+      sessionId,
+      () => new NotFoundException(`Session ${sessionId} not found or not connected`),
+    );
     const gated = await this.gate(sessionId, 'status-image', {
       media: { mimetype: mimetype ?? 'image/jpeg', data: base64 || url || '' },
       options,
@@ -125,10 +125,10 @@ export class StatusService {
       throw new BadRequestException('Either url or base64 must be provided');
     }
     assertBase64WithinMediaCap(base64);
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new NotFoundException(`Session ${sessionId} not found or not connected`);
-    }
+    const engine = this.engines.require(
+      sessionId,
+      () => new NotFoundException(`Session ${sessionId} not found or not connected`),
+    );
     const gated = await this.gate(sessionId, 'status-video', {
       media: { mimetype: mimetype ?? 'video/mp4', data: base64 || url || '' },
       options,
@@ -137,10 +137,10 @@ export class StatusService {
   }
 
   async deleteStatus(sessionId: string, statusId: string): Promise<void> {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new NotFoundException(`Session ${sessionId} not found or not connected`);
-    }
+    const engine = this.engines.require(
+      sessionId,
+      () => new NotFoundException(`Session ${sessionId} not found or not connected`),
+    );
     return engine.deleteStatus(statusId);
   }
 }

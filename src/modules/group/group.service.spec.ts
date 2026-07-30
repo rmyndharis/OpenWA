@@ -1,14 +1,15 @@
 import { BadRequestException, HttpException, NotFoundException } from '@nestjs/common';
 import { GroupService } from './group.service';
-import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 
 describe('GroupService', () => {
   const makeService = (engine: Partial<IWhatsAppEngine> | undefined) => {
-    const sessionService = { getEngine: jest.fn().mockReturnValue(engine) } as unknown as SessionService;
-    return new GroupService(sessionService);
+    const engines = new EngineRegistry();
+    if (engine) engines.set('s1', engine as IWhatsAppEngine);
+    return new GroupService(engines);
   };
 
   it('throws 400 "Session is not started" when the engine is missing (guard preserved)', () => {

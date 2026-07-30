@@ -11,7 +11,8 @@ import {
 import { MessageBatch, BatchStatus, BatchMessageStatus, BatchMessageResult } from './entities/message-batch.entity';
 import { MessageStatus } from './entities/message.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
-import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { MessageService } from './message.service';
 import { HookManager } from '../../core/hooks';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
@@ -67,7 +68,7 @@ describe('BulkMessageService.onApplicationBootstrap', () => {
       providers: [
         BulkMessageService,
         { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
-        { provide: SessionService, useValue: { getEngine: jest.fn() } },
+        EngineRegistry,
         { provide: MessageService, useValue: { saveOutgoingMessage: jest.fn() } },
         {
           provide: HookManager,
@@ -126,7 +127,7 @@ describe('BulkMessageService.processBatch', () => {
     sendVideoMessage?: jest.Mock;
     sendAudioMessage?: jest.Mock;
   };
-  let sessionService: { getEngine: jest.Mock; findOne: jest.Mock };
+  let engines: EngineRegistry;
   let hookManager: { execute: jest.Mock };
 
   const makeBatch = (messageCount: number): MessageBatch =>
@@ -148,10 +149,8 @@ describe('BulkMessageService.processBatch', () => {
 
   beforeEach(async () => {
     engine = { sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa1', timestamp: 111 }) };
-    sessionService = {
-      getEngine: jest.fn().mockReturnValue(engine),
-      findOne: jest.fn().mockResolvedValue({ phone: '628' }),
-    };
+    engines = new EngineRegistry();
+    engines.set('s1', engine as unknown as IWhatsAppEngine);
     messageService = { saveOutgoingMessage: jest.fn().mockResolvedValue(undefined) };
     hookManager = {
       execute: jest.fn().mockImplementation((_e: string, data: unknown) => Promise.resolve({ continue: true, data })),
@@ -166,7 +165,7 @@ describe('BulkMessageService.processBatch', () => {
       providers: [
         BulkMessageService,
         { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
-        { provide: SessionService, useValue: sessionService },
+        { provide: EngineRegistry, useValue: engines },
         { provide: MessageService, useValue: messageService },
         { provide: HookManager, useValue: hookManager },
       ],
@@ -197,7 +196,7 @@ describe('BulkMessageService.processBatch', () => {
 
   it('releases the in-flight marker when the engine is missing (no processingBatches leak)', async () => {
     repo.findOne.mockResolvedValue(makeBatch(1));
-    sessionService.getEngine.mockReturnValue(undefined); // engine-not-found → early-return path
+    engines.delete('s1'); // engine-not-found → early-return path
 
     await runProcessBatch();
 
@@ -578,7 +577,7 @@ describe('BulkMessageService.cancelBatch', () => {
       providers: [
         BulkMessageService,
         { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
-        { provide: SessionService, useValue: {} },
+        EngineRegistry,
         { provide: MessageService, useValue: {} },
         { provide: HookManager, useValue: { execute: jest.fn() } },
       ],
@@ -634,7 +633,7 @@ describe('BulkMessageService.cancelBatch', () => {
 describe('BulkMessageService.createBatch base64 media cap', () => {
   let service: BulkMessageService;
   let repo: { findOne: jest.Mock; save: jest.Mock; create: jest.Mock; update: jest.Mock };
-  let sessionService: { getEngine: jest.Mock };
+  let engines: EngineRegistry;
   let messageService: { saveOutgoingMessage: jest.Mock };
 
   beforeEach(async () => {
@@ -644,13 +643,16 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
       create: jest.fn().mockImplementation((b: MessageBatch) => Object.assign({ id: 'b1' }, b)),
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
-    sessionService = { getEngine: jest.fn().mockReturnValue({}) };
+    engines = new EngineRegistry();
+    // These suites exercise batch bookkeeping across several session ids, so every session is
+    // "started" here; the engine itself is never called.
+    for (const id of ['s1', 's2']) engines.set(id, {} as IWhatsAppEngine);
     messageService = { saveOutgoingMessage: jest.fn().mockResolvedValue(undefined) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BulkMessageService,
         { provide: getRepositoryToken(MessageBatch, 'data'), useValue: repo },
-        { provide: SessionService, useValue: sessionService },
+        { provide: EngineRegistry, useValue: engines },
         { provide: MessageService, useValue: messageService },
         {
           provide: HookManager,
@@ -787,7 +789,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
 
   it('runs the engine once per exact duplicate entry across the full create→process path', async () => {
     const engine = { sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa', timestamp: 1 }) };
-    sessionService.getEngine.mockReturnValue(engine);
+    engines.set('s1', engine as unknown as IWhatsAppEngine);
     const dto = {
       messages: [
         { chatId: 'a@c.us', type: 'text' as const, content: { text: 'first' } },
@@ -813,7 +815,7 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
       sendTextMessage: jest.fn().mockResolvedValue({ id: 'wa-t', timestamp: 1 }),
       sendImageMessage: jest.fn().mockResolvedValue({ id: 'wa-i', timestamp: 2 }),
     };
-    sessionService.getEngine.mockReturnValue(engine);
+    engines.set('s1', engine as unknown as IWhatsAppEngine);
     const dto = {
       messages: [
         { chatId: 'a@c.us', type: 'text' as const, content: { text: 'part 1' } },

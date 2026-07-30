@@ -11,7 +11,7 @@ import {
 } from './entities/message-batch.entity';
 import { SendBulkMessageDto } from './dto/bulk-message.dto';
 import { MessageStatus } from './entities/message.entity';
-import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { MessageService } from './message.service';
 import { HookManager } from '../../core/hooks';
 import { assertBase64WithinMediaCap, stripBase64DataUri } from './media-cap.util';
@@ -79,7 +79,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
   constructor(
     @InjectRepository(MessageBatch, 'data')
     private readonly batchRepository: Repository<MessageBatch>,
-    private readonly sessionService: SessionService,
+    private readonly engines: EngineRegistry,
     private readonly messageService: MessageService,
     private readonly hookManager: HookManager,
   ) {}
@@ -105,11 +105,8 @@ export class BulkMessageService implements OnApplicationBootstrap {
   }
 
   async createBatch(sessionId: string, dto: SendBulkMessageDto): Promise<MessageBatch> {
-    // Validate session exists
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException(`Session '${sessionId}' is not active`);
-    }
+    // Validate the session is started (guard only — the batch is sent later, by drainBatch).
+    this.engines.require(sessionId, () => new BadRequestException(`Session '${sessionId}' is not active`));
 
     // Collapse exact duplicate entries — same chatId, type, content, and variables; first
     // occurrence wins, order preserved. A true repeat would only re-run the engine (and the
@@ -300,7 +297,7 @@ export class BulkMessageService implements OnApplicationBootstrap {
       return;
     }
 
-    const engine = this.sessionService.getEngine(batch.sessionId);
+    const engine = this.engines.get(batch.sessionId);
     if (!engine) {
       batch.status = BatchStatus.FAILED;
       batch.completedAt = new Date();

@@ -5,6 +5,8 @@ import { BadRequestException, NotFoundException, PayloadTooLargeException } from
 import { MessageService } from './message.service';
 import { Message, MessageDirection, MessageStatus } from './entities/message.entity';
 import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { HookManager } from '../../core/hooks';
 import { TemplateService } from '../template/template.service';
 import { Template } from '../template/entities/template.entity';
@@ -39,6 +41,7 @@ describe('MessageService', () => {
   let service: MessageService;
   let repository: jest.Mocked<Partial<Repository<Message>>>;
   let sessionService: jest.Mocked<Partial<SessionService>>;
+  let engines: EngineRegistry;
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let templateService: jest.Mocked<Partial<TemplateService>>;
   let lidMappingStore: { lidsForPhone: jest.Mock; getCached: jest.Mock };
@@ -67,10 +70,12 @@ describe('MessageService', () => {
     mockEngine = createMockEngine();
 
     sessionService = {
-      getEngine: jest.fn().mockReturnValue(mockEngine),
       findOne: jest.fn().mockResolvedValue({ id: 'sess-1', phone: '628123456789' }),
       recordOutboundMessageEdit: jest.fn().mockResolvedValue(undefined),
     };
+
+    engines = new EngineRegistry();
+    engines.set('sess-1', mockEngine as unknown as IWhatsAppEngine);
 
     hookManager = {
       // Echo the input straight back so the message:sending gate is a pass-through by default; specific
@@ -91,6 +96,7 @@ describe('MessageService', () => {
         MessageService,
         { provide: getRepositoryToken(Message, 'data'), useValue: repository },
         { provide: SessionService, useValue: sessionService },
+        { provide: EngineRegistry, useValue: engines },
         { provide: HookManager, useValue: hookManager },
         { provide: TemplateService, useValue: templateService },
         { provide: LidMappingStoreService, useValue: lidMappingStore },
@@ -268,7 +274,7 @@ describe('MessageService', () => {
     });
 
     it('should throw BadRequestException if session is not active', async () => {
-      (sessionService.getEngine as jest.Mock).mockReturnValue(undefined);
+      engines.delete('sess-1');
 
       await expect(service.sendText('inactive', { chatId: 'test@c.us', text: 'hello' })).rejects.toThrow(
         BadRequestException,
@@ -389,10 +395,11 @@ describe('MessageService', () => {
     it('honors a configured template.renderMaxChars override', async () => {
       const configService = {
         get: (key: string, fallback: unknown) => (key === 'template.renderMaxChars' ? 10 : fallback),
-      } as unknown as ConstructorParameters<typeof MessageService>[5];
+      } as unknown as ConstructorParameters<typeof MessageService>[6];
       const capped = new MessageService(
         repository as Repository<Message>,
         sessionService as unknown as SessionService,
+        engines,
         hookManager as HookManager,
         templateService as unknown as TemplateService,
         lidMappingStore as unknown as LidMappingStoreService,
@@ -1303,7 +1310,7 @@ describe('MessageService', () => {
     });
 
     it('throws BadRequestException when the session is not started', async () => {
-      (sessionService.getEngine as jest.Mock).mockReturnValue(undefined);
+      engines.delete('sess-1');
       await expect(
         service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' }),
       ).rejects.toBeInstanceOf(BadRequestException);

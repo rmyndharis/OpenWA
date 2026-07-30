@@ -1,5 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { SessionService } from '../session/session.service';
+import { Injectable } from '@nestjs/common';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 /**
@@ -9,14 +9,11 @@ import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interfa
  */
 @Injectable()
 export class CallService {
-  constructor(private readonly sessionService: SessionService) {}
+  constructor(private readonly engines: EngineRegistry) {}
 
   private getEngine(sessionId: string): IWhatsAppEngine {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new BadRequestException('Session is not started');
-    }
-    return engine;
+    // EngineRegistry.require()'s default is this exact 400 "Session is not started".
+    return this.engines.require(sessionId);
   }
 
   /**

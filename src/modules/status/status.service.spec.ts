@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { StatusService } from './status.service';
-import { SessionService } from '../session/session.service';
+import { EngineRegistry } from '../../engine/engine-registry.service';
+import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { HookManager } from '../../core/hooks';
@@ -14,7 +15,12 @@ describe('StatusService media validation and selection', () => {
     postImageStatus: jest.fn().mockResolvedValue({ id: 'image-status' }),
     postVideoStatus: jest.fn().mockResolvedValue({ id: 'video-status' }),
   };
-  const sessionService = { getEngine: jest.fn().mockReturnValue(engine) };
+  const engines = new EngineRegistry();
+  // Both ids the tests below post from; the store-only paths ('sess') never reach the engine.
+  engines.set('s1', engine as unknown as IWhatsAppEngine);
+  engines.set('sess', engine as unknown as IWhatsAppEngine);
+  // Asserts the store-backed read paths never resolve an engine at all.
+  const requireSpy = jest.spyOn(engines, 'require');
   // Pass-through gate: continue, input unchanged. The blocking/rewriting behaviour has its own
   // tests below.
   const passThrough = (_event: string, data: unknown) => Promise.resolve({ continue: true, data });
@@ -22,7 +28,7 @@ describe('StatusService media validation and selection', () => {
   const store = { list: jest.fn(), listByContact: jest.fn(), getMedia: jest.fn() };
   const storageService = { getFile: jest.fn() };
   const service = new StatusService(
-    sessionService as unknown as SessionService,
+    engines,
     hookManager as unknown as HookManager,
     store as unknown as StatusStoreService,
     storageService as unknown as StorageService,
@@ -41,7 +47,7 @@ describe('StatusService media validation and selection', () => {
 
       expect(out).toEqual([{ id: 'w1' }]);
       expect(store.list).toHaveBeenCalledWith('sess');
-      expect(sessionService.getEngine).not.toHaveBeenCalled();
+      expect(requireSpy).not.toHaveBeenCalled();
     });
 
     it('reads a contact statuses from the store, not the engine', async () => {
@@ -51,7 +57,7 @@ describe('StatusService media validation and selection', () => {
 
       expect(out).toEqual([{ id: 'w2' }]);
       expect(store.listByContact).toHaveBeenCalledWith('sess', 'contact@c.us');
-      expect(sessionService.getEngine).not.toHaveBeenCalled();
+      expect(requireSpy).not.toHaveBeenCalled();
     });
   });
 

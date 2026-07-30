@@ -117,9 +117,9 @@ describe('EngineRegistry', () => {
     });
 
     it('throws the caller-supplied error so each API keeps its documented status', () => {
-      expect(() => registry.require('s1', () => new NotFoundException('Session s1 not found or not connected'))).toThrow(
-        NotFoundException,
-      );
+      expect(() =>
+        registry.require('s1', () => new NotFoundException('Session s1 not found or not connected')),
+      ).toThrow(NotFoundException);
     });
 
     it('does not build the error when the engine is present', () => {
