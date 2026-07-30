@@ -27,6 +27,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { decideReconnect, clampReconnectDelay, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLidResolver } from './session-lid-resolver.service';
+import { buildMessageMetadata, storableWaMessageId } from './message-row.mapper';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
@@ -66,7 +67,6 @@ import {
 // marker in metadata — never NULL — or the dashboard renders an empty bubble (no placeholder) and the
 // by-type stats filter skips the row. Sources that lack the payload (wwjs own-send echo, media-free
 // history sync) get the omitted marker synthesized at the persistence chokepoints.
-const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticker', 'document']);
 
 // How many recent status-broadcast messages the connect-time seed pulls (each with its media).
 // ponytail: fixed ceiling — the most-recent 50 cover a normal account's 24h of stories; anything
@@ -1008,17 +1008,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         .filter(x => !seen.has(x))
         .map(x => {
           const m = byId.get(x)!;
-          const metadata: Record<string, unknown> = {};
-          if (m.media) {
-            metadata.media = m.media;
-          } else if (MEDIA_MESSAGE_TYPES.has(m.type)) {
-            // History sync maps messages media-free (footprint). Without the marker the row renders
-            // as an empty bubble — the DB copy wins over the engine-history placeholder in the
-            // dashboard merge — and the by-type stats filter would skip it.
-            metadata.media = { mimetype: '', omitted: true };
-          }
-          if (m.quotedMessage) metadata.quotedMessage = m.quotedMessage;
-          if (m.call) metadata.call = m.call;
+          const metadata = buildMessageMetadata(m, true);
           const row = this.messageRepository.create({
             sessionId: id,
             waMessageId: m.id,
@@ -1033,7 +1023,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             direction: m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
             timestamp: m.timestamp,
             status: MessageStatus.SENT,
-            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+            metadata,
           });
           // The chat panel orders by createdAt; stamp the real time so history sorts correctly.
           if (m.timestamp) {
@@ -1291,26 +1281,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               incoming.senderPhone = await this.lidResolver.resolveSenderPhone(id, incoming.author ?? incoming.from);
             }
 
-            const metadata: Record<string, unknown> = {};
-            if (incoming.media) {
-              metadata.media = incoming.media;
-            }
-            if (incoming.quotedMessage) {
-              metadata.quotedMessage = incoming.quotedMessage;
-            }
-            if (incoming.call) {
-              metadata.call = incoming.call;
-            }
+            const metadata = buildMessageMetadata(incoming);
 
             const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
 
             const dbMessage = this.messageRepository.create({
               sessionId: id,
-              // Mirror saveOutgoingMessage's chokepoint: an engine that received a message but could
-              // not read its id back reports the empty sentinel, and NULL is what the non-partial
-              // (sessionId, waMessageId) unique index exempts — `''` would collide the second such
-              // message and lose the row.
-              waMessageId: incoming.id || undefined,
+              waMessageId: storableWaMessageId(incoming.id),
               chatId: incoming.chatId,
               chatName,
               // Group poster (participant JID) — `from` is the group JID, so this is the stable
@@ -1323,7 +1300,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
               direction: incoming.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
               timestamp: incoming.timestamp,
               status: MessageStatus.SENT,
-              metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+              metadata,
             });
 
             // The hook chain above is async; a delete()/teardown can retire this engine while it
@@ -1441,21 +1418,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // webhook/WS dispatch below is identical whether the insert won, lost, or failed — the
             // message.sent contract is unchanged.
             const outgoing: IncomingMessage = finalMessage;
-            const metadata: Record<string, unknown> = {};
-            if (outgoing.media) {
-              metadata.media = outgoing.media;
-            } else if (MEDIA_MESSAGE_TYPES.has(outgoing.type)) {
-              // The wwjs own-send echo carries no media field at all (Baileys emits an omitted
-              // marker); synthesize it so the dashboard renders the 📎 placeholder instead of an
-              // empty bubble, and the row stays countable in the by-type stats.
-              metadata.media = { mimetype: '', omitted: true };
-            }
-            if (outgoing.quotedMessage) {
-              metadata.quotedMessage = outgoing.quotedMessage;
-            }
-            if (outgoing.call) {
-              metadata.call = outgoing.call;
-            }
+            const metadata = buildMessageMetadata(outgoing, true);
 
             // The ephemeral opt-out gates STORAGE only (mirrors onMessage); the live dispatch below
             // is today's contract and stays.
@@ -1466,9 +1429,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             if (mayPersist) {
               const dbMessage = this.messageRepository.create({
                 sessionId: id,
-                // Mirror onMessage's chokepoint: an unreadable id is the empty sentinel, stored as
-                // NULL — `''` would collide on the second such message.
-                waMessageId: outgoing.id || undefined,
+                waMessageId: storableWaMessageId(outgoing.id),
                 chatId: outgoing.chatId,
                 from: outgoing.from,
                 to: outgoing.to,
@@ -1477,7 +1438,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
                 direction: MessageDirection.OUTGOING,
                 timestamp: outgoing.timestamp,
                 status: MessageStatus.SENT,
-                metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+                metadata,
               });
               // The hook chain above is async; a delete()/teardown can retire this engine while it
               // awaits. Re-check liveness so a late continuation can't persist an orphan row
