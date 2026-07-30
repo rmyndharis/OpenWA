@@ -1,4 +1,4 @@
-﻿#!/bin/sh
+#!/bin/sh
 # Smoke test: verify the built image runs its process as the openwa user (not root).
 # Usage: ./scripts/smoke-test-non-root.sh
 # Requires Docker to be running locally.

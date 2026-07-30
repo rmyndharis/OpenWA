@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The non-root smoke test can actually be run.** `scripts/smoke-test-non-root.sh` carried a UTF-8
+  BOM ahead of its `#!/bin/sh`, and neither it nor `scripts/smoke-test-docker-proxy.sh` had the
+  executable bit — so the `./scripts/…` invocation both of them document failed outright. The image
+  runs its process as a non-root user by dropping privileges in the entrypoint rather than by a
+  `USER` directive, which is a runtime property no static check can see, and this script is the only
+  thing that verifies it. CI's shellcheck step now covers every script in `scripts/` instead of three
+  of them; the BOM is exactly what it reports as SC1082, so the narrow scope is what let it survive.
+
+### Removed
+
+- `scripts/openwa.sh`, an orchestration helper superseded by the in-process Docker orchestration on
+  `/api/infra`. It had no reference from `package.json`, any workflow, the Dockerfile, either compose
+  file, or the documentation.
+
 ## [0.12.1] - 2026-07-30
 
 ### Added
