@@ -58,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A missing dashboard asset returns 404 instead of the SPA shell.** `ServeStaticModule`'s built-in
+  fallback answered *every* unmatched GET with `index.html`, so a mistyped or stale `<script src>`
+  came back `200 text/html` and the browser reported a JavaScript syntax error from parsing the HTML
+  shell — pointing at the wrong file and hiding a broken build. `main.ts` already serves dashboard
+  documents (it injects the per-response CSP nonce, so it must own them) and is correctly narrow:
+  it skips `/assets`, and only answers extensionless paths or explicit `text/html` navigations. The
+  module's own catch-all is now disabled so that handler is the single owner. Client-side routes are
+  unaffected.
+
+  This also repairs a deployment shape that was broken outright: when the install path contains a
+  dot-segment (`~/.openwa`, a checkout under `~/.cache`, a `TMPDIR` inside a dotdir), the built-in
+  fallback sent the index by **absolute** path and Express's `send` refuses dot-segments under its
+  default `dotfiles: 'ignore'` — so every client-side route 404'd while `/` and the hashed assets
+  kept working. The e2e lock now runs its whole matrix against both path shapes, with a fixture
+  guard asserting the two really differ (`os.tmpdir()` is not reliably dot-free, and using it
+  blindly collapsed both cases onto one shape and hid exactly this bug).
+
 - **The non-root smoke test can actually be run.** `scripts/smoke-test-non-root.sh` carried a UTF-8
   BOM ahead of its `#!/bin/sh`, and neither it nor `scripts/smoke-test-docker-proxy.sh` had the
   executable bit — so the `./scripts/…` invocation both of them document failed outright. The image

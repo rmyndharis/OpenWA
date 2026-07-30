@@ -44,15 +44,19 @@ class PingController {
 }
 
 const EXCLUDE = ['/api/{*splat}', '/socket.io/{*splat}'];
+// Mirrors app.module.ts: the module's own catch-all fallback is off, main.ts's document
+// handler owns SPA routes. Without this the module answers every unmatched GET with the
+// shell, which is the behaviour the missing-asset test below exists to prevent.
+const RENDER_DISABLED = '/__openwa_spa_fallback_owned_by_main_ts__';
 
 @Module({
-  imports: [ServeStaticModule.forRoot({ rootPath: plainDist, exclude: EXCLUDE })],
+  imports: [ServeStaticModule.forRoot({ rootPath: plainDist, exclude: EXCLUDE, renderPath: RENDER_DISABLED })],
   controllers: [PingController],
 })
 class PlainServeStaticModule {}
 
 @Module({
-  imports: [ServeStaticModule.forRoot({ rootPath: dottedDist, exclude: EXCLUDE })],
+  imports: [ServeStaticModule.forRoot({ rootPath: dottedDist, exclude: EXCLUDE, renderPath: RENDER_DISABLED })],
   controllers: [PingController],
 })
 class DottedServeStaticModule {}
@@ -145,9 +149,22 @@ describe.each([
     expect(res.text).not.toContain('OpenWA Dashboard');
   });
 
-  it('never leaks a dotfile out of the build directory', async () => {
-    // The SPA shell is an acceptable answer here; the file's CONTENTS must never be.
+  it('404s a missing asset instead of handing back the SPA shell', async () => {
+    // A mistyped <script src> must fail loudly. Answering 200 HTML makes the browser try to
+    // parse the shell as JavaScript and report a syntax error, hiding the real cause.
+    const res = await request(app.getHttpServer()).get('/assets/missing.js');
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('OpenWA Dashboard');
+  });
+
+  it('404s a missing top-level file rather than serving the shell', async () => {
+    const res = await request(app.getHttpServer()).get('/favicon-missing.svg');
+    expect(res.status).toBe(404);
+  });
+
+  it('never serves a dotfile out of the build directory', async () => {
     const res = await request(app.getHttpServer()).get('/.env.secret');
+    expect(res.status).toBe(404);
     expect(res.text).not.toContain('TOKEN=');
   });
 
