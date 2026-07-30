@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the by-type stats), and `storableWaMessageId()` makes the empty-sentinel chokepoint real rather than
   a comment repeated at each call site.
 
+  `initializeEngine` itself drops from 807 lines to 327. Nearly all of it was engine-callback bodies
+  inlined into one object literal, which hid the wiring — which events exist, and in what order —
+  under the handling; the five largest (inbound message, own-send echo, ack, ready, revoke) are now
+  named methods and the function reads as the event table it is. Pure code motion: each method takes
+  the same captured `(id, engine)` the closure did, so the stale-generation identity guards are
+  unchanged.
+
 ### Fixed
 
 - **The non-root smoke test can actually be run.** `scripts/smoke-test-non-root.sh` carried a UTF-8
