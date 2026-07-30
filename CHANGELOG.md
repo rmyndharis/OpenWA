@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storm, the watchdog's stale-result guard for an engine superseded mid-probe, and the mutation-chain
   reclamation that stops the map growing once per message touched.
 
+  The three message-persist paths (live inbound, own-send echo, history backfill) also stop
+  re-deriving their shared row mapping: `buildMessageMetadata()` now states the one deliberate
+  difference between them (inbound trusts the engine's media field; the two paths known to lose media
+  synthesize the omitted marker that keeps a row from rendering as an empty bubble and dropping out of
+  the by-type stats), and `storableWaMessageId()` makes the empty-sentinel chokepoint real rather than
+  a comment repeated at each call site.
+
 ### Fixed
 
 - **The non-root smoke test can actually be run.** `scripts/smoke-test-non-root.sh` carried a UTF-8
