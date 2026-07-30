@@ -8,6 +8,7 @@ import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import { SessionLidResolver } from './session-lid-resolver.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -92,6 +93,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
         { provide: EngineFactory, useValue: engineFactory },
         // Real registry: this suite asserts on engine map state across the teardown fence.
         EngineRegistry,
+        SessionLidResolver,
         {
           provide: EventsGateway,
           useValue: { emitSessionStatus: jest.fn(), emitSessionDisconnected: jest.fn(), emitQRCode: jest.fn() },

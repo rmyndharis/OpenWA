@@ -24,9 +24,8 @@ import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-messa
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import { SessionLidResolver } from './session-lid-resolver.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
-import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
-import { userPart } from '../../engine/identity/wa-id';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -196,11 +195,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private get engines(): EngineRegistry {
     return this.engineRegistry;
   }
-  // Bounded cache for inline @lid -> phone resolution (#263), keyed `${sessionId}:${lid}`. Caches
-  // misses (null) too, so a chatty unmapped sender isn't re-queried on every message (which also
-  // reduces engine rate-limit pressure). Best-effort feature, so staleness is acceptable.
-  private readonly lidPhoneCache = new Map<string, string | null>();
-  private static readonly LID_PHONE_CACHE_MAX = 5000;
   // Transient, human-readable reason for the most recent terminal engine failure,
   // keyed by session id. Surfaced on read so the dashboard can explain a FAILED
   // status; cleared when the session re-initializes or becomes ready.
@@ -286,16 +280,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly dataSource: DataSource,
     private readonly engineFactory: EngineFactory,
     private readonly engineRegistry: EngineRegistry,
+    private readonly lidResolver: SessionLidResolver,
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
     private readonly statusStore: StatusStoreService,
     @Optional()
     private readonly configService?: ConfigService,
-    // Shared lid<->phone table (global). Used to persist an inbound @lid sender's resolved phone so
-    // an inbound-only migrated contact's `@lid` and `@c.us` rows bridge in the read-path (#583 R3 Ph2).
-    @Optional()
-    private readonly lidMappingStore?: LidMappingStoreService,
     // Draining flag (set on a termination signal or an admin restart). Used to suppress a mid-shutdown
     // reconnect that would launch a fresh Chromium racing onModuleDestroy's teardown. @Optional so the
     // service degrades to today's behaviour if it is ever constructed without the (global) LoggerModule.
@@ -1326,7 +1317,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             // attaches senderPhone (digits or null) before persist/dispatch so webhook/ws consumers
             // get it in a single pass. Only for privacy-id senders, so no lookup for normal numbers.
             if (resolveFeatureFlags(this.configService).resolveLidToPhone && incoming.isLidSender && !incoming.fromMe) {
-              incoming.senderPhone = await this.resolveSenderPhone(id, incoming.author ?? incoming.from);
+              incoming.senderPhone = await this.lidResolver.resolveSenderPhone(id, incoming.author ?? incoming.from);
             }
 
             const metadata: Record<string, unknown> = {};
@@ -2692,40 +2683,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   getEngine(id: string): IWhatsAppEngine | undefined {
     return this.engines.get(id);
-  }
-
-  /**
-   * Best-effort resolution of a privacy-id sender (`@lid`) to a phone number for inline attachment on
-   * incoming messages (#263). Cached per session (incl. misses). Never throws — returns null on any
-   * failure or when the engine isn't available. Gated by the caller on `RESOLVE_LID_TO_PHONE`.
-   */
-  private async resolveSenderPhone(sessionId: string, contactId: string): Promise<string | null> {
-    const key = `${sessionId}:${contactId}`;
-    const cached = this.lidPhoneCache.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-    let phone: string | null;
-    try {
-      phone = (await this.getEngine(sessionId)?.resolveContactPhone(contactId)) ?? null;
-    } catch {
-      phone = null;
-    }
-    // Bounded FIFO eviction: Map preserves insertion order, so the first key is the oldest.
-    if (this.lidPhoneCache.size >= SessionService.LID_PHONE_CACHE_MAX) {
-      for (const oldest of this.lidPhoneCache.keys()) {
-        this.lidPhoneCache.delete(oldest);
-        break;
-      }
-    }
-    this.lidPhoneCache.set(key, phone);
-    // Persist a real @lid -> phone resolution so the read-path can bridge this contact's `@lid` and
-    // `@c.us` rows even when the operator never sent to them (#583 R3 Phase 2). Reuses the resolution
-    // above — no extra network call — and is fire-and-forget so dispatch never blocks/fails on it.
-    if (phone) {
-      void this.lidMappingStore?.remember(userPart(contactId), phone, sessionId)?.catch(() => {});
-    }
-    return phone;
   }
 
   async getGroups(
