@@ -23,6 +23,7 @@ import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { userPart } from '../../engine/identity/wa-id';
@@ -189,8 +190,12 @@ function isAuthTimeoutRejection(err: unknown): boolean {
 export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicationBootstrap {
   private readonly logger = createLogger('SessionService');
 
-  // In-memory map of active engine instances
-  private engines: Map<string, IWhatsAppEngine> = new Map();
+  // Live engine instances, owned by the shared EngineRegistry (the narrow port feature modules
+  // inject instead of this whole service). This service is the only writer: it creates, replaces and
+  // retires engines. `engines` remains a local alias so the lifecycle code below reads unchanged.
+  private get engines(): EngineRegistry {
+    return this.engineRegistry;
+  }
   // Bounded cache for inline @lid -> phone resolution (#263), keyed `${sessionId}:${lid}`. Caches
   // misses (null) too, so a chatty unmapped sender isn't re-queried on every message (which also
   // reduces engine rate-limit pressure). Best-effort feature, so staleness is acceptable.
@@ -225,8 +230,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   // Sessions whose engine is mid-initialization (a start() is in flight). Reserved synchronously
   // in start() so a near-simultaneous second start() can't pass the engines.has() check during the
-  // awaited hook and orphan an engine the lifecycle could never destroy.
-  private initializingSessions: Set<string> = new Set();
+  // awaited hook and orphan an engine the lifecycle could never destroy. Backed by the registry so
+  // the infra import pre-flight sees starting sessions through the same port.
+  private get initializingSessions(): Set<string> {
+    return this.engineRegistry.initializing;
+  }
 
   // Serializes stored-message mutations per `${sessionId}:${waMessageId}`. Reactions perform a
   // read-modify-write and rapid edits must remain latest-write-wins; sharing one chain also preserves
@@ -277,6 +285,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     @InjectDataSource('data')
     private readonly dataSource: DataSource,
     private readonly engineFactory: EngineFactory,
+    private readonly engineRegistry: EngineRegistry,
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
@@ -669,7 +678,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // is gone (delete cannot be followed by a late status write). Identity-checked.
         await this.awaitInitialStatus(id, engine);
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+        this.engines.deleteIfLive(id, engine);
       }
 
       // FENCE #2 — immediately after the current engine is evicted, BEFORE the session:deleted hook
@@ -788,7 +797,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         // start()'s finally), so summing the two sizes would double-count it; and `id` itself is
         // already reserved in `initializingSessions` (added at entry), so it must not count
         // against the cap it is being checked against.
-        const activeIds = new Set<string>([...this.engines.keys(), ...this.initializingSessions]);
+        const activeIds = new Set<string>(this.engines.activeIds());
         activeIds.delete(id);
         if (activeIds.size >= maxConcurrentSessions) {
           throw new BadRequestException(`Maximum concurrent sessions reached (${maxConcurrentSessions})`);
@@ -872,7 +881,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
-          if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
+          this.engines.deleteIfLive(id, resurrected);
         }
         // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created
         // them — purge again so the window leaves no credential residue behind (no-op for a stop()).
@@ -888,13 +897,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * True only while `engine` is still the live engine registered for `id`. Each callback below
    * captures its own engine instance; once the session is stopped (engine removed from the map) or
    * restarted/reconnected (engine replaced), a late callback from the superseded engine must not
-   * mutate the session that now belongs to a different — or no — engine. `this.engines` is the
+   * mutate the session that now belongs to a different — or no — engine. The registry is the
    * single source of truth for the active engine, so identity comparison closes both the
    * post-stop and the stale-generation (stop→start / reconnect-replace) windows the one-shot
    * post-init guard does not cover.
    */
   private isLiveEngine(id: string, engine: IWhatsAppEngine): boolean {
-    return this.engines.get(id) === engine;
+    return this.engines.isLive(id, engine);
   }
 
   /**
@@ -2417,7 +2426,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       const oldEngine = this.engines.get(id);
       if (oldEngine) {
         await this.teardownEngineSafely(id, oldEngine, e => e.destroy(), 'destroy');
-        if (this.isLiveEngine(id, oldEngine)) this.engines.delete(id);
+        this.engines.deleteIfLive(id, oldEngine);
       }
 
       // Credential-teardown fence — BEFORE engineFactory.create (inside initializeEngine). A logout
@@ -2448,7 +2457,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         const resurrected = this.engines.get(id);
         if (resurrected) {
           await this.teardownEngineSafely(id, resurrected, e => e.destroy(), 'destroy');
-          if (this.isLiveEngine(id, resurrected)) this.engines.delete(id);
+          this.engines.deleteIfLive(id, resurrected);
         }
         // Same start/delete window as start()'s post-init guard: this re-init re-created auth dirs
         // delete() had already purged — purge again so no credentials outlive the row.
@@ -2501,7 +2510,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // become the last persisted status. Identity-checked: only the captured engine's promise.
       await this.awaitInitialStatus(id, engine);
       await this.teardownEngineSafely(id, engine, e => e.disconnect(), 'disconnect');
-      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+      this.engines.deleteIfLive(id, engine);
     }
 
     this.logger.log(`Session stopped: ${session.name}`, {
@@ -2565,7 +2574,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // raw logout that outlives its deadline race is tracked under the right name even if the row is
     // later deleted/recreated.
     const unlinked = await this.teardownEngineSafely(id, engine, e => e.logout(), 'logout', session.name);
-    if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+    this.engines.deleteIfLive(id, engine);
     await this.updateStatus(id, SessionStatus.DISCONNECTED);
 
     if (!unlinked) {
@@ -2629,7 +2638,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // write so a delayed pre-initialize status update can never settle after the retirement.
     await this.awaitInitialStatus(id, engine);
     await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-    if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+    this.engines.deleteIfLive(id, engine);
 
     this.logger.warn(`Session force-killed: ${session.name}`, {
       sessionId: id,
@@ -2886,7 +2895,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * to refuse a full-replace restore that would orphan a running engine.
    */
   getActiveSessionIds(): string[] {
-    return [...new Set([...this.engines.keys(), ...this.initializingSessions])];
+    return this.engines.activeIds();
   }
 
   /**
@@ -2934,7 +2943,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           // means the Chromium/socket may still be alive and writing, so the id lands in `failed`
           // and the caller (the infra import) can flag restartRequired instead of reporting a
           // clean stop for a wedged engine.
-          if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+          this.engines.deleteIfLive(id, engine);
           if (tornDown) {
             stopped.push(id);
           } else {
@@ -2947,7 +2956,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
             sessionId: id,
             action: 'stop_orphan_failed',
           });
-          if (this.isLiveEngine(id, engine)) this.engines.delete(id);
+          this.engines.deleteIfLive(id, engine);
           failed.push(id);
         }
       }),

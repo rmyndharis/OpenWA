@@ -24,6 +24,7 @@ import { Webhook } from '../webhook/entities/webhook.entity';
 import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
+import { EngineRegistry } from '../../engine/engine-registry.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -197,6 +198,10 @@ describe('SessionService', () => {
           useValue: dataSource,
         },
         { provide: EngineFactory, useValue: engineFactory },
+        // Real EngineRegistry, not a mock: it is the live-engine source of truth this service reads
+        // and writes on every lifecycle path, and the identity semantics (isLive/deleteIfLive) are
+        // exactly what the stale-callback tests below exercise. Its own unit tests cover it directly.
+        EngineRegistry,
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
