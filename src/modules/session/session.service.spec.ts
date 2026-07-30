@@ -28,6 +28,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
+import { MessageProjector } from './message-projector.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -207,6 +208,7 @@ describe('SessionService', () => {
         EngineRegistry,
         SessionLidResolver,
         SessionLivenessWatchdog,
+        MessageProjector,
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
@@ -2921,7 +2923,10 @@ describe('SessionService', () => {
 
       for (let i = 0; i < 3; i++) await flush();
 
-      const chains = (service as unknown as { messageMutations: KeyedMutationQueue }).messageMutations;
+      // The queue lives on the projector now; reach the instance SessionService delegates to so
+      // this still asserts the real chain drained rather than an object that no longer exists.
+      const chains = (service as unknown as { messages: { messageMutations: KeyedMutationQueue } }).messages
+        .messageMutations;
       expect(chains.size).toBe(0);
     });
 
@@ -4622,7 +4627,11 @@ describe('SessionService', () => {
       // The inbound edit lands first; the REST outbound edit for the same message must queue BEHIND
       // it instead of racing the row directly (latest-write-wins across both directions).
       onMessageEdited(inboundEdit);
-      const outbound = service.recordOutboundMessageEdit('sess-uuid-1', 'WA_MSG_EDIT_1', 'outbound edit');
+      const outbound = (service as unknown as { messages: MessageProjector }).messages.recordOutboundMessageEdit(
+        'sess-uuid-1',
+        'WA_MSG_EDIT_1',
+        'outbound edit',
+      );
       await new Promise(resolve => setImmediate(resolve));
 
       expect(messageRepository.update).toHaveBeenCalledTimes(1); // only the inbound write started
@@ -4644,7 +4653,13 @@ describe('SessionService', () => {
     it('is best-effort: a missing row / failed write does not reject the request', async () => {
       (messageRepository.update as jest.Mock).mockRejectedValueOnce(new Error('db down'));
 
-      await expect(service.recordOutboundMessageEdit('sess-uuid-1', 'GONE', 'x')).resolves.toBeUndefined();
+      await expect(
+        (service as unknown as { messages: MessageProjector }).messages.recordOutboundMessageEdit(
+          'sess-uuid-1',
+          'GONE',
+          'x',
+        ),
+      ).resolves.toBeUndefined();
     });
   });
 

@@ -10,6 +10,7 @@ import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
+import { MessageProjector } from './message-projector.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -96,6 +97,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
         EngineRegistry,
         SessionLidResolver,
         SessionLivenessWatchdog,
+        MessageProjector,
         {
           provide: EventsGateway,
           useValue: { emitSessionStatus: jest.fn(), emitSessionDisconnected: jest.fn(), emitQRCode: jest.fn() },
