@@ -25,6 +25,7 @@ import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import type { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -2913,7 +2914,7 @@ describe('SessionService', () => {
 
       for (let i = 0; i < 3; i++) await flush();
 
-      const chains = (service as unknown as { messageMutationChains: Map<string, unknown> }).messageMutationChains;
+      const chains = (service as unknown as { messageMutations: KeyedMutationQueue }).messageMutations;
       expect(chains.size).toBe(0);
     });
 

@@ -24,6 +24,7 @@ import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-messa
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { decideReconnect, clampReconnectDelay, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
@@ -211,7 +212,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   // Serializes stored-message mutations per `${sessionId}:${waMessageId}`. Reactions perform a
   // read-modify-write and rapid edits must remain latest-write-wins; sharing one chain also preserves
   // order when different mutation kinds for the same message arrive together.
-  private messageMutationChains: Map<string, Promise<void>> = new Map();
+  private readonly messageMutations = new KeyedMutationQueue((key, err) => {
+    // Both current mutation implementations contain their own contextual error handling. Keep a
+    // final guard here so a future implementation cannot leak a rejected fire-and-forget promise
+    // or permanently block the message's later mutations.
+    this.logger.error(`Unexpected failure applying message mutation: ${key}`, String(err));
+  });
 
   // Destructive credential-teardown promises (logout rms of the session's on-disk WhatsApp auth
   // dir), keyed by session NAME — the on-disk auth-dir key (EngineFactory.wwjsAuthDir/baileysAuthDir
@@ -1916,23 +1922,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   /** Queue a message-scoped mutation. A failed operation is isolated so later events still run. */
   private enqueueMessageMutation(id: string, messageId: string, work: () => Promise<void>): void {
-    const key = `${id}:${messageId}`;
-    const prior = this.messageMutationChains.get(key) ?? Promise.resolve();
-    const next = prior
-      .catch(() => undefined)
-      .then(work)
-      .catch(err => {
-        // Both current mutation implementations contain their own contextual error handling. Keep a
-        // final guard here so a future implementation cannot leak a rejected fire-and-forget promise
-        // or permanently block the message's later mutations.
-        this.logger.error(`Unexpected failure applying message mutation: ${messageId}`, String(err));
-      });
-    this.messageMutationChains.set(key, next);
-    void next.finally(() => {
-      if (this.messageMutationChains.get(key) === next) {
-        this.messageMutationChains.delete(key);
-      }
-    });
+    this.messageMutations.enqueue(`${id}:${messageId}`, work);
   }
 
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
