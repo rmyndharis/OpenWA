@@ -24,6 +24,7 @@ import { BaileysStoredMessage } from '../../engine/adapters/baileys-stored-messa
 import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
+import { decideReconnect, clampReconnectDelay, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
@@ -71,13 +72,9 @@ const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'voice', 'sticke
 // proves 50 too few.
 const STATUS_SEED_LIMIT = 50;
 
-interface ReconnectState {
-  attempts: number;
+interface ReconnectState extends ReconnectAttemptState {
+  /** The pending attempt's timer. Lives here, not in the policy, which stays free of side effects. */
   timer: NodeJS.Timeout | null;
-  maxAttempts: number;
-  baseDelay: number;
-  /** When the last attempt was scheduled (epoch ms) — feeds the stability reset in scheduleReconnect. */
-  lastAttemptAt?: number;
 }
 
 // Reconnect-backoff bounds. An OPERATOR-supplied session.config feeds this math, so the values
@@ -86,21 +83,6 @@ interface ReconnectState {
 const RECONNECT_BASE_DELAY_MIN_MS = 1000;
 const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
-const RECONNECT_DELAY_CAP_MS = 3_600_000;
-/**
- * A reconnect-attempt budget covers one CONTINUOUS bad stretch: once this much time has passed
- * since the last scheduled attempt the session demonstrably stayed up, so `attempts` resets to 0.
- * Without it a long-lived session would slowly accrue attempts toward an explicit cap across
- * unrelated transient drops and one day wedge FAILED for no current reason.
- */
-const RECONNECT_STABILITY_RESET_MS = 300_000;
-/**
- * A reconnect-loop alert fires once per this many CONSECUTIVE attempts of a session — one signal per
- * ongoing episode, not spam per attempt. A broken-forever setup retries without limit (by design), so
- * the 5th/10th/15th… scheduled attempt is the operator-facing tell; the streak resets via the
- * stability window above (or onReady), so a later episode re-arms the alert from attempt 5 again.
- */
-const RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS = 5;
 /**
  * Session liveness watchdog. The engine layer is event-driven, so an engine that dies WITHOUT
  * firing an event (a silent Chromium crash) is never noticed: the row sits READY forever and never
@@ -140,11 +122,7 @@ export function resolveReconnectConfig(
   return { maxAttempts, baseDelay };
 }
 
-/** Clamp a computed backoff delay finite and within setTimeout's safe range (a huge value would
- *  overflow its 32-bit ms field and fire immediately). */
-export function clampReconnectDelay(rawDelay: number, baseDelay: number): number {
-  return clampNumber(Number.isFinite(rawDelay) ? rawDelay : baseDelay, 0, RECONNECT_DELAY_CAP_MS);
-}
+export { clampReconnectDelay };
 
 export function resolveMaxConcurrentSessions(configService?: Pick<ConfigService, 'get'>): number | null {
   const configured = configService?.get<number>('sessions.maxConcurrent', 0) ?? 0;
@@ -2277,15 +2255,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const state = this.reconnectStates.get(id);
     if (!state) return;
 
-    // Stability reset: the attempt budget covers one CONTINUOUS bad stretch. When the session stayed
-    // up ≥5 min since the last scheduled attempt it demonstrably recovered, so the next drop
-    // restarts the budget — unrelated transient drops must not accrue toward an explicit cap over
-    // the session's lifetime.
-    if (state.lastAttemptAt !== undefined && Date.now() - state.lastAttemptAt >= RECONNECT_STABILITY_RESET_MS) {
-      state.attempts = 0;
-    }
+    // All the backoff rules (stability reset, budget, exponential delay, loop cadence) live in the
+    // pure policy; this method only applies the effects the decision calls for.
+    const decision = decideReconnect(state);
 
-    if (state.attempts >= state.maxAttempts) {
+    if (decision.kind === 'exhausted') {
       this.logger.error(`Max reconnect attempts reached for session: ${session.name}`, undefined, {
         sessionId: id,
         attempts: state.attempts,
@@ -2293,14 +2267,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       });
       // Don't leave the session silently stuck DISCONNECTED — mark it terminally FAILED with a reason
       // so findOne/findAll surface it via `lastError` and the dashboard shows it needs a restart.
-      // maxAttempts:0 means auto-reconnect is disabled, not that N attempts were tried and failed — say
-      // so instead of the misleading "failed after 0 attempts".
-      this.sessionErrors.set(
-        id,
-        state.maxAttempts === 0
-          ? 'Auto-reconnect is disabled (max attempts set to 0); the session was left disconnected — restart it manually.'
-          : `Reconnection failed after ${state.attempts} attempts — restart the session.`,
-      );
+      this.sessionErrors.set(id, decision.reason);
       void this.updateStatus(id, SessionStatus.FAILED);
       // Terminal path — evict the dead engine so it neither holds a concurrency slot nor makes a
       // subsequent start() reject the session as "already started". This mirrors onError's terminal
@@ -2314,22 +2281,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
 
-    // Exponential backoff: baseDelay * 2^attempts (with jitter), clamped finite + within
-    // setTimeout's safe range so the timer can't overflow and fire immediately. With the default
-    // unlimited budget the delay parks at RECONNECT_DELAY_CAP_MS once the exponent outgrows it.
-    const delay = clampReconnectDelay(
-      state.baseDelay * Math.pow(2, state.attempts) + Math.random() * 1000,
-      state.baseDelay,
-    );
-    state.attempts++;
-    state.lastAttemptAt = Date.now();
-
+    const delay = decision.delayMs;
     const maxAttemptsLabel = Number.isFinite(state.maxAttempts) ? String(state.maxAttempts) : '∞';
     this.logger.log(
-      `Scheduling reconnect attempt ${state.attempts}/${maxAttemptsLabel} in ${Math.round(delay / 1000)}s`,
+      `Scheduling reconnect attempt ${decision.attempt}/${maxAttemptsLabel} in ${Math.round(delay / 1000)}s`,
       {
         sessionId: id,
-        attempt: state.attempts,
+        attempt: decision.attempt,
         delayMs: delay,
         action: 'reconnect_scheduled',
       },
@@ -2337,21 +2295,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     incrementSessionReconnectAttempts();
 
-    // Loop alert every RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS consecutive attempts: with the default
-    // unlimited budget a permanently-broken setup retries forever, and this is the one operator-facing
-    // signal per ongoing episode (not per attempt). The streak resets via the stability window/onReady,
-    // so a fresh episode re-arms the alert instead of continuing an old cadence.
-    if (state.attempts > 0 && state.attempts % RECONNECT_LOOP_ALERT_INTERVAL_ATTEMPTS === 0) {
-      this.logger.warn(`Session is reconnect-looping: attempt ${state.attempts} scheduled`, {
+    // One operator-facing signal per ongoing episode, not spam per attempt (see the policy).
+    if (decision.loopAlert) {
+      this.logger.warn(`Session is reconnect-looping: attempt ${decision.attempt} scheduled`, {
         sessionId: id,
-        attempts: state.attempts,
+        attempts: decision.attempt,
         nextDelayMs: delay,
         action: 'reconnect_loop',
       });
       incrementSessionReconnectLoopAlerts();
       void this.webhookService.dispatch(id, 'session.reconnect_loop', {
         sessionId: id,
-        attempts: state.attempts,
+        attempts: decision.attempt,
         nextDelayMs: delay,
       });
     }
