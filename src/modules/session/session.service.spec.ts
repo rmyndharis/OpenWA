@@ -14,6 +14,7 @@ import {
   SessionService,
   ACK_RECONCILE_DELAY_MS,
   SESSION_WATCHDOG_INTERVAL_MS,
+  SESSION_WATCHDOG_MAX_FAILURES,
   SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
 } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
@@ -1745,6 +1746,71 @@ describe('SessionService', () => {
           'session.disconnected',
           expect.anything(),
         );
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    // ACTION_REQUIRED is probed for observability, but the result must never drive the lifecycle: the
+    // status says a human has to act, and reconnecting the session would silently clear it.
+    it('probes an ACTION_REQUIRED engine but never acts on a failure', async () => {
+      jest.useFakeTimers();
+      try {
+        const engine = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.ACTION_REQUIRED),
+          probeLiveness: jest.fn().mockResolvedValue(false),
+        };
+        seedReadySession(engine);
+        const scheduleSpy = jest.spyOn(internals(), 'scheduleReconnect');
+
+        await service.onApplicationBootstrap();
+        // Well past the 2-failure threshold that would disconnect a READY session.
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS * 4);
+
+        // Probed — that is the point; the page dying while the operator is away is now visible.
+        expect(engine.probeLiveness).toHaveBeenCalled();
+        // …but nothing was acted on.
+        expect(scheduleSpy).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalledWith(
+          expect.anything(),
+          'session.disconnected',
+          expect.anything(),
+        );
+        expect(repository.update).not.toHaveBeenCalledWith(
+          'sess-uuid-1',
+          expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
+        );
+        // The count keeps rising so a later recovery can be distinguished from "never failed".
+        expect(internals().livenessFailures.get('sess-uuid-1')).toBeGreaterThan(SESSION_WATCHDOG_MAX_FAILURES);
+      } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    });
+
+    // A session can sit in ACTION_REQUIRED until someone gets to it. At one tick per minute an
+    // unbounded warning would bury every other log line.
+    it('warns once per unresponsive stretch while ACTION_REQUIRED, not once per tick', async () => {
+      jest.useFakeTimers();
+      try {
+        const engine = {
+          getStatus: jest.fn().mockReturnValue(EngineStatus.ACTION_REQUIRED),
+          probeLiveness: jest.fn().mockResolvedValue(false),
+        };
+        seedReadySession(engine);
+        const warnSpy = jest.spyOn(
+          (service as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger,
+          'warn',
+        );
+
+        await service.onApplicationBootstrap();
+        await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS * 5);
+
+        const observeWarnings = warnSpy.mock.calls.filter(
+          ([, ctx]) => (ctx as { action?: string } | undefined)?.action === 'watchdog_probe_failed_observe_only',
+        );
+        expect(observeWarnings).toHaveLength(1);
       } finally {
         jest.clearAllTimers();
         jest.useRealTimers();

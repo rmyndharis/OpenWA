@@ -489,6 +489,12 @@ once, so the session stops instead of being silently unlinked by WhatsApp about 
 > in a browser signed in as that account, then scan the QR. It does not recur — the modal is shown
 > once per account.
 
+> **While a session sits in `action_required`** the liveness watchdog keeps probing it, but only to
+> report: a failed probe is logged (`action: watchdog_probe_failed_observe_only`, once per
+> unresponsive stretch) and never reconnects the session or changes its status. So a page that died
+> while waiting for you is visible in the logs, and the status still means what it says. If you see
+> that warning, the page is gone and the stop → start below is required rather than optional.
+
 **Fix:** acknowledge the modal once (open WhatsApp Web in the account holder's own browser and click
 through the "What's new" screen), **then restart the session** (`POST /sessions/:id/stop` →
 `POST /sessions/:id/start`). Acknowledging alone does not return the session to `ready` — the status

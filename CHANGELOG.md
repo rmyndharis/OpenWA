@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session awaiting operator action is watched again, without being taken over.** The liveness
+  watchdog skipped every non-`ready` session, so once a session moved to `action_required` its page
+  was never probed again — if it died while waiting for a human, nothing recorded that anywhere. It is
+  now probed, but the result is observed only: a failure is logged and never accrues toward the
+  disconnect threshold, never publishes a `session.disconnected`, and never schedules a reconnect.
+  Acting on it would hand the session to the reconnect path and silently clear the very status that
+  asked for attention, which stays the operator's to clear with a stop and a start. The warning is
+  emitted once per unresponsive stretch rather than once per probe, since a session can legitimately
+  sit in that state until someone reaches it, and a recovery is logged so an earlier warning is not
+  left as the last word.
+
+- **A delete refused while a credential teardown is in flight no longer leaves a status it cannot
+  honour.** That refusal (`409 SESSION_NAME_TEARDOWN_PENDING`) happens after the engine has already
+  been destroyed and evicted, so the surviving row kept reading `ready` — or whatever it was — for a
+  session with nothing behind it, until something else wrote the status. The row is now reconciled to
+  `disconnected` before the refusal propagates. The earlier of the two fences needs no such handling:
+  nothing has run by then, so its status is still accurate.
+
 - **A WhatsApp-initiated logout that arrives during an unrelated teardown no longer hides its
   credential removal.** whatsapp-web.js emits `disconnected: LOGOUT` and then runs
   `authStrategy.logout()` → `fs.rm` of the session's profile directory, and that removal happens
@@ -55,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed two session statuses from the dashboard that the gateway never emits (`connecting`, `idle`),
   along with the dead branches that tested for them.
+
+- Internal tidying with no behaviour change: a caller-initiated logout no longer registers its
+  credential removal twice (the lifecycle already tracks the whole `engine.logout()` promise, which is
+  the only registration that covers both engines), and a duplicated engine-ownership check in the
+  pre-initialize window is gone — it sat behind a synchronous check that cannot change the answer, so
+  it could never disagree with the one before it.
 
 ## [0.12.0] - 2026-07-30
 

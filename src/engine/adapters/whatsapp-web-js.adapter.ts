@@ -1651,9 +1651,14 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async logout(): Promise<void> {
-    // Claim the LOGOUT credential registration before anything can emit 'disconnected': the native
-    // unlink below registers the real promise, so the event handler must not add a stand-in for it.
-    // Set even if there is no live client — the throw path sends nothing, so no event can arrive.
+    // Mark the credential removal as caller-owned before anything can emit 'disconnected'. The
+    // lifecycle tracks this call's removal from the outside — SessionService passes the session name
+    // to teardownEngineSafely, which registers the whole engine.logout() promise (a superset of the
+    // in-page unlink AND the profile rm that follows it), and that is the single owner for BOTH
+    // engines, since the Baileys adapter reports nothing here either. So this method must NOT
+    // register a second, narrower promise for the same removal, and the 'disconnected' LOGOUT handler
+    // must not add its stand-in on top. Set even with no live client: the throw path sends nothing,
+    // so no event can arrive, and a caller-initiated logout is still what happened.
     this.logoutInitiated = true;
     const client = this.beginClientTeardown();
     // No live client means there is nothing to send the unlink through. Resolving here would report a
@@ -1665,22 +1670,11 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       throw new Error('No live WhatsApp Web client — the unlink was not sent');
     }
 
-    // client.logout() chains authStrategy.logout() (LocalAuth) → fs.rm of this session's profile dir.
-    // Surface that destructive operation to the lifecycle SYNCHRONOUSLY, before the await, so a
-    // concurrent start()/delete()/reconnect for the same session NAME observes the in-flight rm and
-    // waits for it instead of re-creating/purging credentials the rm is about to delete. Register
-    // BEFORE awaiting so the callback fires even if the await never settles.
-    const logoutOp = client.logout();
-    this.callbacks.onCredentialTeardownStarted?.(
-      logoutOp.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-
     try {
-      // Logout clears session data - user will need to scan QR again
-      await logoutOp;
+      // client.logout() chains authStrategy.logout() (LocalAuth) → fs.rm of this session's profile
+      // dir. The lifecycle already tracks that removal through this method's own promise (see the
+      // note above logoutInitiated), so nothing is registered here.
+      await client.logout();
     } catch (error) {
       this.logger.warn('Logout failed:', { error: String(error) });
       // Fall back to destroy so the session still dies locally — but rethrow so the caller

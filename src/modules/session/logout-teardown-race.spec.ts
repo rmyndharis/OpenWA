@@ -336,6 +336,14 @@ describe('SessionService logout() name-scoped teardown fence', () => {
       expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
       // Row/name still reserved: the second fence refused before the transaction.
       expect(pendingOf().has(SESSION_NAME)).toBe(true);
+      // The engine was already destroyed and evicted before this fence, so the surviving row must not
+      // keep advertising a status it can no longer honour — the retry this 409 asks for should not have
+      // to look past a session that still reads READY with nothing behind it.
+      expect(enginesOf().has(SESSION_UUID)).toBe(false);
+      expect(repository.update).toHaveBeenCalledWith(
+        SESSION_UUID,
+        expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
+      );
 
       // After the raw teardown settles, the name is released.
       releaseLogout();

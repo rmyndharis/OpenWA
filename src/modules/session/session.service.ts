@@ -678,7 +678,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // onCredentialTeardownStarted callback), so this fence sees it and refuses — the row/name stay
       // reserved and the transaction does not run. After eviction a NEW logout can't create a
       // destructive promise (no live engine); one that already captured the engine is observed here.
-      await this.awaitPendingTeardown(session.name);
+      //
+      // Unlike fence #1, a refusal HERE leaves the row behind with its engine already destroyed, so
+      // the persisted status would keep reading whatever it was (READY, authenticating, …) for a
+      // session that can no longer answer anything. Reconcile it to DISCONNECTED before propagating
+      // the 409 — the retry the message asks for should not have to look past a status that lies.
+      // Fence #1 needs none of this: nothing has run there yet, so its status is still accurate.
+      // Best-effort: a failed status write must not mask the 409 the caller has to act on.
+      try {
+        await this.awaitPendingTeardown(session.name);
+      } catch (fenceError) {
+        if (engine) {
+          await this.updateStatus(id, SessionStatus.DISCONNECTED).catch(() => undefined);
+        }
+        throw fenceError;
+      }
 
       // Execute hook BEFORE delete so plugins can access session data
       await this.hookManager.execute(
@@ -1124,14 +1138,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // write, so checking it here (no DB read on the healthy path) closes the pre-initialize window
     // without changing reconnect-when-reload-fails semantics. isLiveEngine guards the stop-mark-less
     // timeout path and any replacement. There is intentionally NO await between these checks and
-    // engine.initialize() below — an intervening await would re-open the retirement window.
+    // engine.initialize() below — an intervening await would re-open the retirement window, and it is
+    // also why ONE isLiveEngine check is enough: the two guards are separated by a synchronous Set
+    // lookup, so nothing can swap the engine between them (a second, identical check used to sit
+    // after the stop mark and could never disagree with this one).
     if (!this.isLiveEngine(id, engine)) {
       return;
     }
     if (this.stoppingSessions.has(id)) {
-      return;
-    }
-    if (!this.isLiveEngine(id, engine)) {
       return;
     }
 
@@ -2152,11 +2166,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * Actively probe one engine. Only READY sessions are expected to answer (anything else is owned by
    * the QR/reconnect flows); engines without `probeLiveness` keep relying on engine events alone.
    * MAX_FAILURES consecutive failures treat the session exactly like an engine-reported disconnect.
+   *
+   * ACTION_REQUIRED is probed too, but OBSERVE-ONLY: the engine is still running and a human has to
+   * act, and clearing that status is theirs to do (stop, then start). Acting on a failed probe would
+   * hand the session to the reconnect path and silently drop the very status that asked for
+   * attention — so the probe result only reaches the log. Without probing at all, a page that dies
+   * while waiting for the operator left no trace anywhere, which is what this closes.
    */
   private async probeSessionLiveness(id: string, engine: IWhatsAppEngine): Promise<void> {
-    if (engine.getStatus() !== EngineStatus.READY) {
+    const status = engine.getStatus();
+    const observeOnly = status === EngineStatus.ACTION_REQUIRED;
+    if (status !== EngineStatus.READY && !observeOnly) {
       // Not expected to answer right now — and any accrued failures belong to a previous READY
-      // stretch, so the next one starts clean.
+      // stretch, so the next one starts clean. This also self-cleans the observe-only counter below:
+      // every path out of ACTION_REQUIRED passes through a status that lands here (or through
+      // onReady, which clears it), so an observe-only count can never be inherited by a READY
+      // stretch and push it over MAX_FAILURES early.
       this.livenessFailures.delete(id);
       return;
     }
@@ -2192,11 +2217,34 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
 
     if (alive) {
+      // Note a recovery on the observe-only path, so the log shows the page came back rather than
+      // leaving the earlier warning as the last word.
+      if (observeOnly && this.livenessFailures.has(id)) {
+        this.logger.log('Liveness probe answering again while the session awaits operator action', {
+          sessionId: id,
+          action: 'watchdog_probe_recovered',
+        });
+      }
       this.livenessFailures.delete(id);
       return;
     }
 
     const failures = (this.livenessFailures.get(id) ?? 0) + 1;
+    if (observeOnly) {
+      this.livenessFailures.set(id, failures);
+      // One warning per unresponsive stretch, not one per tick: a session can sit in
+      // ACTION_REQUIRED until a human gets to it, and at a 60s interval an unbounded log would bury
+      // everything else. The count keeps rising so the recovery branch above can tell it happened.
+      if (failures === 1) {
+        this.logger.warn(
+          'Liveness probe failed while the session awaits operator action; not reconnecting it — ' +
+            'the status is operator-owned. If the page is gone, stop and start the session.',
+          { sessionId: id, action: 'watchdog_probe_failed_observe_only' },
+        );
+      }
+      return;
+    }
+
     if (failures < SESSION_WATCHDOG_MAX_FAILURES) {
       this.livenessFailures.set(id, failures);
       this.logger.warn('Liveness probe failed; will treat the session as dead after repeated failures', {
