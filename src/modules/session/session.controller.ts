@@ -194,6 +194,7 @@ export class SessionController {
     description: 'Session force-killed',
     type: SessionResponseDto,
   })
+  @ApiResponse({ status: 400, description: 'Session is not started' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   async forceKill(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
     const session = await this.sessionService.forceKill(id);

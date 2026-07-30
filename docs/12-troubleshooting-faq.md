@@ -456,6 +456,31 @@ Re-creating the session (`DELETE /sessions/<id>`) also purges its profile dir; c
 scan. Messages are unaffected — they live in the database, not the browser profile — so nothing is lost
 except the WhatsApp pairing, which must be re-scanned.
 
+`force-kill` requires a started session — it returns `400` when no live engine is registered (there
+is nothing to SIGKILL). A browser left wedged by an earlier teardown is reaped automatically by the
+next `start()` (an orphan sweep keyed on the session's browser marker runs at every engine launch),
+so the stop → start sequence alone is sufficient once the engine is gone.
+
+### Issue: Session stuck at `action_required` ("What's new" onboarding modal)
+
+> **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.
+
+**Symptoms:** A freshly linked session leaves `ready` for `action_required` within its first minutes,
+every send returns `409` ("session not connected"), and the session's `lastError` says WhatsApp keeps
+showing its onboarding modal after repeated attempts to dismiss it.
+
+**Cause:** New WhatsApp accounts are shown a "What's new" modal after linking that must be
+acknowledged before the companion device is allowed to stay linked. The adapter auto-dismisses it
+and only gives up after five clicks that fail to land — at that point a human must click through it
+once, so the session stops instead of being silently unlinked by WhatsApp about five minutes later.
+
+**Fix:** acknowledge the modal once (open WhatsApp Web in the account holder's own browser and click
+through the "What's new" screen), **then restart the session** (`POST /sessions/:id/stop` →
+`POST /sessions/:id/start`). Acknowledging alone does not return the session to `ready` — the status
+is deliberately sticky — but the restart re-drives the engine from the stored credentials, so no new
+QR scan is needed. If the modal never actually appeared (a false trip is possible but rare), the
+same stop → start clears it.
+
 ### Issue: Frequent Disconnections
 
 **Symptoms:**

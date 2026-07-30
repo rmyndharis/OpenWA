@@ -323,6 +323,10 @@ describe('SessionService', () => {
       // Stop-mark stays set, like stop()/forceKill(): it blocks an in-flight reconnect
       // from resurrecting a session we just unlinked; a later start() clears it.
       expect(stoppingOf().has('sess-uuid-1')).toBe(true);
+      // A confirmed unlink wipes the stored credentials, so the session can never reach READY
+      // without a fresh QR — clearing phone takes it out of the boot auto-start query
+      // (phone IS NOT NULL) instead of resurrecting it into a QR it can never pass.
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
       expect(result).toBeDefined();
     });
 
@@ -343,6 +347,9 @@ describe('SessionService', () => {
         'sess-uuid-1',
         expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
       );
+      // The unlink was NOT confirmed — the device may still be linked server-side, so the session
+      // must stay eligible for the boot auto-start (which is the "start and retry" automation).
+      expect(repository.update).not.toHaveBeenCalledWith('sess-uuid-1', { phone: null });
     });
 
     it('logout() rejects with 400 when no engine is loaded (session already stopped)', async () => {
@@ -483,6 +490,15 @@ describe('SessionService', () => {
     it('forceKill() throws NotFoundException for an unknown session', async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
       await expect(service.forceKill('nope')).rejects.toThrow(NotFoundException);
+    });
+
+    it('forceKill() rejects with BadRequestException when the session has no live engine', async () => {
+      // No engine registered: there is nothing to SIGKILL. Resolving would let the controller write
+      // a SESSION_FORCE_KILLED audit row for a kill that never happened — mirror logout()'s
+      // not-started refusal instead.
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+
+      await expect(service.forceKill('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

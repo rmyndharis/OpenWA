@@ -33,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   probe that cannot reach the page — a reload, a teardown, a timeout — is logged and otherwise
   ignored: it says nothing about the modal, and taking a working session out of `ready` blocks every
   send for a reason the operator cannot act on. The status is deliberately expensive to reach for
-  that reason.
+  that reason: five failed dismiss clicks (up from three), so a multi-step "What's new" flow clicked
+  through one screen per tick no longer reads as a stuck modal.
 
 - **`POST /sessions/:id/logout` unlinks the device from the WhatsApp account** (#984, #1003). Both engines
   already implemented a real protocol-level unlink — whatsapp-web.js calls `WAWebSocketModel.Socket.logout()`

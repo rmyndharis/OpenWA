@@ -2279,6 +2279,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       );
     }
 
+    // A confirmed unlink wipes the stored credentials on both engines, so this session can never
+    // reach READY again without a fresh QR/pairing. Clear `phone` to take it out of the boot
+    // auto-start query (phone IS NOT NULL) instead of resurrecting it into a QR it can never pass
+    // on every restart. onReady rewrites it on the next successful link.
+    await this.sessionRepository.update(id, { phone: null });
+
     this.logger.log(`Session logged out: ${session.name}`, {
       sessionId: id,
       action: 'logout',
@@ -2294,16 +2300,22 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    */
   async forceKill(id: string): Promise<Session> {
     const session = await this.findOne(id);
+    const engine = this.engines.get(id);
+
+    // No live engine means there is nothing to SIGKILL. Resolving would let the controller write a
+    // SESSION_FORCE_KILLED audit row for a kill that never happened — mirror logout()'s not-started
+    // refusal. A wedged engine torn down earlier is reaped by the next start()'s orphan sweep (and
+    // by process exit), not by force-kill.
+    if (!engine) {
+      throw new BadRequestException('Session is not started. Call POST /sessions/:id/start first.');
+    }
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
     this.stoppingSessions.add(id);
     this.cancelReconnect(id);
 
-    const engine = this.engines.get(id);
-    if (engine) {
-      await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-      if (this.isLiveEngine(id, engine)) this.engines.delete(id);
-    }
+    await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
+    if (this.isLiveEngine(id, engine)) this.engines.delete(id);
 
     this.logger.warn(`Session force-killed: ${session.name}`, {
       sessionId: id,

@@ -598,6 +598,9 @@
               }
             }
           },
+          "400": {
+            "description": "Session is not started"
+          },
           "404": {
             "description": "Session not found"
           }

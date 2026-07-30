@@ -1286,6 +1286,36 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  // A deliberate logout() also raises this event: client.logout() triggers the in-page Cmd 'logout'
+  // → framenavigated → DISCONNECTED 'LOGOUT' while the adapter is still awaiting it. The unlink is
+  // already acknowledged by the API response and the session service writes DISCONNECTED itself, so
+  // the handler must stay silent — mirroring the puppeteer-death gate. A WhatsApp-initiated unlink
+  // arrives with tearingDown=false and still flows through (the tests above).
+  it('does not report a disconnected event raised by a deliberate logout()', async () => {
+    let settleLogout: () => void = () => undefined;
+    const logout = jest.fn(
+      () =>
+        new Promise<void>(resolve => {
+          settleLogout = resolve;
+        }),
+    );
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter, {
+      logout,
+      destroy: jest.fn().mockResolvedValue(undefined),
+    });
+    const onDisconnected = jest.fn();
+    (adapter as unknown as { callbacks: { onDisconnected: jest.Mock } }).callbacks.onDisconnected = onDisconnected;
+
+    const logoutCall = adapter.logout();
+    client.emit('disconnected', 'LOGOUT'); // the in-page Socket.logout() raises this mid-flight
+    settleLogout();
+    await logoutCall;
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+  });
+
   // The same #982 window for 'authenticated': the re-injected client can re-authenticate on the browser
   // that is about to be replaced. Reviving to AUTHENTICATING would also re-arm the 90s ready-reconcile
   // probe against it.
@@ -4430,7 +4460,19 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         expect(adapter.getStatus()).toBe(EngineStatus.READY);
         expect(onActionRequired).not.toHaveBeenCalled();
 
-        // Third click on a modal that is still there — the click is not landing, a human must act.
+        // Clicks three and four still fit a multi-step "What's new" flow being clicked through one
+        // screen per tick — not yet evidence the modal is stuck.
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
+        await jest.advanceTimersByTimeAsync(5100);
+        expect(adapter.getStatus()).toBe(EngineStatus.READY);
+        expect(onActionRequired).not.toHaveBeenCalled();
+
+        // Fifth click on a modal that is still there — the click is not landing, a human must act.
         evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
         await jest.advanceTimersByTimeAsync(5100);
 
@@ -4554,7 +4596,7 @@ describe('WhatsAppWebJsAdapter honest outcomes (no phantom success)', () => {
         await jest.advanceTimersByTimeAsync(2100);
 
         // Drive it to the fallback the only way that reaches it: clicks that keep failing to land.
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 5; i++) {
           evaluate.mockResolvedValueOnce({ modalPresent: true, dismissed: true } satisfies ModalProbe);
           await jest.advanceTimersByTimeAsync(5100);
         }

@@ -245,21 +245,33 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
  * its late result swallowed (no unhandledRejection). Wrapping the rejection keeps every resolution
  * failure typed, so callers map it to a 4xx instead of leaking a raw DNS error as a generic 500.
  */
-async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
+async function lookupWithDeadline(host: string, signal?: AbortSignal | null): Promise<LookupAddress[]> {
+  // An abort that already fired between hops burns no DNS query at all.
+  if (signal?.aborted) throw signal.reason;
   const lookupPromise = lookup(host, { all: true });
   lookupPromise.catch(() => undefined); // swallow a late rejection if the deadline already fired
   let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new SsrfBlockedError(`Timed out resolving host: ${host}`)), resolveDnsTimeoutMs());
+    if (signal) {
+      // Reject with the signal's own reason — for AbortSignal.timeout that is the same TimeoutError
+      // a fetch-phase abort produces. Never an SsrfBlockedError: a caller timeout is not an SSRF
+      // block, and the redaction layer must not rewrite it into "destination not allowed".
+      onAbort = () => reject(signal.reason as Error);
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
   });
   try {
     return await Promise.race([lookupPromise, deadline]);
   } catch (err) {
+    if (signal?.aborted) throw signal.reason; // the caller's abort wins over a simultaneous DNS error
     if (err instanceof SsrfBlockedError) throw err; // deadline already produced a typed error
     const code = (err as NodeJS.ErrnoException)?.code;
     throw new SsrfBlockedError(`Could not resolve host: ${host}${code ? ` (${code})` : ''}`);
   } finally {
     if (timer) clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -275,7 +287,10 @@ async function lookupWithDeadline(host: string): Promise<LookupAddress[]> {
  * unpinned, since the operator opts in to whatever its DNS returns) or a literal IP (no DNS, so no
  * rebind is possible — fetch connects straight to the validated literal).
  */
-export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddress[] | null> {
+export async function resolveSafeFetchTarget(
+  rawUrl: string,
+  signal?: AbortSignal | null,
+): Promise<LookupAddress[] | null> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -300,7 +315,7 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
     return null; // literal IP — fetch connects directly, nothing to rebind
   }
 
-  const resolved = await lookupWithDeadline(host);
+  const resolved = await lookupWithDeadline(host, signal);
   if (resolved.length === 0) {
     throw new SsrfBlockedError(`Could not resolve host: ${host}`);
   }
@@ -316,8 +331,8 @@ export async function resolveSafeFetchTarget(rawUrl: string): Promise<LookupAddr
  * Backwards-compatible assertion form: validate the URL (used at webhook registration time, where
  * only the throw/no-throw outcome matters).
  */
-export async function assertSafeFetchUrl(rawUrl: string): Promise<void> {
-  await resolveSafeFetchTarget(rawUrl);
+export async function assertSafeFetchUrl(rawUrl: string, signal?: AbortSignal | null): Promise<void> {
+  await resolveSafeFetchTarget(rawUrl, signal);
 }
 
 /**
@@ -444,7 +459,7 @@ export async function withSafeFetch<T>(
     let hopInit = init;
     let sawSecureHop = false;
     for (let hop = 0; ; hop++) {
-      const target = await resolveSafeFetchTarget(currentUrl);
+      const target = await resolveSafeFetchTarget(currentUrl, init.signal);
       // Parsed already by resolveSafeFetchTarget above, so this cannot throw.
       const current = new URL(currentUrl);
       initialOrigin ??= current.origin;
@@ -479,7 +494,7 @@ export async function withSafeFetch<T>(
     }
   }
 
-  const target = await resolveSafeFetchTarget(rawUrl);
+  const target = await resolveSafeFetchTarget(rawUrl, init.signal);
   const dispatcher = target ? new Agent({ connect: { lookup: pinnedLookup(target) } }) : undefined;
   try {
     const response = await undiciFetch(rawUrl, { ...init, redirect: 'manual', dispatcher });

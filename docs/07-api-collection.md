@@ -148,7 +148,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/logout" \
 
 #### POST /api/sessions/:id/force-kill
 
-Force-kill a stuck session (OPERATOR).
+Force-kill a stuck session (OPERATOR). Returns `400` when the session is not started (there is no live engine to kill).
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/force-kill" \

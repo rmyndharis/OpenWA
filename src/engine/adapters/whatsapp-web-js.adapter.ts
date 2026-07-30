@@ -303,8 +303,10 @@ const ONBOARDING_MODAL_MAX_LIFETIME_MS = 5 * 60_000;
 const ONBOARDING_MODAL_PROBE_TIMEOUT_MS = 5_000;
 // Clicking Continue dismisses the modal, so one click is the normal case and the next tick finds
 // nothing. Repeated clicks mean the click is not landing — the only evidence that actually justifies
-// asking a human to intervene.
-const ONBOARDING_MODAL_MAX_DISMISS_CLICKS = 3;
+// asking a human to intervene. Five, not three: a multi-step "What's new" flow is clicked through
+// one screen per tick, and three screens inside one watcher run must not read as a stuck modal.
+// Five failed clicks still trips in ~25s — far inside the lifetime cap and the ~5m unlink deadline.
+const ONBOARDING_MODAL_MAX_DISMISS_CLICKS = 5;
 
 /**
  * In-page probe for the onboarding modal: click its Continue button if it is on screen.
@@ -928,6 +930,13 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('call', call => this.handleIncomingCall(call));
 
     this.client.on('disconnected', reason => {
+      // A deliberate teardown (logout/disconnect/destroy/forceDestroy via beginClientTeardown) also
+      // raises this event: client.logout() triggers the in-page Cmd 'logout' → framenavigated →
+      // DISCONNECTED 'LOGOUT' while we are still awaiting it. The unlink is already acknowledged by
+      // the API response and the session service writes DISCONNECTED itself, so report nothing here
+      // (mirrors the puppeteer-death gate). A WhatsApp-initiated unlink arrives with
+      // tearingDown=false and still flows through.
+      if (this.tearingDown) return;
       this.clearReadyReconcile();
       // #982: LOGOUT is not a transient drop. whatsapp-web.js emits it when WhatsApp Web itself ran a
       // logout (its in-page `Cmd` logout bus), and by then it has ALREADY deleted this session's

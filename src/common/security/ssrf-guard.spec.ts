@@ -10,6 +10,7 @@ import {
   withSafeFetch,
 } from './ssrf-guard';
 import * as dnsPromises from 'dns/promises';
+import { getEventListeners } from 'node:events';
 import { fetch as undiciFetch, Agent, Headers } from 'undici';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -636,6 +637,77 @@ describe('withSafeFetch (guarded + pinned fetch)', () => {
     } finally {
       destroy.mockRestore();
     }
+  });
+});
+
+describe('withSafeFetch DNS phase honors the caller abort signal', () => {
+  afterEach(() => {
+    (undiciFetch as jest.Mock).mockReset();
+  });
+
+  it('a pre-aborted signal skips DNS entirely and rejects with the abort reason', async () => {
+    const lookupSpy = dnsPromises.lookup as jest.Mock;
+    lookupSpy.mockClear();
+    const signal = AbortSignal.abort(new Error('already dead'));
+
+    await expect(
+      withSafeFetch('https://plugins.example.com/p.zip', { signal }, jest.fn(), { followRedirects: true }),
+    ).rejects.toThrow('already dead');
+    expect(lookupSpy).not.toHaveBeenCalled();
+  });
+
+  it('a wedged DNS lookup is cut by the caller timeout, not by the 10s DNS deadline', async () => {
+    (dnsPromises.lookup as jest.Mock).mockReturnValueOnce(new Promise<never>(() => undefined)); // never settles
+    const use = jest.fn();
+
+    const started = Date.now();
+    await expect(
+      withSafeFetch('https://plugins.example.com/p.zip', { signal: AbortSignal.timeout(30) }, use, {
+        followRedirects: true,
+      }),
+    ).rejects.toThrow(/aborted due to timeout/i);
+    expect(Date.now() - started).toBeLessThan(1000); // ~30ms — not the 10s DNS deadline
+    expect(use).not.toHaveBeenCalled();
+  });
+
+  it('a signal fired mid-chain ends the loop at the next hop resolve', async () => {
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]) // hop 0 resolves
+      .mockReturnValueOnce(new Promise<never>(() => undefined)); // hop 1 DNS wedges
+    (undiciFetch as jest.Mock).mockResolvedValueOnce({
+      status: 302,
+      type: 'basic',
+      headers: new Map([['location', 'https://cdn.example.com/p.zip']]),
+    });
+    const use = jest.fn();
+
+    await expect(
+      withSafeFetch('https://github.com/x/p.zip', { signal: AbortSignal.timeout(30) }, use, {
+        followRedirects: true,
+      }),
+    ).rejects.toThrow(/aborted due to timeout/i);
+    expect(undiciFetch as jest.Mock).toHaveBeenCalledTimes(1); // hop 1 never fetched
+  });
+
+  it('removes its abort listener once each hop settles (no listener accumulation across a chain)', async () => {
+    const controller = new AbortController();
+    (dnsPromises.lookup as jest.Mock)
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }])
+      .mockResolvedValueOnce([{ address: '93.184.216.34', family: 4 }]);
+    (undiciFetch as jest.Mock)
+      .mockResolvedValueOnce({
+        status: 302,
+        type: 'basic',
+        headers: new Map([['location', 'https://cdn.example.com/p.zip']]),
+      })
+      .mockResolvedValueOnce({ status: 200, type: 'basic' });
+    const use = jest.fn(() => 'ok');
+
+    await withSafeFetch('https://github.com/x/p.zip', { signal: controller.signal }, use, {
+      followRedirects: true,
+    });
+
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
   });
 });
 

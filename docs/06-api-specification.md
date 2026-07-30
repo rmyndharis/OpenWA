@@ -536,6 +536,11 @@ which happened:
   unlink would. `start` waits for that cleanup to settle before re-creating the profile, so the
   outcome is consistent either way — but plan for a re-scan after a deadline-hit 502.
 
+With `AUTO_START_SESSIONS=true`, a session whose unlink was not confirmed keeps its credentials and
+is auto-started again on boot (the "start and retry" flow, automated) — delete it if it must stay
+down. A confirmed logout is skipped on boot: its credentials are gone, so it can only come back via
+a fresh QR scan.
+
 **Auth:** API key (OPERATOR)  ·  **Scope:** session-scoped
 
 **Path parameters**
@@ -601,7 +606,7 @@ No request body.
 
 Returned via `transformSession`.
 
-**Errors:** `401` · `403` · `404` not found
+**Errors:** `400` session is not started (no live engine to kill) · `401` · `403` · `404` not found
 
 #### POST /api/sessions/:id/pairing-code
 
@@ -5148,7 +5153,7 @@ These are the events OpenWA actually emits. A webhook is registered with an `eve
 | `message.edited` | A message body or media caption is edited | `{ messageId, chatId, body, senderId, from, to, fromMe, isGroup, type, hasMedia, author?, mentionedIds?, timestamp }` — `messageId` is the original message id, `body` is the latest text/caption, and `timestamp` is the edit occurrence time in epoch **seconds** (not the original creation time) |
 | `session.qr` | A new pairing QR is generated | `{ sessionId, qr }` (raw QR string) |
 | `session.authenticated` | The session pairs and becomes ready | `{ sessionId, phone, pushName }` |
-| `session.disconnected` | The session disconnects | `{ sessionId, reason }` |
+| `session.disconnected` | The session disconnects on the engine or WhatsApp side (drop, conflict, or a phone-initiated unlink). Not fired for API-initiated stop/logout/delete — those are acknowledged by the API response and the `session.status` transition | `{ sessionId, reason }` |
 | `session.reconnect_loop` | Every 5th consecutive reconnect attempt is scheduled (attempt 5, 10, 15, …) — the session is failing to come back up | `{ sessionId, attempts, nextDelayMs }` |
 | `session.status` | The session status transitions | `{ sessionId, status }` where `status` is one of `created` / `initializing` / `qr_ready` / `authenticating` / `ready` / `disconnected` / `action_required` / `failed` |
 | `group.join` | Participant(s) are added to or join a group this session is in | `{ groupId, actorId?, participantIds, timestamp }` — `actorId` is the admin/inviter when known |
