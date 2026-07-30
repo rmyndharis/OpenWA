@@ -27,6 +27,7 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { decideReconnect, clampReconnectDelay, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLidResolver } from './session-lid-resolver.service';
+import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
@@ -85,16 +86,6 @@ const RECONNECT_BASE_DELAY_MIN_MS = 1000;
 const RECONNECT_BASE_DELAY_MAX_MS = 300_000;
 const RECONNECT_MAX_ATTEMPTS_CAP = 20;
 /**
- * Session liveness watchdog. The engine layer is event-driven, so an engine that dies WITHOUT
- * firing an event (a silent Chromium crash) is never noticed: the row sits READY forever and never
- * reconnects. Every INTERVAL the watchdog actively probes each READY engine (feature-detected
- * `probeLiveness`, raced against TIMEOUT); MAX_FAILURES consecutive failures route the session
- * through the exact engine-disconnect path.
- */
-export const SESSION_WATCHDOG_INTERVAL_MS = 60_000;
-export const SESSION_WATCHDOG_PROBE_TIMEOUT_MS = 15_000;
-export const SESSION_WATCHDOG_MAX_FAILURES = 2;
-/**
  * Delay before retrying an ack UPDATE that matched 0 rows. A fast delivered/read ack can arrive before
  * the send's 2nd save (which writes waMessageId) has committed, so the first UPDATE finds no row. One
  * retry after this delay closes that race; the forward-only transition guard keeps it idempotent.
@@ -124,6 +115,11 @@ export function resolveReconnectConfig(
 }
 
 export { clampReconnectDelay };
+export {
+  SESSION_WATCHDOG_INTERVAL_MS,
+  SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
+  SESSION_WATCHDOG_MAX_FAILURES,
+} from './session-liveness-watchdog.service';
 
 export function resolveMaxConcurrentSessions(configService?: Pick<ConfigService, 'get'>): number | null {
   const configured = configService?.get<number>('sessions.maxConcurrent', 0) ?? 0;
@@ -181,14 +177,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
-
-  // Consecutive liveness-probe failures per session (watchdog). Reset on a successful probe, on a
-  // non-READY tick, on onReady, and when the threshold routes the session to the disconnect path.
-  private readonly livenessFailures = new Map<string, number>();
-
-  // The single watchdog interval handle. Unref'd so it never keeps the process alive on its own;
-  // cleared (and nulled) in onModuleDestroy, so teardown stays idempotent.
-  private watchdogTimer: NodeJS.Timeout | null = null;
 
   // Last session.status value broadcast per session. Some engines signal one transition via BOTH
   // onStateChanged and a dedicated callback (onQRCode/onDisconnected), so this guards both the WS emit
@@ -265,6 +253,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly engineFactory: EngineFactory,
     private readonly engineRegistry: EngineRegistry,
     private readonly lidResolver: SessionLidResolver,
+    private readonly watchdog: SessionLivenessWatchdog,
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
@@ -307,7 +296,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   async onApplicationBootstrap(): Promise<void> {
     // Start the liveness watchdog FIRST: it must run even when auto-start is disabled (sessions can
     // be started via the API at any time), so it can't sit behind the auto-start early-return below.
-    this.startWatchdog();
+    // The watchdog owns the probe cadence and failure counting; a session it proves dead comes
+    // back through the same disconnect path an engine-reported drop uses.
+    this.watchdog.start((id, engine, reason) => this.handleEngineDisconnected(id, engine, reason));
 
     if (!resolveFeatureFlags(this.configService).autoStartSessions) return;
 
@@ -346,12 +337,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   async onModuleDestroy(): Promise<void> {
     // Stop the watchdog FIRST (before any teardown below can hang): no new probe/disconnect handling
-    // may start mid-shutdown. Nulling the handle keeps a second onModuleDestroy call safe.
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer);
-      this.watchdogTimer = null;
-    }
-    this.livenessFailures.clear();
+    // may start mid-shutdown. stop() is idempotent, so a second onModuleDestroy call stays safe.
+    this.watchdog.stop();
 
     // Stop reconnect timers FIRST so nothing reschedules mid-teardown, and so this always runs even
     // if an engine.destroy() below hangs or throws.
@@ -1187,7 +1174,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
           reconnectState.attempts = 0;
         }
         // A fresh READY stretch starts the watchdog's failure budget clean too.
-        this.livenessFailures.delete(id);
+        this.watchdog.clear(id);
         this.sessionErrors.delete(id);
         // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
         // one-shot recovery budget is re-armed for a future episode.
@@ -2107,129 +2094,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     // Attempt to reconnect
     this.scheduleReconnect(id, session);
-  }
-
-  /** Start the liveness watchdog (idempotent). One unref'd interval probes every registered engine. */
-  private startWatchdog(): void {
-    if (this.watchdogTimer) return;
-    this.watchdogTimer = setInterval(() => {
-      // allSettled inside the tick keeps a failing session from ever throwing into the timer.
-      void this.runWatchdogTick();
-    }, SESSION_WATCHDOG_INTERVAL_MS);
-    // The watchdog must never keep the process alive on its own.
-    this.watchdogTimer.unref();
-  }
-
-  /** Probe all live engines in parallel; a slow/failed probe must not delay or abort the others. */
-  private async runWatchdogTick(): Promise<void> {
-    // Mid-shutdown the disconnect path would schedule a reconnect racing onModuleDestroy's teardown
-    // (same guard as scheduleReconnect) — leave the sessions to the drain instead.
-    if (this.shutdownService?.isShuttingDown()) {
-      return;
-    }
-    await Promise.allSettled([...this.engines].map(([id, engine]) => this.probeSessionLiveness(id, engine)));
-  }
-
-  /**
-   * Actively probe one engine. Only READY sessions are expected to answer (anything else is owned by
-   * the QR/reconnect flows); engines without `probeLiveness` keep relying on engine events alone.
-   * MAX_FAILURES consecutive failures treat the session exactly like an engine-reported disconnect.
-   *
-   * ACTION_REQUIRED is probed too, but OBSERVE-ONLY: the engine is still running and a human has to
-   * act, and clearing that status is theirs to do (stop, then start). Acting on a failed probe would
-   * hand the session to the reconnect path and silently drop the very status that asked for
-   * attention — so the probe result only reaches the log. Without probing at all, a page that dies
-   * while waiting for the operator left no trace anywhere, which is what this closes.
-   */
-  private async probeSessionLiveness(id: string, engine: IWhatsAppEngine): Promise<void> {
-    const status = engine.getStatus();
-    const observeOnly = status === EngineStatus.ACTION_REQUIRED;
-    if (status !== EngineStatus.READY && !observeOnly) {
-      // Not expected to answer right now — and any accrued failures belong to a previous READY
-      // stretch, so the next one starts clean. This also self-cleans the observe-only counter below:
-      // every path out of ACTION_REQUIRED passes through a status that lands here (or through
-      // onReady, which clears it), so an observe-only count can never be inherited by a READY
-      // stretch and push it over MAX_FAILURES early.
-      this.livenessFailures.delete(id);
-      return;
-    }
-    // Feature-detect: an engine whose transport already self-detects death may skip the probe.
-    if (typeof engine.probeLiveness !== 'function') {
-      return;
-    }
-
-    // A wedged connection can hang the probe itself, so race it against a timeout; a timeout or a
-    // probe error both count as "not proven alive".
-    let alive: boolean;
-    let probeTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      alive = await Promise.race([
-        engine.probeLiveness(),
-        new Promise<never>((_, reject) => {
-          probeTimer = setTimeout(
-            () => reject(new Error('liveness probe timed out')),
-            SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } catch {
-      alive = false;
-    } finally {
-      if (probeTimer) clearTimeout(probeTimer);
-    }
-
-    // The session may have been stopped/restarted (engine superseded) while the probe was in flight;
-    // a stale result must not touch it (mirrors the isLiveEngine gate on engine callbacks).
-    if (!this.isLiveEngine(id, engine)) {
-      return;
-    }
-
-    if (alive) {
-      // Note a recovery on the observe-only path, so the log shows the page came back rather than
-      // leaving the earlier warning as the last word.
-      if (observeOnly && this.livenessFailures.has(id)) {
-        this.logger.log('Liveness probe answering again while the session awaits operator action', {
-          sessionId: id,
-          action: 'watchdog_probe_recovered',
-        });
-      }
-      this.livenessFailures.delete(id);
-      return;
-    }
-
-    const failures = (this.livenessFailures.get(id) ?? 0) + 1;
-    if (observeOnly) {
-      this.livenessFailures.set(id, failures);
-      // One warning per unresponsive stretch, not one per tick: a session can sit in
-      // ACTION_REQUIRED until a human gets to it, and at a 60s interval an unbounded log would bury
-      // everything else. The count keeps rising so the recovery branch above can tell it happened.
-      if (failures === 1) {
-        this.logger.warn(
-          'Liveness probe failed while the session awaits operator action; not reconnecting it — ' +
-            'the status is operator-owned. If the page is gone, stop and start the session.',
-          { sessionId: id, action: 'watchdog_probe_failed_observe_only' },
-        );
-      }
-      return;
-    }
-
-    if (failures < SESSION_WATCHDOG_MAX_FAILURES) {
-      this.livenessFailures.set(id, failures);
-      this.logger.warn('Liveness probe failed; will treat the session as dead after repeated failures', {
-        sessionId: id,
-        failures,
-        action: 'watchdog_probe_failed',
-      });
-      return;
-    }
-
-    this.livenessFailures.delete(id);
-    this.logger.warn('Liveness probe failed repeatedly; handling the session as disconnected', {
-      sessionId: id,
-      failures,
-      action: 'watchdog_disconnect',
-    });
-    await this.handleEngineDisconnected(id, engine, 'liveness probe failed (watchdog)');
   }
 
   private scheduleReconnect(id: string, session: Session): void {

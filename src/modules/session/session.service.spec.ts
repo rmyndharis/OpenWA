@@ -27,6 +27,7 @@ import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
+import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
@@ -205,6 +206,7 @@ describe('SessionService', () => {
         // exactly what the stale-callback tests below exercise. Its own unit tests cover it directly.
         EngineRegistry,
         SessionLidResolver,
+        SessionLivenessWatchdog,
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
@@ -1637,11 +1639,14 @@ describe('SessionService', () => {
         string,
         { attempts: number; timer: NodeJS.Timeout | null; maxAttempts: number; baseDelay: number }
       >;
-      livenessFailures: Map<string, number>;
-      watchdogTimer: NodeJS.Timeout | null;
+      // The probe cadence and failure counting now live in SessionLivenessWatchdog; these tests
+      // still drive them end-to-end through SessionService, so they reach the collaborator's state
+      // rather than the service's own.
+      watchdog: { failures: Map<string, number>; timer: NodeJS.Timeout | null };
       scheduleReconnect: (id: string, session: Session) => void;
     };
     const internals = (): WatchdogInternals => service as unknown as WatchdogInternals;
+    const livenessFailures = (): Map<string, number> => internals().watchdog.failures;
 
     // Auto-start is OFF in these tests — the watchdog must start regardless.
     const originalFlag = process.env.AUTO_START_SESSIONS;
@@ -1790,7 +1795,7 @@ describe('SessionService', () => {
           expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
         );
         // The count keeps rising so a later recovery can be distinguished from "never failed".
-        expect(internals().livenessFailures.get('sess-uuid-1')).toBeGreaterThan(SESSION_WATCHDOG_MAX_FAILURES);
+        expect(livenessFailures().get('sess-uuid-1')).toBeGreaterThan(SESSION_WATCHDOG_MAX_FAILURES);
       } finally {
         jest.clearAllTimers();
         jest.useRealTimers();
@@ -1807,8 +1812,10 @@ describe('SessionService', () => {
           probeLiveness: jest.fn().mockResolvedValue(false),
         };
         seedReadySession(engine);
+        // The observe-only warning is emitted by the watchdog collaborator, which carries its own
+        // logger; the behaviour under test (one warning per stretch) is unchanged.
         const warnSpy = jest.spyOn(
-          (service as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger,
+          (internals().watchdog as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger,
           'warn',
         );
 
@@ -1839,12 +1846,12 @@ describe('SessionService', () => {
 
         await service.onApplicationBootstrap();
         await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS); // tick 1: probe hangs
-        expect(internals().livenessFailures.get('sess-uuid-1')).toBeUndefined(); // not counted yet
+        expect(livenessFailures().get('sess-uuid-1')).toBeUndefined(); // not counted yet
         await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_PROBE_TIMEOUT_MS); // 15s → timeout failure
-        expect(internals().livenessFailures.get('sess-uuid-1')).toBe(1);
+        expect(livenessFailures().get('sess-uuid-1')).toBe(1);
 
         await jest.advanceTimersByTimeAsync(SESSION_WATCHDOG_INTERVAL_MS); // tick 2: success
-        expect(internals().livenessFailures.get('sess-uuid-1')).toBeUndefined(); // counter reset
+        expect(livenessFailures().get('sess-uuid-1')).toBeUndefined(); // counter reset
       } finally {
         jest.clearAllTimers();
         jest.useRealTimers();
@@ -1855,11 +1862,11 @@ describe('SessionService', () => {
       jest.useFakeTimers();
       try {
         await service.onApplicationBootstrap();
-        expect(internals().watchdogTimer).not.toBeNull();
+        expect(internals().watchdog.timer).not.toBeNull();
         expect(jest.getTimerCount()).toBe(1); // the interval itself
 
         await service.onModuleDestroy();
-        expect(internals().watchdogTimer).toBeNull();
+        expect(internals().watchdog.timer).toBeNull();
         expect(jest.getTimerCount()).toBe(0);
 
         await expect(service.onModuleDestroy()).resolves.toBeUndefined(); // safe to call twice
