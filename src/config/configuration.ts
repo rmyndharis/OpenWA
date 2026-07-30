@@ -17,6 +17,29 @@ export function resolveNonNegativeIntEnv(raw: string | undefined, fallback: numb
   return Number(trimmed);
 }
 
+/**
+ * The UI locale Chromium is pinned to. WhatsApp Web renders its chrome — including the new-account
+ * onboarding modal the whatsapp-web.js adapter dismisses (#982) — in the browser's language, and that
+ * detector matches visible English text. Without a pin the language is whatever the launched binary
+ * defaults to, which differs between the amd64 (Chrome for Testing) and arm64 (Debian chromium) images
+ * and between host installs.
+ */
+export const PINNED_BROWSER_LOCALE = 'en-US';
+
+/**
+ * Append the locale pin unless the operator already set one. Deliberately applied AFTER the
+ * PUPPETEER_ARGS override rather than baked into the default string: that variable REPLACES the
+ * defaults, so a deployment that customises args for an unrelated reason would otherwise silently
+ * lose the pin and the onboarding detector with it. An explicit `--lang` always wins.
+ *
+ * Returns a NEW array — never mutates the input — because the resolved args object is shared by every
+ * session, and pushing per-session flags onto a shared array leaked proxy settings across sessions
+ * once already (#840).
+ */
+export function withPinnedBrowserLocale(args: string[]): string[] {
+  return args.some(arg => arg.startsWith('--lang')) ? [...args] : [...args, `--lang=${PINNED_BROWSER_LOCALE}`];
+}
+
 export default () => ({
   port: parseInt(process.env.PORT || '2785', 10),
 
@@ -136,11 +159,11 @@ export default () => ({
       // Accept either delimiter: .env/compose use commas, the dashboard Infrastructure form
       // persists space-separated. Splitting on both keeps each flag a discrete argv token —
       // a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox.
-      args: (
-        process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu'
-      )
-        .split(/[\s,]+/)
-        .filter(Boolean),
+      args: withPinnedBrowserLocale(
+        (process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu')
+          .split(/[\s,]+/)
+          .filter(Boolean),
+      ),
       // Optional path to a system Chromium/Chrome binary. When unset, whatsapp-web.js
       // uses Puppeteer's bundled Chromium. Required on hosts where the bundled binary
       // is missing or incompatible (Alpine, ARM, custom base images).

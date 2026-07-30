@@ -3,48 +3,41 @@
 
 import type { Session } from '../services/api.ts';
 
-// Statuses in which the API has an engine loaded for the session. This is the single source of truth
-// for the engine-backed actions — Stop, Unlink, and Force-Kill — because they share one precondition:
-// something live to act on. Keeping them on one set is what stops a card in one of these states from
-// offering an action the API rejects, and from offering Start to a session that is already started
-// (the API answers 400 and the page then opens a QR modal that can never resolve).
+// Stop, Unlink and Force-Kill share one precondition: the gateway holds a live engine to act on.
+// Start has the exact complement — it answers 400 while one exists. So all four derive from the
+// gateway's own `engineLoaded`, which is read from the live engine map per request. Deriving them
+// from `status` cannot be made correct: `disconnected` covers BOTH a session mid automatic-reconnect
+// (engine registered, Start 400s) and one stopped through stop() (no engine, Start is the right
+// action), and those are the same status.
 //
-// `authenticating` and `action_required` belong here: both hold a live engine — the whatsapp-web.js
-// adapter can sit in `authenticating` for 90 seconds, and `action_required` means the engine is
-// running but something needs a human. Without them a card in either state offered only Start.
-//
-// KNOWN GAP (pre-existing, needs a server-side signal to close): `disconnected` is deliberately NOT
-// here even though it can hold a live engine. handleEngineDisconnected writes DISCONNECTED and
-// schedules a reconnect WITHOUT evicting the engine, so one stays registered for the whole backoff —
-// and start() rejects with 400 "already started" while it is. But a session stopped via stop() is
-// also `disconnected` and has no engine, and that one legitimately needs Start. The two are
-// indistinguishable from status alone, so listing it here would break the stop/start path to fix the
-// backoff path. Closing this properly needs the session payload to expose whether an engine is
-// loaded; until then Stop over the API is the escape hatch for a session wedged mid-backoff.
-const STARTED_STATUSES = new Set([
+// The fallback below is for a dashboard talking to a gateway that predates the field. It reproduces
+// the old status set, whose known wrong answer is exactly that `disconnected` case — a stale
+// dashboard keeps the old behaviour instead of guessing differently.
+const STARTED_STATUSES_FALLBACK = new Set([
   'initializing',
-  'connecting',
   'qr_ready',
   'authenticating',
   'ready',
   'action_required',
 ]);
 
-export function isSessionStarted(status: string): boolean {
-  return STARTED_STATUSES.has(status);
+export function isSessionStarted(session: Pick<Session, 'status' | 'engineLoaded'>): boolean {
+  return session.engineLoaded ?? STARTED_STATUSES_FALLBACK.has(session.status);
 }
 
 // Unlink calls POST /sessions/:id/logout, which needs a live engine to send the unlink through — the
 // same precondition as Stop, and what the API's own 400 tells the operator.
-export function canUnlinkSession(status: string, canWrite: boolean): boolean {
-  return canWrite && isSessionStarted(status);
+export function canUnlinkSession(session: Pick<Session, 'status' | 'engineLoaded'>, canWrite: boolean): boolean {
+  return canWrite && isSessionStarted(session);
 }
 
 // Force-kill is the emergency hatch for a WEDGED engine, so it is offered exactly when a live engine
-// exists. It must NOT be offered for FAILED: a terminal failure already evicted the engine, so there
-// is nothing left to kill — the card offers reconnect/manual start instead.
-export function canForceKillSession(status: string, canWrite: boolean): boolean {
-  return canWrite && isSessionStarted(status);
+// exists. That excludes FAILED: a terminal failure already evicted the engine, so there is nothing
+// left to kill — the card offers reconnect/manual start instead. It now INCLUDES a `disconnected`
+// session still holding an engine through its reconnect backoff, which is precisely the wedged case
+// the button exists for and which the status-only rule used to hide.
+export function canForceKillSession(session: Pick<Session, 'status' | 'engineLoaded'>, canWrite: boolean): boolean {
+  return canWrite && isSessionStarted(session);
 }
 
 // Replace the row matching `updated.id` with the EXACT authoritative response object. The original

@@ -21,7 +21,7 @@ export function sessionTools(session: SessionService): ToolDescriptor[] {
       handler: (input: { limit?: number; offset?: number }, apiKey) =>
         session
           .findAll(apiKey.allowedSessions, { limit: input.limit, offset: input.offset })
-          .then(ss => ss.map(s => SessionResponseDto.fromEntity(s))),
+          .then(ss => ss.map(s => SessionResponseDto.fromEntity(s, session.isActive(s.id)))),
     },
     {
       name: 'SessionFindOne',
@@ -30,7 +30,7 @@ export function sessionTools(session: SessionService): ToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({ sessionId }),
       handler: (input: { sessionId: string }) =>
-        session.findOne(input.sessionId).then(s => SessionResponseDto.fromEntity(s)),
+        session.findOne(input.sessionId).then(s => SessionResponseDto.fromEntity(s, session.isActive(s.id))),
     },
     {
       name: 'SessionGetChats',

@@ -126,6 +126,7 @@ describe('FIX 2: session tools strip config + proxyUrl', () => {
   it('SessionFindOne output has no config or proxyUrl keys', async () => {
     const sessionSvc = {
       findOne: jest.fn().mockResolvedValue(entity),
+      isActive: jest.fn().mockReturnValue(false),
     } as unknown as SessionService;
 
     const tool = sessionTools(sessionSvc).find(t => t.name === 'SessionFindOne')!;
@@ -140,6 +141,7 @@ describe('FIX 2: session tools strip config + proxyUrl', () => {
   it('SessionFindAll output items have no config or proxyUrl keys', async () => {
     const sessionSvc = {
       findAll: jest.fn().mockResolvedValue([entity]),
+      isActive: jest.fn().mockReturnValue(false),
     } as unknown as SessionService;
 
     const tool = sessionTools(sessionSvc).find(t => t.name === 'SessionFindAll')!;
@@ -160,6 +162,7 @@ describe('FIX 5: empty sessionId is rejected at validation', () => {
   it('a sessionScoped tool rejects sessionId: "" with BadRequestException', async () => {
     const sessionSvc = {
       findOne: jest.fn().mockResolvedValue(stubSessionEntity()),
+      isActive: jest.fn().mockReturnValue(false),
     } as unknown as SessionService;
 
     const tool = sessionTools(sessionSvc).find(t => t.name === 'SessionFindOne')!;

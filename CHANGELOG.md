@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The session payload reports whether the gateway holds a live engine** (`engineLoaded`). This is the
+  precondition the lifecycle routes actually enforce, and `status` was never a reliable proxy for it:
+  `disconnected` means both "the engine is still registered while an automatic reconnect backs off,
+  and `start` therefore answers 400" and "the session was stopped and has no engine, so `start` is
+  exactly the right call". The dashboard now derives Stop, Unlink, Force-Kill and Start from the field
+  instead of guessing from the status, which closes the case where a session dropped mid-reconnect
+  offered only Start, got a 400, and then left a QR dialog open that could never resolve — and, in the
+  other direction, hid Force-Kill from precisely the wedged engine that button exists for. Added to
+  `openapi.json` and to the JavaScript, Python, Go and Java SDKs (the PHP SDK returns untyped arrays);
+  it is a new optional field on the response, so existing clients are unaffected. A dashboard served
+  by an older gateway falls back to the previous status-based rule rather than reading a missing field
+  as "no engine".
+
+- **The whatsapp-web.js onboarding modal can be dismissed on a non-English WhatsApp Web.** The detector
+  matches the modal's visible confirm label, which is `Continue` only while the page renders in
+  English. Two changes: Chromium is now launched with a pinned `--lang` so the page locale is
+  deterministic across the amd64 and arm64 images (an explicit `--lang` in `PUPPETEER_ARGS` still
+  wins, and the pin is applied even when that variable replaces the default flags — otherwise
+  customising args for an unrelated reason would silently drop it); and
+  `WWEBJS_ONBOARDING_CONTINUE_LABELS` accepts additional labels for a deployment whose modal is
+  localised anyway. An operator-supplied label is matched without the English heading check, which
+  would reject the very modal it targets; the default `Continue` keeps that check, so the
+  out-of-the-box false-positive surface is unchanged.
+
+### Fixed
+
+- **A WhatsApp-initiated logout that arrives during an unrelated teardown no longer hides its
+  credential removal.** whatsapp-web.js emits `disconnected: LOGOUT` and then runs
+  `authStrategy.logout()` → `fs.rm` of the session's profile directory, and that removal happens
+  regardless of what the adapter's listener does. The listener returned early whenever a teardown had
+  already latched — which `stop()`, `destroy()` and `force-kill` all do — so in that window the
+  in-flight removal was never registered, the name-keyed teardown fence saw nothing pending, and a
+  following `start()` under the same name could have its freshly written credentials deleted by it.
+  This is the same hazard the fence was built for, reached through a narrower window. The removal is
+  now surfaced before the latch check, and skipped only when the adapter's own `logout()` started it —
+  that path already registers the real `Client.logout()` promise, which covers the same removal.
+
+- **The dashboard no longer fabricates a session status after a start.** It wrote a local
+  `status: 'connecting'` — a value the gateway does not emit — while keeping every other field from
+  before the request, and used the authoritative response for nothing. It now applies the response as
+  returned, the same rule the stop and unlink paths already follow. A live status push also drops the
+  stale engine answer that arrived with it, and a `disconnected` push refreshes, because that status
+  alone cannot say which of its two meanings applies.
+
+- Removed two session statuses from the dashboard that the gateway never emits (`connecting`, `idle`),
+  along with the dead branches that tested for them.
+
 ## [0.12.0] - 2026-07-30
 
 The session-lifecycle security hardening release. Lifecycle endpoints, the

@@ -1,4 +1,8 @@
-import configuration, { resolveNonNegativeIntEnv } from './configuration';
+import configuration, {
+  PINNED_BROWSER_LOCALE,
+  resolveNonNegativeIntEnv,
+  withPinnedBrowserLocale,
+} from './configuration';
 
 describe('configuration — main DB synchronize', () => {
   const orig = process.env.MAIN_DATABASE_SYNCHRONIZE;
@@ -48,12 +52,14 @@ describe('configuration — Puppeteer args delimiter', () => {
   // (a single glued token like "--no-sandbox --disable-gpu" silently neuters --no-sandbox).
   it('splits space-separated PUPPETEER_ARGS into discrete flags (dashboard-written form)', () => {
     process.env.PUPPETEER_ARGS = '--no-sandbox --disable-gpu';
-    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-gpu']);
+    // The locale pin is appended after the split (see withPinnedBrowserLocale) — assert the split
+    // itself, not the whole list, so this test keeps testing the delimiter and nothing else.
+    expect(configuration().engine.puppeteer.args.slice(0, 2)).toEqual(['--no-sandbox', '--disable-gpu']);
   });
 
   it('still splits comma-separated PUPPETEER_ARGS (.env / docker-compose form)', () => {
     process.env.PUPPETEER_ARGS = '--no-sandbox,--disable-setuid-sandbox';
-    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
+    expect(configuration().engine.puppeteer.args.slice(0, 2)).toEqual(['--no-sandbox', '--disable-setuid-sandbox']);
   });
 
   it('defaults to the Docker-relevant sandbox flag set when unset', () => {
@@ -63,6 +69,7 @@ describe('configuration — Puppeteer args delimiter', () => {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      `--lang=${PINNED_BROWSER_LOCALE}`,
     ]);
   });
 });
@@ -305,5 +312,56 @@ describe('resolveNonNegativeIntEnv', () => {
     for (const bad of ['abc', '-1', '1.5', '1e6', '0x100']) {
       expect(resolveNonNegativeIntEnv(bad, 5000)).toBe(5000);
     }
+  });
+});
+
+// WhatsApp Web renders its chrome in the BROWSER's language, and the onboarding-modal detector (#982)
+// matches visible English text. Pinning the locale is what makes that match deterministic across the
+// amd64 (Chrome for Testing) and arm64 (Debian chromium) images and any host install.
+describe('withPinnedBrowserLocale', () => {
+  it('appends the pin when the args carry no --lang', () => {
+    expect(withPinnedBrowserLocale(['--no-sandbox'])).toEqual(['--no-sandbox', `--lang=${PINNED_BROWSER_LOCALE}`]);
+  });
+
+  it('leaves an operator-supplied --lang alone (theirs wins, and it is not duplicated)', () => {
+    expect(withPinnedBrowserLocale(['--no-sandbox', '--lang=de-DE'])).toEqual(['--no-sandbox', '--lang=de-DE']);
+    // `--lang` with no value, and the `--lang foo` spelling, both count as operator-supplied.
+    expect(withPinnedBrowserLocale(['--lang'])).toEqual(['--lang']);
+  });
+
+  it('never mutates the input array', () => {
+    // The resolved puppeteer args object is shared by every session; mutating it leaked one session's
+    // proxy flag into the others once already (#840).
+    const original = ['--no-sandbox'];
+    const result = withPinnedBrowserLocale(original);
+    expect(original).toEqual(['--no-sandbox']);
+    expect(result).not.toBe(original);
+  });
+});
+
+describe('configuration — puppeteer locale pin', () => {
+  const orig = process.env.PUPPETEER_ARGS;
+
+  afterEach(() => {
+    if (orig === undefined) delete process.env.PUPPETEER_ARGS;
+    else process.env.PUPPETEER_ARGS = orig;
+  });
+
+  it('pins the locale on the default args', () => {
+    delete process.env.PUPPETEER_ARGS;
+    expect(configuration().engine.puppeteer.args).toContain(`--lang=${PINNED_BROWSER_LOCALE}`);
+  });
+
+  // PUPPETEER_ARGS REPLACES the defaults, so applying the pin only to the default string would let any
+  // deployment that customises args for an unrelated reason silently lose the onboarding detector.
+  it('still pins the locale when the operator overrides PUPPETEER_ARGS', () => {
+    process.env.PUPPETEER_ARGS = '--no-sandbox,--disable-gpu';
+    const args = configuration().engine.puppeteer.args;
+    expect(args).toEqual(['--no-sandbox', '--disable-gpu', `--lang=${PINNED_BROWSER_LOCALE}`]);
+  });
+
+  it('respects an explicit --lang inside PUPPETEER_ARGS', () => {
+    process.env.PUPPETEER_ARGS = '--no-sandbox --lang=id-ID';
+    expect(configuration().engine.puppeteer.args).toEqual(['--no-sandbox', '--lang=id-ID']);
   });
 });

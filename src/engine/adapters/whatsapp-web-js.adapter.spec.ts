@@ -942,7 +942,18 @@ describe('WhatsAppWebJsAdapter credential-teardown observation', () => {
     return { client, onCredentialTeardownStarted };
   };
 
+  // clearLocalAuth() really removes `<sessionDataPath>/session-<sessionId>`, and these tests assert
+  // the registration contract rather than the removal itself. Stub the rm: unmocked, a developer whose
+  // machine happens to hold a session named 'sess-1' would have its WhatsApp credentials deleted just
+  // by running the suite — and force:true makes that silent.
+  let rmSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
+    rmSpy.mockRestore();
     jest.useRealTimers();
   });
 
@@ -997,16 +1008,81 @@ describe('WhatsAppWebJsAdapter credential-teardown observation', () => {
     expect(onCredentialTeardownStarted).not.toHaveBeenCalled();
   });
 
-  it('does not register a credential teardown for a deliberate (tearingDown) LOGOUT — the caller already owns that cleanup', () => {
-    // client.logout() during adapter.logout() also fires disconnected:LOGOUT; the adapter must not
-    // double-track (the explicit logout() path already registered the promise).
+  it('does not register a second credential teardown when THIS adapter started the logout', () => {
+    // client.logout() during adapter.logout() also fires disconnected:LOGOUT. That path already
+    // registered the real client.logout() promise, which covers the same rm, so the handler must not
+    // add a redundant stand-in. Keyed on logoutInitiated — NOT on tearingDown, which every teardown
+    // path sets (see the next test).
     const adapter = newAdapter();
     const { client, onCredentialTeardownStarted } = attach(adapter);
+    (adapter as unknown as { logoutInitiated: boolean }).logoutInitiated = true;
     (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
 
     client.emit('disconnected', 'LOGOUT');
 
     expect(onCredentialTeardownStarted).not.toHaveBeenCalled();
+  });
+
+  // The regression this pair guards: whatsapp-web.js runs authStrategy.logout() → fs.rm(userDataDir)
+  // whatever our listener does. If a stop()/destroy() has already latched the finished flags, an
+  // early return would hide that in-flight rm from the name fence, and a later start() under the same
+  // session name could have its freshly written profile deleted by it.
+  it('registers the credential teardown for a WhatsApp LOGOUT that lands after a stop/destroy set tearingDown', () => {
+    const adapter = newAdapter();
+    const { client, onCredentialTeardownStarted } = attach(adapter);
+    // disconnect()/destroy()/forceDestroy() all set this WITHOUT owning a credential teardown.
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    client.emit('disconnected', 'LOGOUT');
+
+    expect(onCredentialTeardownStarted).toHaveBeenCalledTimes(1);
+    const [tracked] = onCredentialTeardownStarted.mock.calls[0] as [Promise<void>];
+    expect(tracked).toBeInstanceOf(Promise);
+    // The registered promise is the profile removal itself, not an unrelated resolved promise — and
+    // asserting on the spy also proves the stub above is the fs call being made, not the real one.
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('session-sess-1'), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('registers the credential teardown for a WhatsApp LOGOUT that lands after a disconnect was already reported', () => {
+    const adapter = newAdapter();
+    const { client, onCredentialTeardownStarted } = attach(adapter);
+    // setStatus(DISCONNECTED) latches this on the first drop; a LOGOUT arriving afterwards still
+    // means the library is deleting the profile.
+    (adapter as unknown as { disconnectReported: boolean }).disconnectReported = true;
+
+    client.emit('disconnected', 'LOGOUT');
+
+    expect(onCredentialTeardownStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports nothing else for a latched LOGOUT — no status change and no onDisconnected', () => {
+    // Registering the rm must NOT resurrect the rest of the handler: a finished adapter still must
+    // not drive a status transition or schedule a reconnect for its replacement.
+    const adapter = newAdapter();
+    const client = Object.assign(new EventEmitter(), {
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    }) as FakeClient;
+    const onCredentialTeardownStarted = jest.fn();
+    const onDisconnected = jest.fn();
+    const onStateChanged = jest.fn();
+    (adapter as unknown as { client: unknown }).client = client;
+    (adapter as unknown as { callbacks: unknown }).callbacks = {
+      onCredentialTeardownStarted,
+      onDisconnected,
+      onStateChanged,
+    };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+    (adapter as unknown as { tearingDown: boolean }).tearingDown = true;
+
+    client.emit('disconnected', 'LOGOUT');
+
+    expect(onCredentialTeardownStarted).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(onStateChanged).not.toHaveBeenCalled();
   });
 });
 
@@ -5134,5 +5210,71 @@ describe('probeOnboardingModal (in-page onboarding modal detection)', () => {
   it('reports no modal on a page with nothing to click', () => {
     install([]);
     expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+  });
+
+  // ── Localised modal ─────────────────────────────────────────────────────────
+  // The match is on visible text, so a WhatsApp Web rendering this modal in another language is
+  // invisible to the English default. An operator can add their label; that path deliberately does not
+  // also require the English heading, which would reject the very modal it is meant to reach.
+
+  it('ignores a localised modal with the default English label — the pre-existing behaviour', () => {
+    const button = el('Continuar', { button: true });
+    nest(el('Novedades de WhatsApp Web'), button);
+    install([button]);
+
+    expect(probeOnboardingModal()).toEqual({ modalPresent: false, dismissed: false });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  it('clicks a localised confirm button when the operator supplied its label', () => {
+    const button = el('Continuar', { button: true });
+    nest(el('Novedades de WhatsApp Web'), button);
+    install([button]);
+
+    const result = probeOnboardingModal({
+      labels: ['Continue', 'Continuar'],
+      headingOptionalFor: ['Continuar'],
+    });
+
+    expect(result).toEqual({ modalPresent: true, dismissed: true });
+    expect(button.click).toHaveBeenCalledTimes(1);
+  });
+
+  // The loosening is scoped to the operator's own labels: the default label keeps its heading guard, so
+  // configuring an extra label cannot start matching stray "Continue" buttons elsewhere on the page.
+  it('still requires the heading for the default label even when extra labels are configured', () => {
+    const button = el('Continue', { button: true });
+    nest(el('some unrelated panel'), button);
+    install([button]);
+
+    const result = probeOnboardingModal({
+      labels: ['Continue', 'Continuar'],
+      headingOptionalFor: ['Continuar'],
+    });
+
+    expect(result).toEqual({ modalPresent: false, dismissed: false });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  it('never clicks a hidden localised button', () => {
+    const button = el('Continuar', { button: true, hidden: true });
+    install([button]);
+
+    expect(probeOnboardingModal({ labels: ['Continue', 'Continuar'], headingOptionalFor: ['Continuar'] })).toEqual({
+      modalPresent: false,
+      dismissed: false,
+    });
+    expect(button.click).not.toHaveBeenCalled();
+  });
+
+  it('matches the label exactly, so a longer string containing it is not a confirm button', () => {
+    const button = el('Continuar con la copia de seguridad', { button: true });
+    install([button]);
+
+    expect(probeOnboardingModal({ labels: ['Continue', 'Continuar'], headingOptionalFor: ['Continuar'] })).toEqual({
+      modalPresent: false,
+      dismissed: false,
+    });
+    expect(button.click).not.toHaveBeenCalled();
   });
 });

@@ -308,50 +308,78 @@ const ONBOARDING_MODAL_PROBE_TIMEOUT_MS = 5_000;
 // Five failed clicks still trips in ~25s — far inside the lifetime cap and the ~5m unlink deadline.
 const ONBOARDING_MODAL_MAX_DISMISS_CLICKS = 5;
 
+/** The modal's confirm-button label on an English WhatsApp Web. */
+const ONBOARDING_DEFAULT_CONTINUE_LABEL = 'Continue';
+
 /**
- * In-page probe for the onboarding modal: click its Continue button if it is on screen.
+ * Extra confirm-button labels for a deployment whose WhatsApp Web does not render this modal in
+ * English, comma-separated (`WWEBJS_ONBOARDING_CONTINUE_LABELS=Continuar,Weiter`).
+ *
+ * Needed because the match is on visible text and WhatsApp controls those strings — we are not going
+ * to carry its translation table. Read per probe, not cached, so an operator can correct a running
+ * deployment through the infra config without a restart.
+ *
+ * Supplying labels also drops the heading requirement for THOSE labels: the English heading regex
+ * would reject a localised modal anyway, so requiring both would make the setting useless. That is a
+ * deliberate, operator-opted-in loosening — see {@link probeOnboardingModal}.
+ */
+function resolveOnboardingContinueLabels(): string[] {
+  const extra = (process.env.WWEBJS_ONBOARDING_CONTINUE_LABELS ?? '')
+    .split(',')
+    .map(label => label.trim())
+    .filter(Boolean);
+  return [ONBOARDING_DEFAULT_CONTINUE_LABEL, ...extra];
+}
+
+/**
+ * In-page probe for the onboarding modal: click its confirm button if it is on screen.
  *
  * Exported and self-contained on purpose. `page.evaluate` stringifies this into the browser, so it
- * may not close over anything in this module — and being a plain function means the DOM matching can
- * be unit-tested directly, rather than only through a mocked `evaluate` that proves nothing about the
- * matching itself.
+ * may not close over anything in this module — every input arrives as an argument — and being a plain
+ * function means the DOM matching can be unit-tested directly, rather than only through a mocked
+ * `evaluate` that proves nothing about the matching itself.
  *
  * The BUTTON is the presence signal, never the heading text on its own. `textContent` on a `div`
  * concatenates every descendant, so a chat-list row previewing the words "what's new" — an ordinary
  * English message — satisfies a heading-only test. Treating that as a stuck modal would take a
  * perfectly healthy session out of READY and block every send. A visible control whose exact label is
- * "Continue", sitting within a few levels of an element that also carries the heading, is a shape the
- * chat list does not produce. The ancestor walk is bounded for the same reason: matching against
- * `<body>` would just be the loose text test again.
+ * the confirm label, sitting within a few levels of an element that also carries the heading, is a
+ * shape the chat list does not produce. The ancestor walk is bounded for the same reason: matching
+ * against `<body>` would just be the loose text test again.
  *
- * ENGLISH-ONLY, by decision: both the button label and the heading are matched as English strings, so
- * this only works while WhatsApp Web renders the modal in English. That language follows the browser
- * locale — which nothing here sets (no `--lang` in the launch args, no `Accept-Language` override), so
- * it is whatever the browser this deployment launches defaults to (`PUPPETEER_EXECUTABLE_PATH`, or
- * Puppeteer's bundled Chromium when that is unset), NOT something derived from the linked account.
- * Against a localised modal this returns `{modalPresent:false}` on every tick it runs: it is never
- * dismissed and the watcher never escalates — it just ages out at the lifetime cap — so that
- * deployment keeps the pre-#982 behaviour. Failing silent is
- * deliberate — the alternative is carrying WhatsApp's translation table for two strings it controls,
- * and a looser match (any visible button inside a dialog-ish container) would take healthy sessions
- * out of READY, which is strictly worse than not fixing the modal. Limitation is in the CHANGELOG.
+ * LANGUAGE. The default label and the heading are English, and the modal is rendered in whatever
+ * language WhatsApp Web decides. Two things address that, both defaulting to today's behaviour:
+ * the launch args pin `--lang` so the page has a deterministic locale, and an operator can add
+ * their own labels (see {@link resolveOnboardingContinueLabels}). An operator-supplied label matches
+ * WITHOUT the heading check — the English heading would reject a localised modal regardless, so
+ * requiring both would make the setting inert. The default `Continue` keeps the heading requirement,
+ * so the out-of-the-box false-positive surface is unchanged.
  */
-export function probeOnboardingModal(): { modalPresent: boolean; dismissed: boolean } {
+export function probeOnboardingModal(options?: { labels?: string[]; headingOptionalFor?: string[] }): {
+  modalPresent: boolean;
+  dismissed: boolean;
+} {
   const isVisible = (el: Element): boolean => {
     const rect = (el as HTMLElement).getBoundingClientRect();
     return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
   };
+  const labels = options?.labels?.length ? options.labels : ['Continue'];
+  const headingOptional = new Set(options?.headingOptionalFor ?? []);
   // Both apostrophes: WhatsApp Web renders the typographic U+2019, and an ASCII quote appears in
   // older builds. Matching only the ASCII form means never recognising the real modal.
   const heading = /what[’']?s new/i;
-  const buttons = Array.from(document.querySelectorAll('button, [role="button"]')).filter(
-    el => isVisible(el) && (el.textContent || '').trim() === 'Continue',
-  );
-  for (const button of buttons.reverse()) {
-    let scope: Element | null = button;
+  const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
+    .map(el => ({ el, label: (el.textContent || '').trim() }))
+    .filter(c => isVisible(c.el) && labels.includes(c.label));
+  for (const { el, label } of candidates.reverse()) {
+    if (headingOptional.has(label)) {
+      (el as HTMLElement).click();
+      return { modalPresent: true, dismissed: true };
+    }
+    let scope: Element | null = el;
     for (let depth = 0; depth < 8 && scope; depth++, scope = scope.parentElement) {
       if (!heading.test(scope.textContent || '')) continue;
-      (button as HTMLElement).click();
+      (el as HTMLElement).click();
       return { modalPresent: true, dismissed: true };
     }
   }
@@ -439,6 +467,12 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   // Set once teardown begins so a late 'authenticated' can't resurrect a disconnecting adapter. Not
   // reset — an adapter is single-use after teardown (the session creates a fresh one to reconnect).
   private tearingDown = false;
+  // Set by logout() before it starts the native unlink, which itself registers the real
+  // `client.logout()` promise as the credential teardown. The 'disconnected' LOGOUT handler consults
+  // this to avoid registering a second, redundant stand-in for the same profile rm — while still
+  // registering one for a WhatsApp-initiated logout, including one that lands after another teardown
+  // path has already latched the flags below.
+  private logoutInitiated = false;
   // Set once the adapter ACTIVELY transitions to DISCONNECTED (engine disconnect, puppeteer death,
   // stuck-auth recovery, teardown). Same single-use contract as `tearingDown`, but it latches earlier:
   // on LOGOUT whatsapp-web.js keeps the browser and re-runs inject(), while the lifecycle only replaces
@@ -962,13 +996,28 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.client.on('call', call => this.handleIncomingCall(call));
 
     this.client.on('disconnected', reason => {
+      // A LOGOUT means whatsapp-web.js is ABOUT to delete this session's profile: `Client.logout()`
+      // ends in `authStrategy.logout()` → `LocalAuth.logout()` → `fs.rm(userDataDir)`, and the
+      // library emits this event BEFORE that await (Client.js: emit DISCONNECTED 'LOGOUT', then
+      // `pupBrowser.close()`, then `authStrategy.logout()`). That rm happens whatever this listener
+      // does, so it MUST be surfaced to the lifecycle before the latch check below can drop out —
+      // otherwise a stop()/destroy() that latched first hides an in-flight rm, the name fence sees
+      // nothing pending, and a later start() under the same name can have its freshly written
+      // profile deleted by it (the #994 hazard, through a narrower window).
+      //
+      // Skipped only when THIS adapter's logout() started it: that path already registered the real
+      // `client.logout()` promise, which covers the same rm and settles no earlier.
+      if (reason === 'LOGOUT' && !this.logoutInitiated) {
+        // Idempotent stand-in for the library's own rm, which we cannot get a handle on:
+        // `fs.rm(force: true)` races it safely and gives the lifecycle something to await.
+        this.callbacks.onCredentialTeardownStarted?.(this.clearLocalAuth());
+      }
       // A deliberate teardown (logout/disconnect/destroy/forceDestroy via beginClientTeardown) also
       // raises this event: client.logout() triggers the in-page Cmd 'logout' → framenavigated →
       // DISCONNECTED 'LOGOUT' while we are still awaiting it. The unlink is already acknowledged by
       // the API response and the session service writes DISCONNECTED itself, so report nothing here
-      // (mirrors the puppeteer-death gate). The credential-teardown promise for that path was already
-      // registered by logout() itself, so do NOT double-register here. A WhatsApp-initiated unlink
-      // arrives with tearingDown=false and still flows through.
+      // (mirrors the puppeteer-death gate). A WhatsApp-initiated unlink arrives with
+      // tearingDown=false and still flows through to the status/callback below.
       //
       // setStatus(DISCONNECTED) below latches disconnectReported synchronously on the first event, so a
       // duplicate native 'disconnected' (whatsapp-web.js can fire it more than once for one drop) must
@@ -976,21 +1025,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // onDisconnected re-run and the lifecycle schedules a second reconnect.
       if (this.tearingDown || this.disconnectReported) return;
       this.clearReadyReconcile();
-      // #982: LOGOUT is not a transient drop. whatsapp-web.js emits it when WhatsApp Web itself ran a
-      // logout (its in-page `Cmd` logout bus). The library emits `disconnected: LOGOUT` BEFORE it
-      // awaits `authStrategy.logout()` (LocalAuth.logout() → fs.rm of this session's profile dir), so
-      // at this moment the credentials are ABOUT to be removed, not already gone. The lifecycle's
-      // reconnect cannot restore the link; it can only come back with a fresh QR. Say that here rather
-      // than leaving the operator with an opaque engine token that reads like any other drop.
+      // #982: LOGOUT is not a transient drop. The lifecycle's reconnect cannot restore the link; it
+      // can only come back with a fresh QR. Say that here rather than leaving the operator with an
+      // opaque engine token that reads like any other drop.
       if (reason === 'LOGOUT') {
-        // Surface the destructive credential cleanup to the lifecycle SYNCHRONOUSLY, before the event
-        // loop can run a start()/reconnect: the lib's authStrategy.logout() (the rm) is about to settle
-        // right after this handler returns. We can't grab the lib's internal promise, so the adapter
-        // runs its own idempotent clearLocalAuth() (fs.rm with force:true races the lib's rm safely) as
-        // the tracked operation. A concurrent start()/delete() under the SAME session name then sees the
-        // in-flight rm and waits for it instead of re-creating/purging credentials the rm is deleting.
-        const cleanup = this.clearLocalAuth();
-        this.callbacks.onCredentialTeardownStarted?.(cleanup);
         this.logger.warn(
           'WhatsApp unlinked this device (LOGOUT). whatsapp-web.js is deleting the stored credentials ' +
             'for this session, so reconnecting cannot restore the link — the session comes back with a ' +
@@ -1328,12 +1366,21 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
    */
   private async dismissOnboardingModalIfNeeded(): Promise<void> {
     if (!this.client) return;
-    const page = (this.client as unknown as { pupPage?: { evaluate: <T>(fn: () => T) => Promise<T> } }).pupPage;
+    const page = (
+      this.client as unknown as {
+        pupPage?: { evaluate: <T, A>(fn: (arg: A) => T, arg: A) => Promise<T> };
+      }
+    ).pupPage;
+
+    // Resolved out here, not inside the probe: the function body is stringified into the page, so it
+    // cannot read process.env. Operator-supplied labels skip the English heading check (see the probe).
+    const labels = resolveOnboardingContinueLabels();
+    const headingOptionalFor = labels.filter(label => label !== ONBOARDING_DEFAULT_CONTINUE_LABEL);
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
-        page?.evaluate(probeOnboardingModal),
+        page?.evaluate(probeOnboardingModal, { labels, headingOptionalFor }),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(
             () => reject(new Error('onboarding modal probe timed out')),
@@ -1604,6 +1651,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
   }
 
   async logout(): Promise<void> {
+    // Claim the LOGOUT credential registration before anything can emit 'disconnected': the native
+    // unlink below registers the real promise, so the event handler must not add a stand-in for it.
+    // Set even if there is no live client — the throw path sends nothing, so no event can arrive.
+    this.logoutInitiated = true;
     const client = this.beginClientTeardown();
     // No live client means there is nothing to send the unlink through. Resolving here would report a
     // confirmed unlink for a request that never reached WhatsApp — the caller writes an audit row on

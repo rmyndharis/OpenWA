@@ -27,15 +27,20 @@ export interface Session {
   name: string;
   status:
     | 'created'
-    | 'idle'
     | 'initializing'
-    | 'connecting'
     | 'authenticating'
     | 'qr_ready'
     | 'ready'
     | 'disconnected'
     | 'action_required'
     | 'failed';
+  /**
+   * Whether the gateway holds a live engine for this session right now. The precondition the
+   * lifecycle routes enforce, and not derivable from `status`: `disconnected` covers both a session
+   * mid automatic-reconnect (engine present, start 400s) and one stopped through stop() (no engine).
+   * Optional only because a dashboard can be served by a gateway that predates the field.
+   */
+  engineLoaded?: boolean;
   phone?: string | null;
   pushName?: string | null;
   lastActive?: string | null;

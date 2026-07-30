@@ -25,51 +25,75 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
-// Every status with a live engine must be "started": the card picks Stop vs Start from this, and
-// offering Start to a started session gets a 400 and then a QR modal that can never resolve.
-test('isSessionStarted: every status that holds a live engine counts as started', () => {
-  for (const status of ['initializing', 'connecting', 'qr_ready', 'authenticating', 'ready', 'action_required']) {
-    assert.equal(isSessionStarted(status), true, status);
+const ENGINE_BACKED_STATUSES = ['initializing', 'qr_ready', 'authenticating', 'ready', 'action_required'] as const;
+const ENGINELESS_STATUSES = ['created', 'failed'] as const;
+
+// The gateway's `engineLoaded` is authoritative: it is read from the live engine map per request, and
+// it is the precondition the lifecycle routes actually enforce. Status is not a proxy for it.
+test('isSessionStarted: engineLoaded decides, whatever the status says', () => {
+  for (const status of [...ENGINE_BACKED_STATUSES, ...ENGINELESS_STATUSES, 'disconnected'] as Session['status'][]) {
+    assert.equal(isSessionStarted(makeSession({ status, engineLoaded: true })), true, `${status} + engine`);
+    assert.equal(isSessionStarted(makeSession({ status, engineLoaded: false })), false, `${status} + no engine`);
   }
-  for (const status of ['created', 'idle', 'disconnected', 'failed']) {
-    assert.equal(isSessionStarted(status), false, status);
+});
+
+// The case that was unrepresentable before: `disconnected` means BOTH "mid automatic-reconnect, engine
+// still registered, start() answers 400" and "stopped, no engine, Start is the right action".
+test('isSessionStarted: a disconnected session mid-reconnect is started, a stopped one is not', () => {
+  const reconnecting = makeSession({ status: 'disconnected', engineLoaded: true });
+  const stopped = makeSession({ status: 'disconnected', engineLoaded: false });
+
+  assert.equal(isSessionStarted(reconnecting), true);
+  assert.equal(isSessionStarted(stopped), false);
+  // So the wedged one offers the recovery actions and does NOT offer Start.
+  assert.equal(canForceKillSession(reconnecting, true), true);
+  assert.equal(canUnlinkSession(reconnecting, true), true);
+  assert.equal(canForceKillSession(stopped, true), false);
+  assert.equal(canUnlinkSession(stopped, true), false);
+});
+
+// A gateway older than the field sends no engineLoaded; the helper must not read `undefined` as false
+// and hide every action. It falls back to the historical status set instead.
+test('isSessionStarted: falls back to the status set when the gateway omits engineLoaded', () => {
+  for (const status of ENGINE_BACKED_STATUSES) {
+    assert.equal(isSessionStarted(makeSession({ status, engineLoaded: undefined })), true, status);
+  }
+  for (const status of [...ENGINELESS_STATUSES, 'disconnected'] as Session['status'][]) {
+    assert.equal(isSessionStarted(makeSession({ status, engineLoaded: undefined })), false, status);
   }
 });
 
 test('canUnlinkSession: unlinkable is exactly started — Stop and Unlink share one precondition', () => {
-  for (const status of ['initializing', 'connecting', 'qr_ready', 'authenticating', 'ready', 'action_required']) {
-    assert.equal(canUnlinkSession(status, true), true, status);
-    assert.equal(canUnlinkSession(status, true), isSessionStarted(status), `${status} must track Stop`);
+  for (const status of ENGINE_BACKED_STATUSES) {
+    const session = makeSession({ status, engineLoaded: true });
+    assert.equal(canUnlinkSession(session, true), true, status);
+    assert.equal(canUnlinkSession(session, true), isSessionStarted(session), `${status} must track Stop`);
   }
-  for (const status of ['created', 'idle', 'disconnected', 'failed']) {
-    assert.equal(canUnlinkSession(status, true), false, status);
+  for (const status of ENGINELESS_STATUSES) {
+    assert.equal(canUnlinkSession(makeSession({ status, engineLoaded: false }), true), false, status);
   }
 });
 
 test('canUnlinkSession: a read-only role never sees the action, even for a started session', () => {
-  assert.equal(canUnlinkSession('ready', false), false);
+  assert.equal(canUnlinkSession(makeSession({ status: 'ready', engineLoaded: true }), false), false);
 });
 
 // Force-kill is the emergency hatch for a WEDGED engine, so it must be offered exactly when a live
-// engine exists — never for FAILED (the engine is already gone, so there is nothing to kill).
-test('canForceKillSession: offered for every engine-backed status, hidden for terminal FAILED', () => {
-  for (const status of [
-    'initializing',
-    'connecting',
-    'qr_ready',
-    'authenticating',
-    'ready',
-    'action_required',
-  ]) {
-    assert.equal(canForceKillSession(status, true), true, `${status} is engine-backed and should offer kill`);
+// engine exists — never for FAILED, whose engine is evicted on the way to that status.
+test('canForceKillSession: offered whenever an engine is loaded, hidden for terminal FAILED', () => {
+  for (const status of ENGINE_BACKED_STATUSES) {
+    assert.equal(
+      canForceKillSession(makeSession({ status, engineLoaded: true }), true),
+      true,
+      `${status} is engine-backed and should offer kill`,
+    );
   }
-  for (const status of ['created', 'idle', 'disconnected', 'failed']) {
-    assert.equal(canForceKillSession(status, true), false, `${status} has no live engine to kill`);
-  }
+  assert.equal(canForceKillSession(makeSession({ status: 'failed', engineLoaded: false }), true), false);
+  assert.equal(canForceKillSession(makeSession({ status: 'created', engineLoaded: false }), true), false);
 });
 
 test('canForceKillSession: a read-only role never sees the action, even for a started session', () => {
-  assert.equal(canForceKillSession('ready', false), false);
+  assert.equal(canForceKillSession(makeSession({ status: 'ready', engineLoaded: true }), false), false);
 });
 
 // ── replaceSession ────────────────────────────────────────────────────────────

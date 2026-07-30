@@ -131,8 +131,16 @@ export function Sessions() {
         // and the failed-refresh don't fire on every redundant envelope. Update the ref synchronously so
         // a duplicate arriving in the same tick (before the sync effect runs) is also caught.
         if (prev && prev.status === event.status) return;
+        // Drop `engineLoaded` alongside the status patch: it is server-owned live state the status
+        // envelope does not carry, so keeping the previous value would pair a fresh status with a
+        // stale engine answer and the card could offer Start to a running session (or Unlink to one
+        // with no engine). Clearing it makes isSessionStarted fall back to the status set until an
+        // authoritative response arrives — and for `disconnected`, where that fallback is knowingly
+        // wrong, the branch below refetches.
         sessionsRef.current = sessionsRef.current.map(s =>
-          s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s,
+          s.id === event.sessionId
+            ? { ...s, status: event.status as Session['status'], engineLoaded: undefined }
+            : s,
         );
         setSessions(sessionsRef.current);
         // Mark the shared session queries stale so sibling views refetch — but ONLY on a real
@@ -142,6 +150,11 @@ export function Sessions() {
         if (event.status === 'ready') {
           toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
         } else if (event.status === 'disconnected') {
+          // Refresh so the card picks up `engineLoaded` from the API. `disconnected` is the one status
+          // that means two different things — an engine still registered through its automatic
+          // reconnect backoff, or a session stopped with no engine at all — and only the server can
+          // say which, so the offered actions must not be guessed from the status here.
+          void fetchSessions();
           toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
         } else if (event.status === 'action_required') {
           // Refresh so the card picks up the lastError reason (what the operator must do) from the API.
@@ -229,7 +242,7 @@ export function Sessions() {
         // instead of being torn down mid-pairing — it closes on the real 'ready'/'failed' transition.
         const updated = await sessionApi.get(sessionId).catch(() => null);
         const stillInitializing =
-          updated && ['initializing', 'connecting', 'qr_ready', 'authenticating'].includes(updated.status);
+          updated && ['initializing', 'qr_ready', 'authenticating'].includes(updated.status);
         if (!stillInitializing) {
           setQrData(null);
           currentSessionName.current = '';
@@ -325,14 +338,18 @@ export function Sessions() {
 
   const handleStart = async (id: string) => {
     const session = sessions.find(s => s.id === id);
-    if (session && ['initializing', 'connecting', 'qr_ready'].includes(session.status)) {
+    if (session && ['initializing', 'qr_ready'].includes(session.status)) {
       handleShowQR(id);
       return;
     }
 
     try {
-      await sessionApi.start(id);
-      setSessions(current => current.map(s => (s.id === id ? { ...s, status: 'connecting' } : s)));
+      // Use the authoritative response instead of fabricating a status. The old code wrote a local
+      // `status: 'connecting'` — a value the gateway never emits — while keeping every other field
+      // from before the start, which now includes `engineLoaded` and would leave the card offering
+      // Start for a session that just acquired an engine.
+      const started = await sessionApi.start(id);
+      setSessions(current => replaceSession(current, started));
       await fetchSessions();
       handleShowQR(id);
     } catch (err) {
@@ -458,9 +475,9 @@ export function Sessions() {
       statusFilter === 'all' ||
       (statusFilter === 'active' && s.status === 'ready') ||
       (statusFilter === 'inactive' &&
-        ['created', 'idle', 'disconnected', 'action_required', 'failed'].includes(s.status)) ||
+        ['created', 'disconnected', 'action_required', 'failed'].includes(s.status)) ||
       (statusFilter === 'connecting' &&
-        ['initializing', 'connecting', 'authenticating', 'qr_ready'].includes(s.status));
+        ['initializing', 'authenticating', 'qr_ready'].includes(s.status));
     return matchesSearch && matchesStatus;
   });
 
@@ -891,7 +908,7 @@ export function Sessions() {
                 <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
               </div>
 
-              {session.status === 'initializing' || session.status === 'connecting' || session.status === 'qr_ready' ? (
+              {session.status === 'initializing' || session.status === 'qr_ready' ? (
                 <div className="qr-placeholder">
                   <QrCode size={80} className="qr-icon" />
                   <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
@@ -933,13 +950,13 @@ export function Sessions() {
                   <Eye size={16} />
                   {t('sessions.actions.view')}
                 </button>
-                {canWrite && isSessionStarted(session.status) ? (
+                {canWrite && isSessionStarted(session) ? (
                   <button className="btn-action" onClick={() => handleStop(session.id)}>
                     <Square size={16} />
                     {t('sessions.actions.stop')}
                   </button>
                 ) : canWrite &&
-                  (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
+                  (session.status === 'created' || session.status === 'disconnected') ? (
                   <button className="btn-action" onClick={() => handleStart(session.id)}>
                     <Play size={16} />
                     {t('sessions.actions.start')}
@@ -950,7 +967,7 @@ export function Sessions() {
                     {t('sessions.actions.reconnect')}
                   </button>
                 ) : null}
-                {canUnlinkSession(session.status, canWrite) && (
+                {canUnlinkSession(session, canWrite) && (
                   <button className="btn-action danger" onClick={() => setUnlinkConfirmId(session.id)}>
                     <Unlink size={16} />
                     {t('sessions.actions.unlink')}
@@ -962,7 +979,7 @@ export function Sessions() {
                     {t('sessions.actions.delete')}
                   </button>
                 )}
-                {canForceKillSession(session.status, canWrite) && (
+                {canForceKillSession(session, canWrite) && (
                   <button className="btn-action danger" onClick={() => setKillConfirmId(session.id)}>
                     <Skull size={16} />
                     {t('sessions.actions.killStuck')}

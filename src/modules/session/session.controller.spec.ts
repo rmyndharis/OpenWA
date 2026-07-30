@@ -27,12 +27,14 @@ describe('SessionController — create() response contract', () => {
     updatedAt: new Date('2026-01-01T00:00:00Z'),
   };
 
-  let sessionService: { create: jest.Mock };
+  let sessionService: { create: jest.Mock; isActive: jest.Mock };
   let auditService: { logInfo: jest.Mock };
   let controller: SessionController;
 
   beforeEach(() => {
-    sessionService = { create: jest.fn().mockResolvedValue({ ...entity }) };
+    // transformSession reads live engine state for `engineLoaded`; a freshly created session has no
+    // engine yet, which is what the response must say.
+    sessionService = { create: jest.fn().mockResolvedValue({ ...entity }), isActive: jest.fn().mockReturnValue(false) };
     auditService = { logInfo: jest.fn().mockResolvedValue(undefined) };
     controller = new SessionControllerClass(
       sessionService as unknown as SessionService,
@@ -63,7 +65,19 @@ describe('SessionController — create() response contract', () => {
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       lastError: null,
+      engineLoaded: false,
     });
+  });
+
+  // engineLoaded is live process state, not an entity column, so the only thing that can get it wrong
+  // is the wiring. Assert both answers come from the service rather than from the row's status.
+  it('reports engineLoaded from the live engine map, not from the row status', async () => {
+    sessionService.isActive.mockReturnValue(true);
+
+    const result = await controller.create({ name: 'test-session' });
+
+    expect(result.engineLoaded).toBe(true);
+    expect(sessionService.isActive).toHaveBeenCalledWith(entity.id);
   });
 
   it('still audits the creation with the session id and name', async () => {
@@ -95,12 +109,12 @@ describe('SessionController — logout() audit + error forwarding contract', () 
     updatedAt: new Date('2026-01-01T00:00:00Z'),
   };
 
-  let sessionService: { logout: jest.Mock };
+  let sessionService: { logout: jest.Mock; isActive: jest.Mock };
   let auditService: { logInfo: jest.Mock };
   let controller: SessionController;
 
   beforeEach(() => {
-    sessionService = { logout: jest.fn() };
+    sessionService = { logout: jest.fn(), isActive: jest.fn().mockReturnValue(false) };
     auditService = { logInfo: jest.fn().mockResolvedValue(undefined) };
     controller = new SessionControllerClass(
       sessionService as unknown as SessionService,

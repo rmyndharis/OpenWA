@@ -11,5 +11,12 @@ public record SessionResponse(
     String lastActive,
     String createdAt,
     String updatedAt,
-    /** Only present when {@code status == FAILED}. */
-    String lastError) {}
+    /** Present when {@code status == FAILED} or {@code status == ACTION_REQUIRED}. */
+    String lastError,
+    /**
+     * Whether the gateway holds a live engine for this session. The precondition the lifecycle
+     * routes enforce; not derivable from {@code status}, since {@code DISCONNECTED} covers both a
+     * session mid automatic-reconnect (engine present) and one stopped with no engine. {@code null}
+     * from a gateway older than the field.
+     */
+    Boolean engineLoaded) {}

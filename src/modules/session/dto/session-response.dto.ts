@@ -40,12 +40,29 @@ export class SessionResponseDto {
   })
   lastError?: string | null;
 
+  @ApiProperty({
+    description:
+      'Whether the gateway currently holds a live engine for this session. This is the precondition ' +
+      'the lifecycle routes actually enforce, and `status` alone does not imply it: a `disconnected` ' +
+      'session keeps its engine for the duration of an automatic reconnect backoff, while a session ' +
+      'stopped through `POST /sessions/:id/stop` carries the same status with no engine. When `true`, ' +
+      '`stop`, `logout` and `force-kill` can act and `start` answers 400; when `false`, the reverse. ' +
+      'Derived per request from live process state, so it is never persisted and never historical.',
+    example: true,
+  })
+  engineLoaded: boolean;
+
   /**
    * Map a Session entity to the public response shape, stripping sensitive
    * engine config fields (`config`, `proxyUrl`, `proxyType`) that must not
    * appear in any API response.
+   *
+   * `engineLoaded` is not on the entity — it is live process state owned by the session service, so
+   * every caller must pass it in rather than letting it default. A required parameter is deliberate:
+   * a default of `false` would silently tell clients "no engine" for whole surfaces (the MCP tools,
+   * any future caller) and the dashboard would then offer Start to a running session.
    */
-  static fromEntity(session: Session): SessionResponseDto {
+  static fromEntity(session: Session, engineLoaded: boolean): SessionResponseDto {
     return {
       id: session.id,
       name: session.name,
@@ -57,6 +74,7 @@ export class SessionResponseDto {
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       lastError: session.lastError ?? null,
+      engineLoaded,
     };
   }
 }

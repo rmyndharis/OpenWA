@@ -55,6 +55,11 @@ class SessionResponse(TypedDict, total=False):
     createdAt: str
     updatedAt: str
     lastError: str | None
+    # Whether the gateway holds a live engine for this session -- the precondition stop/logout/
+    # force-kill require and start refuses. Not derivable from status: 'disconnected' covers both a
+    # session mid automatic-reconnect (engine present) and one stopped with no engine. Absent from a
+    # gateway that predates the field (the TypedDict is total=False).
+    engineLoaded: bool
 
 
 class CreateSessionRequest(TypedDict, total=False):

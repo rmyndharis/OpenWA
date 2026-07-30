@@ -50,6 +50,13 @@ export interface SessionResponse {
   updatedAt: string;
   /** Only present when `status === 'failed'` (terminal failure) or `status === 'action_required'` (operator must intervene). */
   lastError?: string | null;
+  /**
+   * Whether the gateway holds a live engine for this session right now — the precondition `stop`,
+   * `logout` and `force-kill` require and `start` refuses. Not derivable from `status`:
+   * `disconnected` covers both a session mid automatic-reconnect (engine present) and one stopped
+   * with no engine. Absent from a gateway that predates the field.
+   */
+  engineLoaded?: boolean;
 }
 
 export interface CreateSessionRequest {

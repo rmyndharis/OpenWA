@@ -215,12 +215,15 @@ List all sessions, scoped to the API key's `allowedSessions`, ordered `createdAt
     "lastActive": "2026-06-25T09:01:55.000Z",
     "createdAt": "2026-06-20T11:30:00.000Z",
     "updatedAt": "2026-06-25T09:01:55.000Z",
-    "lastError": null
+    "lastError": null,
+    "engineLoaded": true
   }
 ]
 ```
 
 `lastError` is non-null only when `status` is `failed` or `action_required`; any other status clears it. `config`/`proxyUrl`/`proxyType` are not present (stripped by `fromEntity`).
+
+`engineLoaded` reports whether the gateway holds a live engine for the session at the moment of the response. It is the precondition the lifecycle routes enforce, and **`status` is not a substitute for it**: `disconnected` covers both a session whose engine is still registered while an automatic reconnect backs off — where `POST /start` answers `400` — and one stopped through `POST /stop`, which has no engine and does need a start. When `engineLoaded` is `true`, `stop`, `logout` and `force-kill` can act; when it is `false`, `start` is the applicable route. The field is derived per request from live process state, so it is never persisted and never appears in historical/exported data.
 
 **Errors:** `401` missing/invalid `X-API-Key`
 
@@ -249,7 +252,8 @@ Get a single session by ID.
   "lastActive": "2026-06-25T09:01:55.000Z",
   "createdAt": "2026-06-20T11:30:00.000Z",
   "updatedAt": "2026-06-25T09:01:55.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": true
 }
 ```
 
@@ -426,7 +430,8 @@ network cannot reach WhatsApp directly. Set `proxyUrl`/`proxyType` on the same r
   "lastActive": null,
   "createdAt": "2026-06-25T09:00:00.000Z",
   "updatedAt": "2026-06-25T09:00:00.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": false
 }
 ```
 
@@ -461,7 +466,8 @@ No request body.
   "lastActive": null,
   "createdAt": "2026-06-20T11:30:00.000Z",
   "updatedAt": "2026-06-25T09:05:00.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": true
 }
 ```
 
@@ -496,7 +502,8 @@ No request body.
   "lastActive": "2026-06-25T09:01:55.000Z",
   "createdAt": "2026-06-20T11:30:00.000Z",
   "updatedAt": "2026-06-25T09:10:00.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": false
 }
 ```
 
@@ -562,7 +569,8 @@ No request body.
   "lastActive": "2026-06-25T09:01:55.000Z",
   "createdAt": "2026-06-20T11:30:00.000Z",
   "updatedAt": "2026-06-25T09:11:00.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": false
 }
 ```
 
@@ -599,7 +607,8 @@ No request body.
   "lastActive": "2026-06-25T09:01:55.000Z",
   "createdAt": "2026-06-20T11:30:00.000Z",
   "updatedAt": "2026-06-25T09:12:00.000Z",
-  "lastError": null
+  "lastError": null,
+  "engineLoaded": false
 }
 ```
 
