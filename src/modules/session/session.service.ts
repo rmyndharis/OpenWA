@@ -25,7 +25,7 @@ import { CreateSessionDto } from './dto';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
-import { decideReconnect, clampReconnectDelay, type ReconnectAttemptState } from './reconnect-policy';
+import { decideReconnect, type ReconnectAttemptState } from './reconnect-policy';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, storableWaMessageId } from './message-row.mapper';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
@@ -115,7 +115,8 @@ export function resolveReconnectConfig(
   return { maxAttempts, baseDelay };
 }
 
-export { clampReconnectDelay };
+// Re-exported so the existing spec import paths keep working after these moved out.
+export { clampReconnectDelay } from './reconnect-policy';
 export {
   SESSION_WATCHDOG_INTERVAL_MS,
   SESSION_WATCHDOG_PROBE_TIMEOUT_MS,
