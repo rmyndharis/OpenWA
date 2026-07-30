@@ -27,18 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   around twenty call sites as `isLiveEngine(id, e) && engines.delete(id)`. It is now `isLive` /
   `deleteIfLive` on the registry, written once.
 
-- **Three self-contained concerns were lifted out of `SessionService`.** Each was previously reachable
+- **Four self-contained concerns were lifted out of `SessionService`.** Each was previously reachable
   only by driving the full session lifecycle, so the trickiest logic in the file had the least direct
   coverage. The `@lid`→phone read-through cache became `SessionLidResolver` (and took an `@Optional`
   constructor dependency with it); the reconnect backoff *decision* became a pure `decideReconnect()`
-  with injected clock and jitter, leaving the service to apply only the effects; and the per-message
-  serialization chain became a general `KeyedMutationQueue`. Behaviour is unchanged — the existing
-  session specs pass untouched — and the split adds 59 tests over branches that previously needed hours
-  of uptime or live engine callbacks to reach: the FIFO eviction that bounds the lid cache, the
-  stability reset that stops a long-lived session slowly wedging `FAILED` across unrelated transient
-  drops, the loop-alert re-arm after a stable stretch, the non-finite-delay fallback that keeps an
-  operator typo from becoming a relaunch storm, and the mutation-chain reclamation that stops the map
-  growing once per message touched.
+  with injected clock and jitter, leaving the service to apply only the effects; the liveness watchdog
+  became `SessionLivenessWatchdog`, which owns its interval and failure counter and reports back
+  through a single `onDead` callback; and the per-message serialization chain became a general
+  `KeyedMutationQueue`. Behaviour is unchanged — the existing session specs pass untouched — and the
+  split adds 77 tests over branches that previously needed hours of uptime or live engine callbacks to
+  reach: the FIFO eviction that bounds the lid cache, the stability reset that stops a long-lived
+  session slowly wedging `FAILED` across unrelated transient drops, the loop-alert re-arm after a
+  stable stretch, the non-finite-delay fallback that keeps an operator typo from becoming a relaunch
+  storm, the watchdog's stale-result guard for an engine superseded mid-probe, and the mutation-chain
+  reclamation that stops the map growing once per message touched.
 
 ### Fixed
 
