@@ -70,7 +70,8 @@ listed explicitly because TypeScript 6 no longer auto-includes every `@types` pa
 
 The backend uses ESLint flat config in `eslint.config.mjs` with type-aware TypeScript rules,
 Prettier integration, and an architecture guard for controllers. HTTP controllers must call
-capability services; they must not import `IWhatsAppEngine` or call `getEngine()` directly.
+capability services; they must not import `IWhatsAppEngine` or `EngineRegistry`, call `getEngine()`,
+or resolve an engine via `engines.require()` / `engines.get()`.
 
 ```bash
 npm run lint
@@ -197,8 +198,25 @@ export class ExampleController {
 
 Controllers are protected by the global API key guard unless marked with `@Public()`. Keep
 controllers thin: validate transport input through DTOs, delegate behavior to services, and never
-call `SessionService.getEngine()` directly from a controller. Engine-specific details belong behind
-capability services and engine adapters.
+resolve an engine directly from a controller. Engine-specific details belong behind capability
+services and engine adapters.
+
+A capability service reaches the live engine through `EngineRegistry`, the narrow port exported by
+the (global) `EngineModule` — not through `SessionService`, which owns the session *lifecycle*
+(start/stop/delete/reconnect) and should only be injected by code that actually drives it:
+
+```typescript
+@Injectable()
+export class ExampleService {
+  constructor(private readonly engines: EngineRegistry) {}
+
+  // require() throws 400 "Session is not started" by default; pass a factory to keep an
+  // endpoint's own documented status/message.
+  private getEngine(sessionId: string): IWhatsAppEngine {
+    return this.engines.require(sessionId);
+  }
+}
+```
 
 ### Service Template
 

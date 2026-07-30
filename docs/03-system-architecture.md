@@ -78,7 +78,7 @@ sequenceDiagram
 OpenWA is designed with a **Pluggable Architecture** that allows infrastructure components to be swapped without changing application code. This enables flexible deployments ranging from minimal single-session bots to larger single-node, multi-session installs.
 
 > **Note — single-instance:** the live WhatsApp engine layer is stateful and held in-process
-> (an in-memory `Map` in `SessionService`). OpenWA currently runs as **one API instance per
+> (an in-memory `Map` in `EngineRegistry`). OpenWA currently runs as **one API instance per
 > session-data volume**; horizontal scaling across multiple API replicas is a future design
 > (not implemented). See [13 - Horizontal Scaling](13-horizontal-scaling.md).
 
@@ -438,12 +438,14 @@ src/
 
 The diagram below is conceptual: `SessionManager` is the role played by `SessionService`
 (`src/modules/session/session.service.ts`), which injects the TypeORM `Repository<Session>` directly —
-there is no `SessionRepository` class in the codebase.
+there is no `SessionRepository` class in the codebase. The live-engine map itself lives in
+`EngineRegistry` (`src/engine/engine-registry.service.ts`), the narrow port that capability services
+inject when they only need the running engine for a session; `SessionService` is its only writer.
 
 ```mermaid
 classDiagram
     class SessionManager {
-        -engines: Map~string, IWhatsAppEngine~
+        -engines: EngineRegistry
         -sessionRepository: Repository~Session~
         -engineFactory: EngineFactory
         +createSession(config): Session

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The live engine is reachable through its own narrow port instead of through the session lifecycle
+  owner.** Ten feature services (contacts, groups, labels, channels, calls, profile, catalog, status,
+  and both message services) injected the whole 2.9k-line `SessionService` purely to reach its private
+  `engines` map, which coupled every one of them to start/stop/delete/reconnect semantics they never
+  call. The map now lives in `EngineRegistry`, exported from the (already global) `EngineModule`, so
+  those services depend on "give me the running engine for this session" and eight feature modules no
+  longer import `SessionModule` at all. `SessionService` remains the only writer, and the services
+  that genuinely drive the lifecycle (`MessageService` for `findOne`/edit recording, `InfraController`
+  for orphan reaping) still hold it deliberately. No API change: each call site keeps its own error, so
+  contacts/labels/groups/channels/calls/profile still answer 400 `Session is not started`,
+  catalog/status still answer 404 `not found or not connected`, and the two message services keep their
+  distinct wording. `openapi.json` is unchanged, byte for byte.
+
+  The engine-identity rule that guards every lifecycle path — a late callback from a superseded engine
+  must never mutate a session that now belongs to a different one, or to none — was open-coded at
+  around twenty call sites as `isLiveEngine(id, e) && engines.delete(id)`. It is now `isLive` /
+  `deleteIfLive` on the registry, written once.
+
+- **Three self-contained concerns were lifted out of `SessionService`.** Each was previously reachable
+  only by driving the full session lifecycle, so the trickiest logic in the file had the least direct
+  coverage. The `@lid`→phone read-through cache became `SessionLidResolver` (and took an `@Optional`
+  constructor dependency with it); the reconnect backoff *decision* became a pure `decideReconnect()`
+  with injected clock and jitter, leaving the service to apply only the effects; and the per-message
+  serialization chain became a general `KeyedMutationQueue`. Behaviour is unchanged — the existing
+  session specs pass untouched — and the split adds 59 tests over branches that previously needed hours
+  of uptime or live engine callbacks to reach: the FIFO eviction that bounds the lid cache, the
+  stability reset that stops a long-lived session slowly wedging `FAILED` across unrelated transient
+  drops, the loop-alert re-arm after a stable stretch, the non-finite-delay fallback that keeps an
+  operator typo from becoming a relaunch storm, and the mutation-chain reclamation that stops the map
+  growing once per message touched.
+
 ### Fixed
 
 - **The non-root smoke test can actually be run.** `scripts/smoke-test-non-root.sh` carried a UTF-8

@@ -4,7 +4,7 @@
 >
 > **OpenWA is currently a single-process, single-instance application.** Live WhatsApp
 > engine state (browser + WebSocket + reconnect/error state) lives in an in-memory `Map`
-> in `SessionService`; there is **no** DB-backed session registry, **no** node-claim/lease,
+> in `EngineRegistry`; there is **no** DB-backed session registry, **no** node-claim/lease,
 > and **no** Socket.IO Redis adapter.
 >
 > **Supported topology:** exactly **one** API instance per session-data volume. Running

@@ -36,7 +36,8 @@ export default tseslint.config(
     // Architecture guard: HTTP controllers must go through a per-capability service and
     // never reach for the raw WhatsApp engine. This keeps the "session not started" guard,
     // error mapping, and business rules behind the service boundary instead of leaking into
-    // controllers. `.getEngine(` (not `.getEngines()`) and the `IWhatsAppEngine` type are banned.
+    // controllers. `.getEngine(` (not `.getEngines()`), the EngineRegistry accessors, and the
+    // `IWhatsAppEngine` type are banned.
     files: ['**/*.controller.ts'],
     rules: {
       'no-restricted-syntax': [
@@ -45,6 +46,16 @@ export default tseslint.config(
           selector: "CallExpression[callee.property.name='getEngine']",
           message:
             'Controllers must not call getEngine(). Add a method to the capability service (e.g. GroupService) and call that instead.',
+        },
+        {
+          // EngineRegistry.require()/get() resolve a live engine, so reaching for either from a
+          // controller bypasses the capability service exactly as getEngine() used to. Matches
+          // `this.engines.require(...)` (a MemberExpression callee object) as well as a bare
+          // `engines.require(...)`.
+          selector:
+            "CallExpression[callee.property.name=/^(require|get)$/]:has(MemberExpression[property.name='engines'])",
+          message:
+            'Controllers must not resolve an engine from EngineRegistry. Add a method to the capability service and call that instead.',
         },
       ],
       'no-restricted-imports': [
@@ -58,6 +69,11 @@ export default tseslint.config(
               importNames: ['IWhatsAppEngine'],
               message:
                 'Controllers must not import IWhatsAppEngine. Keep engine types behind a capability service.',
+            },
+            {
+              group: ['**/engine/engine-registry.service'],
+              message:
+                'Controllers must not import EngineRegistry. Keep engine access behind a capability service.',
             },
           ],
         },
