@@ -226,6 +226,26 @@ describe('PluginLoaderService — sandbox hook error surfacing', () => {
     expect(after.message ?? '').not.toContain('last hook error');
   });
 
+  it('does not carry a dead generation’s hook error into the worker that replaces it', async () => {
+    // The record is cleared on disable, but a crash never goes through disable. Without a clear on
+    // enable, the next worker inherits the previous one's error and checkPluginHealth reports it as
+    // current — the field's own contract says a fresh enable starts from a clean slate.
+    const loader = makeLoader();
+    const handler = await setupShim(loader, 'message:sent');
+    loader.hosts[0].dispatchHook.mockResolvedValue({ continue: true, error: 'boom' });
+    jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined);
+
+    await handler({ data: {}, sessionId: 's1', source: 'Engine' });
+    expect((await loader.checkPluginHealth('p1')).message).toContain('last hook error');
+
+    // Worker crashes (intentional=false): the host is dropped without any disable running.
+    loader.capturedOnWorkerExit!(1, false);
+    await loader.enablePlugin('p1');
+
+    const after = await loader.checkPluginHealth('p1');
+    expect(after.message ?? '').not.toContain('last hook error');
+  });
+
   it('does not log or record anything when the worker reports no error', async () => {
     const loader = makeLoader();
     const handler = await setupShim(loader, 'message:sent');

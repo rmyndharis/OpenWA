@@ -194,7 +194,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   // Live worker host per enabled sandboxed (untrusted) plugin. Built-ins are not in here.
   private readonly sandboxHosts = new Map<string, PluginWorkerHost>();
   // Last hook-handler error each sandboxed plugin's worker reported, surfaced via checkPluginHealth so a
-  // hook that keeps throwing is visible to the operator. Cleared on disable (fresh enable = fresh slate).
+  // hook that keeps throwing is visible to the operator. Scoped to ONE worker generation: cleared when a
+  // generation starts (enableSandboxed) and when one is deliberately ended (disablePlugin). Clearing at
+  // the start is what makes it hold for a crash or a failed enable, neither of which runs a disable.
   private readonly lastSandboxHookError = new Map<string, { event: string; error: string; at: Date }>();
   // Carries the firing event's sessionId across an in-process hook handler so ctx.config (a getter)
   // resolves the per-session slice. Per async call tree, so concurrent sessions don't cross over.
@@ -1078,6 +1080,12 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    * tears the worker back down.
    */
   private async enableSandboxed(pluginId: string, plugin: PluginInstance): Promise<void> {
+    // A new worker generation starts from a clean slate. disablePlugin clears this too, but a crash
+    // and a failed enable both end a generation WITHOUT going through disable — so clearing only
+    // there let the replacement worker inherit a dead one's hook error and report it through
+    // checkPluginHealth as current. Enforced here, at the one point every generation begins, rather
+    // than repeated on each way a generation can end.
+    this.lastSandboxHookError.delete(pluginId);
     // Containment guard: reject a manifest.main that escapes the plugin dir.
     const mainPath = resolvePluginMainPath(this.pluginsDir, pluginId, plugin.manifest.main);
     // The capability dispatcher runs a worker request through the SAME context an in-process plugin

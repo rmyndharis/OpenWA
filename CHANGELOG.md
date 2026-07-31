@@ -90,6 +90,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Plugin health no longer reports a hook error from a worker that already died.** The last
+  hook-handler error a sandboxed plugin reported is operator context on
+  `GET /api/plugins/{id}/health`, and it is scoped to one worker generation — the field's contract was
+  "a fresh enable starts from a clean slate". It was cleared only on `disablePlugin`, but a worker
+  crash and a failed enable both end a generation without going through disable. The replacement
+  worker therefore inherited the dead one's error, and health reported it as current: an operator
+  restarting a plugin to clear a fault saw the same fault reported against the healthy worker that
+  replaced it.
+
+  The record is now cleared where a generation *starts*, so it holds for every way one can end rather
+  than for the single path that happened to be handled.
+
 - **A rolled-back `POST /api/infra/import-data` no longer denies the engines it already stopped.** The
   orphan pre-flight runs *before* the transaction opens, and `stopOrphans: true` really destroys those
   engines there — a teardown the rollback cannot undo. Both rollback branches nevertheless returned a
