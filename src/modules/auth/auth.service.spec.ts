@@ -9,6 +9,7 @@ import { UnauthorizedException, NotFoundException, ConflictException } from '@ne
 import { createHash, createHmac } from 'crypto';
 import * as fs from 'fs';
 import { AuthService, resolveSeedApiKey, bannerKeyLine } from './auth.service';
+import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 
 // Helpers
@@ -104,6 +105,7 @@ describe('AuthService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
+        ApiKeyUsageTracker,
         {
           provide: getRepositoryToken(ApiKey, 'main'),
           useValue: repository,

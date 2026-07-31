@@ -18,6 +18,7 @@ import { hashApiKey } from './api-key-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 import { KeyedAsyncLock } from '../integration/ordering-lock';
 
@@ -57,13 +58,6 @@ export function bannerKeyLine(displayKey: string, isNewKey: boolean): string {
 export class AuthService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('AuthService');
 
-  /** Coalesce per-request usage-stat writes to at most one DB write per key per window. */
-  private static readonly STAT_FLUSH_INTERVAL_MS = 60_000;
-  /** Upper bound for the best-effort usage-stat flush on shutdown — teardown must not stall on a wedged DB. */
-  private static readonly SHUTDOWN_FLUSH_TIMEOUT_MS = 5_000;
-  /** keyId -> usage increments observed but not yet persisted (flushed on the next windowed write). */
-  private readonly pendingUsage = new Map<string, number>();
-
   /**
    * Serializes every last-usable-admin check with the mutation it guards, in ONE critical section.
    * The check is check-then-act across awaits: without serialization, two concurrent requests that
@@ -80,6 +74,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectRepository(ApiKey, 'main')
     private readonly apiKeyRepository: Repository<ApiKey>,
+    private readonly usageTracker: ApiKeyUsageTracker,
     private readonly moduleRef: ModuleRef,
   ) {}
 
@@ -131,44 +126,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('');
   }
 
-  /**
-   * Best-effort flush of the coalesced usage-stat counters on teardown. Nest runs onModuleDestroy
-   * before the TypeORM connection closes (the DataSource is destroyed in onApplicationShutdown, the
-   * last lifecycle hook), so the DB is still writable here. Bounded so a wedged DB cannot stall
-   * shutdown past the grace window; whatever is still unflushed after the bound is dropped — the
-   * counters are advisory statistics, authentication never depends on them.
-   */
+  /** Flush the coalesced usage counters before the DB connection closes. See ApiKeyUsageTracker. */
   async onModuleDestroy(): Promise<void> {
-    if (this.pendingUsage.size === 0) return;
-    this.logger.log(`Flushing usage stats for ${this.pendingUsage.size} API key(s) before shutdown`);
-    const timeout = new Promise<'timeout'>(resolve =>
-      setTimeout(() => resolve('timeout'), AuthService.SHUTDOWN_FLUSH_TIMEOUT_MS).unref(),
-    );
-    const result = await Promise.race([this.flushPendingUsage().then(() => 'done' as const), timeout]);
-    if (result === 'timeout') {
-      this.logger.warn('Usage-stat shutdown flush exceeded its time bound; remaining deltas dropped');
-    }
-  }
-
-  /** Persist every accumulated usage delta with an atomic increment; entries that fail stay pending. */
-  private async flushPendingUsage(): Promise<void> {
-    for (const [keyId, delta] of [...this.pendingUsage.entries()]) {
-      if (delta <= 0) {
-        this.pendingUsage.delete(keyId);
-        continue;
-      }
-      try {
-        // Atomic UPDATE ... SET usageCount = usageCount + delta — no read-modify-write race with a
-        // concurrent windowed save, unlike reloading the row and saving it back.
-        await this.apiKeyRepository.increment({ id: keyId }, 'usageCount', delta);
-        this.pendingUsage.delete(keyId);
-      } catch (error) {
-        this.logger.warn('Usage-stat flush failed for a key; delta kept pending', {
-          keyId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    await this.usageTracker.flushOnShutdown();
   }
 
   /**
@@ -364,7 +324,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       const target = await this.findOne(id);
       await this.assertNotLastUsableAdmin(target);
       // Drop any un-flushed usage accumulator so a deleted key leaves nothing behind in the Map.
-      this.pendingUsage.delete(id);
+      this.usageTracker.forget(id);
       await this.apiKeyRepository.remove(target);
       this.removeBootstrapKeyFileIfMatching(target);
     };
@@ -391,7 +351,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       await this.assertNotLastUsableAdmin(target);
       // A revoked key fails validation before its next flush, so its accumulator would orphan —
       // drop it here.
-      this.pendingUsage.delete(id);
+      this.usageTracker.forget(id);
       target.isActive = false;
       const saved = await this.apiKeyRepository.save(target);
       this.removeBootstrapKeyFileIfMatching(target);
@@ -516,35 +476,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Update usage stats — coalesced. Validation above is unchanged/synchronous; only
-    // the stat WRITE is throttled to at most once per key per window. usageCount stays
-    // accurate via an in-memory accumulator; the returned object reflects the true count.
-    const pending = (this.pendingUsage.get(apiKey.id) ?? 0) + 1;
-    const previousLastUsedAt = apiKey.lastUsedAt;
-    apiKey.lastUsedAt = new Date();
-    apiKey.usageCount += pending; // DB value + all not-yet-persisted increments (incl. this request)
-
-    const due =
-      !previousLastUsedAt ||
-      apiKey.lastUsedAt.getTime() - previousLastUsedAt.getTime() >= AuthService.STAT_FLUSH_INTERVAL_MS;
-    if (due) {
-      this.pendingUsage.delete(apiKey.id);
-      try {
-        await this.apiKeyRepository.save(apiKey);
-      } catch (error) {
-        // Lost-update safe: a failed windowed write must not drop the accumulated increments —
-        // merge them back (accumulate, never overwrite, in case a concurrent path re-added a
-        // delta) so the next windowed write or the shutdown flush persists them. Validation
-        // itself succeeded, so a stat-write failure must not fail the request.
-        this.pendingUsage.set(apiKey.id, (this.pendingUsage.get(apiKey.id) ?? 0) + pending);
-        this.logger.warn('Usage-stat write failed; delta kept pending for the next flush', {
-          keyId: apiKey.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else {
-      this.pendingUsage.set(apiKey.id, pending);
-    }
+    // Advisory stats only; the tracker coalesces the write and never throws.
+    await this.usageTracker.record(apiKey);
 
     return apiKey;
   }
