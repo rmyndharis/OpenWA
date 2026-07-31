@@ -55,9 +55,11 @@ describe('PluginLoaderService — stale conversation-mapping repair', () => {
   });
 
   function contextFor(plugin: PluginInstance): PluginContext {
-    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
-      plugin,
-    );
+    // The capability surface moved to PluginCapabilityContext; the loader holds one. Every assertion
+    // below is unchanged — only the reach-in points at the object that owns the surface now.
+    return (
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
   }
 
   function makePlugin(activeSessions?: string[]): PluginInstance {

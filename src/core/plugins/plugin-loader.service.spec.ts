@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { resolvePluginMainPath, buildSandboxWorkerEnv, dispatchConversationMedia } from './plugin-loader.service';
+import { resolvePluginMainPath, buildSandboxWorkerEnv } from './plugin-loader.service';
+import { dispatchConversationMedia } from './plugin-capability-context';
 
 /** Regression lock: a plugin's manifest.main must not escape its plugin directory. */
 describe('resolvePluginMainPath', () => {

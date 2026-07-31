@@ -64,9 +64,11 @@ describe('PluginLoaderService capability facade — ctx.messages', () => {
   });
 
   function contextFor(plugin: PluginInstance): PluginContext {
-    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
-      plugin,
-    );
+    // The capability surface moved to PluginCapabilityContext; the loader holds one. Every assertion
+    // below is unchanged — only the reach-in points at the object that owns the surface now.
+    return (
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
   }
 
   it('messages.sendText delegates to MessageService.sendText with a wrapped dto', async () => {
@@ -171,9 +173,11 @@ describe('PluginLoaderService capability facade — ctx.engine', () => {
   }
 
   function contextFor(plugin: PluginInstance): PluginContext {
-    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
-      plugin,
-    );
+    // The capability surface moved to PluginCapabilityContext; the loader holds one. Every assertion
+    // below is unchanged — only the reach-in points at the object that owns the surface now.
+    return (
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
   }
 
   it('engine.getGroupInfo delegates to SessionService.getEngine(id).getGroupInfo', async () => {
@@ -268,9 +272,11 @@ describe('PluginLoaderService capability facade — ctx.net', () => {
     return { manifest, status: PluginStatus.INSTALLED, config: {}, instance: null };
   }
   function contextFor(loader: PluginLoaderService, plugin: PluginInstance): PluginContext {
-    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
-      plugin,
-    );
+    // The capability surface moved to PluginCapabilityContext; the loader holds one. Every assertion
+    // below is unchanged — only the reach-in points at the object that owns the surface now.
+    return (
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
   }
 
   it('denies net.fetch when the plugin does not declare net:fetch', async () => {
@@ -315,9 +321,11 @@ describe('PluginLoaderService capability facade — ctx.conversations', () => {
   });
 
   function contextFor(plugin: PluginInstance): PluginContext {
-    return (loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }).createPluginContext(
-      plugin,
-    );
+    // The capability surface moved to PluginCapabilityContext; the loader holds one. Every assertion
+    // below is unchanged — only the reach-in points at the object that owns the surface now.
+    return (
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
   }
 
   const sendEnv = {

@@ -41,8 +41,8 @@ describe('PluginLoaderService — per-session activation gate (hook delivery)', 
 
   function register(plugin: PluginInstance, handler: HookHandler): void {
     const ctx = (
-      loader as unknown as { createPluginContext: (p: PluginInstance) => PluginContext }
-    ).createPluginContext(plugin);
+      loader as unknown as { capabilities: { createPluginContext: (p: PluginInstance) => PluginContext } }
+    ).capabilities.createPluginContext(plugin);
     ctx.registerHook('message:received', handler);
   }
 
