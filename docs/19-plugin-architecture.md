@@ -631,8 +631,9 @@ URL / catalog), not an npm/github source descriptor.
 
 ### Permission model
 
-There are exactly **five** capability permissions, declared in the manifest `permissions` array — four
-enforced at the capability boundary, `webhook:ingress` at load and at route subscription:
+There are exactly **six** capability permissions, declared in the manifest `permissions` array — four
+enforced at the capability boundary, plus two on the worker-declaration bridges: `webhook:ingress` at
+load and at route subscription, and `search:provide` when the provider declaration reaches the host:
 
 ```typescript
 // src/core/plugins/plugin.interfaces.ts (doc comments condensed)
@@ -648,6 +649,9 @@ export const PluginCapabilityPermission = {
   WEBHOOK_INGRESS: 'webhook:ingress',
   /** ctx.conversations.send plus ctx.handover.* and ctx.mappings.* — the normalized outbound surface. */
   CONVERSATION_SEND: 'conversation:send',
+  /** ctx.registerSearchProvider — serve /api/search. Under SEARCH_PROVIDER=auto the provider is also
+   *  made ACTIVE, so an undeclared plugin would see every query the gateway serves. */
+  SEARCH_PROVIDE: 'search:provide',
 } as const;
 ```
 
@@ -673,6 +677,15 @@ two places: at **load**, `validateIngressManifest` throws when a manifest declar
 the permission, so the plugin never loads; and at the **ingress-subscribe guard**, a route claim from a
 worker whose manifest lacks the permission is silently dropped (no `PluginCapabilityError`) and the plugin
 simply owns no routes.
+
+`search:provide` is enforced the same way, and for the same reason: a worker declares itself a search
+provider by sending `search-provider-register` over IPC, which never passes through the capability router
+that gates `ctx.messages` / `ctx.net` / `ctx.engine`. `registerPluginSearchProvider` checks the manifest
+before the provider reaches the registry. Unlike the ingress guard this one **warns**
+(`sandbox_search_provider_denied`) rather than dropping silently: there is no manifest `search` array, so
+no load-time validation can catch it, and an operator would otherwise have no signal at all. The warning
+is bounded to one line per enable — `WorkerSearchRegistry` posts the declaration only on the plugin's
+first `ctx.registerSearchProvider` call.
 
 Two further checks apply on top of the permission:
 

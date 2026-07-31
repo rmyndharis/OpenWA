@@ -21,6 +21,20 @@ user-facing feature and the built-in DB-FTS default.
 
 ## 27.2 The contract
 
+### Declare the permission
+
+The manifest must declare `search:provide`:
+
+```json
+{ "id": "meili", "name": "Meilisearch", "version": "1.0.0", "type": "extension",
+  "main": "index.cjs", "permissions": ["search:provide"] }
+```
+
+Without it the host ignores the registration and logs one warning
+(`sandbox_search_provider_denied`); the plugin keeps running and the active provider is unchanged.
+The permission is required because under the default `SEARCH_PROVIDER=auto` a registered provider is
+also made **active**, so it sees every query `GET /api/search` serves.
+
 ### Register the handler
 
 In `onEnable`, call `ctx.registerSearchProvider(handler)` with a function that takes a `SearchQuery` and

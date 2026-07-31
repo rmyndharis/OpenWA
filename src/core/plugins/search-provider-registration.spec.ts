@@ -11,6 +11,8 @@ const deps = (overrides: Partial<Parameters<typeof registerPluginSearchProvider>
   timeoutMs: 10000,
   registry: new SearchProviderRegistry(),
   mode: 'auto',
+  hasPermission: true,
+  warn: jest.fn(),
   ...overrides,
 });
 
@@ -26,6 +28,18 @@ describe('registerPluginSearchProvider', () => {
 
     expect(registry.list().map(p => p.id)).toContain('plugin:meili');
     expect(registry.active()?.id).toBe('plugin:meili');
+  });
+
+  it('denies a plugin that never declared the search:provide permission, even in auto mode', () => {
+    const registry = new SearchProviderRegistry();
+    registry.register(builtin());
+    const warn = jest.fn();
+
+    registerPluginSearchProvider(deps({ registry, hasPermission: false, warn }));
+
+    expect(registry.list().map(p => p.id)).not.toContain('plugin:meili');
+    expect(registry.active()?.id).toBe('builtin-fts');
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('builtin-fts mode registers the plugin but leaves builtin active', () => {

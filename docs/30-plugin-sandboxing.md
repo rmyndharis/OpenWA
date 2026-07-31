@@ -96,8 +96,9 @@ in-process plugin that calls it fails loud rather than silently never firing —
 4. **Declare your permissions.** A capability call is denied unless the manifest declares it:
    `messages:send` for `ctx.messages`, `engine:read` for `ctx.engine`, `net:fetch` for `ctx.net.fetch`
    (plus a `net.allow` host list), `conversation:send` for `ctx.conversations` / `ctx.handover` /
-   `ctx.mappings`, and `webhook:ingress` for `ctx.registerWebhook` (enforced at load and again at route
-   subscription). `ctx.storage` needs no permission — it is already per-plugin scoped. See
+   `ctx.mappings`, `webhook:ingress` for `ctx.registerWebhook` (enforced at load and again at route
+   subscription), and `search:provide` for `ctx.registerSearchProvider` (enforced when the declaration
+   reaches the host). `ctx.storage` needs no permission — it is already per-plugin scoped. See
    [19 — Plugin Architecture](./19-plugin-architecture.md).
 
 Sandboxing was a **breaking change for third-party plugin authoring** when it shipped in v0.6.0.

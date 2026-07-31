@@ -170,6 +170,12 @@ export const PluginCapabilityPermission = {
   WEBHOOK_INGRESS: 'webhook:ingress',
   /** `ctx.conversations.send` — normalized outbound send translated to MessageService. */
   CONVERSATION_SEND: 'conversation:send',
+  /**
+   * `ctx.registerSearchProvider` — serve the gateway's /search queries. Under the default
+   * SEARCH_PROVIDER=auto a registered provider is also made ACTIVE, superseding builtin-fts, so an
+   * undeclared plugin would otherwise see every search query the gateway serves.
+   */
+  SEARCH_PROVIDE: 'search:provide',
 } as const;
 export type PluginCapabilityPermission = (typeof PluginCapabilityPermission)[keyof typeof PluginCapabilityPermission];
 

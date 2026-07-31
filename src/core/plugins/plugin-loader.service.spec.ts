@@ -979,7 +979,15 @@ describe('PluginLoaderService — search-provider worker-crash fallback', () => 
     fs.mkdirSync(path.join(tmpDir, 'ok'), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, 'ok', 'manifest.json'),
-      JSON.stringify({ id: 'ok', name: 'OK', version: '1.0.0', type: 'extension', main: 'index.cjs' }),
+      JSON.stringify({
+        id: 'ok',
+        name: 'OK',
+        version: '1.0.0',
+        type: 'extension',
+        main: 'index.cjs',
+        // This suite is about crash fallback, so the fixture must be a plugin the search bridge accepts.
+        permissions: ['search:provide'],
+      }),
     );
     fs.writeFileSync(
       path.join(tmpDir, 'ok', 'index.cjs'),
@@ -1011,6 +1019,38 @@ describe('PluginLoaderService — search-provider worker-crash fallback', () => 
 
     expect(registry.list().map(p => p.id)).not.toContain('plugin:ok');
     expect(registry.active()?.id).toBe('builtin-fts'); // fell back, not pinned to the dead plugin
+  });
+
+  it('never activates a plugin that registers a search provider without declaring search:provide', async () => {
+    // Same fixture, permission removed: ctx.registerSearchProvider is installed in EVERY worker context,
+    // so this is the whole distance between an undeclared plugin and serving every /search query.
+    fs.writeFileSync(
+      path.join(tmpDir, 'ok', 'manifest.json'),
+      JSON.stringify({ id: 'ok', name: 'OK', version: '1.0.0', type: 'extension', main: 'index.cjs' }),
+    );
+    const registry = new SearchProviderRegistry();
+    registry.register({ id: 'builtin-fts', label: 'b', search: jest.fn(), health: jest.fn() });
+    const config = {
+      get: (k: string) =>
+        k === 'search.provider' ? 'auto' : k === 'plugins.dir' || k === 'dataDir' ? tmpDir : undefined,
+    } as unknown as ConfigService;
+    const storage = new PluginStorageService(config);
+    const loader = new CapturingLoader(config, new HookManager(), storage, {
+      get: () => registry,
+    } as unknown as ModuleRef);
+
+    loader.loadPlugin(path.join(tmpDir, 'ok'));
+    await loader.enablePlugin('ok');
+
+    // Assert BEFORE reaping: terminate() runs onWorkerExit -> unregisterPluginSearchProvider, which
+    // drops plugin:ok and restores builtin-fts on its own. Asserting after it would pass whether or
+    // not the permission gate works at all. The finally still reaps, so no worker handle leaks.
+    try {
+      expect(registry.list().map(p => p.id)).not.toContain('plugin:ok');
+      expect(registry.active()?.id).toBe('builtin-fts'); // auto mode must NOT hand the gateway to it
+    } finally {
+      await loader.lastHost!.terminate();
+    }
   });
 });
 

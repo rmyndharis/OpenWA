@@ -89,6 +89,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/infra`. It had no reference from `package.json`, any workflow, the Dockerfile, either compose
   file, or the documentation.
 
+### Security
+
+- **A sandboxed plugin can no longer serve the gateway's search queries without declaring a permission
+  for it.** `ctx.registerSearchProvider` is installed unconditionally in every worker context, and a
+  plugin declares itself a provider by sending `search-provider-register` over IPC — a path that never
+  passes through the capability router gating `ctx.messages` / `ctx.net` / `ctx.engine`. Nothing between
+  that declaration and the `SearchProviderRegistry` consulted the manifest, and under the shipped default
+  `SEARCH_PROVIDER=auto` a registered provider is also made **active**, superseding `builtin-fts`. A
+  plugin that declared no permissions at all could therefore see every query `GET /api/search` serves.
+
+  Registration now requires the new `search:provide` permission. A plugin without it is refused before
+  the provider reaches the registry, the active provider is left untouched, and the host logs one
+  warning (`sandbox_search_provider_denied`) — bounded to a single line per enable, because
+  `WorkerSearchRegistry` posts the declaration only on the plugin's first call. The check is warned
+  rather than silently dropped (as the ingress-subscribe guard does) because there is no manifest
+  `search` array, so no load-time validation can catch it and an operator would otherwise get no signal.
+  `hasPermission` is a required field of `RegisterPluginSearchProviderDeps`, so the compiler — not
+  reviewer discipline — is what keeps a future call site from re-opening the gap.
+
+  **Action required for search-provider plugins:** add `"permissions": ["search:provide"]` to the
+  manifest. Plugins that do not provide search are unaffected, as are all first-party plugins. No
+  gateway payload changes.
+
 ## [0.12.1] - 2026-07-30
 
 ### Added

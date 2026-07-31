@@ -1314,7 +1314,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // When the worker declares itself a search provider (ctx.registerSearchProvider →
     // search-provider-register), register a PluginSearchProvider in the SearchProviderRegistry. The host
     // is in sandboxHosts by the time registration fires (during onLoad/onEnable), so look it up lazily
-    // like onHookSubscribe. Search disabled (no registry, or SEARCH_PROVIDER=none) → the util skips.
+    // like onHookSubscribe. Search disabled (no registry, or SEARCH_PROVIDER=none) → the util skips, and
+    // a manifest without 'search:provide' is denied there — the wire declaration is untrusted input, and
+    // this bridge bypasses the capability router that gates the ctx.* capabilities.
     const onSearchProviderRegister = (): void => {
       const liveHost = this.sandboxHosts.get(pluginId);
       if (!liveHost) return;
@@ -1325,6 +1327,8 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         timeoutMs: SANDBOX_SEARCH_TIMEOUT_MS,
         registry: this.getSearchRegistry(),
         mode: this.configService.get<string>('search.provider', 'auto'),
+        hasPermission: (plugin.manifest.permissions ?? []).includes(PluginCapabilityPermission.SEARCH_PROVIDE),
+        warn: (message, meta) => this.logger.warn(message, meta),
       });
     };
 
