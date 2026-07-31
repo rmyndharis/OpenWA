@@ -74,6 +74,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generous window and never a shorter one. Splitting the two engines' windows needs its own env var
   and is a behaviour change, not a move.
 
+- **`data/.env.generated` has one declared location instead of three derived ones.** `InfraController`
+  re-built `path.resolve(process.cwd(), 'data', '.env.generated')` at each of its three readers — the
+  built-in-flag fallback behind the Docker probe, the config form's hydrate, and the merge base the
+  save path then writes back over — which made the file an undeclared dependency shared between
+  reading infrastructure status, rendering the form, and persisting credentials. Those are otherwise
+  independent concerns that touch none of the same state, so moving the file would have been a
+  three-site edit with nothing to catch a missed one. `generated-env.ts` now owns the path and the
+  parse.
+
+  Pure code motion: `infra.controller.spec.ts` passes with no edits, and the path is still resolved
+  per call rather than captured at import. `database/load-cli-env.ts` deliberately keeps its own copy
+  — it resolves the same filename against an injected `cwd` so it stays testable without `chdir`, and
+  folding it in would remove that seam.
+
 ### Fixed
 
 - **A rolled-back `POST /api/infra/import-data` no longer denies the engines it already stopped.** The

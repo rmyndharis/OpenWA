@@ -43,7 +43,7 @@ import { BLANK_SHADOWED_ENV_KEYS, isOsProvidedEnv } from '../../config/env-prece
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import * as dotenv from 'dotenv';
+import { generatedEnvPath, readGeneratedEnv } from './generated-env';
 
 interface InfraStatus {
   // `builtIn` reflects whether OpenWA's own bundled container is actually running and backing this
@@ -576,10 +576,7 @@ export class InfraController implements OnApplicationBootstrap {
   /** Saved built-in intent flags from data/.env.generated — the fallback when Docker isn't reachable. */
   private readSavedBuiltinFlags(): { database: boolean; cache: boolean; storage: boolean } {
     try {
-      const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
-      const saved: Record<string, string> = fs.existsSync(envPath)
-        ? dotenv.parse(fs.readFileSync(envPath, 'utf8'))
-        : {};
+      const saved = readGeneratedEnv();
       return {
         database: saved.POSTGRES_BUILTIN === 'true',
         cache: saved.REDIS_BUILTIN === 'true',
@@ -611,8 +608,7 @@ export class InfraController implements OnApplicationBootstrap {
   @ApiOperation({ summary: 'Read the saved infrastructure configuration for the dashboard form' })
   @ApiResponse({ status: 200, description: 'Saved configuration (secrets omitted)' })
   getConfig(): SavedConfigResponse {
-    const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
-    const saved: Record<string, string> = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath, 'utf8')) : {};
+    const saved = readGeneratedEnv();
 
     // Secrets (passwords, S3 keys) are never returned; the form shows a "set" indicator
     // and an empty submission preserves the stored value (see saveConfig). This lets the
@@ -673,10 +669,8 @@ export class InfraController implements OnApplicationBootstrap {
       // field (`undefined`) leaves its stored key alone — only values actually submitted
       // are written. `existing` below is therefore the base for every key the payload
       // does not mention.
-      const envPath = path.resolve(process.cwd(), 'data', '.env.generated');
-      const existing: Record<string, string> = fs.existsSync(envPath)
-        ? dotenv.parse(fs.readFileSync(envPath, 'utf8'))
-        : {};
+      const envPath = generatedEnvPath();
+      const existing = readGeneratedEnv();
       const updates: Record<string, string> = {};
       // Keys to remove from the merged result — used to drop stale settings when the
       // user switches mode (postgres->sqlite, s3->local, built-in->external) so a reload
