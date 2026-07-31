@@ -50,6 +50,7 @@ import {
   IncomingCallEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { resolveWebVersionPin } from '../wa-web-version';
+import { resolveAuthTimeoutMs } from '../engine-init-timeout';
 import { chatKind, isChannelJid, userPart } from '../identity/wa-id';
 import { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
@@ -390,23 +391,11 @@ export function probeOnboardingModal(options?: { labels?: string[]; headingOptio
 // status can import it without loading whatsapp-web.js (engine lazy-loading). The adapter imports
 // resolveWebVersionPin above for use in initialize().
 
-/**
- * Optional override for whatsapp-web.js's initial boot/inject wait (#353). On slow first boots
- * (e.g. WSL2 or low-resource containers) the default 30s `authTimeoutMs` can expire before WhatsApp
- * Web finishes loading, aborting QR generation. Set WWEBJS_AUTH_TIMEOUT_MS to a larger value in
- * milliseconds (e.g. 120000) to extend it. Unset, or a value that is not a positive safe integer,
- * keeps the whatsapp-web.js default (30000ms).
- */
-export function resolveAuthTimeoutMs(): number | undefined {
-  const raw = process.env.WWEBJS_AUTH_TIMEOUT_MS?.trim();
-  if (!raw || !/^\d+$/.test(raw)) {
-    return undefined;
-  }
-  const ms = Number(raw);
-  // Number.isSafeInteger rejects Infinity (from huge digit strings) and >2^53 unsafe integers — both
-  // pass the /^\d+$/ shape check but would make whatsapp-web.js's inject loop wait effectively forever.
-  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined;
-}
+// resolveAuthTimeoutMs now lives in ../engine-init-timeout, next to the outer init deadline derived
+// from it: that deadline is engine-agnostic, so deriving it here made the session lifecycle import
+// this adapter just to size a timeout. Re-exported because callers still reach it through the engine
+// they are configuring.
+export { resolveAuthTimeoutMs };
 
 /**
  * Extracts the JID of the parent community a group is linked to, if any.

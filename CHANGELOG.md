@@ -56,6 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same captured `(id, engine)` the closure did, so the stale-generation identity guards are
   unchanged.
 
+- **The session lifecycle no longer imports the whatsapp-web.js adapter to size a timeout.** The
+  deadline `SessionService` races `engine.initialize()` against is engine-agnostic — it applies to
+  Baileys sessions too — but it was derived inline from `resolveAuthTimeoutMs()`, which the adapter
+  owned, so the lifecycle owner depended on one specific engine's module for a value it applies to
+  all of them. Both the env parse and the derivation now live in `engine/engine-init-timeout.ts`, and
+  the adapter re-exports `resolveAuthTimeoutMs` for the callers that legitimately reach it through
+  the engine they are configuring.
+
+  Pure code motion — the derived deadline is identical, and both
+  `whatsapp-web-js.adapter.spec.ts` and `session.service.spec.ts` pass with no edits. The wwjs-named
+  `WWEBJS_AUTH_TIMEOUT_MS` still feeds the shared floor, which is documented rather than changed: it
+  can only ever raise the deadline above 60s, never lower it, so a Baileys session gets a more
+  generous window and never a shorter one. Splitting the two engines' windows needs its own env var
+  and is a behaviour change, not a move.
+
 ### Fixed
 
 - **A missing dashboard asset returns 404 instead of the SPA shell.** `ServeStaticModule`'s built-in

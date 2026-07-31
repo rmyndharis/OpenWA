@@ -27,7 +27,7 @@ import { decideReconnect, type ReconnectAttemptState } from './reconnect-policy'
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { MessageProjector } from './message-projector.service';
-import { resolveAuthTimeoutMs } from '../../engine/adapters/whatsapp-web-js.adapter';
+import { resolveEngineInitTimeoutMs } from '../../engine/engine-init-timeout';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import { resolveFeatureFlags } from '../../config/feature-flags';
@@ -1181,12 +1181,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // propagate untouched so start()'s catch keeps owning FAILED+reason (the diagnosability #600/#631
     // added) — pre-deleting the engine and writing DISCONNECTED here would make start()'s
     // `engines.get(id)` return undefined, skip its FAILED write, and hide the failure reason.
-    // The deadline MUST exceed the auth wait whatsapp-web.js runs INSIDE engine.initialize()
-    // (authTimeoutMs — the inject() poll for WA Web's JS to bootstrap, raisable via
-    // WWEBJS_AUTH_TIMEOUT_MS for slow first boots, e.g. WSL2/low-resource containers). A shorter
-    // outer deadline would SIGKILL a legitimate slow init mid-auth. Floor 60s for the hang case;
-    // otherwise give the configured auth window + 30s for launch/navigation/post-inject overhead.
-    const engineInitTimeoutMs = Math.max(60_000, (resolveAuthTimeoutMs() ?? 30_000) + 30_000);
+    // The deadline must clear the auth wait an engine runs INSIDE initialize(), or it would SIGKILL a
+    // legitimately slow init mid-auth — see resolveEngineInitTimeoutMs for the derivation.
+    const engineInitTimeoutMs = resolveEngineInitTimeoutMs();
     // Promise.race can't cancel the losing promise, so swallow a late rejection from initPromise.
     initPromise.catch(() => undefined);
 
