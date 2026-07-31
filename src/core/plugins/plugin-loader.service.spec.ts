@@ -775,20 +775,8 @@ describe('PluginLoaderService — search-provider wiring', () => {
     } as unknown as ModuleRef);
   }
 
-  it('getSearchRegistry returns the registry when ModuleRef has it', () => {
-    const registry = new SearchProviderRegistry();
-    const loader = makeLoader(jest.fn().mockReturnValue(registry));
-    expect((loader as unknown as { getSearchRegistry: () => unknown }).getSearchRegistry()).toBe(registry);
-  });
-
-  it('getSearchRegistry returns undefined when ModuleRef has no registry (search disabled)', () => {
-    const loader = makeLoader(
-      jest.fn().mockImplementation(() => {
-        throw new Error('not found');
-      }),
-    );
-    expect((loader as unknown as { getSearchRegistry: () => unknown }).getSearchRegistry()).toBeUndefined();
-  });
+  // getSearchRegistry's own behaviour now lives in plugin-host-services.spec.ts, tested on the class
+  // that owns it instead of through a private reach-in on the loader.
 
   it('disablePlugin unregisters the plugin’s search-provider entry', async () => {
     const registry = new SearchProviderRegistry();

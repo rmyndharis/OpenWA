@@ -39,6 +39,7 @@ import { validatePluginManifest } from './plugin-manifest';
 import { effectiveNetAllow, isNetHostAllowed, performPluginFetch } from './plugin-net';
 import { PluginStorageService } from './plugin-storage.service';
 import { seedConfigDefaults } from './config-defaults.util';
+import { PluginHostServices } from './plugin-host-services';
 import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
@@ -49,16 +50,10 @@ import { shouldDispatchToPlugin } from './handover-gate';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
-import type { MessageService } from '../../modules/message/message.service';
-import type { SessionService } from '../../modules/session/session.service';
 import type { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
-import {
-  ConversationMappingConflict,
-  type ConversationMappingService,
-} from '../../modules/integration/conversation-mapping.service';
-import type { PluginInstanceService } from '../../modules/integration/plugin-instance.service';
+import { ConversationMappingConflict } from '../../modules/integration/conversation-mapping.service';
+import type { MessageService } from '../../modules/message/message.service';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
-import type { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
 
 /** Default per-plugin heap cap for the sandbox worker; an OOM terminates the worker, not the host. */
 const SANDBOX_MAX_OLD_GEN_MB = 256;
@@ -205,13 +200,15 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   // resolves the per-session slice. Per async call tree, so concurrent sessions don't cross over.
   private readonly hookSession = new AsyncLocalStorage<{ sessionId?: string }>();
   private readonly pluginsDir: string;
+  /** Resolves host services at call time; see PluginHostServices for why it is not constructor-injected. */
+  private readonly hostServices: PluginHostServices;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly hookManager: HookManager,
     private readonly pluginStorage: PluginStorageService,
-    // Resolves MessageService/SessionService lazily inside capability verbs. ModuleRef is used
-    // instead of constructor injection to avoid the provider cycle
+    // Handed straight to PluginHostServices below, which owns the reasoning: ModuleRef rather than
+    // constructor injection avoids the provider cycle
     // PluginLoaderService -> SessionService -> EngineFactory -> PluginLoaderService.
     private readonly moduleRef: ModuleRef,
     // Shared lid->phone table (EngineModule is @Global and exports it). Optional so the many unit tests
@@ -220,6 +217,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
   ) {
     this.pluginsDir = this.configService.get<string>('plugins.dir') ?? './plugins';
+    this.hostServices = new PluginHostServices(this.moduleRef);
   }
 
   onModuleInit(): void {
@@ -659,7 +657,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       // Unregister all hooks for this plugin
       this.hookManager.unregisterPlugin(pluginId);
       // Drop the plugin's search-provider entry (if any) so queries don't route to a terminated worker.
-      unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
+      unregisterPluginSearchProvider(this.hostServices.getSearchRegistry(), pluginId);
 
       plugin.status = PluginStatus.DISABLED;
 
@@ -908,7 +906,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // explicitly configured with scheme:none is unauthenticated and must never be labelled verified.
     // Missing/hot-swapped route metadata fails closed.
     const verified = route ? route.signature.scheme !== 'none' : false;
-    const instance = await this.getPluginInstanceService().resolve(d.pluginId, d.instanceId);
+    const instance = await this.hostServices.getPluginInstanceService().resolve(d.pluginId, d.instanceId);
     const config = plugin
       ? resolvePluginConfig(
           plugin.config,
@@ -933,61 +931,6 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     });
     if (!result.ok) {
       throw new Error(result.error ?? 'ingress dispatch failed with status ' + result.status);
-    }
-  }
-
-  /**
-   * Resolve MessageService at call time via a lazy require so plugin-loader creates NO top-level
-   * module-load edge to message.service. A static import closes the cycle
-   * plugin-loader -> message -> session -> engine.factory -> core/plugins barrel -> plugin-loader,
-   * which corrupts MessageService's constructor paramtype metadata (SessionService -> undefined) at boot.
-   */
-  private getMessageService(): MessageService {
-    const mod =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('../../modules/message/message.service') as typeof import('../../modules/message/message.service');
-    return this.moduleRef.get(mod.MessageService, { strict: false });
-  }
-
-  private getSessionService(): SessionService {
-    const mod =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('../../modules/session/session.service') as typeof import('../../modules/session/session.service');
-    return this.moduleRef.get(mod.SessionService, { strict: false });
-  }
-
-  /**
-   * Same lazy-require pattern as getMessageService/getSessionService: a static import of the
-   * integration module would add a top-level edge back into plugin-loader's own module graph.
-   */
-  private getConversationMappingService(): ConversationMappingService {
-    const mod =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('../../modules/integration/conversation-mapping.service') as typeof import('../../modules/integration/conversation-mapping.service');
-    return this.moduleRef.get(mod.ConversationMappingService, { strict: false });
-  }
-
-  private getPluginInstanceService(): PluginInstanceService {
-    const mod =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('../../modules/integration/plugin-instance.service') as typeof import('../../modules/integration/plugin-instance.service');
-    return this.moduleRef.get(mod.PluginInstanceService, { strict: false });
-  }
-
-  /**
-   * Resolve the SearchProviderRegistry lazily — search is conditionally loaded (SEARCH_ENABLED=false omits
-   * SearchModule), so the registry may not be registered. Mirrors the lazy-require pattern for
-   * MessageService/SessionService to avoid a static module edge and a DI cycle. Returns undefined when
-   * search is disabled, so the loader can no-op search-provider registration without throwing.
-   */
-  private getSearchRegistry(): SearchProviderRegistry | undefined {
-    try {
-      const mod =
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        require('../../modules/search/search-provider.registry') as typeof import('../../modules/search/search-provider.registry');
-      return this.moduleRef.get(mod.SearchProviderRegistry, { strict: false });
-    } catch {
-      return undefined;
     }
   }
 
@@ -1043,7 +986,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    */
   private resolveEngine(plugin: PluginInstance, sessionId: string): IWhatsAppEngine {
     this.assertSessionActive(plugin, sessionId);
-    const engine = this.getSessionService().getEngine(sessionId);
+    const engine = this.hostServices.getSessionService().getEngine(sessionId);
     if (!engine) {
       throw new PluginCapabilityError(`Session ${sessionId} has no active engine (unknown or not started)`);
     }
@@ -1065,7 +1008,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    */
   private async isSessionGone(sessionId: string): Promise<boolean> {
     try {
-      await this.getSessionService().findOne(sessionId);
+      await this.hostServices.getSessionService().findOne(sessionId);
       return false;
     } catch (error) {
       return error instanceof NotFoundException;
@@ -1189,10 +1132,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
             try {
               const chatId = (hookCtx.data as { chatId?: string } | undefined)?.chatId;
               if (chatId && hookCtx.sessionId) {
-                const handover = await this.getConversationMappingService().findHandoverForChat(
-                  hookCtx.sessionId,
-                  chatId,
-                );
+                const handover = await this.hostServices
+                  .getConversationMappingService()
+                  .findHandoverForChat(hookCtx.sessionId, chatId);
                 if (!shouldDispatchToPlugin(handover, pluginId)) return { continue: true };
               }
             } catch (error) {
@@ -1303,7 +1245,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         label: `${plugin.manifest.name} (plugin)`,
         transport: liveHost,
         timeoutMs: SANDBOX_SEARCH_TIMEOUT_MS,
-        registry: this.getSearchRegistry(),
+        registry: this.hostServices.getSearchRegistry(),
         mode: this.configService.get<string>('search.provider', 'auto'),
         hasPermission: (plugin.manifest.permissions ?? []).includes(PluginCapabilityPermission.SEARCH_PROVIDE),
         warn: (message, meta) => this.logger.warn(message, meta),
@@ -1329,7 +1271,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       // Always release the search-provider slot so the registry can fall back to builtin-fts. On a crash
       // this is the only cleanup; on a deliberate disable/enable-failure the explicit unregister already
       // ran, making this a harmless no-op.
-      unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
+      unregisterPluginSearchProvider(this.hostServices.getSearchRegistry(), pluginId);
       if (intentional) return; // routine disable/enable-failure already logged and expected
       // Unexpected crash after a successful enable: the worker is gone. Drop the dead host +
       // unregister the hook shims (so they don't keep dispatching into the dead worker) + mark the
@@ -1371,7 +1313,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       // Drop a search provider registered mid-onEnable before the failure: without this, a plugin that
       // registers then throws leaves a dead provider as the ACTIVE registry entry in auto mode, so every
       // /search routes to a terminated worker → outage. Mirrors disablePlugin's cleanup.
-      unregisterPluginSearchProvider(this.getSearchRegistry(), pluginId);
+      unregisterPluginSearchProvider(this.hostServices.getSearchRegistry(), pluginId);
       await host.terminate().catch(() => undefined);
       throw error;
     }
@@ -1440,12 +1382,12 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           // assertSessionActive.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
           this.resolveEngine(plugin, sessionId);
-          return this.getMessageService().sendText(sessionId, { chatId, text });
+          return this.hostServices.getMessageService().sendText(sessionId, { chatId, text });
         },
         reply: async (sessionId, chatId, quotedMessageId, text) => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.MESSAGES_SEND);
           this.resolveEngine(plugin, sessionId);
-          return this.getMessageService().reply(sessionId, { chatId, quotedMessageId, text });
+          return this.hostServices.getMessageService().reply(sessionId, { chatId, quotedMessageId, text });
         },
       } satisfies PluginMessagingCapability,
       engine: {
@@ -1507,11 +1449,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
               `Plugin ${plugin.manifest.id}: conversation.send requires chatId, or both instanceId and source to resolve one`,
             );
           }
-          const mapping = await this.getConversationMappingService().getByProvider(
-            plugin.manifest.id,
-            env.instanceId,
-            env.source.externalConversationId,
-          );
+          const mapping = await this.hostServices
+            .getConversationMappingService()
+            .getByProvider(plugin.manifest.id, env.instanceId, env.source.externalConversationId);
           if (!mapping) {
             throw new PluginCapabilityError(
               `Plugin ${plugin.manifest.id}: no conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId}`,
@@ -1530,7 +1470,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
             // dead session's rows bricked conversation.send permanently. A mapping owned by another
             // EXISTING session is a genuine cross-session violation and still throws.
             if (await this.isSessionGone(mapping.sessionId)) {
-              await this.getConversationMappingService().rebindSession(mapping.id, env.sessionId);
+              await this.hostServices.getConversationMappingService().rebindSession(mapping.id, env.sessionId);
               this.logger.warn(
                 `Rebound conversation mapping for instance ${env.instanceId} / ${env.source.externalConversationId} ` +
                   `from deleted session ${mapping.sessionId} to ${env.sessionId}`,
@@ -1553,10 +1493,11 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           (events as HookEvent[]).some(e => this.hookManager.isInFlight(e))
             ? this.hookManager.runInFlight(events as HookEvent[], run)
             : run(),
-        sendText: (sessionId, opts) => this.getMessageService().sendText(sessionId, opts),
-        reply: (sessionId, opts) => this.getMessageService().reply(sessionId, opts),
-        sendMedia: (sessionId, opts) => dispatchConversationMedia(this.getMessageService(), sessionId, opts),
-        sendLocation: (sessionId, opts) => this.getMessageService().sendLocation(sessionId, opts),
+        sendText: (sessionId, opts) => this.hostServices.getMessageService().sendText(sessionId, opts),
+        reply: (sessionId, opts) => this.hostServices.getMessageService().reply(sessionId, opts),
+        sendMedia: (sessionId, opts) =>
+          dispatchConversationMedia(this.hostServices.getMessageService(), sessionId, opts),
+        sendLocation: (sessionId, opts) => this.hostServices.getMessageService().sendLocation(sessionId, opts),
       } satisfies Parameters<typeof buildConversationSendFacade>[0]) satisfies PluginConversationsCapability,
       handover: {
         set: async (key, state) => {
@@ -1564,7 +1505,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
           // it reuses CONVERSATION_SEND rather than adding a new permission.
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
           this.assertSessionActive(plugin, key.sessionId);
-          const mapping = await this.getConversationMappingService().get({
+          const mapping = await this.hostServices.getConversationMappingService().get({
             sessionId: key.sessionId,
             chatId: key.chatId,
             pluginId: plugin.manifest.id,
@@ -1575,7 +1516,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
               `Plugin ${plugin.manifest.id}: no conversation mapping for session ${key.sessionId} / chat ${key.chatId} / instance ${key.instanceId}`,
             );
           }
-          await this.getConversationMappingService().setHandover(mapping.id, state);
+          await this.hostServices.getConversationMappingService().setHandover(mapping.id, state);
         },
       } satisfies PluginHandoverCapability,
       mappings: {
@@ -1589,7 +1530,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
             instanceId: key.instanceId,
           };
           try {
-            await this.getConversationMappingService().upsert(mappingKey, providerConversationId);
+            await this.hostServices.getConversationMappingService().upsert(mappingKey, providerConversationId);
           } catch (error) {
             if (!(error instanceof ConversationMappingConflict)) throw error;
             // The reverse unique key is held by another row. If that row's session was DELETED
@@ -1597,20 +1538,18 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
             // carries the new sessionId, so every upsert bricks on the dead session's row. Supersede
             // the stale row and retry once. A row owned by an EXISTING session is a genuine conflict
             // and rethrows.
-            const stale = await this.getConversationMappingService().getByProvider(
-              plugin.manifest.id,
-              key.instanceId,
-              providerConversationId,
-            );
+            const stale = await this.hostServices
+              .getConversationMappingService()
+              .getByProvider(plugin.manifest.id, key.instanceId, providerConversationId);
             if (!stale || !(await this.isSessionGone(stale.sessionId))) throw error;
-            await this.getConversationMappingService().delete(stale.id);
-            await this.getConversationMappingService().upsert(mappingKey, providerConversationId);
+            await this.hostServices.getConversationMappingService().delete(stale.id);
+            await this.hostServices.getConversationMappingService().upsert(mappingKey, providerConversationId);
           }
         },
         get: async key => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
           this.assertSessionActive(plugin, key.sessionId);
-          const m = await this.getConversationMappingService().get({
+          const m = await this.hostServices.getConversationMappingService().get({
             sessionId: key.sessionId,
             chatId: key.chatId,
             pluginId: plugin.manifest.id,
@@ -1620,11 +1559,9 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
         },
         getByProvider: async (instanceId, providerConversationId) => {
           this.assertPermission(plugin.manifest, PluginCapabilityPermission.CONVERSATION_SEND);
-          const m = await this.getConversationMappingService().getByProvider(
-            plugin.manifest.id,
-            instanceId,
-            providerConversationId,
-          );
+          const m = await this.hostServices
+            .getConversationMappingService()
+            .getByProvider(plugin.manifest.id, instanceId, providerConversationId);
           // Parity with get/upsert: a plugin may only read a mapping for a session it is activated for.
           if (m) this.assertSessionActive(plugin, m.sessionId);
           return m ? { sessionId: m.sessionId, chatId: m.chatId, handoverState: m.handoverState } : null;
