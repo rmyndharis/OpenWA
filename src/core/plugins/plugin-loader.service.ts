@@ -340,10 +340,14 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       const manifestPath = path.join(pluginPath, 'manifest.json');
 
       if (!fs.existsSync(manifestPath)) {
-        this.logger.warn(`Plugin ${entry.name} missing manifest.json`, {
-          pluginPath,
-          action: 'manifest_missing',
-        });
+        // Operators do drop unrelated directories in here, and this fires on every boot for each one.
+        // The old bare "missing manifest.json" wording read like an internal fault — #981's reporter
+        // pasted it into an unrelated session bug as evidence. Say what was skipped and what to do.
+        this.logger.warn(
+          `Skipped ${entry.name}: not a plugin (no manifest.json). Delete the directory to silence this, ` +
+            `or add a manifest.json if it is meant to load.`,
+          { pluginPath, action: 'manifest_missing' },
+        );
         if (LEGACY_REMOVED_PLUGIN_IDS.has(entry.name)) {
           this.pluginStorage.deletePluginEntry(entry.name);
           this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {

@@ -101,6 +101,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thing that verifies it. CI's shellcheck step now covers every script in `scripts/` instead of three
   of them; the BOM is exactly what it reports as SC1082, so the narrow scope is what let it survive.
 
+- **A stray directory under `data/plugins` no longer reads as a plugin fault.** Anything in there
+  without a `manifest.json` is skipped and logged, once per directory on every boot. The wording was a
+  bare "Plugin `<name>` missing manifest.json", which describes an internal failure rather than a
+  directory the loader simply does not recognise — an operator reporting an unrelated session problem
+  pasted two of these lines as evidence for it. The message now names what was skipped and what to do
+  about it. The `manifest_missing` action key is unchanged, so existing log filters still match.
+
+- **`.env.example` records when `AUTO_START_SESSIONS` began taking effect under Docker Compose.** The
+  bundled `docker-compose.yml` did not forward the variable into the container before v0.12.0, and
+  nothing else could supply it — there is no `env_file:` entry, `.env` is not mounted, and the build
+  context excludes it. Setting the flag on an earlier version therefore did nothing at all, and
+  authenticated sessions stayed `disconnected` after every restart with no indication why. The
+  forwarding itself was fixed in v0.12.0; this only stops the sample config from implying the value was
+  always live.
+
 ### Removed
 
 - `scripts/openwa.sh`, an orchestration helper superseded by the in-process Docker orchestration on
