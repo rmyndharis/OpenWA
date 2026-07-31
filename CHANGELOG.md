@@ -76,6 +76,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rolled-back `POST /api/infra/import-data` no longer denies the engines it already stopped.** The
+  orphan pre-flight runs *before* the transaction opens, and `stopOrphans: true` really destroys those
+  engines there — a teardown the rollback cannot undo. Both rollback branches nevertheless returned a
+  hardcoded `restartRequired: false` with three empty orphan arrays, so an operator who hit a per-row
+  warning read "nothing was stopped, no restart needed" while their sessions were in fact down. They
+  now report what actually happened, exactly as the success path already did.
+
+  `restartRequired` on that path narrows to the one thing a rollback cannot undo: a **failed** teardown,
+  which may have left a Chromium/socket alive. A cleanly stopped orphan leaves its session row intact
+  (restart it with `POST /sessions/{id}/start`), and an engine `force` left running was never orphaned
+  after all, because the data that would have orphaned it was not replaced. The response shape is
+  unchanged and `openapi.json` is untouched — only the values were wrong.
+
 - **A missing dashboard asset returns 404 instead of the SPA shell.** `ServeStaticModule`'s built-in
   fallback answered *every* unmatched GET with `index.html`, so a mistyped or stale `<script src>`
   came back `200 text/html` and the browser reported a JavaScript syntax error from parsing the HTML

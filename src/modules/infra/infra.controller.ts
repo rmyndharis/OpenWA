@@ -1407,6 +1407,23 @@ export class InfraController implements OnApplicationBootstrap {
       restartRequired = true;
     }
 
+    // What the rollback branches below must report about the engines. The transaction can be rolled
+    // back; the orphan teardown above CANNOT — it ran before the transaction opened and those engines
+    // are already destroyed. Reporting empty arrays there would tell an operator nothing happened
+    // while their sessions are down.
+    //
+    // restartRequired narrows to the one thing a rollback cannot undo: a FAILED teardown may have left
+    // a Chromium/socket alive. The two other pre-flight outcomes do not survive the rollback as
+    // restart-worthy — a cleanly stopped orphan leaves its session row intact (restart it through
+    // POST /sessions/:id/start), and an engine the force path left running was never orphaned after
+    // all, because the data it would have been orphaned by is gone.
+    const engineStateAfterRollback = {
+      restartRequired: failedOrphanEngines.length > 0,
+      orphanedEngines,
+      stoppedOrphanEngines,
+      failedOrphanEngines,
+    };
+
     const queryRunner = this.dataDataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -1886,10 +1903,7 @@ export class InfraController implements OnApplicationBootstrap {
           counts,
           warnings,
           notices,
-          restartRequired: false,
-          orphanedEngines: [],
-          stoppedOrphanEngines: [],
-          failedOrphanEngines: [],
+          ...engineStateAfterRollback,
         };
       }
 
@@ -1903,10 +1917,7 @@ export class InfraController implements OnApplicationBootstrap {
           counts,
           warnings: ['Backup contained no rows to restore; refused to replace existing data. Check the file.'],
           notices,
-          restartRequired: false,
-          orphanedEngines: [],
-          stoppedOrphanEngines: [],
-          failedOrphanEngines: [],
+          ...engineStateAfterRollback,
         };
       }
 

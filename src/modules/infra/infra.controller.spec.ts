@@ -2623,6 +2623,60 @@ describe('InfraController.importData status_updates + runtime reconciliation', (
     expect(res.orphanedEngines).toEqual(['ghost']);
   });
 
+  it('still reports the engines it already stopped when the import rolls back', async () => {
+    // The pre-flight teardown runs BEFORE the transaction opens and cannot be rolled back with it.
+    // An operator reading imported:false plus empty orphan arrays would conclude nothing happened,
+    // while their sessions are actually down.
+    await seedSession('s1');
+    const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: ['ghost'], notRunning: [], failed: [] });
+    const controller = build({
+      sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
+    });
+    const dump = await controller.exportData();
+
+    // A message row missing the non-null from/to fails mid-import and forces the all-or-nothing rollback.
+    const res = await controller.importData({
+      tables: {
+        ...dump.tables,
+        messages: [
+          { id: 'mX', sessionId: 's1', chatId: 'c', type: 'text', direction: 'incoming', status: 'sent' },
+        ] as never,
+      },
+      stopOrphans: true,
+    });
+
+    expect(res.imported).toBe(false); // the DB really did roll back
+    expect(stopOrphanEngines).toHaveBeenCalledWith(['ghost']); // ...but the teardown really did happen
+    expect(res.stoppedOrphanEngines).toEqual(['ghost']);
+    expect(res.orphanedEngines).toEqual(['ghost']);
+    expect(res.restartRequired).toBe(false); // sessions survive the rollback; restart them via the API
+  });
+
+  it('flags restartRequired on a rolled-back import whose orphan teardown failed', async () => {
+    // The failed teardown is the one irreversible thing a rollback cannot undo: the Chromium/socket
+    // may still be alive, so this must stay true even though no data changed.
+    await seedSession('s1');
+    const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: [], notRunning: [], failed: ['ghost'] });
+    const controller = build({
+      sessionService: { getActiveSessionIds: () => ['ghost'], stopOrphanEngines },
+    });
+    const dump = await controller.exportData();
+
+    const res = await controller.importData({
+      tables: {
+        ...dump.tables,
+        messages: [
+          { id: 'mX', sessionId: 's1', chatId: 'c', type: 'text', direction: 'incoming', status: 'sent' },
+        ] as never,
+      },
+      stopOrphans: true,
+    });
+
+    expect(res.imported).toBe(false);
+    expect(res.restartRequired).toBe(true);
+    expect(res.failedOrphanEngines).toEqual(['ghost']);
+  });
+
   it('stopOrphans=true surfaces a teardown failure as restartRequired:true + a warning (Map reconciled regardless)', async () => {
     await seedSession('s1');
     const stopOrphanEngines = jest.fn().mockResolvedValue({ stopped: ['g1'], notRunning: [], failed: ['g2'] });
