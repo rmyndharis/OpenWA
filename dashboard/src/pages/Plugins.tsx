@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
+import { configUiSafeConfig, missingRequiredConfig, sparseSessionOverride } from '../utils/pluginConfigRules';
 import { coerceFieldInput, emptyForField } from '../utils/pluginConfigForm';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -45,40 +46,6 @@ const pluginTypeIcons: Record<PluginType, typeof Puzzle> = {
   auth: Shield,
   extension: Zap,
 };
-
-/**
- * Build a sparse per-session config override from a full edited config: include only non-secret keys
- * whose value differs from the Global base (so untouched keys keep inheriting Global), plus every
- * TOP-LEVEL secret key (the backend restores an untouched `***` to the stored per-session value, or
- * drops it → the host's deep-merge then re-inherits it from Global). A key absent from the base whose
- * value is just the empty default is skipped, so an untouched optional field never creates a spurious
- * override. With no schema, the input is returned as-is.
- *
- * Inheritance of untouched secrets holds for top-level secret keys and secrets nested in an OBJECT
- * (deep-merged). It does NOT hold for a `secret` column inside an array-of-rows: arrays are replaced
- * wholesale at resolve time, so a first-time per-session override that edits any cell of such an array
- * loses the untouched rows' secrets (they redact to `***`, the dashboard can't resend the real value).
- * No bundled plugin ships that shape; a plugin needing per-session array secrets should re-enter them.
- */
-function sparseSessionOverride(full: Record<string, unknown>, plugin: Plugin): Record<string, unknown> {
-  const props = plugin.configSchema?.properties;
-  if (!props) return full;
-  const out: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(props)) {
-    if (!(key in full)) continue;
-    const val = full[key];
-    if (field.secret) {
-      out[key] = val;
-      continue;
-    }
-    if (JSON.stringify(val) === JSON.stringify(plugin.config[key])) continue; // unchanged → inherit Global
-    if (plugin.config[key] === undefined && JSON.stringify(val) === JSON.stringify(emptyForField(field))) {
-      continue; // untouched optional field with no Global value → don't pin a spurious empty override
-    }
-    out[key] = val;
-  }
-  return out;
-}
 
 /**
  * Renders one config field from a plugin's schema and reports edits via `onChange`. Recurses for
@@ -330,17 +297,12 @@ function PluginConfigUi({ plugin, sessionId }: { plugin: Plugin; sessionId?: str
         // schema there is nothing safe to send. The plugin must declare its fields to pre-fill them.
         // For a per-session editor (sessionId set), expose the resolved slice: the session's override
         // value where set, else the base value.
-        const props = plugin.configSchema?.properties;
-        const override = sessionId ? (plugin.sessionConfig?.[sessionId] ?? {}) : {};
-        const safeConfig = props
-          ? Object.fromEntries(
-              Object.keys(props).flatMap(k => {
-                if (sessionId && k in override) return [[k, override[k]]];
-                return k in plugin.config ? [[k, plugin.config[k]]] : [];
-              }),
-            )
-          : {};
-        post({ type: 'config:value', config: safeConfig, schema: plugin.configSchema, theme: resolvedTheme });
+        post({
+          type: 'config:value',
+          config: configUiSafeConfig(plugin, sessionId),
+          schema: plugin.configSchema,
+          theme: resolvedTheme,
+        });
       } else if (msg?.type === 'config:save') {
         void (async () => {
           try {
@@ -602,17 +564,6 @@ export default function Plugins() {
   // INSIDE the sandbox with a raw "<id>: <field> is required" error and flips the card to ERROR.
   // Open the config modal instead so the user completes the fields first — cures the whole class
   // (after-hours `schedule`/`awayMessage`, faq-bot `rules`, any catalog plugin with required fields).
-  const missingRequiredConfig = (plugin: Plugin): string[] => {
-    const props = plugin.configSchema?.properties ?? {};
-    return Object.entries(props)
-      .filter(
-        ([key, field]) =>
-          field.required === true &&
-          (plugin.config[key] === undefined || plugin.config[key] === null || plugin.config[key] === ''),
-      )
-      .map(([key]) => key);
-  };
-
   const handleToggle = async (plugin: Plugin) => {
     if (plugin.status !== 'enabled') {
       const missing = missingRequiredConfig(plugin);
