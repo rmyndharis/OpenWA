@@ -122,6 +122,7 @@ import { ModuleRef } from '@nestjs/core';
 import { HookManager } from '../hooks';
 import { PluginStorageService } from './plugin-storage.service';
 import { IPlugin, PluginContext, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
+import configuration from '../../config/configuration';
 import { SearchProviderRegistry } from '../../modules/search/search-provider.registry';
 import { WorkerThreadChannel } from './sandbox/worker-thread-channel';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
@@ -1305,5 +1306,258 @@ describe('PluginLoaderService — uninstall cleans up split-dir plugin storage',
     expect(fs.existsSync(userStorageDir)).toBe(false); // split-dir storage is now cleaned too
     expect(fs.existsSync(otherStorageDir)).toBe(true); // another plugin's storage is untouched
     expect(await storage.createPluginStorage('other-plg').get('token')).toEqual({ secret: 'xyz' });
+  });
+});
+
+/**
+ * Where the loader looks for plugin code at boot.
+ *
+ * The package dir and the plugin registry describe the same install, and they used to default from
+ * two unrelated strings: with PLUGINS_DIR unset the loader scanned ./plugins while the registry (and
+ * every plugin's ctx.storage) lived under <dataDir>/plugins. The scan found nothing and said only
+ * "Loaded 0 plugins", while the registry still listed every plugin as installed — and in Docker the
+ * install landed in the container layer instead of on the data volume, so a recreate destroyed the
+ * code while the config and secrets on the volume survived.
+ *
+ * These tests boot through the REAL configuration factory from a temp cwd standing in for the image's
+ * WORKDIR /app, because the defaults under test are relative paths resolved against the cwd.
+ */
+describe('PluginLoaderService — boot plugins directory', () => {
+  let tmpDir: string;
+  let origCwd: string;
+  const origPluginsDir = process.env.PLUGINS_DIR;
+
+  const loggerOf = (loader: PluginLoaderService): { warn: jest.Mock; log: jest.Mock; debug: jest.Mock } =>
+    (loader as unknown as { logger: { warn: jest.Mock; log: jest.Mock; debug: jest.Mock } }).logger;
+
+  /** Put a loadable plugin package (manifest + main file) at <dir>/<id>, like the installer does. */
+  const installAt = (dir: string, id: string): void => {
+    const pluginDir = path.join(dir, id);
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'manifest.json'),
+      JSON.stringify({ id, name: id, version: '1.0.0', type: 'extension', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(pluginDir, 'index.js'), 'module.exports = class {};');
+  };
+
+  const boot = (): { loader: PluginLoaderService; storage: PluginStorageService; warn: jest.Mock } => {
+    const config = new ConfigService(configuration());
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+    const warn = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined) as unknown as jest.Mock;
+    jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
+    jest.spyOn(loggerOf(loader), 'debug').mockImplementation(() => undefined);
+    loader.onModuleInit();
+    return { loader, storage, warn };
+  };
+
+  const warningsMatching = (warn: jest.Mock, action: string): unknown[][] =>
+    warn.mock.calls.filter(call => (call[1] as { action?: string } | undefined)?.action === action);
+
+  beforeEach(() => {
+    delete process.env.PLUGINS_DIR;
+    // realpath: on macOS os.tmpdir() is a symlink, and process.cwd() reports the resolved path.
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'owa-pluginsdir-')));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    if (origPluginsDir === undefined) delete process.env.PLUGINS_DIR;
+    else process.env.PLUGINS_DIR = origPluginsDir;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // THE regression: with PLUGINS_DIR unset, plugin code sitting where the registry lives must load.
+  it('loads plugin code from <dataDir>/plugins when PLUGINS_DIR is unset', () => {
+    installAt(path.join(tmpDir, 'data', 'plugins'), 'ext-data');
+
+    const { loader } = boot();
+
+    expect(loader.getPlugin('ext-data')).toBeDefined();
+    // ...and the registry is written into that same tree, which is the whole point: an install's code
+    // and its persisted entry can never end up on different volumes again.
+    expect(fs.existsSync(path.join(tmpDir, 'data', 'plugins', 'registry.json'))).toBe(true);
+  });
+
+  it('still loads plugins left at the legacy ./plugins location, and says so', () => {
+    installAt(path.join(tmpDir, 'plugins'), 'ext-legacy');
+
+    const { loader, warn } = boot();
+
+    expect(loader.getPlugin('ext-legacy')).toBeDefined();
+    const [message] = warningsMatching(warn, 'plugins_legacy_dir')[0] as [string];
+    // The operator must be able to act on this without reading the source: both paths, and how to
+    // make the choice permanent either way.
+    expect(message).toContain(path.join('.', 'plugins'));
+    expect(message).toContain(path.join('data', 'plugins'));
+    expect(message).toContain('PLUGINS_DIR');
+  });
+
+  it('loads plugins from both locations while a host is mid-migration', () => {
+    installAt(path.join(tmpDir, 'data', 'plugins'), 'ext-new');
+    installAt(path.join(tmpDir, 'plugins'), 'ext-legacy');
+
+    const { loader } = boot();
+
+    expect(loader.getPlugin('ext-new')).toBeDefined();
+    expect(loader.getPlugin('ext-legacy')).toBeDefined();
+  });
+
+  it('keeps the copy in the configured dir when the same plugin exists in both, without marking it ERROR', () => {
+    installAt(path.join(tmpDir, 'data', 'plugins'), 'ext-both');
+    installAt(path.join(tmpDir, 'plugins'), 'ext-both');
+
+    const { loader, storage } = boot();
+
+    expect(loader.getPlugin('ext-both')).toBeDefined();
+    expect(storage.getPluginStatus('ext-both')).toBe(PluginStatus.INSTALLED);
+  });
+
+  it('honors an explicit PLUGINS_DIR over both the default and the legacy fallback', () => {
+    const custom = path.join(tmpDir, 'custom-plugins');
+    process.env.PLUGINS_DIR = custom;
+    installAt(custom, 'ext-custom');
+    installAt(path.join(tmpDir, 'data', 'plugins'), 'ext-data');
+    installAt(path.join(tmpDir, 'plugins'), 'ext-legacy');
+
+    const { loader, warn } = boot();
+
+    expect(loader.getPlugin('ext-custom')).toBeDefined();
+    expect(loader.getPlugin('ext-data')).toBeUndefined();
+    expect(loader.getPlugin('ext-legacy')).toBeUndefined();
+    expect(warningsMatching(warn, 'plugins_legacy_dir')).toHaveLength(0);
+  });
+
+  it('ignores a legacy directory that holds no loadable plugin package', () => {
+    // <dataDir>/plugins/<id> doubles as the plugin's ctx.storage dir, so "a directory exists" says
+    // nothing about whether code is there — only a manifest does.
+    fs.mkdirSync(path.join(tmpDir, 'plugins', 'ext-storage-only'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'plugins', 'ext-storage-only', 'key-abc.json'), '{}');
+
+    const { warn } = boot();
+
+    expect(warningsMatching(warn, 'plugins_legacy_dir')).toHaveLength(0);
+  });
+
+  it('warns when the registry holds installed plugins whose code is not there', () => {
+    // A host whose plugin code was destroyed with the container layer: the entry (config, secrets,
+    // enabledByOperator) survived on the volume, the code did not.
+    const config = new ConfigService(configuration());
+    const seed = new PluginStorageService(config);
+    seed.setPluginEntry({
+      id: 'ext-gone',
+      type: PluginType.EXTENSION,
+      name: 'Ext Gone',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const { warn } = boot();
+
+    const [message, context] = warningsMatching(warn, 'plugin_registry_without_code')[0] as [
+      string,
+      { count: number; pluginsDir: string },
+    ];
+    expect(message).toContain('ext-gone');
+    expect(context.count).toBe(1);
+    expect(context.pluginsDir).toContain(path.join('data', 'plugins'));
+  });
+
+  it('warns when the plugins directory does not exist at all but the registry has entries', () => {
+    const custom = path.join(tmpDir, 'never-created');
+    process.env.PLUGINS_DIR = custom;
+    const seed = new PluginStorageService(new ConfigService(configuration()));
+    seed.setPluginEntry({
+      id: 'ext-gone',
+      type: PluginType.EXTENSION,
+      name: 'Ext Gone',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const { warn } = boot();
+
+    const [message] = warningsMatching(warn, 'plugin_registry_without_code')[0] as [string];
+    expect(message).toContain(custom);
+    expect(message).toContain('does not exist');
+  });
+
+  it('stays quiet on a genuinely empty install and for built-ins, which never have a package dir', () => {
+    const seed = new PluginStorageService(new ConfigService(configuration()));
+    seed.setPluginEntry({
+      id: 'whatsapp-web.js',
+      type: PluginType.ENGINE,
+      name: 'whatsapp-web.js',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: true,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const { warn } = boot();
+
+    expect(warningsMatching(warn, 'plugin_registry_without_code')).toHaveLength(0);
+    expect(warningsMatching(warn, 'plugins_legacy_dir')).toHaveLength(0);
+  });
+
+  it("does not report a built-in's storage directory as a stray non-plugin directory", () => {
+    // <dataDir>/plugins/<id> is also where ctx.storage writes, so a built-in engine that persists
+    // anything gets a manifest-less directory here on every healthy boot. That must not read like a
+    // fault, and must not look the same as an installed plugin whose code is gone.
+    const seed = new PluginStorageService(new ConfigService(configuration()));
+    seed.setPluginEntry({
+      id: 'whatsapp-web.js',
+      type: PluginType.ENGINE,
+      name: 'whatsapp-web.js',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: true,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+    fs.mkdirSync(path.join(tmpDir, 'data', 'plugins', 'whatsapp-web.js'), { recursive: true });
+
+    const { warn } = boot();
+
+    expect(warningsMatching(warn, 'manifest_missing')).toHaveLength(0);
+  });
+
+  it('reports an installed plugin whose storage survived but whose code is gone', () => {
+    const seed = new PluginStorageService(new ConfigService(configuration()));
+    seed.setPluginEntry({
+      id: 'ext-gone',
+      type: PluginType.EXTENSION,
+      name: 'Ext Gone',
+      version: '1.0.0',
+      status: PluginStatus.INSTALLED,
+      config: {},
+      builtIn: false,
+      installedAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const dataOnly = path.join(tmpDir, 'data', 'plugins', 'ext-gone');
+    fs.mkdirSync(dataOnly, { recursive: true });
+    fs.writeFileSync(path.join(dataOnly, 'key-abc.json'), '{}');
+
+    const { warn } = boot();
+
+    const [message] = warningsMatching(warn, 'plugin_code_missing')[0] as [string];
+    expect(message).toContain('ext-gone');
+    // The state is intact — the operator needs to know reinstalling is safe, not assume data loss.
+    expect(message).toMatch(/config|data/i);
   });
 });

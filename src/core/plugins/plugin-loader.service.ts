@@ -4,6 +4,7 @@ import { ModuleRef } from '@nestjs/core';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import * as fs from 'fs';
 import * as path from 'path';
+import { DEFAULT_PLUGINS_DIR } from '../../config/configuration';
 import { createLogger } from '../../common/services/logger.service';
 import { HookManager, HookEvent, KNOWN_HOOK_EVENTS, isKnownHookEvent } from '../hooks';
 import {
@@ -135,6 +136,28 @@ export function buildSandboxWorkerEnv(source: NodeJS.ProcessEnv = process.env): 
 // temporarily-unreadable plugin dir (e.g. an unmounted volume) never loses its persisted config.
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(['auto-reply', 'translation']);
 
+/**
+ * Whether `dir` holds at least one loadable plugin package — a non-dot subdirectory with a manifest.
+ * Existence of the directory, or of subdirectories in it, proves nothing: <dataDir>/plugins is also
+ * where the registry and every plugin's ctx.storage live, so it is routinely full of directories that
+ * hold only `key-*.json` state. Unreadable or missing counts as "no packages": this only ever decides
+ * whether to scan a fallback location, never whether to delete anything.
+ */
+function hasPluginPackages(dir: string): boolean {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .some(
+        entry =>
+          entry.isDirectory() &&
+          !entry.name.startsWith('.') &&
+          fs.existsSync(path.join(dir, entry.name, 'manifest.json')),
+      );
+  } catch {
+    return false;
+  }
+}
+
 @Injectable()
 export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = createLogger('PluginLoaderService');
@@ -149,6 +172,12 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
   // the start is what makes it hold for a crash or a failed enable, neither of which runs a disable.
   private readonly lastSandboxHookError = new Map<string, { event: string; error: string; at: Date }>();
   private readonly pluginsDir: string;
+  /**
+   * The package dir OpenWA defaulted to before it moved under <dataDir>. Scanned as a compatibility
+   * fallback so a host that installed plugins there keeps loading them; null when PLUGINS_DIR names a
+   * directory explicitly, and null for a ConfigService that carries no app config (unit tests).
+   */
+  private readonly legacyPluginsDir: string | null;
   /** Resolves host services at call time; see PluginHostServices for why it is not constructor-injected. */
   private readonly hostServices: PluginHostServices;
   /** Owns the capability surface handed to plugins — permissions, session scope, engine resolution. */
@@ -167,7 +196,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // degrades to identity (no @lid resolution).
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
   ) {
-    this.pluginsDir = this.configService.get<string>('plugins.dir') ?? './plugins';
+    // Same default the `plugins.dir` key is built from, so this fallback cannot drift away from the
+    // tree PluginStorageService keeps the registry and each plugin's ctx.storage in.
+    this.pluginsDir = this.configService.get<string>('plugins.dir') ?? DEFAULT_PLUGINS_DIR;
+    this.legacyPluginsDir = this.configService.get<string>('plugins.legacyDir') ?? null;
     this.hostServices = new PluginHostServices(this.moduleRef);
     this.capabilities = new PluginCapabilityContext(
       this.logger,
@@ -187,10 +219,55 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       this.loadPluginsFromDirectory(this.pluginsDir);
     }
 
+    // COMPATIBILITY PATH — hosts that installed plugins before the package dir moved under <dataDir>.
+    // Their code sits in the old ./plugins, which was self-consistent while the loader and the
+    // installer both used that default, so changing the default must not take those plugins away.
+    // Scanned in ADDITION to the configured dir rather than instead of it, so a host part-way through
+    // migrating keeps both halves; the configured copy loads first and wins any duplicate id. Never
+    // runs when PLUGINS_DIR is set (legacyDir is null then). Keyed on finding a real plugin package,
+    // not on the directory existing: <dataDir>/plugins/<id> doubles as the plugin's ctx.storage dir,
+    // so directories with no code in them are routine.
+    if (this.legacyPluginsDir && hasPluginPackages(this.legacyPluginsDir)) {
+      this.logger.warn(
+        `Loading plugins from the legacy directory ${this.legacyPluginsDir}: the default moved to ` +
+          `${this.pluginsDir}, where the plugin registry and every new install already are. Move them ` +
+          `(mv ${this.legacyPluginsDir}/* ${this.pluginsDir}/) or keep the old location by setting ` +
+          `PLUGINS_DIR=${this.legacyPluginsDir}. In Docker this matters: a directory outside the data ` +
+          `volume is destroyed on the next container recreate.`,
+        { action: 'plugins_legacy_dir', legacyDir: this.legacyPluginsDir, pluginsDir: this.pluginsDir },
+      );
+      this.loadPluginsFromDirectory(this.legacyPluginsDir);
+    }
+
     this.logger.log(`Loaded ${this.plugins.size} plugins`, {
       action: 'plugins_loaded',
       count: this.plugins.size,
     });
+
+    this.warnOnRegistryEntriesWithoutCode();
+  }
+
+  /**
+   * Report installed plugins the registry knows about but the scan did not find. Without this, the
+   * two halves of an install drifting apart is invisible: the boot logs "Loaded 0 plugins" — exactly
+   * what a host with nothing installed logs — while the dashboard, which reads the registry, lists
+   * every plugin as installed and enabled. Naming the directory that was actually scanned is what
+   * makes the divergence self-diagnosing.
+   *
+   * Built-ins are excluded: they are registered programmatically at bootstrap (after this runs) and
+   * never have a package directory at all.
+   */
+  private warnOnRegistryEntriesWithoutCode(): void {
+    const orphaned = this.pluginStorage.getAllEntries().filter(e => !e.builtIn && !this.plugins.has(e.id));
+    if (orphaned.length === 0) return;
+
+    const missingDir = fs.existsSync(this.pluginsDir) ? '' : ' (that directory does not exist)';
+    this.logger.warn(
+      `The plugin registry lists ${orphaned.length} installed plugin(s) with no loaded code in ` +
+        `${this.pluginsDir}${missingDir}: ${orphaned.map(e => e.id).join(', ')}. Their config and stored ` +
+        `data are intact — reinstall them, or set PLUGINS_DIR to the directory that holds their code.`,
+      { action: 'plugin_registry_without_code', count: orphaned.length, pluginsDir: this.pluginsDir },
+    );
   }
 
   /**
@@ -266,23 +343,65 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       // plugin on the next boot. recoverInterruptedUpdates has already reconciled them by this point.
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
 
+      // Already loaded by an earlier scan. Only reachable through the legacy-directory compatibility
+      // scan, where the same package can sit in both trees: the copy in the configured dir wins, and
+      // re-loading it would throw "already loaded" — which the catch below would persist as ERROR on
+      // a perfectly healthy plugin.
+      if (this.plugins.has(entry.name)) {
+        this.logger.debug(`Skipped ${entry.name} in ${dir}: already loaded from another plugin directory`, {
+          pluginId: entry.name,
+          action: 'plugin_duplicate_dir_skipped',
+        });
+        continue;
+      }
+
       const pluginPath = path.join(dir, entry.name);
       const manifestPath = path.join(pluginPath, 'manifest.json');
 
       if (!fs.existsSync(manifestPath)) {
-        // Operators do drop unrelated directories in here, and this fires on every boot for each one.
-        // The old bare "missing manifest.json" wording read like an internal fault — #981's reporter
-        // pasted it into an unrelated session bug as evidence. Say what was skipped and what to do.
-        this.logger.warn(
-          `Skipped ${entry.name}: not a plugin (no manifest.json). Delete the directory to silence this, ` +
-            `or add a manifest.json if it is meant to load.`,
-          { pluginPath, action: 'manifest_missing' },
-        );
         if (LEGACY_REMOVED_PLUGIN_IDS.has(entry.name)) {
+          this.logger.warn(
+            `Skipped ${entry.name}: not a plugin (no manifest.json). Delete the directory to silence this, ` +
+              `or add a manifest.json if it is meant to load.`,
+            { pluginPath, action: 'manifest_missing' },
+          );
           this.pluginStorage.deletePluginEntry(entry.name);
           this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
             action: 'registry_ghost_pruned',
           });
+          continue;
+        }
+
+        // A manifest-less directory here means one of three different things, which used to log
+        // identically: <dataDir>/plugins/<id> is BOTH the package dir and the plugin's ctx.storage
+        // dir, so a built-in that persists anything owns a manifest-less directory on every healthy
+        // boot, while an installed plugin whose code is gone (a container recreate that took the
+        // image layer with it) leaves a directory that looks exactly the same — state still in it.
+        // The registry is what tells them apart, so consult it rather than logging one wording for
+        // the routine case, the data-loss case, and a directory an operator simply dropped in here.
+        const registryEntry = this.pluginStorage.getPluginEntry(entry.name);
+        if (registryEntry?.builtIn) {
+          this.logger.debug(`Skipped ${entry.name}: built-in plugin storage, not a package directory`, {
+            pluginPath,
+            pluginId: entry.name,
+            action: 'builtin_storage_dir_skipped',
+          });
+        } else if (registryEntry) {
+          this.logger.warn(
+            `Plugin ${entry.name} is installed but its code is missing from ${pluginPath} (no manifest.json) ` +
+              `while its stored data is still there. Reinstall it — its config and stored data are kept. ` +
+              `Plugin code kept outside the data volume does not survive a container recreate.`,
+            { pluginPath, pluginId: entry.name, action: 'plugin_code_missing' },
+          );
+        } else {
+          // Operators do drop unrelated directories in here, and this fires on every boot for each one.
+          // The old bare "missing manifest.json" wording read like an internal fault — #981's reporter
+          // pasted it into an unrelated session bug as evidence. Say what was skipped and what to do.
+          this.logger.warn(
+            `Skipped ${entry.name}: not a plugin (no manifest.json). Delete the directory to silence this, ` +
+              `or add a manifest.json if it is meant to load.`,
+            { pluginPath, action: 'manifest_missing' },
+          );
         }
         continue;
       }
