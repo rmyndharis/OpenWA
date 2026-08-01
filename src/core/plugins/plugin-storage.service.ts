@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { DEFAULT_DATA_DIR } from '../../config/configuration';
 import { createLogger } from '../../common/services/logger.service';
 import { isPathWithin, isSafeStorageKey } from '../../common/utils/path-safety';
 import { PluginStatus, PluginStorage, PluginRegistryEntry } from './plugin.interfaces';
@@ -68,7 +69,9 @@ export class PluginStorageService {
   private registry: Map<string, PluginRegistryEntry> = new Map();
 
   constructor(private readonly configService: ConfigService) {
-    this.dataDir = this.configService.get<string>('dataDir') ?? './data';
+    // Same constant the `dataDir` key is built from, so this fallback (hit only by a ConfigService
+    // that carries no app config, e.g. in unit tests) can never drift from the configured value.
+    this.dataDir = this.configService.get<string>('dataDir') ?? DEFAULT_DATA_DIR;
     this.registryPath = path.join(this.dataDir, 'plugins', 'registry.json');
     this.maxPluginStorageBytes =
       this.configService.get<number>('plugins.storageMaxBytes') ?? DEFAULT_MAX_PLUGIN_STORAGE_BYTES;

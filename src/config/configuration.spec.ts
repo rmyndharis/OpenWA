@@ -1,4 +1,6 @@
+import * as path from 'path';
 import configuration, {
+  DEFAULT_DATA_DIR,
   PINNED_BROWSER_LOCALE,
   resolveNonNegativeIntEnv,
   withPinnedBrowserLocale,
@@ -101,6 +103,38 @@ describe('configuration — Postgres pool timeouts', () => {
     expect(cfg.statementTimeoutMs).toBe(0);
     expect(cfg.idleTimeoutMs).toBe(15000);
     expect(cfg.connectionTimeoutMs).toBe(2000);
+  });
+});
+
+describe('configuration — plugins directory default', () => {
+  const orig = process.env.PLUGINS_DIR;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.PLUGINS_DIR;
+    else process.env.PLUGINS_DIR = orig;
+  });
+
+  // The package dir and the registry are two halves of one install: PluginStorageService writes
+  // <dataDir>/plugins/registry.json, so a package dir defaulting anywhere else means the loader scans
+  // an empty tree while the registry still lists every plugin as installed — and, in Docker, an
+  // install lands in the container layer instead of on the data volume.
+  it('defaults plugins.dir to <dataDir>/plugins so plugin code and the registry share one tree', () => {
+    delete process.env.PLUGINS_DIR;
+    const cfg = configuration();
+    expect(cfg.dataDir).toBe(DEFAULT_DATA_DIR);
+    expect(cfg.plugins.dir).toBe(path.join(cfg.dataDir, 'plugins'));
+  });
+
+  it('exposes the historical ./plugins default as legacyDir so an existing install keeps loading', () => {
+    delete process.env.PLUGINS_DIR;
+    expect(configuration().plugins.legacyDir).toBe('./plugins');
+  });
+
+  it('lets an explicit PLUGINS_DIR win, and drops the legacy fallback with it', () => {
+    process.env.PLUGINS_DIR = '/srv/openwa-plugins';
+    const cfg = configuration();
+    expect(cfg.plugins.dir).toBe('/srv/openwa-plugins');
+    // An operator who named the directory has said where plugins live; nothing may second-guess it.
+    expect(cfg.plugins.legacyDir).toBeNull();
   });
 });
 
