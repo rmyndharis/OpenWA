@@ -20,9 +20,10 @@
 # Environment:
 #   MAIN_DATABASE_NAME  auth/audit SQLite file (default: ./data/main.sqlite)
 #   DATABASE_NAME       data-store SQLite file (default: ./data/openwa.sqlite; sqlite only)
-#                       Both resolve EXACTLY like the app (src/config/configuration.ts): the
-#                       explicit env path wins, otherwise the fixed ./data default. They are NOT
-#                       derived from OPENWA_DATA_DIR — the app never does that either.
+#                       Both resolve EXACTLY like the app: the environment first, then ./.env, then
+#                       <data dir>/.env.generated, otherwise the fixed ./data default (see
+#                       lib-env.sh). They are NOT derived from OPENWA_DATA_DIR — the app never does
+#                       that either.
 #   OPENWA_DATA_DIR   data directory for the non-DB state below (default: ./data)
 #   BACKUP_DIR        where archives are written (default: ./backups)
 #   DATABASE_TYPE     sqlite (default) | postgres
@@ -40,23 +41,29 @@ set -euo pipefail
 # permissive operator umask for newly-created backup artifacts.
 umask 077
 
+# OPENWA_DATA_DIR and BACKUP_DIR steer the script itself and are never written to an env file, so
+# they stay environment-only. Everything below them is application configuration and must be read
+# through the same layers the app reads (see lib-env.sh).
 DATA_DIR="${OPENWA_DATA_DIR:-./data}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
-DATABASE_TYPE="${DATABASE_TYPE:-sqlite}"
+# shellcheck source=scripts/lib-env.sh
+. "$(dirname "$0")/lib-env.sh"
+DATABASE_TYPE="$(openwa_resolve DATABASE_TYPE sqlite)"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 
-# Database paths resolve exactly like the app (src/config/configuration.ts): the explicit env path
-# wins, otherwise the fixed ./data default. OPENWA_DATA_DIR below only bases the non-DB state
-# directories — deriving DB paths from it would back up files the app never reads.
-MAIN_DB="${MAIN_DATABASE_NAME:-./data/main.sqlite}"
-DATA_DB="${DATABASE_NAME:-./data/openwa.sqlite}"
-SESSIONS_DIR="${SESSION_DATA_PATH:-$DATA_DIR/sessions}"
-BAILEYS_DIR="${BAILEYS_AUTH_DIR:-$DATA_DIR/baileys}"
-MEDIA_DIR="${STORAGE_LOCAL_PATH:-$DATA_DIR/media}"
+# Database paths resolve exactly like the app: an explicit environment value wins, then ./.env, then
+# the dashboard's <data dir>/.env.generated, otherwise the fixed ./data default. OPENWA_DATA_DIR
+# below only bases the non-DB state directories — deriving DB paths from it would back up files the
+# app never reads.
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
+DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
+BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
+MEDIA_DIR="$(openwa_resolve STORAGE_LOCAL_PATH "$DATA_DIR/media")"
 # Installed plugin code. The app defaults this to <dataDir>/plugins — the same tree as the
 # registry and each plugin's ctx.storage below — so an unset PLUGINS_DIR must resolve there
 # too, or the archive silently omits the plugin packages.
-PLUGIN_PACKAGES_DIR="${PLUGINS_DIR:-$DATA_DIR/plugins}"
+PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins")"
 PLUGIN_STATE_DIR="$DATA_DIR/plugins"
 GENERATED_ENV="$DATA_DIR/.env.generated"
 ADMIN_KEY_FILE="$DATA_DIR/.api-key"
@@ -119,11 +126,13 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   if [ -n "${DATABASE_URL:-}" ]; then
     pg_dump "$DATABASE_URL" >"$STAGE/database.sql"
   else
-    PGPASSWORD="${DATABASE_PASSWORD:-}" pg_dump \
-      -h "${DATABASE_HOST:-localhost}" \
-      -p "${DATABASE_PORT:-5432}" \
-      -U "${DATABASE_USERNAME:-openwa}" \
-      "${DATABASE_NAME:-openwa}" >"$STAGE/database.sql"
+    # Same layered resolution as the paths above: a dashboard-provisioned Postgres keeps its
+    # connection details in <data dir>/.env.generated, never in the operator's shell.
+    PGPASSWORD="$(openwa_resolve DATABASE_PASSWORD '')" pg_dump \
+      -h "$(openwa_resolve DATABASE_HOST localhost)" \
+      -p "$(openwa_resolve DATABASE_PORT 5432)" \
+      -U "$(openwa_resolve DATABASE_USERNAME openwa)" \
+      "$(openwa_resolve DATABASE_NAME openwa)" >"$STAGE/database.sql"
   fi
   REQUIRED_MEMBERS+=("./database.sql")
 else

@@ -58,17 +58,21 @@ for arg in "$@"; do
 done
 
 DATA_DIR="${OPENWA_DATA_DIR:-./data}"
-# Database targets resolve exactly like the app (src/config/configuration.ts): explicit env path,
-# else the fixed ./data defaults. They may legitimately live outside OPENWA_DATA_DIR.
-MAIN_DB="${MAIN_DATABASE_NAME:-./data/main.sqlite}"
-DATA_DB="${DATABASE_NAME:-./data/openwa.sqlite}"
-SESSIONS_DIR="${SESSION_DATA_PATH:-$DATA_DIR/sessions}"
-BAILEYS_DIR="${BAILEYS_AUTH_DIR:-$DATA_DIR/baileys}"
-MEDIA_DIR="${STORAGE_LOCAL_PATH:-$DATA_DIR/media}"
+# shellcheck source=scripts/lib-env.sh
+. "$(dirname "$0")/lib-env.sh"
+# Database targets resolve exactly like the app: an explicit environment value, then ./.env, then the
+# dashboard's <data dir>/.env.generated, else the fixed ./data defaults. They may legitimately live
+# outside OPENWA_DATA_DIR. This reads the config of the install being restored INTO, which is why it
+# happens here rather than after the archive's own .env.generated is written over it further down.
+MAIN_DB="$(openwa_resolve MAIN_DATABASE_NAME ./data/main.sqlite)"
+DATA_DB="$(openwa_resolve DATABASE_NAME ./data/openwa.sqlite)"
+SESSIONS_DIR="$(openwa_resolve SESSION_DATA_PATH "$DATA_DIR/sessions")"
+BAILEYS_DIR="$(openwa_resolve BAILEYS_AUTH_DIR "$DATA_DIR/baileys")"
+MEDIA_DIR="$(openwa_resolve STORAGE_LOCAL_PATH "$DATA_DIR/media")"
 # Installed plugin code. The app defaults this to <dataDir>/plugins — the same tree as the
 # registry and each plugin's ctx.storage below — so an unset PLUGINS_DIR must resolve there
 # too, or the archive silently omits the plugin packages.
-PLUGIN_PACKAGES_DIR="${PLUGINS_DIR:-$DATA_DIR/plugins}"
+PLUGIN_PACKAGES_DIR="$(openwa_resolve PLUGINS_DIR "$DATA_DIR/plugins")"
 PLUGIN_STATE_DIR="$DATA_DIR/plugins"
 RESTORE_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RESOLVED_CWD="$(pwd -P)"

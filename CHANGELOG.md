@@ -65,6 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have reported failure while the stack was still coming up correctly. The deadline is now derived
   from the estimate the server already returns, with the old 60 as a floor. (#1019)
 
+- **`backup.sh` could archive a database the application had stopped using.** Both scripts resolved
+  every path from the process environment alone, while the application fills the same settings from
+  three layers: the environment, then `./.env`, then `<data dir>/.env.generated` — the file Dashboard >
+  Infrastructure writes. An install configured through the dashboard was therefore backed up at the
+  *default* paths.
+
+  That is not reliably loud. A missing database already failed the run, but a database left at a
+  default path from before the operator switched was archived instead and the run exited 0. A backup
+  that captured an abandoned database announces itself only during a restore. `backup.sh` was already
+  copying `.env.generated` into the archive without ever reading it.
+
+  Both scripts now resolve through the same three layers, in the application's order, so an explicit
+  environment value still wins. Only plain `KEY=value` lines are honoured: a value carrying quotes or
+  a trailing `#` comment is reported and skipped rather than guessed at, because a silently
+  mis-parsed path is the failure being fixed. The Postgres connection details `pg_dump` uses resolve
+  the same way, so a dashboard-provisioned database no longer needs its credentials restated in the
+  operator's shell.
+
 ## [0.12.2] - 2026-08-01
 
 ### Changed

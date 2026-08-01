@@ -242,4 +242,56 @@ fi
 pass "(e) min-content check fails hard and removes the defective archive"
 
 echo ""
+echo "==> (f) data/.env.generated supplies paths the environment does not"
+# The dangerous shape: the app was pointed elsewhere through the dashboard, and a database from
+# before that switch is still sitting at the DEFAULT path. Resolving from the process environment
+# alone then archives the abandoned file and exits 0 — a backup that only reveals itself as wrong
+# during a restore. A missing default would at least fail loudly; a stale one does not.
+F="$WORK/f"
+mkdir -p "$F/state" "$F/live" "$F/data" "$F/extract" "$F/restore/state"
+make_fixture "$F/live/auth.sqlite" "foxtrot-live-main"
+make_fixture "$F/live/store.sqlite" "foxtrot-live-data"
+make_fixture "$F/data/main.sqlite" "STALE-main"
+make_fixture "$F/data/openwa.sqlite" "STALE-data"
+printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
+  "$F/live/auth.sqlite" "$F/live/store.sqlite" >"$F/state/.env.generated"
+(
+  cd "$F"
+  OPENWA_DATA_DIR="$F/state" BACKUP_DIR="$F/out" "$BACKUP" >/dev/null
+)
+ARCHIVE_F="$(ls "$F"/out/openwa-backup-*.tar.gz)"
+tar -xzf "$ARCHIVE_F" -C "$F/extract"
+if [ "$(db_fingerprint "$F/extract/main.sqlite")" != "foxtrot-live-main" ]; then
+  fail "(f) backup archived the stale default main DB instead of the one data/.env.generated names"
+fi
+if [ "$(db_fingerprint "$F/extract/openwa.sqlite")" != "foxtrot-live-data" ]; then
+  fail "(f) backup archived the stale default data DB instead of the one data/.env.generated names"
+fi
+# restore.sh must read the SAME layer, or it writes the databases somewhere backup.sh never looked.
+printf 'DATABASE_TYPE=sqlite\nMAIN_DATABASE_NAME=%s\nDATABASE_NAME=%s\n' \
+  "$F/restore/auth.sqlite" "$F/restore/store.sqlite" >"$F/restore/state/.env.generated"
+(
+  cd "$F/restore"
+  OPENWA_DATA_DIR="$F/restore/state" "$RESTORE" "$ARCHIVE_F" >/dev/null
+)
+if [ "$(db_fingerprint "$F/restore/auth.sqlite")" != "foxtrot-live-main" ]; then
+  fail "(f) restore ignored the MAIN_DATABASE_NAME in data/.env.generated"
+fi
+if [ "$(db_fingerprint "$F/restore/store.sqlite")" != "foxtrot-live-data" ]; then
+  fail "(f) restore ignored the DATABASE_NAME in data/.env.generated"
+fi
+# An explicit environment value must still win — that is the app's precedence, not ours to change.
+(
+  cd "$F"
+  MAIN_DATABASE_NAME="$F/data/main.sqlite" DATABASE_NAME="$F/data/openwa.sqlite" \
+    OPENWA_DATA_DIR="$F/state" BACKUP_DIR="$F/out2" "$BACKUP" >/dev/null
+)
+rm -rf "${F:?}/extract2" && mkdir -p "$F/extract2"
+tar -xzf "$(ls "$F"/out2/openwa-backup-*.tar.gz)" -C "$F/extract2"
+if [ "$(db_fingerprint "$F/extract2/main.sqlite")" != "STALE-main" ]; then
+  fail "(f) an explicit environment path lost to data/.env.generated — precedence is inverted"
+fi
+pass "(f) data/.env.generated resolves paths for both scripts, and the environment still wins"
+
+echo ""
 echo "All smoke tests passed!"
