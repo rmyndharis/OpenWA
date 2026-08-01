@@ -10,19 +10,15 @@ import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Equal, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { randomBytes } from 'crypto';
-import { existsSync, readFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
-import { writeSecretFile } from '../../common/utils/secret-file';
 import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
 import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
 import { createLogger } from '../../common/services/logger.service';
+import { readBootstrapKey, removeBootstrapKey, writeBootstrapKey } from './bootstrap-key-file';
 import { ApiKeyUsageTracker } from './api-key-usage-tracker.service';
 import { EventsGateway, type ApiKeyEvictionReason } from '../events/events.gateway';
 import { KeyedAsyncLock } from '../integration/ordering-lock';
-
-const API_KEY_FILE = join(process.cwd(), 'data', '.api-key');
 
 /**
  * Resolves the API key to seed on first boot (when no keys exist yet).
@@ -92,7 +88,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
       // Save raw key to file for startup script to read (owner-only — it's the raw admin key).
       try {
-        writeSecretFile(API_KEY_FILE, displayKey);
+        writeBootstrapKey(displayKey);
       } catch (err) {
         this.logger.warn('Could not save API key file', { error: String(err) });
       }
@@ -139,14 +135,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * Returns null when the file is absent, unreadable, empty, or stale.
    */
   private async readLiveBootstrapKey(): Promise<string | null> {
-    if (!existsSync(API_KEY_FILE)) return null;
-    let rawKey: string;
-    try {
-      rawKey = readFileSync(API_KEY_FILE, 'utf-8').trim();
-    } catch (error) {
-      this.logger.warn(`Failed to read API key file: ${API_KEY_FILE}`, { error: String(error) });
-      return null;
-    }
+    const rawKey = readBootstrapKey(this.logger);
     if (!rawKey) return null;
     const stored = await this.apiKeyRepository.findOne({ where: { keyHash: this.hashKey(rawKey) } });
     const live = Boolean(stored && stored.isActive && (!stored.expiresAt || stored.expiresAt > new Date()));
@@ -166,7 +155,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         return null;
       }
     }
-    this.removeBootstrapKeyFile('it no longer resolves to an active key');
+    removeBootstrapKey('it no longer resolves to an active key', this.logger);
     return null;
   }
 
@@ -177,24 +166,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * removing it cannot break first-boot seeding — seeding writes it only when no keys exist.
    */
   private removeBootstrapKeyFileIfMatching(apiKey: ApiKey): void {
-    try {
-      if (!existsSync(API_KEY_FILE)) return;
-      const fileKey = readFileSync(API_KEY_FILE, 'utf-8').trim();
-      if (!fileKey || this.hashKey(fileKey) !== apiKey.keyHash) return;
-      this.removeBootstrapKeyFile('its key was revoked or deleted');
-    } catch (error) {
-      this.logger.warn(`Failed to inspect API key file: ${API_KEY_FILE}`, { error: String(error) });
-    }
-  }
-
-  private removeBootstrapKeyFile(reason: string): void {
-    try {
-      unlinkSync(API_KEY_FILE);
-      this.logger.log(`Removed stale bootstrap API key file (${reason}): ${API_KEY_FILE}`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; // already gone
-      this.logger.warn(`Failed to remove stale API key file: ${API_KEY_FILE}`, { error: String(error) });
-    }
+    const fileKey = readBootstrapKey(this.logger);
+    if (!fileKey || this.hashKey(fileKey) !== apiKey.keyHash) return;
+    removeBootstrapKey('its key was revoked or deleted', this.logger);
   }
 
   private async seedApiKey(rawKey: string, name: string, role: ApiKeyRole): Promise<ApiKey> {

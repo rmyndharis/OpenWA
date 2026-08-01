@@ -16,6 +16,12 @@ process.env.DATABASE_NAME = e2eDataDb;
 const e2eMainDb = join(tmpdir(), `openwa-e2e-main-${process.pid}.sqlite`);
 rmSync(e2eMainDb, { force: true });
 process.env.MAIN_DATABASE_NAME = e2eMainDb;
+// The bootstrap key file is written on first boot (no keys yet — which every e2e run is) and unlinked
+// when that key is revoked or deleted. Without a lever it resolves under the repo root, so an e2e run
+// rewrote the DEVELOPER'S ./data/.api-key. Point it at the same throwaway temp dir as the databases.
+const e2eKeyFile = join(tmpdir(), `openwa-e2e-key-${process.pid}`);
+rmSync(e2eKeyFile, { force: true });
+process.env.BOOTSTRAP_KEY_FILE = e2eKeyFile;
 process.env.QUEUE_ENABLED = 'false';
 // Likewise force Redis off per suite: queue-on.e2e-spec.ts flips REDIS_ENABLED=true at module
 // load and can't restore it when it self-skips, so without this reset later suites in the same
