@@ -26,6 +26,7 @@ import {
   replaceSession,
 } from '../utils/sessionActions';
 import { invalidateSessionQueries, reconcileSessionCache } from '../utils/sessionMutation';
+import { canCreateSession, filterSessions, isValidPairingPhone, sessionNameIssues } from '../utils/sessionForm';
 import { useToast } from '../components/Toast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
@@ -281,7 +282,7 @@ export function Sessions() {
     // input's Enter handler is not, so a rapid double-Enter would otherwise fire overlapping POSTs.
     if (requestingPairing) return;
     if (!qrData || !phoneNumber.trim()) return;
-    if (!/^[0-9]{6,15}$/.test(phoneNumber.trim())) {
+    if (!isValidPairingPhone(phoneNumber)) {
       setPairingError(t('sessions.pairing.invalidPhone'));
       return;
     }
@@ -471,19 +472,10 @@ export function Sessions() {
 
   const formatStatus = (status: string) => t(`sessionStatus.${status}`, { defaultValue: status });
 
-  const filteredSessions = sessions.filter(s => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.id.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus =
-      statusFilter === 'all' ||
-      (statusFilter === 'active' && s.status === 'ready') ||
-      (statusFilter === 'inactive' &&
-        ['created', 'disconnected', 'action_required', 'failed'].includes(s.status)) ||
-      (statusFilter === 'connecting' &&
-        ['initializing', 'authenticating', 'qr_ready'].includes(s.status));
-    return matchesSearch && matchesStatus;
-  });
+  const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
+  const existingSessionNames = sessions.map(s => s.name);
+  // Empty is a disabled button, not a message: the form stays quiet until the user types something.
+  const nameIssues = newSessionName ? sessionNameIssues(newSessionName, existingSessionNames) : [];
 
   if (loading) {
     return (
@@ -565,13 +557,7 @@ export function Sessions() {
               <button
                 className="btn-primary"
                 onClick={handleCreate}
-                disabled={
-                  creating ||
-                  !newSessionName.trim() ||
-                  !/^[a-z0-9-]+$/.test(newSessionName) ||
-                  newSessionName.length > 50 ||
-                  sessions.some(s => s.name === newSessionName)
-                }
+                disabled={creating || !canCreateSession(newSessionName, existingSessionNames)}
               >
                 {creating ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
               </button>
@@ -592,18 +578,11 @@ export function Sessions() {
           <p className="input-hint">
             <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
           </p>
-          {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
-            <p className="input-error">{t('sessions.create.invalidChars')}</p>
-          )}
-          {newSessionName && newSessionName.length > 50 && (
+          {nameIssues.includes('format') && <p className="input-error">{t('sessions.create.invalidChars')}</p>}
+          {nameIssues.includes('too-long') && (
             <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
           )}
-          {newSessionName &&
-            /^[a-z0-9-]+$/.test(newSessionName) &&
-            newSessionName.length <= 50 &&
-            sessions.some(s => s.name === newSessionName) && (
-              <p className="input-error">{t('sessions.create.duplicate')}</p>
-            )}
+          {nameIssues.includes('duplicate') && <p className="input-error">{t('sessions.create.duplicate')}</p>}
         </Modal>
       )}
 
@@ -701,7 +680,7 @@ export function Sessions() {
                     <button
                       className="btn-primary"
                       onClick={handleGeneratePairingCode}
-                      disabled={requestingPairing || !/^[0-9]{6,15}$/.test(phoneNumber.trim())}
+                      disabled={requestingPairing || !isValidPairingPhone(phoneNumber)}
                       style={{ width: '100%', justifyContent: 'center' }}
                     >
                       {requestingPairing ? (
