@@ -25,6 +25,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no registry entry at all. Nothing is skipped in the process: there is no runtime in this state,
   so no lifecycle hook goes unrun and no worker is left behind.
 
+- **Eight settings written to `data/.env.generated` were silently ignored under the bundled Docker
+  Compose stack.** `docker-compose.yml` forwards a variable as `- KEY=${KEY:-}` so a real host value
+  reaches the container; with nothing set, that line renders an *empty* value. An empty value still
+  occupies `process.env`, and both lower-priority layers — the project `.env` and
+  `data/.env.generated` — are loaded with dotenv `override: false`, which will not replace a key that
+  is already present, blank or not. `clearBlankEnv` exists to delete exactly those blanks before the
+  files load, but its key list had drifted behind the compose file: `AUTO_START_SESSIONS`,
+  `BODY_SIZE_LIMIT`, `API_MASTER_KEY`, `TRUSTED_PROXIES`, `CSP_UPGRADE_INSECURE_REQUESTS`,
+  `WWEBJS_WEB_VERSION`, `WWEBJS_WEB_VERSION_REMOTE_PATH` and `WWEBJS_AUTH_TIMEOUT_MS` were forwarded
+  but never cleared. Setting any of them in `data/.env.generated` — a file the first-run header
+  invites operators to edit directly — did nothing, with no error and no warning.
+
+  `AUTO_START_SESSIONS` is the one that got noticed. It gained its compose forward in 0.12.0; in
+  0.11.1 and earlier the variable had no route into the container at all, which is why the flag
+  appeared inert across the 0.7–0.11 range. Adding the forward without the matching clear entry
+  relocated the failure instead of ending it: the flag still resolved to off, `SessionService`'s
+  bootstrap hook returned before it looked at a single session, and previously authenticated sessions
+  stayed at `disconnected` with no engine ever created and a null `lastError`. (#981)
+
+  The clear list is now covered by a test that derives the expected set from `docker-compose.yml`
+  itself, so a forward added without its clear entry fails in CI rather than shipping inert.
+
 ## [0.12.2] - 2026-08-01
 
 ### Changed

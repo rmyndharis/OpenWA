@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 import { clearBlankEnv, BLANK_SHADOWED_ENV_KEYS } from './env-precedence';
+import { computeFeatureFlags } from './feature-flags';
 
 describe('clearBlankEnv', () => {
   it('deletes a key whose value is empty or whitespace-only', () => {
@@ -143,6 +144,26 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
     }
   });
 
+  // #981: compose gained the AUTO_START_SESSIONS forward in v0.12.0 but the key was never added to
+  // BLANK_SHADOWED_ENV_KEYS, so the blank forward shadowed data/.env.generated and auto-start stayed
+  // off with no error — sessions sat at `disconnected` with `engineLoaded:false`. Assert the FLAG,
+  // not just the raw variable: that is the behaviour the operator loses.
+  it('keeps auto-start enabled when the forward is blank and .env.generated turns it on (#981)', () => {
+    const key = 'AUTO_START_SESSIONS';
+    const prev = process.env[key];
+    try {
+      withGenerated(`${key}=true`, genPath => {
+        process.env[key] = ''; // compose `${AUTO_START_SESSIONS:-}` with nothing set on the host
+        clearBlankEnv(process.env, BLANK_SHADOWED_ENV_KEYS);
+        dotenv.config({ path: genPath, override: false });
+        expect(computeFeatureFlags(process.env).autoStartSessions).toBe(true);
+      });
+    } finally {
+      if (prev === undefined) delete process.env[key];
+      else process.env[key] = prev;
+    }
+  });
+
   it('lets .env.generated supply the password when the forwarded DATABASE_PASSWORD is blank', () => {
     withGenerated('DATABASE_PASSWORD=s3cret', genPath => {
       process.env[KEY] = ''; // compose `${DATABASE_PASSWORD:-}` with nothing set on the host
@@ -159,5 +180,31 @@ describe('blank-shadowed env keys (compose ${VAR:-} forwards the dashboard manag
       dotenv.config({ path: genPath, override: false });
       expect(process.env[KEY]).toBe('from-host');
     });
+  });
+});
+
+// The list above is only correct while it covers EVERY `- KEY=${KEY:-}` line in the bundled compose:
+// a forward without a clear entry renders blank, and dotenv's override:false then refuses to let
+// .env / data/.env.generated supply a value — the operator's setting is ignored with no error. Derive
+// the expectation from the compose file rather than restating a list, so a forward added without its
+// clear entry fails here instead of shipping inert (#981).
+describe.each(['docker-compose.yml', 'docker-compose.dev.yml'])('every blank forward in %s is cleared', file => {
+  const blankForwards = (): string[] => {
+    const compose = fs.readFileSync(path.join(__dirname, '../..', file), 'utf8');
+    const found = new Set<string>();
+    for (const line of compose.split('\n')) {
+      const match = /^\s*-\s*([A-Z0-9_]+)=\$\{([A-Z0-9_]+):-\}\s*$/.exec(line);
+      if (match && match[1] === match[2]) found.add(match[1]);
+    }
+    return [...found].sort();
+  };
+
+  // Guards the assertion below: a pattern that silently matches nothing would make it vacuously pass.
+  it('parses the compose forwards', () => {
+    expect(blankForwards()).toContain('ENGINE_TYPE');
+  });
+
+  it('has a BLANK_SHADOWED_ENV_KEYS entry for each one', () => {
+    expect(blankForwards().filter(key => !BLANK_SHADOWED_ENV_KEYS.includes(key))).toEqual([]);
   });
 });
