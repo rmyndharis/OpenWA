@@ -81,6 +81,7 @@ describe('SessionService', () => {
   let mockEngine: Record<string, jest.Mock>;
 
   beforeEach(async () => {
+    delete process.env.STATUS_SEED_ON_READY;
     repository = {
       count: jest.fn(),
       find: jest.fn(),
@@ -3467,7 +3468,18 @@ describe('SessionService', () => {
       expect(auth[0][2]).toMatchObject({ sessionId: 'sess-uuid-1', phone: '628123', pushName: 'Alice' });
     });
 
+    it('does not fetch status history on ready by default', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onReady!('628123', 'Alice');
+      await flush();
+
+      expect(mockEngine.getChatHistory).not.toHaveBeenCalled();
+      expect(statusStore.ingest).not.toHaveBeenCalled();
+    });
+
     it('seeds the status store from the status-broadcast chat history when the engine reports ready', async () => {
+      process.env.STATUS_SEED_ON_READY = 'true';
       const callbacks = await startAndCaptureCallbacks();
       const nowSec = Math.floor(Date.now() / 1000);
       mockEngine.getChatHistory.mockResolvedValue([
@@ -3563,6 +3575,7 @@ describe('SessionService', () => {
     });
 
     it('seeds status media downloaded with the history so it renders like a live post', async () => {
+      process.env.STATUS_SEED_ON_READY = 'true';
       const callbacks = await startAndCaptureCallbacks();
       const media = { mimetype: 'image/png', data: 'QUJD' };
       mockEngine.getChatHistory.mockResolvedValue([
@@ -3590,6 +3603,7 @@ describe('SessionService', () => {
     });
 
     it('skips the account’s own (fromMe) statuses and statuses older than 24h when seeding', async () => {
+      process.env.STATUS_SEED_ON_READY = 'true';
       const callbacks = await startAndCaptureCallbacks();
       const nowSec = Math.floor(Date.now() / 1000);
       mockEngine.getChatHistory.mockResolvedValue([
@@ -3624,6 +3638,7 @@ describe('SessionService', () => {
     });
 
     it('keeps seeding the remaining statuses when one item’s ingest fails', async () => {
+      process.env.STATUS_SEED_ON_READY = 'true';
       const callbacks = await startAndCaptureCallbacks();
       const nowSec = Math.floor(Date.now() / 1000);
       const seedItem = (id: string, author: string) =>
@@ -3657,6 +3672,7 @@ describe('SessionService', () => {
     });
 
     it('swallows a status-history failure on ready (e.g. Baileys has no status chat) without throwing', async () => {
+      process.env.STATUS_SEED_ON_READY = 'true';
       const callbacks = await startAndCaptureCallbacks();
       mockEngine.getChatHistory.mockRejectedValue(new Error('not supported'));
 

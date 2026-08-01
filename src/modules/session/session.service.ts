@@ -63,6 +63,14 @@ import { HookManager } from '../../core/hooks';
 // proves 50 too few.
 const STATUS_SEED_LIMIT = 50;
 
+/**
+ * Eager status-history reads are opt-in. On affected freshly paired whatsapp-web.js accounts,
+ * fetching status@broadcast before WhatsApp Web's first scheduled reload makes WhatsApp revoke the
+ * companion at that reload. Live status events remain unaffected when this backfill is disabled.
+ */
+const isStatusSeedOnReadyEnabled = (): boolean =>
+  ['true', '1', 'yes', 'on'].includes((process.env.STATUS_SEED_ON_READY ?? 'false').trim().toLowerCase());
+
 interface ReconnectState extends ReconnectAttemptState {
   /** The pending attempt's timer. Lives here, not in the policy, which stays free of side effects. */
   timer: NodeJS.Timeout | null;
@@ -1284,7 +1292,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Best-effort snapshot of the account's own contacts' currently-active statuses. Live status
     // posts arrive through onMessage below; this just backfills what was already up before we
     // connected. Not awaited — onReady must not block on it.
-    void this.seedStatuses(id, engine);
+    if (isStatusSeedOnReadyEnabled()) {
+      void this.seedStatuses(id, engine);
+    } else {
+      this.logger.debug('Status backfill on session ready is disabled', {
+        sessionId: id,
+        action: 'status_seed_on_ready_disabled',
+      });
+    }
   }
 
   /**

@@ -461,6 +461,26 @@ is nothing to SIGKILL). A browser left wedged by an earlier teardown is reaped a
 next `start()` (an orphan sweep keyed on the session's browser marker runs at every engine launch),
 so the stop → start sequence alone is sufficient once the engine is gone.
 
+### Issue: Freshly paired session logs out at the first five-minute reload
+
+> **Engine:** This issue applies to the `whatsapp-web.js` engine only.
+
+**Symptoms:** The session reaches `ready` normally, then at almost exactly five minutes WhatsApp Web
+reloads, briefly returns to `CONNECTED`/`hasSynced`, and navigates to
+`?post_logout=1&logout_reason=0`. The phone silently removes the companion from Linked devices and
+OpenWA returns to a fresh QR because `whatsapp-web.js` deletes LocalAuth credentials on `LOGOUT`.
+
+**Cause:** OpenWA used to backfill active WhatsApp Status posts immediately in its `ready` callback by
+fetching `status@broadcast`. Some accounts tolerate that request, but affected accounts have the new
+companion revoked at WhatsApp Web's first scheduled reload. A minimal `whatsapp-web.js` client using
+the same container, browser, account and Web build remains linked when it does not perform this eager
+fetch.
+
+**Fix:** Status backfill-on-ready is disabled by default. Keep `STATUS_SEED_ON_READY=false` for
+affected accounts. Live status events still work; only the one-time history backfill of statuses that
+predate the connection is skipped. Operators who have tested their accounts and need the backfill can
+opt in with `STATUS_SEED_ON_READY=true`.
+
 ### Issue: Session stuck at `action_required` ("What's new" onboarding modal)
 
 > **Engine:** This issue applies to the `whatsapp-web.js` engine only (Chromium/Puppeteer-based). It does not affect `ENGINE_TYPE=baileys`.

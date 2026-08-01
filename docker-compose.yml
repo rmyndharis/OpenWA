@@ -155,6 +155,10 @@ services:
       # "true", so a blank forward (nothing set) keeps the default off. Without this line the value in
       # .env never reaches the container and the flag silently does nothing.
       - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-}
+      # Fetching status@broadcast immediately after a fresh pairing can make affected accounts lose
+      # the companion at WhatsApp Web's first scheduled reload. Disabled by default; live statuses
+      # still arrive normally. Opt in only after validating the account.
+      - STATUS_SEED_ON_READY=${STATUS_SEED_ON_READY:-false}
       # Storage. Blank-forwarded (see Database note) so a dashboard local↔S3 switch applies; a real
       # host value pins. Credentials use the canonical S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY names the
       # app and dashboard write; the legacy S3_ACCESS_KEY / S3_SECRET_KEY are ALSO forwarded (and read
