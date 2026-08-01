@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin whose code is missing can now be switched off.** `enabledByOperator` is the standing
+  instruction to enable a plugin on every boot, and the only way to withdraw it is
+  `POST /api/plugins/{id}/disable`. That route answered 404 whenever the plugin was not loaded — which
+  is exactly the state an install lands in when its package directory is gone: an interrupted update,
+  or a directory that was never on the data volume. The registry entry survives with its config,
+  `ctx.storage` and the enable decision intact, so reinstalling the code brought the plugin straight
+  back up and no API call could prevent it. The only ways out were uninstalling, which also deletes
+  the plugin's stored data, or hand-editing `registry.json`.
+
+  `disable` records intent rather than performing a runtime operation, so it now clears the decision
+  against the registry when the plugin is not loaded and reports
+  `Plugin {id} is not loaded; it will not be enabled on boot`. This is the same reasoning the route
+  already applied to a plugin sitting in `error` after a failed restore. 404 is now reserved for an id
+  with no registry entry at all. Nothing is skipped in the process: there is no runtime in this state,
+  so no lifecycle hook goes unrun and no worker is left behind.
+
 ## [0.12.2] - 2026-08-01
 
 ### Changed
