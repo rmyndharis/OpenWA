@@ -106,10 +106,14 @@ export function Sessions() {
       sessionsRef.current = replaceSession(sessionsRef.current, updated);
       setSessions(sessionsRef.current);
       setSelectedSession(current => (current?.id === updated.id ? updated : current));
-      if (qrData?.sessionId === updated.id) setQrData(null);
+      // Functional form deliberately: reading `qrData` here would make it a dependency, and this
+      // callback is held by three lifecycle handlers (start/stop/logout). Opening or closing the QR
+      // modal would then rotate all three for a reason none of them care about. The updater also sees
+      // the CURRENT modal rather than the one captured when this callback was built.
+      setQrData(current => (current?.sessionId === updated.id ? null : current));
       await reconcileSessionCache(queryClient, queryKeys.sessions, updated);
     },
-    [queryClient, qrData?.sessionId],
+    [queryClient],
   );
 
   // Live session-feed subscription state: wildcard first, per-session fallback for scoped keys.
