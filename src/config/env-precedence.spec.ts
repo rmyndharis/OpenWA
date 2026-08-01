@@ -207,4 +207,20 @@ describe.each(['docker-compose.yml', 'docker-compose.dev.yml'])('every blank for
   it('has a BLANK_SHADOWED_ENV_KEYS entry for each one', () => {
     expect(blankForwards().filter(key => !BLANK_SHADOWED_ENV_KEYS.includes(key))).toEqual([]);
   });
+
+  // Clearing a blank forward only lets data/.env.generated win when nothing ABOVE it supplies a
+  // value. `.env` sits above it and is loaded at load-env.ts:60 — after clearBlankEnv has already
+  // run at :50 — so a value shipped uncommented in `.env.example` survives `cp .env.example .env`
+  // as a permanent pin that the clear list structurally cannot reach. An empty assignment pins just
+  // as hard: dotenv treats `KEY=` as present, so `DATABASE_PASSWORD=` shadows a dashboard-provisioned
+  // password and the next production boot refuses to start.
+  it('ships none of them uncommented in .env.example', () => {
+    const example = fs.readFileSync(path.join(__dirname, '../../.env.example'), 'utf8');
+    const uncommented = example
+      .split('\n')
+      .map(line => /^([A-Z0-9_]+)=/.exec(line)?.[1])
+      .filter((key): key is string => key !== undefined);
+    expect(uncommented).toContain('NODE_ENV'); // the file really does ship some keys uncommented
+    expect(uncommented.filter(key => blankForwards().includes(key))).toEqual([]);
+  });
 });

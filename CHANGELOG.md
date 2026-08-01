@@ -82,6 +82,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-parsed path is the failure being fixed. The Postgres connection details `pg_dump` uses resolve
   the same way, so a dashboard-provisioned database no longer needs its credentials restated in the
   operator's shell.
+- **`cp .env.example .env` pinned 23 settings the dashboard is supposed to own.** Configuration is
+  filled from the process environment, then `.env`, then `data/.env.generated`, each supplying only
+  what the previous layer left unset. Every value shipped uncommented in `.env.example` therefore
+  became a permanent pin the moment an operator followed the documented setup step: the matching
+  dashboard control still moved, saved and reported success, while the running value never changed.
+
+  The blank-forward fix above cannot reach this. `clearBlankEnv` runs before `.env` is read, so it
+  only clears blanks arriving from the process environment. A value in `.env` — including an *empty*
+  one, since dotenv treats `KEY=` as present rather than absent — is never cleared. That made
+  `DATABASE_PASSWORD=` the sharpest case: it shadowed a password the dashboard had provisioned, the
+  next production boot refused to start, and the dashboard could not warn about it, because the
+  save-time guard reads a snapshot taken before `.env` was loaded and so validated the file value it
+  was writing rather than the one that would win.
+
+  All 23 are now commented out with their defaults shown, so copying the file pins nothing. Each was
+  checked against its application-level default first; none changes behaviour when absent. One
+  deliberate exception is called out in the file: the dev compose defaults an unset
+  `AUTO_START_SESSIONS` to `true`, so a dev stack that had inherited `false` from a copied
+  `.env.example` now gets the dev default it was always meant to have. A test derives the key set
+  from `docker-compose.yml` and fails if a dashboard-owned key is shipped uncommented again.
 
 ## [0.12.2] - 2026-08-01
 
