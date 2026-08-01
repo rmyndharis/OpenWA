@@ -1,7 +1,8 @@
-import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, NotFoundException, OnApplicationBootstrap } from '@nestjs/common';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { SessionService } from '../session/session.service';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
 import { createLogger } from '../../common/services/logger.service';
@@ -21,6 +22,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
     private readonly instances: PluginInstanceService,
     private readonly loader: PluginLoaderService,
     private readonly audit: AuditService,
+    private readonly sessions: SessionService,
   ) {}
 
   /**
@@ -65,6 +67,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
       // Skip instances whose plugin isn't loaded — applyScopeBinding would only no-op/log for them.
       if (!this.loader.getPlugin(inst.pluginId)) continue;
       await this.applyScopeBinding(inst.pluginId, inst.sessionScope, inst.config ?? {}, true, { additive: true });
+      await this.warnIfScopeHasNoSession(inst);
       count++;
     }
 
@@ -73,6 +76,37 @@ export class ScopeBindingService implements OnApplicationBootstrap {
         action: 'scope_bindings_reconciled',
         count,
       });
+    }
+  }
+
+  /**
+   * Warn when a just-reconciled instance binds a concrete scope no session row matches — a session the
+   * operator deleted, or a scope typed/copied wrong. The plugin is then activated for nothing: the
+   * dispatch gate never matches that id, so it receives no events, while every signal an operator can
+   * read stays reassuring (the instance row says `enabled`, the plugin's status says `enabled`, hooks
+   * are registered and healthCheck is green). This log line is the only place that inertness surfaces.
+   *
+   * Diagnostic only — it never skips or alters the binding: the id may be recreated (an import or a
+   * re-provision can restore the same session id), in which case the restored binding is exactly right.
+   */
+  private async warnIfScopeHasNoSession(inst: PluginInstance): Promise<void> {
+    if (!inst.sessionScope || inst.sessionScope === '*') return;
+    try {
+      await this.sessions.findOne(inst.sessionScope);
+    } catch (err) {
+      // findOne throws NotFoundException only for a genuinely missing row. Any other failure (a DB
+      // hiccup mid-boot) is not evidence the session is gone, and reporting it as gone would send an
+      // operator hunting a binding that is in fact fine — so stay quiet rather than cry wolf.
+      if (!(err instanceof NotFoundException)) return;
+      this.logger.warn(
+        `Plugin instance ${inst.pluginId}:${inst.instanceId} is bound to session '${inst.sessionScope}', which does not exist — it will receive no events until that session is restored or the instance is re-scoped`,
+        {
+          action: 'scope_binding_session_missing',
+          pluginId: inst.pluginId,
+          instanceId: inst.instanceId,
+          sessionScope: inst.sessionScope,
+        },
+      );
     }
   }
 
