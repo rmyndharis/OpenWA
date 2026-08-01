@@ -53,7 +53,10 @@ DATA_DB="${DATABASE_NAME:-./data/openwa.sqlite}"
 SESSIONS_DIR="${SESSION_DATA_PATH:-$DATA_DIR/sessions}"
 BAILEYS_DIR="${BAILEYS_AUTH_DIR:-$DATA_DIR/baileys}"
 MEDIA_DIR="${STORAGE_LOCAL_PATH:-$DATA_DIR/media}"
-PLUGIN_PACKAGES_DIR="${PLUGINS_DIR:-./plugins}"
+# Installed plugin code. The app defaults this to <dataDir>/plugins — the same tree as the
+# registry and each plugin's ctx.storage below — so an unset PLUGINS_DIR must resolve there
+# too, or the archive silently omits the plugin packages.
+PLUGIN_PACKAGES_DIR="${PLUGINS_DIR:-$DATA_DIR/plugins}"
 PLUGIN_STATE_DIR="$DATA_DIR/plugins"
 GENERATED_ENV="$DATA_DIR/.env.generated"
 ADMIN_KEY_FILE="$DATA_DIR/.api-key"

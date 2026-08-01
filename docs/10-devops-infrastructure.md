@@ -153,8 +153,8 @@ services:
       # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
       # strong secret. Production refuses to boot with a placeholder/default.
       - API_MASTER_KEY=
-      # Without this, plugins fall back to ./plugins (outside the data volume) and are lost
-      # when the container is replaced. The shipped compose sets it for the same reason.
+      # Pins the plugin directory onto the data volume. This is also the default, so the setting is
+      # belt-and-braces — it keeps working if the volume is mounted somewhere else.
       - PLUGINS_DIR=/app/data/plugins
     volumes:
       - ./:/app
@@ -232,8 +232,8 @@ services:
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - API_MASTER_KEY=${API_MASTER_KEY}
-      # Without this, plugins fall back to ./plugins (outside the data volume) and are lost
-      # when the container is replaced. The shipped compose sets it for the same reason.
+      # Pins the plugin directory onto the data volume. This is also the default, so the setting is
+      # belt-and-braces — it keeps working if the volume is mounted somewhere else.
       - PLUGINS_DIR=/app/data/plugins
     volumes:
       # Session auth, the main (auth/audit) SQLite DB, media and plugins all live here — losing

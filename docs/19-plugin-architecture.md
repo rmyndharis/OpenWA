@@ -485,7 +485,9 @@ also applies the per-session activation gate.
 discovers, loads, and runs plugins.
 
 **Discovery & load.** On `onModuleInit` it registers built-in plugins programmatically (the engine
-adapters; see §19.7), then scans the plugins directory (`plugins.dir`, default `./plugins`). For each
+adapters; see §19.7), then scans the plugins directory (`plugins.dir`, default `<dataDir>/plugins` — the same tree the
+registry and each plugin's `ctx.storage` live in, so code and persisted state stay together on one
+volume; `PLUGINS_DIR` overrides it). For each
 sub-directory with a `manifest.json` it reads the manifest, validates the required fields
 (`id`/`name`/`version`/`type`/`main`), and records an `INSTALLED` plugin plus a persisted registry
 entry — **without running any plugin code**. Persisted config and per-session activation/config are

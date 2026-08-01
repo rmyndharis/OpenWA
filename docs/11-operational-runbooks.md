@@ -551,8 +551,9 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > compose. Run the script where that volume is mounted — e.g. point `OPENWA_DATA_DIR`
 > at the volume's mountpoint, or run it inside a container with `/app/data` mounted. When operating
 > directly on the host mount, also set any path that does not use its default below `OPENWA_DATA_DIR`
-> (notably compose's colocated `PLUGINS_DIR`, and `MAIN_DATABASE_NAME` / `DATABASE_NAME` when the app
-> overrides them) to the corresponding host-visible path.
+> (`MAIN_DATABASE_NAME` / `DATABASE_NAME` when the app overrides them, and `PLUGINS_DIR` only if it
+> points somewhere outside the data directory — unset, it follows `OPENWA_DATA_DIR` like the app's own
+> default does) to the corresponding host-visible path.
 
 **Verification:**
 

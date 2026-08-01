@@ -80,7 +80,8 @@ services:
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-/app/data/media}
       # Install plugins into the writable, persistent data volume (the root FS is read-only). Matches
-      # docker-compose.yml; without this it falls back to ./plugins on the read-only root and install fails.
+      # docker-compose.yml and the application default; set explicitly so the path stays correct even
+      # if the volume moves.
       - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
       # Plugin install-from-URL redirect policy (ssrf-guard): off unless the exact string 'true'.
       - PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS=${PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS:-false}
