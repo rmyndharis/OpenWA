@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } fr
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
+import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
 import {
   Search,
   Send,
@@ -657,36 +658,22 @@ export function Chats() {
         if (!newMsg.fromMe) onMessageAppended('incoming');
       }
 
-      // Update sidebar chat list
+      // Update sidebar chat list. The refetch is REPORTED by the reducer and fired below, never from
+      // inside the updater: React double-invokes updaters under StrictMode, so a side effect in there
+      // ran twice for every message arriving in a chat the sidebar does not have.
+      let needsSidebarRefetch = false;
       setChats(prevChats => {
-        const chatIndex = prevChats.findIndex(c => c.id === newMsg.chatId);
-        if (chatIndex === -1) {
-          // A message for a chat not in the sidebar. Suppress the refetch ONLY for an outgoing echo
-          // addressed as `@lid`: a LID-migrated contact echoes back `@lid` while the user sent to
-          // `@c.us`, and the sent bubble is already reconciled in the active chat, so refetching on
-          // every such send just churns the chat list (#583 R2). Incoming messages and ordinary
-          // outgoing sends to a genuinely new chat still refetch so the sidebar stays complete.
-          const isMigratedEcho = newMsg.fromMe && (newMsg.chatId?.endsWith('@lid') ?? false);
-          if (!isMigratedEcho) {
-            void loadChats(selectedSessionId);
-          }
-          return prevChats;
-        }
-
-        const updatedChats = [...prevChats];
-        const targetChat = { ...updatedChats[chatIndex] };
-        // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
-        targetChat.lastMessage = newMsg.type === 'location' ? `📍 ${t('chats.media.location')}` : newMsg.body;
-        targetChat.timestamp = newMsg.timestamp;
-
-        if (!newMsg.fromMe && (!activeChat || activeChat.id !== targetChat.id)) {
-          targetChat.unreadCount = (targetChat.unreadCount || 0) + 1;
-        }
-
-        updatedChats.splice(chatIndex, 1);
-        updatedChats.unshift(targetChat);
-        return updatedChats;
+        const result = applyIncomingToChatList(prevChats, newMsg, {
+          activeChatId: activeChat?.id,
+          // A location message's body is the (multi-KB) base64 map thumbnail; show a label instead.
+          locationLabel: `📍 ${t('chats.media.location')}`,
+        });
+        needsSidebarRefetch = result.needsSidebarRefetch;
+        return result.chats;
       });
+      if (needsSidebarRefetch) {
+        void loadChats(selectedSessionId);
+      }
     },
     [selectedSessionId, activeChat, loadChats, markChatRead, appendMessage, onMessageAppended, t],
   );
@@ -1166,17 +1153,9 @@ export function Chats() {
       });
 
       // Update sidebar chat list (move active chat to the top with the new snippet)
-      setChats(prevChats => {
-        const chatIndex = prevChats.findIndex(c => c.id === activeChat.id);
-        if (chatIndex === -1) return prevChats;
-        const updatedChats = [...prevChats];
-        const target = { ...updatedChats[chatIndex] };
-        target.lastMessage = currentAttachment ? `[${currentAttachment.mimetype.split('/')[0]}]` : textToSend;
-        target.timestamp = Math.floor(Date.now() / 1000);
-        updatedChats.splice(chatIndex, 1);
-        updatedChats.unshift(target);
-        return updatedChats;
-      });
+      const snippet = currentAttachment ? `[${currentAttachment.mimetype.split('/')[0]}]` : textToSend;
+      const sentAt = Math.floor(Date.now() / 1000);
+      setChats(prevChats => promoteChatWithSnippet(prevChats, activeChat.id, snippet, sentAt));
     } catch (err) {
       showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
       updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
