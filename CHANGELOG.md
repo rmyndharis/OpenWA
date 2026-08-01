@@ -47,6 +47,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The clear list is now covered by a test that derives the expected set from `docker-compose.yml`
   itself, so a forward added without its clear entry fails in CI rather than shipping inert.
 
+- **Restarting from Dashboard > Infrastructure no longer reloads the page into an error.** The restart
+  modal polls the server and reloads once it answers, but it polled `GET /api/infra/health` — a plain
+  ping with no knowledge of shutdown. That endpoint keeps answering `200` for the entire drain window
+  and the engine teardown that follows, so the very first poll, three seconds in, was answered by the
+  process that had just been asked to exit. The modal declared success and reloaded two seconds later,
+  by which time the old process was gone and the new one had not yet bound its port — leaving the
+  operator on a 502/503 from their reverse proxy until they refreshed by hand several times.
+
+  The poll now targets `GET /api/health/ready`, which reports `503` the moment draining starts and
+  keeps reporting it until both databases answer. The page therefore reloads only once the new process
+  is genuinely serving, and it waits for the databases too rather than only for the port to open.
+
+  With the poll now waiting for real readiness, its deadline started to matter for the first time.
+  It was a fixed 60 attempts at one second, while `POST /api/infra/restart` estimates up to 63 seconds
+  for a restart that brings up PostgreSQL, Redis and MinIO together — so a full-profile restart could
+  have reported failure while the stack was still coming up correctly. The deadline is now derived
+  from the estimate the server already returns, with the old 60 as a floor. (#1019)
+
 ## [0.12.2] - 2026-08-01
 
 ### Changed
