@@ -1341,19 +1341,23 @@ describe('PluginLoaderService — boot plugins directory', () => {
     fs.writeFileSync(path.join(pluginDir, 'index.js'), 'module.exports = class {};');
   };
 
-  const boot = (): { loader: PluginLoaderService; storage: PluginStorageService; warn: jest.Mock } => {
+  /** One `logger.warn(message, context)` call, as recorded by the spy below. */
+  type WarnCall = [message: string, context?: Record<string, unknown>];
+  type WarnMock = jest.Mock<void, WarnCall>;
+
+  const boot = (): { loader: PluginLoaderService; storage: PluginStorageService; warn: WarnMock } => {
     const config = new ConfigService(configuration());
     const storage = new PluginStorageService(config);
     const loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
-    const warn = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined) as unknown as jest.Mock;
+    const warn = jest.spyOn(loggerOf(loader), 'warn').mockImplementation(() => undefined) as unknown as WarnMock;
     jest.spyOn(loggerOf(loader), 'log').mockImplementation(() => undefined);
     jest.spyOn(loggerOf(loader), 'debug').mockImplementation(() => undefined);
     loader.onModuleInit();
     return { loader, storage, warn };
   };
 
-  const warningsMatching = (warn: jest.Mock, action: string): unknown[][] =>
-    warn.mock.calls.filter(call => (call[1] as { action?: string } | undefined)?.action === action);
+  const warningsMatching = (warn: WarnMock, action: string): WarnCall[] =>
+    warn.mock.calls.filter(([, context]) => context?.action === action);
 
   beforeEach(() => {
     delete process.env.PLUGINS_DIR;
@@ -1388,7 +1392,7 @@ describe('PluginLoaderService — boot plugins directory', () => {
     const { loader, warn } = boot();
 
     expect(loader.getPlugin('ext-legacy')).toBeDefined();
-    const [message] = warningsMatching(warn, 'plugins_legacy_dir')[0] as [string];
+    const [message] = warningsMatching(warn, 'plugins_legacy_dir')[0];
     // The operator must be able to act on this without reading the source: both paths, and how to
     // make the choice permanent either way.
     expect(message).toContain(path.join('.', 'plugins'));
@@ -1461,13 +1465,10 @@ describe('PluginLoaderService — boot plugins directory', () => {
 
     const { warn } = boot();
 
-    const [message, context] = warningsMatching(warn, 'plugin_registry_without_code')[0] as [
-      string,
-      { count: number; pluginsDir: string },
-    ];
+    const [message, context] = warningsMatching(warn, 'plugin_registry_without_code')[0];
     expect(message).toContain('ext-gone');
-    expect(context.count).toBe(1);
-    expect(context.pluginsDir).toContain(path.join('data', 'plugins'));
+    expect(context?.count).toBe(1);
+    expect(context?.pluginsDir).toContain(path.join('data', 'plugins'));
   });
 
   it('warns when the plugins directory does not exist at all but the registry has entries', () => {
@@ -1488,7 +1489,7 @@ describe('PluginLoaderService — boot plugins directory', () => {
 
     const { warn } = boot();
 
-    const [message] = warningsMatching(warn, 'plugin_registry_without_code')[0] as [string];
+    const [message] = warningsMatching(warn, 'plugin_registry_without_code')[0];
     expect(message).toContain(custom);
     expect(message).toContain('does not exist');
   });
@@ -1555,7 +1556,7 @@ describe('PluginLoaderService — boot plugins directory', () => {
 
     const { warn } = boot();
 
-    const [message] = warningsMatching(warn, 'plugin_code_missing')[0] as [string];
+    const [message] = warningsMatching(warn, 'plugin_code_missing')[0];
     expect(message).toContain('ext-gone');
     // The state is intact — the operator needs to know reinstalling is safe, not assume data loss.
     expect(message).toMatch(/config|data/i);
