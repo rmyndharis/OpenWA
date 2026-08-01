@@ -64,7 +64,7 @@ export class ScopeBindingService implements OnApplicationBootstrap {
       if (!inst.enabled) continue;
       // Skip instances whose plugin isn't loaded — applyScopeBinding would only no-op/log for them.
       if (!this.loader.getPlugin(inst.pluginId)) continue;
-      await this.applyScopeBinding(inst.pluginId, inst.sessionScope, inst.config ?? {}, true);
+      await this.applyScopeBinding(inst.pluginId, inst.sessionScope, inst.config ?? {}, true, { additive: true });
       count++;
     }
 
@@ -85,12 +85,22 @@ export class ScopeBindingService implements OnApplicationBootstrap {
    * session + sessionConfig survive while a sibling binds the same scope, and '*' survives while a
    * sibling binds a wildcard/null scope.
    * Best-effort: provisioning must not fail because the plugin is momentarily unloaded.
+   *
+   * `additive` is for the boot reconciler, which RESTORES bindings rather than deciding them. Retiring
+   * '*' on a concrete activation is a provisioning-time decision — the operator just narrowed this
+   * plugin to one session, so it should stop firing on all of them. At boot there is no such new
+   * decision to apply: activeSessions (restored from registry.json) already encodes the outcome of
+   * every prior decision, including an explicit PUT /api/plugins/:id/sessions. Re-deriving it from the
+   * instance row would silently overwrite that operator choice — and bind the plugin to the row's
+   * scope even when that session has since been deleted, leaving it activated for nothing. So the boot
+   * path only ever ADDS the row's scope; it removes nothing.
    */
   async applyScopeBinding(
     pluginId: string,
     scope: string | null,
     config: Record<string, unknown>,
     activate: boolean,
+    opts: { additive?: boolean } = {},
   ): Promise<void> {
     try {
       if (!scope || scope === '*') {
@@ -129,7 +139,9 @@ export class ScopeBindingService implements OnApplicationBootstrap {
       }
       this.loader.setPluginSessionConfig(pluginId, scope, activate ? config : {});
       const current = this.loader.getPlugin(pluginId)?.activeSessions ?? [];
-      const set = new Set(current.filter(s => s !== '*'));
+      // Provisioning retires '*' (this instance narrows the plugin to one session); the additive boot
+      // path keeps the restored set whole, so an operator's PUT /plugins/:id/sessions survives a restart.
+      const set = new Set(opts.additive ? current : current.filter(s => s !== '*'));
       if (activate) set.add(scope);
       else set.delete(scope);
       // Preserve '*' while an enabled wildcard/null sibling still binds all sessions ('*' subsumes
