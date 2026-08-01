@@ -112,10 +112,13 @@ COPY package*.json ./
 # scripts/postinstall.js rides along: `npm ci` below runs the hook, which fails
 # when the file is missing. With the patcher present the hook applies it in
 # --best-effort mode; the explicit fatal run right after is the real gate.
-COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch ./scripts/
+COPY scripts/postinstall.js scripts/patch-wwebjs-201832.js scripts/wwebjs-201832.patch scripts/patch-wwebjs-newsletter-preview.js ./scripts/
 
-# Install production dependencies only, then apply the backport patcher (needs `patch`).
-RUN npm ci --omit=dev && node scripts/patch-wwebjs-201832.js && npm cache clean --force
+# Install production dependencies only, then apply the backports.
+RUN npm ci --omit=dev \
+    && node scripts/patch-wwebjs-201832.js \
+    && node scripts/patch-wwebjs-newsletter-preview.js \
+    && npm cache clean --force
 
 # Replace the npm the base image bundles. npm is not on the request path — the entrypoint runs
 # `node dist/main` — but it stays in the image because the operator runbooks drive it
