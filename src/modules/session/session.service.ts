@@ -27,6 +27,7 @@ import { decideReconnect, type ReconnectAttemptState } from './reconnect-policy'
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { MessageProjector } from './message-projector.service';
+import { SessionErrorStore } from './session-error-store.service';
 import { resolveEngineInitTimeoutMs } from '../../engine/engine-init-timeout';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
@@ -154,10 +155,6 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   private get engines(): EngineRegistry {
     return this.engineRegistry;
   }
-  // Transient, human-readable reason for the most recent terminal engine failure,
-  // keyed by session id. Surfaced on read so the dashboard can explain a FAILED
-  // status; cleared when the session re-initializes or becomes ready.
-  private sessionErrors: Map<string, string> = new Map();
 
   // Reconnection state per session
   private reconnectStates: Map<string, ReconnectState> = new Map();
@@ -229,6 +226,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     private readonly lidResolver: SessionLidResolver,
     private readonly watchdog: SessionLivenessWatchdog,
     private readonly messages: MessageProjector,
+    private readonly sessionErrors: SessionErrorStore,
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
@@ -559,18 +557,9 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     return this.attachLastError(session);
   }
 
-  /**
-   * Populate the transient `lastError` field from the in-memory error map. A FAILED session always
-   * carries its failure reason, and an ACTION_REQUIRED session carries what the operator must do
-   * (e.g. the whatsapp-web.js onboarding-modal fallback, #982); any other status clears it so a
-   * recovered session never shows a stale reason.
-   */
+  /** See SessionErrorStore — the reason map and this projection live together. */
   private attachLastError(session: Session): Session {
-    session.lastError =
-      session.status === SessionStatus.FAILED || session.status === SessionStatus.ACTION_REQUIRED
-        ? this.sessionErrors.get(session.id)
-        : undefined;
-    return session;
+    return this.sessionErrors.attachTo(session);
   }
 
   async findByName(name: string): Promise<Session> {
@@ -695,7 +684,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         this.lastDispatchedStatus.delete(id);
         // Drop the FAILED-reason entry too: it's keyed by a now-deleted UUID that can never be read
         // again, so leaving it would grow the map without bound across create/fail/delete churn.
-        this.sessionErrors.delete(id);
+        this.sessionErrors.clear(id);
         // The stuck-auth recovery budget is keyed by id; a committed delete frees it (and a recreated
         // session under the same name gets a fresh UUID + fresh budget). Left only on a committed
         // delete so a failed/409 delete — the session still exists — keeps the budget intact.
@@ -932,7 +921,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     });
     this.engines.set(id, engine);
     // Clear any prior failure reason before a fresh start.
-    this.sessionErrors.delete(id);
+    this.sessionErrors.clear(id);
 
     // Mark INITIALIZING before engine.initialize(): the engine drives status forward
     // (QR_READY -> AUTHENTICATING -> READY) through the callbacks below while it
@@ -1277,7 +1266,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     }
     // A fresh READY stretch starts the watchdog's failure budget clean too.
     this.watchdog.clear(id);
-    this.sessionErrors.delete(id);
+    this.sessionErrors.clear(id);
     // READY proves any in-flight stuck-auth recovery succeeded (or none was needed), so the
     // one-shot recovery budget is re-armed for a future episode.
     this.stuckAuthRecoveryUsed.delete(id);

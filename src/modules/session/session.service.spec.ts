@@ -1,3 +1,4 @@
+import { SessionErrorStore } from './session-error-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
@@ -189,6 +190,7 @@ describe('SessionService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
+        SessionErrorStore,
         {
           provide: getRepositoryToken(Session, 'data'),
           useValue: repository,
@@ -1240,7 +1242,7 @@ describe('SessionService', () => {
         }
 
         expect(state.attempts).toBe(12);
-        expect(i.sessionErrors.has('sess-uuid-1')).toBe(false); // never terminally FAILED
+        expect(i.sessionErrors.get('sess-uuid-1')).toBeUndefined(); // never terminally FAILED
         expect(jest.getTimerCount()).toBe(1); // still exactly one pending timer
 
         // The 12th schedule computed its delay with attempts=11: 5000*2^11 ≈ 10.24M ms, clamped to
@@ -1302,7 +1304,7 @@ describe('SessionService', () => {
 
         i.scheduleReconnect('sess-uuid-1', createMockSession()); // attempt 3/3 still schedules
         expect(state.attempts).toBe(3);
-        expect(i.sessionErrors.has('sess-uuid-1')).toBe(false);
+        expect(i.sessionErrors.get('sess-uuid-1')).toBeUndefined();
 
         i.scheduleReconnect('sess-uuid-1', createMockSession()); // budget exhausted → terminal FAILED
         expect(state.attempts).toBe(3); // no further attempt consumed
@@ -1923,13 +1925,13 @@ describe('SessionService', () => {
       callbacks.onError?.('chromium missing');
 
       const sessionErrors = (service as unknown as { sessionErrors: Map<string, string> }).sessionErrors;
-      expect(sessionErrors.has('sess-uuid-1')).toBe(true); // precondition: the FAILED reason is recorded
+      expect(sessionErrors.get('sess-uuid-1')).toBeDefined(); // precondition: the FAILED reason is recorded
 
       (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ status: SessionStatus.FAILED }));
       await service.delete('sess-uuid-1');
 
       // Without cleanup, the entry would linger forever keyed by a deleted UUID (unbounded growth).
-      expect(sessionErrors.has('sess-uuid-1')).toBe(false);
+      expect(sessionErrors.get('sess-uuid-1')).toBeUndefined();
     });
 
     it('does not surface lastError once the session has recovered', async () => {
@@ -5167,7 +5169,7 @@ describe('SessionService', () => {
         // clears it in its finally.
         expect(intern().initializingSessions.has('sess-uuid-1')).toBe(false);
         expect(intern().reconnectStates.has('sess-uuid-1')).toBe(false);
-        expect(intern().sessionErrors.has('sess-uuid-1')).toBe(false);
+        expect(intern().sessionErrors.get('sess-uuid-1')).toBeUndefined();
       },
     );
 

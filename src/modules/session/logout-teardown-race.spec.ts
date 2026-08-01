@@ -4,6 +4,7 @@ import { Repository, DataSource } from 'typeorm';
 import { BadGatewayException, ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SessionService } from './session.service';
+import { SessionErrorStore } from './session-error-store.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { EngineFactory } from '../../engine/engine.factory';
@@ -89,6 +90,7 @@ describe('SessionService logout() name-scoped teardown fence', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SessionService,
+        SessionErrorStore,
         { provide: getRepositoryToken(Session, 'data'), useValue: repository },
         { provide: getRepositoryToken(Message, 'data'), useValue: messageRepository },
         { provide: getDataSourceToken('data'), useValue: dataSource },
