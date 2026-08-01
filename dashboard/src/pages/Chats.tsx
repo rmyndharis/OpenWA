@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
 import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
+import { filterChats, filterChannels, groupStatusesByContact } from '../utils/chatFilters';
 import {
   Search,
   Send,
@@ -1190,46 +1191,14 @@ export function Chats() {
     [t],
   );
 
-  const searchMatch = (c: Chat) =>
-    c.name?.toLowerCase().includes(searchQuery.toLowerCase()) || c.id.toLowerCase().includes(searchQuery.toLowerCase());
-
-  // Chats tab: real conversations. Channel/status-kind rows are hidden here and surfaced on their
-  // own tabs instead.
-  const filteredChats = chats.filter(c => c.kind !== 'channel' && c.kind !== 'status' && searchMatch(c));
-
-  // Channels tab: same search box, filtered client-side like the other two tabs. The zero-state
-  // ("not subscribed to any channels") stays keyed on the unfiltered list below, so a non-matching
-  // search just renders an empty list instead of claiming there are no subscriptions at all.
-  const searchQueryLower = searchQuery.toLowerCase();
-  const filteredChannels = (channelsQuery.data ?? []).filter(
-    ch => ch.name.toLowerCase().includes(searchQueryLower) || ch.id.toLowerCase().includes(searchQueryLower),
-  );
-
-  // Status tab: group the flat status list by contact (one row per contact), newest-contact-first
-  // across groups, filtered by the same search box. The store returns statuses newest-first
-  // (postedAt DESC); each group's items are flipped to oldest-first so the viewer reads like a
-  // WhatsApp story — newest at the bottom, where the viewer's open-at-newest scroll lands.
-  // A plain const (not useMemo) mirrors filteredChats/filteredChannels above — statusesQuery.data
-  // is already a stable, query-cached reference, so re-grouping on every render is cheap.
-  const byStatusContact = new Map<string, ContactStatusGroup>();
-  for (const item of statusesQuery.data ?? []) {
-    const existing = byStatusContact.get(item.contact.id);
-    if (existing) {
-      existing.items.push(item);
-      if (item.timestamp > existing.latest) existing.latest = item.timestamp;
-    } else {
-      byStatusContact.set(item.contact.id, { contact: item.contact, items: [item], latest: item.timestamp });
-    }
-  }
-  for (const group of byStatusContact.values()) group.items.reverse();
-  const groupedStatuses = Array.from(byStatusContact.values())
-    .filter(
-      g =>
-        (g.contact.name ?? '').toLowerCase().includes(searchQueryLower) ||
-        (g.contact.pushName ?? '').toLowerCase().includes(searchQueryLower) ||
-        g.contact.id.toLowerCase().includes(searchQueryLower),
-    )
-    .sort((a, b) => (a.latest < b.latest ? 1 : a.latest > b.latest ? -1 : 0));
+  // One search box drives all three tabs; each matches on its own fields. Plain consts (not useMemo)
+  // because chats/channelsQuery.data/statusesQuery.data are already stable, query-cached references,
+  // so re-filtering on every render is cheap. See utils/chatFilters for the two status orderings.
+  const filteredChats = filterChats(chats, searchQuery);
+  // The channels zero-state ("not subscribed to any channels") stays keyed on the UNFILTERED list
+  // below, so a non-matching search renders an empty list rather than claiming there are none.
+  const filteredChannels = filterChannels(channelsQuery.data ?? [], searchQuery);
+  const groupedStatuses: ContactStatusGroup[] = groupStatusesByContact(statusesQuery.data ?? [], searchQuery);
 
   // The open status group, derived — see the activeStatusContactId declaration.
   const activeStatusGroup = activeStatusContactId
