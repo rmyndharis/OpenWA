@@ -595,3 +595,52 @@ describe('isIngressCapable', () => {
     expect(isIngressCapable({ ingress: [{ route: 'events' }] })).toBe(false);
   });
 });
+
+describe('PluginsService — disable when the plugin is not loaded', () => {
+  let tmpDir: string;
+  let pluginsDir: string;
+  let config: ConfigService;
+
+  const build = () => {
+    const storage = new PluginStorageService(config);
+    const loader = new PluginLoaderService(config, new HookManager(), storage, {} as unknown as ModuleRef);
+    return { storage, loader, service: new PluginsService(loader, config) };
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owa-disable-'));
+    pluginsDir = path.join(tmpDir, 'plugins');
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    config = {
+      get: (k: string) => (k === 'plugins.dir' ? pluginsDir : k === 'dataDir' ? tmpDir : undefined),
+    } as unknown as ConfigService;
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  // Regression: a plugin whose package directory is gone (an interrupted update, or a directory that
+  // was never on the data volume) still has a registry entry carrying enabledByOperator — the standing
+  // instruction to enable it on every boot. disable() threw NotFound because the loader had nothing to
+  // tear down, so the operator could not withdraw that decision by any route: reinstalling the code
+  // brought the plugin straight back up.
+  it('clears the boot decision for an installed plugin whose code is missing', async () => {
+    const first = build();
+    first.service.install({ buffer: pkg() });
+    first.loader.setOperatorEnabled('svc-plg', true);
+
+    // The code disappears; a restart re-reads the registry but loads nothing.
+    fs.rmSync(path.join(pluginsDir, 'svc-plg'), { recursive: true, force: true });
+    const restarted = build();
+    expect(restarted.loader.getPlugin('svc-plg')).toBeUndefined();
+    expect(restarted.storage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(true);
+
+    const res = await restarted.service.disable('svc-plg');
+
+    expect(res.success).toBe(true);
+    expect(restarted.storage.getPluginEntry('svc-plg')?.enabledByOperator).toBe(false);
+  });
+
+  it('still throws NotFound for an id with no registry entry at all', async () => {
+    const { service } = build();
+    await expect(service.disable('never-installed')).rejects.toThrow(/not found/i);
+  });
+});

@@ -11,6 +11,7 @@ import {
   PluginCapabilityPermission,
   PluginManifest,
   PluginInstance,
+  PluginRegistryEntry,
   PluginStatus,
   IPlugin,
   PluginType,
@@ -604,6 +605,15 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
    */
   setOperatorEnabled(pluginId: string, enabled: boolean): void {
     this.pluginStorage.setPluginEnabledByOperator(pluginId, enabled);
+  }
+
+  /**
+   * The persisted registry entry for a plugin id, whether or not its code is currently loaded. Lets a
+   * caller distinguish "installed but not loaded" — which still owns config, storage and the
+   * `enabledByOperator` decision — from an id the gateway has genuinely never seen.
+   */
+  getRegistryEntry(pluginId: string): PluginRegistryEntry | undefined {
+    return this.pluginStorage.getPluginEntry(pluginId);
   }
 
   async enablePlugin(pluginId: string): Promise<void> {

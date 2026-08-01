@@ -151,7 +151,18 @@ export class PluginsService {
     const plugin = this.pluginLoader.getPlugin(id);
 
     if (!plugin) {
-      throw new NotFoundException(`Plugin ${id} not found`);
+      // Not loaded, but the registry may still hold its entry — and with it `enabledByOperator`, the
+      // standing instruction to enable it on every boot. A plugin whose code went missing (an
+      // interrupted update, a package directory outside the data volume) is exactly that case: there is
+      // no runtime to tear down, so `disablePlugin` can never run, and until now the operator had no way
+      // to withdraw the decision at all. `disable` expresses intent rather than performing a runtime
+      // operation, so honour it against the registry; reinstalling the code must not silently resurrect
+      // a plugin the operator switched off. A 404 now means only what it should: an id nobody knows.
+      if (!this.pluginLoader.getRegistryEntry(id)) {
+        throw new NotFoundException(`Plugin ${id} not found`);
+      }
+      this.pluginLoader.setOperatorEnabled(id, false);
+      return { success: true, message: `Plugin ${id} is not loaded; it will not be enabled on boot` };
     }
 
     if (plugin.status !== PluginStatus.ENABLED) {
