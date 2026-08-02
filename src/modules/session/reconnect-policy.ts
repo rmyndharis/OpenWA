@@ -1,7 +1,7 @@
 /**
  * The reconnect backoff *decision*, separated from its effects.
  *
- * `SessionService.scheduleReconnect` interleaves four rules (stability reset, budget exhaustion,
+ * `SessionEngineLifecycle.scheduleReconnect` interleaves four rules (stability reset, budget exhaustion,
  * exponential backoff with jitter, periodic loop alerting) with the side effects they trigger
  * (status writes, engine eviction, webhooks, timers). The rules are the subtle part and the effects
  * are the untestable part, so the rules live here as a pure function over explicit state.

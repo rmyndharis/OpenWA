@@ -15,11 +15,12 @@ import {
 } from 'lucide-react';
 import { infraApi, API_BASE_URL } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
+import { restartPollAttempts } from '../utils/restartPoll';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
-import { useToast } from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 import './Infrastructure.css';
 
 import sqliteIcon from '../assets/icons/sqlite.svg';
@@ -451,8 +452,12 @@ export function Infrastructure() {
 
     const profilesToRemove = previousProfiles.filter(p => !pendingProfiles.includes(p));
 
+    // Kept outside the try: the poll deadline is derived from it, and the restart call is expected to
+    // fail sometimes (the server may go down before it answers).
+    let estimatedTime: number | undefined;
     try {
       const response = await infraApi.restart(pendingProfiles, profilesToRemove);
+      estimatedTime = response.estimatedTime;
       if (response.estimatedTime) setRestartCountdown(response.estimatedTime);
     } catch {
       // Expected — server shutting down
@@ -477,12 +482,12 @@ export function Infrastructure() {
       });
     }, 1000);
 
-    checkServerHealth(stopCountdown);
+    checkServerHealth(stopCountdown, estimatedTime);
   };
 
-  const checkServerHealth = async (stopCountdown?: () => void) => {
+  const checkServerHealth = async (stopCountdown?: () => void, estimatedTime?: number) => {
     let attempts = 0;
-    const maxAttempts = 60;
+    const maxAttempts = restartPollAttempts(estimatedTime);
 
     const check = async () => {
       try {

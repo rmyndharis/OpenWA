@@ -6,7 +6,7 @@ import { Repository } from 'typeorm';
 import { createLogger } from '../../../common/services/logger.service';
 import { QUEUE_NAMES } from '../queue-names';
 import { workerConnectionOptions, webhookWorkerConcurrency } from '../redis-connection';
-import { WebhookJobData } from '../../webhook/webhook.service';
+import { WebhookJobData, WebhookPayload } from '../../webhook/webhook.service';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import { recordWebhookDeliveryFailure, statusCodeFromError } from '../../webhook/utils/record-delivery-failure';
@@ -29,6 +29,18 @@ export interface WebhookJobResult {
  * stalls, so reaching this sentinel implies the job genuinely died twice mid-processing.
  */
 const STALL_EXHAUSTION_MESSAGE = 'job stalled more than allowable limit';
+
+/** Per-attempt delivery context threaded through the process() pipeline stages (was closure state). */
+interface WebhookDeliveryContext {
+  job: Job<WebhookJobData>;
+  webhookId: string;
+  url: string;
+  event: string;
+  payload: WebhookPayload;
+  maxRetries: number;
+  sessionId: string;
+  startTime: number;
+}
 
 // Override the Worker's connection so it does NOT inherit the producer's `enableOfflineQueue: false`
 // from the shared BullModule connection — the Worker must tolerate a brief Redis reconnect. Set an
@@ -69,125 +81,160 @@ export class WebhookProcessor extends WorkerHost {
       'X-OpenWA-Retry-Count': String(job.attemptsMade),
     };
 
+    const ctx: WebhookDeliveryContext = { job, webhookId, url, event, payload, maxRetries, sessionId, startTime };
+
     try {
-      const { status, statusText, ok } = await withSafeFetch(
-        url,
-        {
-          method: 'POST',
-          headers: requestHeaders,
-          body: JSON.stringify(payload),
-          // Honor WEBHOOK_TIMEOUT on the primary (queued) path too — not just the deprecated direct one.
-          signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
-        },
-        response => ({ status: response.status, statusText: response.statusText, ok: response.ok }),
-        { guard: isSsrfProtectionEnabled() },
-      );
-
-      const responseTime = Date.now() - startTime;
-
-      if (!ok) {
-        throw new Error(`HTTP ${status}: ${statusText}`);
-      }
-
-      // The receiver already answered 2xx — the delivery SUCCEEDED. Everything up to the return is
-      // bookkeeping and must never throw back into the failure path: a rethrow would make BullMQ
-      // retry (a duplicate POST for an already-delivered event) and, on the final attempt, file a
-      // false dead-letter row. Log a bookkeeping failure and keep the success outcome.
-      try {
-        await this.webhookRepository.update(webhookId, {
-          lastTriggeredAt: new Date(),
-        });
-      } catch (bookkeepingError) {
-        this.logger.error(
-          'Webhook delivered but lastTriggeredAt update failed',
-          bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
-          { webhookId, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
-        );
-      }
-
-      // Execute hook after successful delivery
-      await this.hookManager.execute(
-        'webhook:delivered',
-        {
-          sessionId,
-          event,
-          webhookId,
-          deliveryId: payload.deliveryId,
-          statusCode: status,
-          responseTime,
-          attempt: job.attemptsMade + 1,
-        },
-        { sessionId, source: 'WebhookProcessor' },
-      );
-
-      this.logger.log(`Webhook delivered successfully`, {
-        webhookId,
-        event,
-        deliveryId: payload.deliveryId,
-        idempotencyKey: payload.idempotencyKey,
-        statusCode: status,
-        responseTime,
-        attempt: job.attemptsMade + 1,
-        action: 'webhook_delivered',
-      });
-
+      const { status, responseTime } = await this.postToReceiver(ctx, requestHeaders);
+      await this.recordSuccessfulDelivery(ctx, status, responseTime);
       return {
         statusCode: status,
         success: true,
         responseTime,
       };
     } catch (error) {
-      const responseTime = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isFinalAttempt = job.attemptsMade + 1 >= maxRetries;
-
-      this.logger.error(`Webhook delivery failed`, errorMessage, {
-        webhookId,
-        event,
-        deliveryId: payload.deliveryId,
-        idempotencyKey: payload.idempotencyKey,
-        responseTime,
-        attempt: job.attemptsMade + 1,
-        maxRetries,
-        isFinalAttempt,
-        action: 'webhook_failed',
-      });
-
-      // On final failure (all retries exhausted): fire the error hook AND persist a durable record so
-      // the lost event is visible after the BullMQ failed-set / logs roll off.
-      if (isFinalAttempt) {
-        // The hook payload and the durable row are surfaced to operators/plugins — redact SSRF detail
-        // (resolved internal IP) from the client-facing message. The full `errorMessage` is already
-        // logged server-side above; statusCodeFromError never matches an SSRF block (matches ^HTTP \d{3}).
-        const clientError = redactSsrfError(error);
-        await this.hookManager.execute(
-          'webhook:error',
-          {
-            sessionId,
-            event,
-            webhookId,
-            deliveryId: payload.deliveryId,
-            error: clientError,
-            attempt: job.attemptsMade + 1,
-          },
-          { sessionId, source: 'WebhookProcessor' },
-        );
-        await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
-          webhookId,
-          sessionId,
-          event,
-          url,
-          idempotencyKey: payload.idempotencyKey,
-          deliveryId: payload.deliveryId,
-          attempts: job.attemptsMade + 1,
-          lastStatusCode: statusCodeFromError(errorMessage),
-          lastError: clientError,
-        });
-        incrementWebhookDeliveryFailures();
-      }
-
+      await this.recordDeliveryFailure(ctx, error);
       // Re-throw to trigger BullMQ retry
       throw error;
+    }
+  }
+
+  /**
+   * POST the payload to the receiver through the SSRF-guarded fetch and classify the response:
+   * a non-ok status throws into the failure path. Returns the status and measured response time.
+   */
+  private async postToReceiver(
+    ctx: WebhookDeliveryContext,
+    requestHeaders: Record<string, string>,
+  ): Promise<{ status: number; responseTime: number }> {
+    const { url, payload, startTime } = ctx;
+    const { status, statusText, ok } = await withSafeFetch(
+      url,
+      {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify(payload),
+        // Honor WEBHOOK_TIMEOUT on the primary (queued) path too — not just the deprecated direct one.
+        signal: AbortSignal.timeout(this.configService.get<number>('webhook.timeout', 10000)),
+      },
+      response => ({ status: response.status, statusText: response.statusText, ok: response.ok }),
+      { guard: isSsrfProtectionEnabled() },
+    );
+
+    const responseTime = Date.now() - startTime;
+
+    if (!ok) {
+      throw new Error(`HTTP ${status}: ${statusText}`);
+    }
+
+    return { status, responseTime };
+  }
+
+  /**
+   * Post-delivery bookkeeping for a 2xx answer: guarded lastTriggeredAt update, the
+   * webhook:delivered hook, and the success log.
+   */
+  private async recordSuccessfulDelivery(
+    ctx: WebhookDeliveryContext,
+    status: number,
+    responseTime: number,
+  ): Promise<void> {
+    const { job, webhookId, event, payload, sessionId } = ctx;
+    // The receiver already answered 2xx — the delivery SUCCEEDED. Everything up to the return is
+    // bookkeeping and must never throw back into the failure path: a rethrow would make BullMQ
+    // retry (a duplicate POST for an already-delivered event) and, on the final attempt, file a
+    // false dead-letter row. Log a bookkeeping failure and keep the success outcome.
+    try {
+      await this.webhookRepository.update(webhookId, {
+        lastTriggeredAt: new Date(),
+      });
+    } catch (bookkeepingError) {
+      this.logger.error(
+        'Webhook delivered but lastTriggeredAt update failed',
+        bookkeepingError instanceof Error ? bookkeepingError.message : String(bookkeepingError),
+        { webhookId, deliveryId: payload.deliveryId, action: 'webhook_bookkeeping_failed' },
+      );
+    }
+
+    // Execute hook after successful delivery
+    await this.hookManager.execute(
+      'webhook:delivered',
+      {
+        sessionId,
+        event,
+        webhookId,
+        deliveryId: payload.deliveryId,
+        statusCode: status,
+        responseTime,
+        attempt: job.attemptsMade + 1,
+      },
+      { sessionId, source: 'WebhookProcessor' },
+    );
+
+    this.logger.log(`Webhook delivered successfully`, {
+      webhookId,
+      event,
+      deliveryId: payload.deliveryId,
+      idempotencyKey: payload.idempotencyKey,
+      statusCode: status,
+      responseTime,
+      attempt: job.attemptsMade + 1,
+      action: 'webhook_delivered',
+    });
+  }
+
+  /**
+   * Failure-path bookkeeping: log the delivery failure and, on the final attempt, fire the
+   * webhook:error hook, persist the durable dead-letter row, and bump the failures metric.
+   */
+  private async recordDeliveryFailure(ctx: WebhookDeliveryContext, error: unknown): Promise<void> {
+    const { job, webhookId, url, event, payload, maxRetries, sessionId, startTime } = ctx;
+    const responseTime = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isFinalAttempt = job.attemptsMade + 1 >= maxRetries;
+
+    this.logger.error(`Webhook delivery failed`, errorMessage, {
+      webhookId,
+      event,
+      deliveryId: payload.deliveryId,
+      idempotencyKey: payload.idempotencyKey,
+      responseTime,
+      attempt: job.attemptsMade + 1,
+      maxRetries,
+      isFinalAttempt,
+      action: 'webhook_failed',
+    });
+
+    // On final failure (all retries exhausted): fire the error hook AND persist a durable record so
+    // the lost event is visible after the BullMQ failed-set / logs roll off.
+    if (isFinalAttempt) {
+      // The hook payload and the durable row are surfaced to operators/plugins — redact SSRF detail
+      // (resolved internal IP) from the client-facing message. The full `errorMessage` is already
+      // logged server-side above; statusCodeFromError never matches an SSRF block (matches ^HTTP \d{3}).
+      const clientError = redactSsrfError(error);
+      await this.hookManager.execute(
+        'webhook:error',
+        {
+          sessionId,
+          event,
+          webhookId,
+          deliveryId: payload.deliveryId,
+          error: clientError,
+          attempt: job.attemptsMade + 1,
+        },
+        { sessionId, source: 'WebhookProcessor' },
+      );
+      await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+        webhookId,
+        sessionId,
+        event,
+        url,
+        idempotencyKey: payload.idempotencyKey,
+        deliveryId: payload.deliveryId,
+        attempts: job.attemptsMade + 1,
+        lastStatusCode: statusCodeFromError(errorMessage),
+        lastError: clientError,
+      });
+      incrementWebhookDeliveryFailures();
     }
   }
 

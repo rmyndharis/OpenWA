@@ -17,11 +17,12 @@ export const generatedEnvPath = (): string => path.resolve(process.cwd(), 'data'
 /**
  * Parsed contents, or `{}` when the file has never been written.
  *
- * Three `InfraController` reads share this — the built-in-flag fallback behind the Docker probe, the
- * config form's hydrate, and the merge base the save path writes back over. Re-deriving the location
- * at each of them made the file an undeclared dependency shared between reading infrastructure
- * status, rendering the form, and persisting credentials: three concerns that otherwise touch none of
- * the same state.
+ * Three reads share this — the built-in-flag fallback behind the Docker probe
+ * (InfraStatusController.readSavedBuiltinFlags), the config form's hydrate
+ * (InfraConfigController.getConfig), and the merge base the save path writes back over
+ * (InfraConfigController.saveConfig). Re-deriving the location at each of them made the file an
+ * undeclared dependency shared between reading infrastructure status, rendering the form, and
+ * persisting credentials: three concerns that otherwise touch none of the same state.
  */
 export function readGeneratedEnv(): Record<string, string> {
   const envPath = generatedEnvPath();

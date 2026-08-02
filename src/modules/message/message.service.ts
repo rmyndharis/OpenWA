@@ -91,8 +91,9 @@ export class MessageService {
       return this.failSend(sessionId, 'text', message, finalDto, error);
     }
 
-    // Note: the `message:sent` hook is emitted solely by SessionService.onMessageCreate (engine
-    // `message_create`) with a consistent IncomingMessage payload for ALL sends (text, media,
+    // Note: the `message:sent` hook is emitted solely by the onMessageCreate wiring in
+    // SessionEngineLifecycle (engine `message_create`, handled by MessageProjector) with a
+    // consistent IncomingMessage payload for ALL sends (text, media,
     // and phone-composed), so it is intentionally not fired here to avoid a double dispatch.
     return this.persistSentState(message, result);
   }

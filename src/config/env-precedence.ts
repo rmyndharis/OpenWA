@@ -10,12 +10,16 @@
  * provide the value, while a real (non-empty) value is preserved and keeps its top precedence.
  */
 /**
- * Keys the bundled compose forwards with `- KEY=${KEY:-}` (rendering blank when unset) AND the
- * dashboard saves to `data/.env.generated`. A blank forward of one of these would shadow the
- * dashboard's value, so each is cleared when blank — letting a dashboard switch (database, storage,
- * redis, engine) actually apply at runtime while a real host value still pins. Only add a key that
- * meets BOTH conditions (blank-forwarded by compose AND dashboard-managed); keep this list in sync
- * with the `${KEY:-}` forwards in docker-compose.yml.
+ * Keys the bundled compose forwards with `- KEY=${KEY:-}`, which renders blank when the operator
+ * sets nothing. A blank forward shadows `.env` / `data/.env.generated` (both loaded with dotenv
+ * `override: false`), so each is cleared when blank — letting a dashboard switch (database, storage,
+ * redis, engine) or a hand-edited `data/.env.generated` actually apply at runtime while a real host
+ * value still pins.
+ *
+ * EVERY `${KEY:-}` forward in docker-compose.yml belongs here — being dashboard-managed is not a
+ * further condition, because `data/.env.generated` is documented as hand-editable (see load-env.ts)
+ * and `saveConfig` preserves keys it does not own. `env-precedence.spec.ts` derives the expected set
+ * from the compose file and fails when the two drift.
  */
 export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'ENGINE_TYPE',
@@ -58,6 +62,20 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'RATE_LIMIT_MEDIUM_LIMIT',
   'RATE_LIMIT_LONG_TTL',
   'RATE_LIMIT_LONG_LIMIT',
+  // Boot-time flags and limits an operator sets in .env / data/.env.generated. AUTO_START_SESSIONS
+  // gained its compose forward in v0.12.0 without a clear entry here, so the blank forward shadowed
+  // the file and auto-start silently stayed off — sessions sat at `disconnected` with no engine and
+  // no error to go on (#981).
+  'AUTO_START_SESSIONS',
+  'BODY_SIZE_LIMIT',
+  'API_MASTER_KEY',
+  'TRUSTED_PROXIES',
+  'CSP_UPGRADE_INSECURE_REQUESTS',
+  // whatsapp-web.js launch knobs: the WhatsApp Web version pin, its remote HTML template, and the
+  // first-boot init wait raised for slow hosts.
+  'WWEBJS_WEB_VERSION',
+  'WWEBJS_WEB_VERSION_REMOTE_PATH',
+  'WWEBJS_AUTH_TIMEOUT_MS',
 ];
 
 export function clearBlankEnv(env: NodeJS.ProcessEnv, keys: string[]): void {

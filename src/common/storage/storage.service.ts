@@ -2,9 +2,6 @@ import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
-import { TarArchive } from 'archiver';
-import * as tar from 'tar-stream';
-import { createGunzip } from 'zlib';
 import { Readable, PassThrough } from 'stream';
 import {
   S3Client,
@@ -16,7 +13,9 @@ import {
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { createLogger } from '../services/logger.service';
-import { isPathWithin, isSafeStorageKey } from '../utils/path-safety';
+import { isSafeStorageKey } from '../utils/path-safety';
+import { createExportStream, importFromStream } from './storage-transfer';
+import { listLocalFiles, iterateLocalFiles, getLocalFile, putLocalFile, deleteLocalFile } from './storage-local-files';
 
 interface S3Config {
   endpoint?: string;
@@ -26,14 +25,6 @@ interface S3Config {
   bucket?: string;
 }
 
-/** Per-entry buffer cap for an import (200 MiB — 4× the inbound media cap). Bounds a decompression bomb. */
-const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
-/** Max number of entries an import archive may contain. Bounds an entry-count DoS. */
-const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
-/** Max number of local files a single traversal enumerates. Bounds a count DoS on a huge media dir. */
-const DEFAULT_LIST_MAX_FILES = 100_000;
-/** Max directory depth a local traversal descends. Prevents a pathological tree from running unbounded. */
-const LOCAL_TRAVERSAL_MAX_DEPTH = 20;
 /** How often an S3-configured service re-probes a bucket that was unreachable at boot. */
 export const DEFAULT_S3_REPROBE_INTERVAL_MS = 60_000;
 
@@ -357,148 +348,24 @@ export class StorageService implements OnModuleDestroy {
   }
 
   // ============================================================================
-  // Export - Create tar.gz stream from current storage
+  // Export/Import - tar.gz streams (implemented in storage-transfer.ts)
   // ============================================================================
 
-  async createExportStream(): Promise<PassThrough> {
-    const files = await this.listFiles();
-    const output = new PassThrough();
+  createExportStream(): Promise<PassThrough> {
+    return createExportStream(
+      () => this.listFiles(),
+      filePath => this.getFile(filePath),
+      this.logger,
+    );
+  }
 
-    const archive = new TarArchive({
-      gzip: true,
-      gzipOptions: { level: 6 },
-    });
-
-    // Surface archive-level failures (gzip/finalize) on the returned stream instead of
-    // letting them become an unhandled rejection or a silently truncated download.
-    archive.on('error', (err: Error) => {
-      this.logger.error('Export archive failed', String(err));
-      output.destroy(err);
-    });
-
-    archive.pipe(output);
-
-    // Add files to archive
-    for (const file of files) {
-      try {
-        const data = await this.getFile(file);
-        archive.append(data, { name: file });
-      } catch (error) {
-        this.logger.warn(`Failed to export file: ${file}`, { error: String(error) });
-      }
-    }
-
-    // finalize() rejections also emit via the 'error' handler above; catch the promise so it
-    // never surfaces as an unhandled rejection.
-    archive.finalize().catch(() => undefined);
-    return output;
+  // Best-effort, NOT atomic: see the implementation in storage-transfer.ts for the full contract.
+  importFromStream(inputStream: Readable): Promise<number> {
+    return importFromStream(inputStream, (filePath, data) => this.putFile(filePath, data), this.logger);
   }
 
   // ============================================================================
-  // Import - Extract tar.gz stream to current storage
-  // ============================================================================
-
-  // Best-effort, NOT atomic: a single bad/traversing entry is skipped and the rest still import, and a
-  // resource-cap breach aborts the rest but KEEPS the entries already written (no rollback). Callers
-  // re-running an import is safe (putFile overwrites). A staging-dir + atomic promote would make it
-  // transactional, but is out of scope here.
-  async importFromStream(inputStream: Readable): Promise<number> {
-    let importedCount = 0;
-    let entryCount = 0;
-    const maxEntryBytes = positiveIntFromEnv('STORAGE_IMPORT_MAX_BYTES', DEFAULT_IMPORT_MAX_BYTES);
-    const maxEntries = positiveIntFromEnv('STORAGE_IMPORT_MAX_ENTRIES', DEFAULT_IMPORT_MAX_ENTRIES);
-
-    const extract = tar.extract();
-    const gunzip = createGunzip();
-
-    return new Promise<number>((resolve, reject) => {
-      let settled = false;
-      // Abort the whole import: a per-entry overflow or too many entries is a (zip-bomb) attack, not
-      // a per-file skip — tear down the pipeline and reject so nothing further is buffered or written.
-      const fail = (err: Error): void => {
-        if (settled) return;
-        settled = true;
-        extract.destroy();
-        gunzip.destroy();
-        // Destroying the input mid-pipe stops the source; without an error arg it emits no 'error'.
-        inputStream.destroy();
-        reject(err);
-      };
-      // Every stream in the pipeline needs an 'error' listener: an EventEmitter with none CRASHES the
-      // process on error. pipe() does not forward errors, so a corrupt gzip (zlib error on gunzip) or
-      // an input read failure (disk I/O, file replaced mid-read) would otherwise kill the server
-      // mid-request instead of failing the import.
-      gunzip.on('error', (err: Error) => {
-        this.logger.error('Import failed (gzip)', String(err));
-        fail(err);
-      });
-      inputStream.on('error', (err: Error) => {
-        this.logger.error('Import failed (input)', String(err));
-        fail(err);
-      });
-
-      extract.on('entry', (header, stream, next) => {
-        if (settled) {
-          stream.resume();
-          return;
-        }
-        if (++entryCount > maxEntries) {
-          stream.resume();
-          fail(new Error(`Import aborted: archive exceeds the ${maxEntries}-entry limit`));
-          return;
-        }
-
-        const chunks: Buffer[] = [];
-        let entryBytes = 0;
-        let entryAborted = false;
-
-        stream.on('data', (chunk: Buffer) => {
-          if (entryAborted || settled) return;
-          entryBytes += chunk.length;
-          if (entryBytes > maxEntryBytes) {
-            entryAborted = true;
-            stream.resume(); // drain the remainder so the source can end
-            fail(new Error(`Import aborted: entry "${header.name}" exceeds the ${maxEntryBytes}-byte per-entry cap`));
-          } else {
-            chunks.push(chunk);
-          }
-        });
-
-        stream.on('end', () => {
-          if (entryAborted || settled) return;
-          const data = Buffer.concat(chunks);
-          this.putFile(header.name, data)
-            .then(() => {
-              importedCount++;
-              this.logger.debug(`Imported file: ${header.name}`);
-              next();
-            })
-            .catch((error: unknown) => {
-              this.logger.error(`Failed to import file: ${header.name}`, String(error));
-              next();
-            });
-        });
-        stream.resume();
-      });
-
-      extract.on('finish', () => {
-        if (settled) return;
-        settled = true;
-        this.logger.log(`Import completed: ${importedCount} files`);
-        resolve(importedCount);
-      });
-
-      extract.on('error', (err: Error) => {
-        this.logger.error('Import failed', String(err));
-        fail(err);
-      });
-
-      inputStream.pipe(gunzip).pipe(extract);
-    });
-  }
-
-  // ============================================================================
-  // Local Storage Operations
+  // Local Storage Operations (implemented in storage-local-files.ts)
   // ============================================================================
 
   /**
@@ -506,14 +373,8 @@ export class StorageService implements OnModuleDestroy {
    * DoS guard (a healthy media store stays well under it), NOT a completeness contract. Callers
    * that must see the whole tree use iterateFiles().
    */
-  private async listLocalFiles(): Promise<string[]> {
-    const maxFiles = positiveIntFromEnv('STORAGE_LIST_MAX_FILES', DEFAULT_LIST_MAX_FILES);
-    const files: string[] = [];
-    for await (const file of this.iterateLocalFiles()) {
-      files.push(file);
-      if (files.length >= maxFiles) break; // cap reached — stop early
-    }
-    return files;
+  private listLocalFiles(): Promise<string[]> {
+    return listLocalFiles(this.localPath);
   }
 
   /**
@@ -521,68 +382,20 @@ export class StorageService implements OnModuleDestroy {
    * recursion) so a deep/wide media tree can't block the event loop or stack-overflow; still
    * bounded by the max directory depth so a pathological tree can't descend unbounded.
    */
-  private async *iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
-    // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth. A prefix
-    // ending in '/' names a subtree, so start the walk there instead of filtering afterwards.
-    const root = prefix.endsWith('/') ? prefix.slice(0, -1) : '';
-    if (root && !isPathWithin(this.localPath, root)) return;
-    const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
-
-    while (queue.length > 0) {
-      const { dir, depth } = queue.shift()!;
-      if (depth >= LOCAL_TRAVERSAL_MAX_DEPTH) continue;
-
-      const fullPath = path.join(this.localPath, dir);
-      let entries: fs.Dirent[];
-      try {
-        entries = await fs.promises.readdir(fullPath, { withFileTypes: true });
-      } catch {
-        continue; // dir vanished or unreadable — skip rather than abort the whole traversal
-      }
-
-      for (const entry of entries) {
-        const relativePath = dir ? path.join(dir, entry.name) : entry.name;
-        if (entry.isDirectory()) {
-          queue.push({ dir: relativePath, depth: depth + 1 });
-        } else if (entry.isFile()) {
-          yield relativePath;
-        }
-      }
-    }
+  private iterateLocalFiles(prefix = ''): AsyncGenerator<string> {
+    return iterateLocalFiles(this.localPath, prefix);
   }
 
   private getLocalFile(filePath: string): Promise<Buffer> {
-    if (!isPathWithin(this.localPath, filePath)) {
-      throw new Error(`Refusing to read outside storage root: ${filePath}`);
-    }
-    const fullPath = path.join(this.localPath, filePath);
-    // Async read so the export loop (the only caller) yields the event loop per file instead of
-    // blocking it with a synchronous read for every media file.
-    return fs.promises.readFile(fullPath);
+    return getLocalFile(this.localPath, filePath);
   }
 
-  private async putLocalFile(filePath: string, data: Buffer): Promise<void> {
-    if (!isPathWithin(this.localPath, filePath)) {
-      throw new Error(`Refusing to write outside storage root: ${filePath}`);
-    }
-    const fullPath = path.join(this.localPath, filePath);
-
-    // Async, non-blocking: a synchronous write here stalls the event loop during an import.
-    // mkdir recursive is idempotent, so it doubles as the existsSync check.
-    await fs.promises.mkdir(path.dirname(fullPath), { recursive: true });
-    await fs.promises.writeFile(fullPath, data);
+  private putLocalFile(filePath: string, data: Buffer): Promise<void> {
+    return putLocalFile(this.localPath, filePath, data);
   }
 
-  private async deleteLocalFile(filePath: string): Promise<void> {
-    if (!isPathWithin(this.localPath, filePath)) {
-      throw new Error(`Refusing to delete outside storage root: ${filePath}`);
-    }
-    const fullPath = path.join(this.localPath, filePath);
-    try {
-      await fs.promises.unlink(fullPath);
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+  private deleteLocalFile(filePath: string): Promise<void> {
+    return deleteLocalFile(this.localPath, filePath);
   }
 
   // ============================================================================

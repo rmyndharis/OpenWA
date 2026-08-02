@@ -1,6 +1,6 @@
 {
   "name": "openwa",
-  "version": "0.12.2",
+  "version": "0.12.4",
   "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API for WhatsApp",
   "author": "Yudhi Armyndharis & OpenWA Contributors",
   "private": true,
@@ -34,7 +34,7 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
-    "test:scripts": "node --test scripts/postinstall.spec.js",
+    "test:scripts": "node --test scripts/postinstall.spec.js scripts/patch-wwebjs-newsletter-preview.spec.js",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",

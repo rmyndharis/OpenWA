@@ -33,7 +33,7 @@ import { useTheme } from '../hooks/useTheme';
 import { usePluginsQuery, useSessionsQuery, queryKeys } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
-import { useToast } from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 import { PluginInstances } from '../components/PluginInstances';
 import './Plugins.css';
 

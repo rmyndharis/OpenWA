@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { SessionService } from './session.service';
+import { SessionEngineLifecycle } from './session-engine-lifecycle.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { SessionLivenessWatchdog } from './session-liveness-watchdog.service';
 import { MessageProjector } from './message-projector.service';
@@ -16,7 +17,14 @@ import { StatusStoreModule } from '../status-store/status-store.module';
   // one-directional — no forwardRef() needed.
   imports: [TypeOrmModule.forFeature([Session, Message], 'data'), WebhookModule, StatusStoreModule],
   controllers: [SessionController],
-  providers: [SessionService, SessionErrorStore, SessionLidResolver, SessionLivenessWatchdog, MessageProjector],
+  providers: [
+    SessionService,
+    SessionEngineLifecycle,
+    SessionErrorStore,
+    SessionLidResolver,
+    SessionLivenessWatchdog,
+    MessageProjector,
+  ],
   exports: [SessionService, MessageProjector],
 })
 export class SessionModule {}

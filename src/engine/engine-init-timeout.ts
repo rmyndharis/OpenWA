@@ -2,9 +2,10 @@
  * The deadline the session lifecycle races `engine.initialize()` against, and the whatsapp-web.js
  * auth window it is derived from.
  *
- * These live outside the adapters because the OUTER deadline is engine-agnostic — SessionService
- * applies it to every engine — while the value it must clear is set by whatsapp-web.js. Deriving it
- * inside `session.service.ts` meant the lifecycle owner imported the wwjs adapter just to size a
+ * These live outside the adapters because the OUTER deadline is engine-agnostic —
+ * SessionEngineLifecycle applies it to every engine — while the value it must clear is set by
+ * whatsapp-web.js. Deriving it inside the session lifecycle service meant the lifecycle owner
+ * imported the wwjs adapter just to size a
  * timeout, which is why this pair now has one home instead of a cross-layer import.
  */
 

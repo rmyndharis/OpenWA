@@ -7,7 +7,7 @@ describe('PluginsController authorization', () => {
   const reflector = new Reflector();
 
   // Plugin reads expose installed versions, non-secret config, and health/error text — privileged
-  // inventory on par with the ADMIN-gated write routes and the InfraController convention. A
+  // inventory on par with the ADMIN-gated write routes and the infra controllers' convention. A
   // VIEWER/OPERATOR key (or a session-scoped key) must not be able to enumerate it via the raw API.
   const adminOnly = [
     'findAll',
@@ -22,7 +22,7 @@ describe('PluginsController authorization', () => {
   ] as const;
 
   it.each(adminOnly)('%s requires the ADMIN role', method => {
-    // Metadata lookup key, never invoked — see the same note in infra.controller.spec.ts.
+    // Metadata lookup key, never invoked.
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const handler = PluginsController.prototype[method];
     const role = reflector.get<ApiKeyRole | undefined>(REQUIRED_ROLE_KEY, handler);

@@ -17,7 +17,7 @@ import type { SearchProviderRegistry } from '../../modules/search/search-provide
  *   which corrupts MessageService's constructor paramtype metadata (`SessionService -> undefined`)
  *   at boot. The same reasoning covers the two integration services.
  * - `ModuleRef` rather than constructor injection avoids the provider cycle
- *   `PluginLoaderService -> SessionService -> EngineFactory -> PluginLoaderService`.
+ *   `PluginLoaderService -> SessionService -> SessionEngineLifecycle -> EngineFactory -> PluginLoaderService`.
  *
  * Keeping the pair in one place means the loader no longer has to carry that reasoning, nor name the
  * five services it was resolving. Everything below is a resolution detail; nothing here decides

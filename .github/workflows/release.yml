@@ -287,7 +287,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -336,6 +336,15 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Never serve the production stage's `apt-get update && apt-get install` from cache. That
+          # layer's cache key is its own command text, which does not change when Debian publishes a
+          # security update — so a cached hit silently installs whatever the apt index held when the
+          # layer was first built, and the release image ships known-vulnerable packages. It is not a
+          # theoretical risk: the first two v0.12.3 attempts installed chromium 150.0.7871.181 from a
+          # cached layer while bookworm-security already carried 151.0.7922.71 on BOTH architectures,
+          # and image-scan failed with 228 then 240 findings. The builder stage keeps its cache, so
+          # only the OS-package layer is rebuilt.
+          no-cache-filters: production
 
   # ──── Boot Smoke (amd64 + arm64) ──────────────────────────────────
   # The docker job proves the image BUILDS for both architectures; this proves the just-pushed image
@@ -355,7 +364,7 @@ jobs:
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -433,7 +442,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -483,7 +492,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -493,7 +502,7 @@ jobs:
       # pull count lives (GHCR exposes no download metrics). Requires the DOCKERHUB_USERNAME /
       # DOCKERHUB_TOKEN repo secrets; without them this step fails before any tag is applied.
       - name: Login to Docker Hub
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -9,6 +9,8 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, storableWaMessageId } from './message-row.mapper';
+import { MessageMutationProjector } from './message-mutation-projector';
+import { persistHistoryMessages } from './message-history-projector';
 import { isUniqueConstraintError } from '../../common/utils/unique-constraint.util';
 import { resolveFeatureFlags } from '../../config/feature-flags';
 import { StatusStoreService } from '../status-store/status-store.service';
@@ -37,7 +39,8 @@ import {
  *
  * This is the data path for messages: inbound arrivals, own-send echoes, delivery acks, revokes,
  * reactions, edits, and the pre-connection history backfill. It is deliberately separate from
- * SessionService, which owns the session *lifecycle* (start/stop/delete/reconnect). The two share
+ * SessionEngineLifecycle, which owns the session *lifecycle* (start/stop/delete/reconnect). The two
+ * share
  * only the engine identity guard — a late event from a superseded engine must never mutate a
  * session that now belongs to a different one, or to none — which both read from EngineRegistry.
  *
@@ -51,6 +54,20 @@ import {
  * retry after this delay closes that race; the forward-only transition guard keeps it idempotent.
  */
 export const ACK_RECONCILE_DELAY_MS = 750;
+
+/** Persist-stage outcome threaded into the inbound dispatch stage (was closure state in the hook continuation). */
+interface InboundPersistOutcome {
+  dbMessage: Message;
+  persisted: boolean;
+}
+
+/**
+ * Type of the `{ ...message }` copy the `message:received` hook returns (was the closure-inferred
+ * spread type in handleInboundMessage). Kept as an object type rather than the IncomingMessage
+ * interface so it stays assignable to the Record<string, unknown> dispatch/emit params — interfaces
+ * carry no implicit index signature.
+ */
+type InboundMessageData = { [K in keyof IncomingMessage]: IncomingMessage[K] };
 
 @Injectable()
 export class MessageProjector {
@@ -66,6 +83,10 @@ export class MessageProjector {
     this.logger.error(`Unexpected failure applying message mutation: ${key}`, String(err));
   });
 
+  // Reaction/edit applies, extracted to a plain collaborator. It shares this instance's
+  // messageMutations queue, so the public enqueue path and the queued applies serialize on one chain.
+  private readonly mutationProjector: MessageMutationProjector;
+
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
@@ -79,55 +100,24 @@ export class MessageProjector {
     private readonly lidResolver: SessionLidResolver,
     @Optional()
     private readonly configService?: ConfigService,
-  ) {}
+  ) {
+    this.mutationProjector = new MessageMutationProjector(
+      this.messageRepository,
+      this.eventsGateway,
+      this.webhookService,
+      this.messageMutations,
+      this.logger,
+    );
+  }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
   handleInboundMessage(id: string, engine: IWhatsAppEngine, message: IncomingMessage): void {
     if (!this.engines.isLive(id, engine)) return;
-    // Status/Story posts arrive via the inbound path for some engines; ingest them into the
-    // status store instead of the message pipeline. Mirrors the isStatusBroadcast guard in
-    // onMessageCreate below: an own-send echo (fromMe) stays a plain drop — never ingested,
-    // never dispatched — so a status you posted never re-appears in your own webhooks/API as
-    // if a contact had posted it.
     if (message.isStatusBroadcast) {
-      if (message.fromMe) return;
-      const status = buildIncomingStatus(message);
-      if (status) {
-        void this.statusStore
-          .ingest(id, status)
-          // Dispatch only on a fresh insert: ingest also resolves with the pre-existing row
-          // for a duplicate delivery (or the winner's row after a lost insert race), and the
-          // webhook must fire once per status, not once per (re)delivery.
-          .then(({ row, created }) => {
-            // The ingest awaited; a stop()/delete() can retire this engine mid-flight — don't
-            // dispatch for a session that no longer exists (mirrors message.received's re-check).
-            if (!this.engines.isLive(id, engine)) return;
-            if (created) this.dispatchStatusReceived(id, row);
-          })
-          .catch(err =>
-            this.logger.warn('Status ingest failed', {
-              sessionId: id,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-      }
+      this.ingestInboundStatus(id, engine, message);
       return;
     }
-    // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
-    // A message is ephemeral when its chat has a disappearing-messages timer (ephemeralDuration > 0).
-    if (
-      !resolveFeatureFlags(this.configService).storeEphemeralMessages &&
-      message.ephemeralDuration &&
-      message.ephemeralDuration > 0
-    ) {
-      this.logger.debug('Skipping ephemeral message', {
-        sessionId: id,
-        messageId: message.id,
-        chatId: message.chatId,
-        ephemeralDuration: message.ephemeralDuration,
-      });
-      return;
-    }
+    if (this.shouldSkipEphemeralMessage(id, message)) return;
     this.logger.debug(`Message received from ${message.from}`, {
       sessionId: id,
       messageId: message.id,
@@ -145,116 +135,192 @@ export class MessageProjector {
         sessionId: id,
         source: 'Engine',
       })
-      .then(async ({ data: finalMessage }) => {
-        // `continue: false` is deliberately NOT read here. It means "stop the handler chain", which
-        // HookManager has already done — the plugins after the one that returned it never ran. It
-        // does not mean "this message never happened".
-        //
-        // Honouring it here used to skip everything below: the message was never written to the
-        // messages table, never dispatched to webhooks, and never emitted over the websocket. An
-        // auto-reply plugin returning `false` for its ordinary purpose — keeping other bots from
-        // answering the same message — silently erased the customer's message from the operator's
-        // own history, leaving a thread of bot replies answering nothing. Nothing in the hook
-        // contract (`HookResult.continue`, docs/19) or the webhook contract (`message.received`
-        // fires when "an inbound message arrives", docs/06) hinted at that, and a sandboxed
-        // marketplace plugin could swallow a session's entire inbound traffic with no audit trail.
-        //
-        // The message has already arrived at WhatsApp. A plugin can stop other plugins from acting
-        // on it; it cannot make the gateway forget it. Pre-action hooks are where a veto belongs —
-        // `message:sending` blocks a send that has not happened yet (core/hooks/sending-gate.ts).
-
-        // Persist the incoming message so the dashboard chats view can render history.
-        const incoming: IncomingMessage = finalMessage;
-
-        // Inline @lid -> phone resolution (#263), opt-in via RESOLVE_LID_TO_PHONE. Best-effort:
-        // attaches senderPhone (digits or null) before persist/dispatch so webhook/ws consumers
-        // get it in a single pass. Only for privacy-id senders, so no lookup for normal numbers.
-        if (resolveFeatureFlags(this.configService).resolveLidToPhone && incoming.isLidSender && !incoming.fromMe) {
-          incoming.senderPhone = await this.lidResolver.resolveSenderPhone(id, incoming.author ?? incoming.from);
-        }
-
-        const metadata = buildMessageMetadata(incoming);
-
-        const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
-
-        const dbMessage = this.messageRepository.create({
-          sessionId: id,
-          waMessageId: storableWaMessageId(incoming.id),
-          chatId: incoming.chatId,
-          chatName,
-          // Group poster (participant JID) — `from` is the group JID, so this is the stable
-          // sender identity the chat view keys attribution runs/colors on. Undefined for 1:1.
-          author: incoming.author,
-          from: incoming.from,
-          to: incoming.to,
-          body: incoming.body,
-          type: incoming.type,
-          direction: incoming.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
-          timestamp: incoming.timestamp,
-          status: MessageStatus.SENT,
-          metadata,
-        });
-
-        // The hook chain above is async; a delete()/teardown can retire this engine while it
-        // awaits. Re-check liveness so a late continuation can't persist an orphan messages row
-        // (the row has no FK, so a session-delete cleanup would never reap it) or dispatch for a
-        // session that no longer exists. Mirrors the synchronous isLiveEngine gate at entry.
-        if (!this.engines.isLive(id, engine)) return;
-
-        // De-duplicate at the source: the engine can re-fire `message` for one inbound message
-        // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
-        // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
-        // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
-        // message is never dropped by a transient DB failure.
-        let isNewMessage = true;
-        let persisted = false;
-        try {
-          // `insert()` (not `save()`) is load-bearing: the UNIQUE(sessionId, waMessageId) constraint
-          // makes a duplicate insert throw, which is the atomic dedup oracle for #464 re-fires.
-          // Unlike `save()`, `insert()` does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
-          // @CreateDateColumn) back onto the entity instance — so merge them explicitly here, before
-          // the `message:persisted` emit. `identifiers[0]` always carries the PK on both SQLite and
-          // Postgres; `generatedMaps[0]` adds createdAt where the driver returns it (Postgres yes;
-          // SQLite historically does not — acceptable; the PK is the load-bearing field for plugins).
-          const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
-          Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
-          persisted = true;
-        } catch (err) {
-          if (isUniqueConstraintError(err)) {
-            isNewMessage = false;
-          } else {
-            this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
-          }
-        }
-        if (!isNewMessage) {
-          return; // duplicate re-fire — the original already persisted and dispatched
-        }
-
-        // Fire-and-forget: a plugin handler must never break the receive path. Both engine adapters
-        // (wwjs `message` and Baileys `upsert`) converge on this persist, so one emit covers inbound.
-        // The built-in FTS search provider is DB-synced and does NOT consume this; it exists for
-        // plugin providers (Spec 2) + general use.
-        // Gate ONLY the hook on `persisted`: on a non-unique insert error (transient SQLITE_BUSY /
-        // lock-timeout / connection drop) the row was never stored and `dbMessage.id` is undefined,
-        // so emitting `message:persisted` would hand plugins an id-less payload for a row that isn't
-        // in the DB. The webhook/WS dispatch below stays fail-open — a real inbound message must
-        // never be dropped on a transient DB failure; only the hook requires a durable row.
-        if (persisted) {
-          void this.hookManager
-            .execute(
-              'message:persisted',
-              { sessionId: id, message: dbMessage },
-              { sessionId: id, source: 'SessionService' },
-            )
-            .catch(() => undefined);
-        }
-
-        // Dispatch to webhooks with potentially modified message
-        void this.webhookService.dispatch(id, 'message.received', finalMessage);
-        // Emit real-time event to WebSocket clients
-        this.eventsGateway.emitMessage(id, finalMessage);
-      })
+      .then(({ data: finalMessage }) => this.projectInboundMessage(id, engine, finalMessage))
       .catch(err => this.logger.error(`onMessage handler failed for ${id}`, String(err)));
+  }
+
+  /** `isStatusBroadcast` arm of {@link handleInboundMessage}: ingest into the status store, not the message pipeline. */
+  private ingestInboundStatus(id: string, engine: IWhatsAppEngine, message: IncomingMessage): void {
+    // Status/Story posts arrive via the inbound path for some engines; ingest them into the
+    // status store instead of the message pipeline. Mirrors the isStatusBroadcast guard in
+    // onMessageCreate below: an own-send echo (fromMe) stays a plain drop — never ingested,
+    // never dispatched — so a status you posted never re-appears in your own webhooks/API as
+    // if a contact had posted it.
+    if (message.fromMe) return;
+    const status = buildIncomingStatus(message);
+    if (status) {
+      void this.statusStore
+        .ingest(id, status)
+        // Dispatch only on a fresh insert: ingest also resolves with the pre-existing row
+        // for a duplicate delivery (or the winner's row after a lost insert race), and the
+        // webhook must fire once per status, not once per (re)delivery.
+        .then(({ row, created }) => {
+          // The ingest awaited; a stop()/delete() can retire this engine mid-flight — don't
+          // dispatch for a session that no longer exists (mirrors message.received's re-check).
+          if (!this.engines.isLive(id, engine)) return;
+          if (created) this.dispatchStatusReceived(id, row);
+        })
+        .catch(err =>
+          this.logger.warn('Status ingest failed', {
+            sessionId: id,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+    }
+  }
+
+  /** Operator opt-out gate for disappearing messages: true when the message must be skipped entirely. */
+  private shouldSkipEphemeralMessage(id: string, message: IncomingMessage): boolean {
+    // Ephemeral/disappearing messages: skip persist + dispatch when the operator opted out.
+    // A message is ephemeral when its chat has a disappearing-messages timer (ephemeralDuration > 0).
+    if (
+      !resolveFeatureFlags(this.configService).storeEphemeralMessages &&
+      message.ephemeralDuration &&
+      message.ephemeralDuration > 0
+    ) {
+      this.logger.debug('Skipping ephemeral message', {
+        sessionId: id,
+        messageId: message.id,
+        chatId: message.chatId,
+        ephemeralDuration: message.ephemeralDuration,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /** Post-hook continuation of {@link handleInboundMessage}: resolve sender, persist, dispatch. */
+  private async projectInboundMessage(
+    id: string,
+    engine: IWhatsAppEngine,
+    finalMessage: InboundMessageData,
+  ): Promise<void> {
+    // `continue: false` is deliberately NOT read here. It means "stop the handler chain", which
+    // HookManager has already done — the plugins after the one that returned it never ran. It
+    // does not mean "this message never happened".
+    //
+    // Honouring it here used to skip everything below: the message was never written to the
+    // messages table, never dispatched to webhooks, and never emitted over the websocket. An
+    // auto-reply plugin returning `false` for its ordinary purpose — keeping other bots from
+    // answering the same message — silently erased the customer's message from the operator's
+    // own history, leaving a thread of bot replies answering nothing. Nothing in the hook
+    // contract (`HookResult.continue`, docs/19) or the webhook contract (`message.received`
+    // fires when "an inbound message arrives", docs/06) hinted at that, and a sandboxed
+    // marketplace plugin could swallow a session's entire inbound traffic with no audit trail.
+    //
+    // The message has already arrived at WhatsApp. A plugin can stop other plugins from acting
+    // on it; it cannot make the gateway forget it. Pre-action hooks are where a veto belongs —
+    // `message:sending` blocks a send that has not happened yet (core/hooks/sending-gate.ts).
+
+    // Persist the incoming message so the dashboard chats view can render history.
+    const incoming: IncomingMessage = finalMessage;
+
+    // Inline @lid -> phone resolution (#263), opt-in via RESOLVE_LID_TO_PHONE. Best-effort:
+    // attaches senderPhone (digits or null) before persist/dispatch so webhook/ws consumers
+    // get it in a single pass. Only for privacy-id senders, so no lookup for normal numbers.
+    if (resolveFeatureFlags(this.configService).resolveLidToPhone && incoming.isLidSender && !incoming.fromMe) {
+      incoming.senderPhone = await this.lidResolver.resolveSenderPhone(id, incoming.author ?? incoming.from);
+    }
+
+    const outcome = await this.persistInboundMessage(id, engine, incoming);
+    if (!outcome) return;
+    this.dispatchInboundMessage(id, finalMessage, outcome);
+  }
+
+  /**
+   * Build the inbound row and insert it under the UNIQUE dedup oracle. Returns the row plus whether
+   * the insert landed, or null when the pipeline must stop (stale engine, or duplicate re-fire).
+   */
+  private async persistInboundMessage(
+    id: string,
+    engine: IWhatsAppEngine,
+    incoming: IncomingMessage,
+  ): Promise<InboundPersistOutcome | null> {
+    const metadata = buildMessageMetadata(incoming);
+
+    const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
+
+    const dbMessage = this.messageRepository.create({
+      sessionId: id,
+      waMessageId: storableWaMessageId(incoming.id),
+      chatId: incoming.chatId,
+      chatName,
+      // Group poster (participant JID) — `from` is the group JID, so this is the stable
+      // sender identity the chat view keys attribution runs/colors on. Undefined for 1:1.
+      author: incoming.author,
+      from: incoming.from,
+      to: incoming.to,
+      body: incoming.body,
+      type: incoming.type,
+      direction: incoming.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+      timestamp: incoming.timestamp,
+      status: MessageStatus.SENT,
+      metadata,
+    });
+
+    // The hook chain above is async; a delete()/teardown can retire this engine while it
+    // awaits. Re-check liveness so a late continuation can't persist an orphan messages row
+    // (the row has no FK, so a session-delete cleanup would never reap it) or dispatch for a
+    // session that no longer exists. Mirrors the synchronous isLiveEngine gate at entry.
+    if (!this.engines.isLive(id, engine)) return null;
+
+    // De-duplicate at the source: the engine can re-fire `message` for one inbound message
+    // (#464). UNIQUE(sessionId, waMessageId) makes the insert the atomic dedup oracle — a
+    // near-simultaneous re-fire loses the race and is skipped here, so persist + webhook + WS
+    // happen exactly once. Fail-open: a non-conflict DB error still dispatches, so a real
+    // message is never dropped by a transient DB failure.
+    let isNewMessage = true;
+    let persisted = false;
+    try {
+      // `insert()` (not `save()`) is load-bearing: the UNIQUE(sessionId, waMessageId) constraint
+      // makes a duplicate insert throw, which is the atomic dedup oracle for #464 re-fires.
+      // Unlike `save()`, `insert()` does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
+      // @CreateDateColumn) back onto the entity instance — so merge them explicitly here, before
+      // the `message:persisted` emit. `identifiers[0]` always carries the PK on both SQLite and
+      // Postgres; `generatedMaps[0]` adds createdAt where the driver returns it (Postgres yes;
+      // SQLite historically does not — acceptable; the PK is the load-bearing field for plugins).
+      const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
+      Object.assign(dbMessage, result.identifiers[0] ?? {}, result.generatedMaps?.[0] ?? {});
+      persisted = true;
+    } catch (err) {
+      if (isUniqueConstraintError(err)) {
+        isNewMessage = false;
+      } else {
+        this.logger.error(`Failed to save incoming message ${incoming.id} to database`, String(err));
+      }
+    }
+    if (!isNewMessage) {
+      return null; // duplicate re-fire — the original already persisted and dispatched
+    }
+    return { dbMessage, persisted };
+  }
+
+  /** Fan an accepted inbound message out: `message:persisted` plugin hook, webhook, websocket emit. */
+  private dispatchInboundMessage(id: string, finalMessage: InboundMessageData, outcome: InboundPersistOutcome): void {
+    const { dbMessage, persisted } = outcome;
+    // Fire-and-forget: a plugin handler must never break the receive path. Both engine adapters
+    // (wwjs `message` and Baileys `upsert`) converge on this persist, so one emit covers inbound.
+    // The built-in FTS search provider is DB-synced and does NOT consume this; it exists for
+    // plugin providers (Spec 2) + general use.
+    // Gate ONLY the hook on `persisted`: on a non-unique insert error (transient SQLITE_BUSY /
+    // lock-timeout / connection drop) the row was never stored and `dbMessage.id` is undefined,
+    // so emitting `message:persisted` would hand plugins an id-less payload for a row that isn't
+    // in the DB. The webhook/WS dispatch below stays fail-open — a real inbound message must
+    // never be dropped on a transient DB failure; only the hook requires a durable row.
+    if (persisted) {
+      void this.hookManager
+        .execute(
+          'message:persisted',
+          { sessionId: id, message: dbMessage },
+          { sessionId: id, source: 'SessionService' },
+        )
+        .catch(() => undefined);
+    }
+
+    // Dispatch to webhooks with potentially modified message
+    void this.webhookService.dispatch(id, 'message.received', finalMessage);
+    // Emit real-time event to WebSocket clients
+    this.eventsGateway.emitMessage(id, finalMessage);
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
@@ -481,179 +547,29 @@ export class MessageProjector {
     this.eventsGateway.emitMessageRevoked(id, revokedPayload);
   }
 
-  /**
-   * Persist pre-connection history into the `messages` table for the chat view, without webhook/hook/ws
-   * dispatch (it predates the live session). De-duplicated by `waMessageId` so re-syncs never duplicate.
-   */
-  async persistHistoryMessages(id: string, messages: IncomingMessage[]): Promise<void> {
-    const storeEphemeralMessages = resolveFeatureFlags(this.configService).storeEphemeralMessages;
-    const byId = new Map<string, IncomingMessage>();
-    for (const m of messages) {
-      // Need an id to de-dup; chatId/from/to are NOT NULL; status/story posts aren't chats.
-      if (!m.id || m.isStatusBroadcast || !m.chatId || !m.from || !m.to) {
-        continue;
-      }
-      // Mirror the live onMessage guard: skip disappearing messages when the operator opted out, so a
-      // history backfill can't bypass STORE_EPHEMERAL_MESSAGES=false. No-op when the flag is at its
-      // default (true); only a message with a positive timer is dropped, never a regular one.
-      if (!storeEphemeralMessages && (m.ephemeralDuration ?? 0) > 0) {
-        continue;
-      }
-      byId.set(m.id, m);
-    }
-    if (byId.size === 0) {
-      return;
-    }
-    // Chunk the dedup query: a batch can be thousands, past SQLite's bound-variable limit for IN (...).
-    const ids = [...byId.keys()];
-    const CHUNK = 400;
-    let inserted = 0;
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunkIds = ids.slice(i, i + CHUNK);
-      const existing = await this.messageRepository.find({
-        where: { sessionId: id, waMessageId: In(chunkIds) },
-        select: { waMessageId: true },
-      });
-      const seen = new Set(existing.map(r => r.waMessageId));
-      const rows = chunkIds
-        .filter(x => !seen.has(x))
-        .map(x => {
-          const m = byId.get(x)!;
-          const metadata = buildMessageMetadata(m, true);
-          const row = this.messageRepository.create({
-            sessionId: id,
-            waMessageId: m.id,
-            chatId: m.chatId,
-            // Group poster for inbound rows only — the account's own backfilled group messages must
-            // not carry author (the column's contract is "null on outgoing echoes").
-            author: m.fromMe ? undefined : m.author,
-            from: m.from,
-            to: m.to,
-            body: m.body,
-            type: m.type,
-            direction: m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
-            timestamp: m.timestamp,
-            status: MessageStatus.SENT,
-            metadata,
-          });
-          // The chat panel orders by createdAt; stamp the real time so history sorts correctly.
-          if (m.timestamp) {
-            row.createdAt = new Date(m.timestamp * 1000);
-          }
-          return row;
-        });
-      if (rows.length) {
-        // Insert-or-ignore: a live onMessage insert can land between the `seen` SELECT above and this
-        // write, colliding on UNIQUE(sessionId, waMessageId). orIgnore skips the collision instead of
-        // throwing and aborting the whole batch (history is best-effort, persist-never-dispatch).
-        await this.messageRepository
-          .createQueryBuilder()
-          .insert()
-          .values(rows as unknown as QueryDeepPartialEntity<Message>[])
-          .orIgnore()
-          .execute();
-        inserted += rows.length;
-      }
-    }
-    if (inserted) {
-      this.logger.log(`Persisted ${inserted} history message(s)`, {
-        sessionId: id,
-        inserted,
-        action: 'history_messages_persisted',
-      });
-    }
+  /** History backfill persist, extracted to message-history-projector.ts (stateless function). */
+  persistHistoryMessages(id: string, messages: IncomingMessage[]): Promise<void> {
+    return persistHistoryMessages(this.messageRepository, this.configService, id, messages, this.logger);
   }
 
-  /**
-   * Queue a reaction apply. Reactions read-modify-write the metadata column, so they must be
-   * serialized per message; the caller only knows it has an event to apply.
-   */
+  /** Reaction apply, queued on the per-message mutation chain — see MessageMutationProjector. */
   applyReactionQueued(id: string, event: ReactionEvent): void {
-    this.enqueueMessageMutation(id, event.messageId, () => this.applyReaction(id, event));
+    this.mutationProjector.applyReactionQueued(id, event);
   }
 
-  /**
-   * Queue an edit apply. Shares the reaction chain so rapid edit-vs-reaction on the same message
-   * stays ordered rather than racing.
-   */
+  /** Edit apply, queued on the per-message mutation chain — see MessageMutationProjector. */
   applyMessageEditQueued(id: string, message: EditedMessage): void {
-    this.enqueueMessageMutation(id, message.messageId, () => this.applyMessageEdit(id, message));
+    this.mutationProjector.applyMessageEditQueued(id, message);
   }
 
   /** Queue a message-scoped mutation. A failed operation is isolated so later events still run. */
   enqueueMessageMutation(id: string, messageId: string, work: () => Promise<void>): void {
-    this.messageMutations.enqueue(`${id}:${messageId}`, work);
+    this.mutationProjector.enqueueMessageMutation(id, messageId, work);
   }
 
-  private async applyReaction(id: string, event: ReactionEvent): Promise<void> {
-    try {
-      // Guard the lookup key before it reaches TypeORM: `findOne` DROPS an undefined condition from
-      // the where-clause rather than matching nothing, so an engine that couldn't resolve the reacted
-      // message's id would silently match an arbitrary row and clobber/emit its reactions. `!msg` is
-      // no protection against that — the row it finds is real, just the wrong one.
-      if (!event.messageId) return;
-
-      const msg = await this.messageRepository.findOne({ where: { sessionId: id, waMessageId: event.messageId } });
-      if (!msg) return;
-
-      const metadata = msg.metadata || {};
-      const reactions = (metadata.reactions as Record<string, string>) || {};
-      if (!event.reaction) {
-        delete reactions[event.senderId];
-      } else {
-        reactions[event.senderId] = event.reaction;
-      }
-      metadata.reactions = reactions;
-      // Scoped update of ONLY the metadata column. A full-row save(msg) would re-persist the `status`
-      // read at findOne time, clobbering a concurrent ack UPDATE (SENT→DELIVERED/READ) that committed in
-      // the window between this findOne and the write — the mutation chain serializes reaction-vs-reaction
-      // but NOT reaction-vs-ack, so scoping the write to metadata is what keeps delivery state monotonic
-      // (#220). Other metadata fields are carried through untouched (they were read into `metadata`).
-      await this.messageRepository.update({ sessionId: id, waMessageId: event.messageId }, {
-        metadata,
-      } as QueryDeepPartialEntity<Message>);
-
-      this.eventsGateway.emitMessageReaction(id, { ...event, reactions });
-      // Webhook parity with the WebSocket broadcast: same payload (event + post-apply snapshot), so a
-      // webhook-only consumer observes reactions too. Idempotency for this event is salted per dispatch.
-      void this.webhookService.dispatch(id, 'message.reaction', { ...event, reactions });
-    } catch (err) {
-      this.logger.error(`Failed to update message reaction: ${event.messageId}`, String(err));
-    }
-  }
-
-  /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
-  private async applyMessageEdit(id: string, message: EditedMessage): Promise<void> {
-    try {
-      await this.messageRepository.update({ sessionId: id, waMessageId: message.messageId }, { body: message.body });
-    } catch (err) {
-      this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
-    }
-
-    const editedPayload = message as unknown as Record<string, unknown>;
-    this.eventsGateway.emitMessageEdited(id, editedPayload);
-    void this.webhookService.dispatch(id, 'message.edited', editedPayload);
-  }
-
-  /**
-   * Reflect an OUTBOUND edit (REST MessageService.editMessage) in the stored row, routed through the
-   * same per-message mutation queue as the inbound edit/reaction paths so the two writers cannot
-   * interleave (latest-write-wins holds across both directions). Same best-effort semantics as
-   * applyMessageEdit: a missing row or a failed write must not fail the request — the engine edit
-   * already succeeded. Resolves once the queued write has run.
-   */
-  async recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
-    await new Promise<void>(resolve => {
-      this.enqueueMessageMutation(sessionId, messageId, async () => {
-        try {
-          await this.messageRepository.update({ sessionId, waMessageId: messageId }, { body });
-        } catch (err) {
-          this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
-        } finally {
-          resolve();
-        }
-      });
-    });
+  /** Stored-row update for a REST outbound edit, on the same mutation chain — see MessageMutationProjector. */
+  recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
+    return this.mutationProjector.recordOutboundMessageEdit(sessionId, messageId, body);
   }
 
   /**

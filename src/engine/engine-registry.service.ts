@@ -4,11 +4,11 @@ import type { IWhatsAppEngine } from './interfaces/whatsapp-engine.interface';
 /**
  * The single source of truth for which engine instance is live for a session.
  *
- * This is the narrow port between session *lifecycle* (SessionService, which creates, retires and
- * reconnects engines) and the ~10 feature services that only ever need "give me the running engine
- * for this session". Those consumers previously injected the whole SessionService — a 2.9k-line
- * lifecycle owner — purely to reach its private `engines` map, which coupled every feature module to
- * start/stop/delete/reconnect semantics they never call.
+ * This is the narrow port between session *lifecycle* (SessionEngineLifecycle, which creates,
+ * retires and reconnects engines) and the ~10 feature services that only ever need "give me the
+ * running engine for this session". Those consumers previously injected the whole SessionService —
+ * a 2k-line lifecycle owner — purely to reach its private `engines` map, which coupled every
+ * feature module to start/stop/delete/reconnect semantics they never call.
  *
  * Identity, not just presence, is the invariant that matters. Each engine callback captures its own
  * engine instance; once a session is stopped (engine removed) or restarted/reconnected (engine

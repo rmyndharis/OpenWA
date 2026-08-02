@@ -18,12 +18,17 @@ const { planSteps, failureReason, run } = require('./postinstall.js');
 const OK = { status: 0, signal: null, error: null };
 
 /** Bare temp dir optionally holding a dashboard/ and/or the patch script. */
-function makeRoot({ dashboard = false, patcher = false } = {}) {
+function makeRoot({ dashboard = false, patcher = false, previewPatcher = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-postinstall-'));
   if (dashboard) fs.mkdirSync(path.join(root, 'dashboard'));
-  if (patcher) {
+  if (patcher || previewPatcher) {
     fs.mkdirSync(path.join(root, 'scripts'));
+  }
+  if (patcher) {
     fs.writeFileSync(path.join(root, 'scripts', 'patch-wwebjs-201832.js'), '// stub\n');
+  }
+  if (previewPatcher) {
+    fs.writeFileSync(path.join(root, 'scripts', 'patch-wwebjs-newsletter-preview.js'), '// stub\n');
   }
   return root;
 }
@@ -59,11 +64,27 @@ test('planSteps: patcher only plans the best-effort backport via the current nod
   assert.deepEqual(steps[0].args.slice(1), ['--best-effort']);
 });
 
+test('planSteps: newsletter preview patcher plans its own best-effort backport', () => {
+  const steps = planSteps(makeRoot({ previewPatcher: true }));
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].command, process.execPath);
+  assert.match(steps[0].args[0], /patch-wwebjs-newsletter-preview\.js$/);
+  assert.deepEqual(steps[0].args.slice(1), ['--best-effort']);
+});
+
 test('planSteps: both present plans dashboard first, patcher second', () => {
   const steps = planSteps(makeRoot({ dashboard: true, patcher: true }));
   assert.equal(steps.length, 2);
   assert.equal(steps[0].command, 'npm run dashboard:ci');
   assert.equal(steps[1].command, process.execPath);
+});
+
+test('planSteps: dashboard and both patchers run in stable order', () => {
+  const steps = planSteps(makeRoot({ dashboard: true, patcher: true, previewPatcher: true }));
+  assert.equal(steps.length, 3);
+  assert.equal(steps[0].command, 'npm run dashboard:ci');
+  assert.match(steps[1].args[0], /patch-wwebjs-201832\.js$/);
+  assert.match(steps[2].args[0], /patch-wwebjs-newsletter-preview\.js$/);
 });
 
 test('run: nothing to do exits 0 and never spawns', () => {

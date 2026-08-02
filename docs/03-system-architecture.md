@@ -440,7 +440,7 @@ The diagram below is conceptual: `SessionManager` is the role played by `Session
 (`src/modules/session/session.service.ts`), which injects the TypeORM `Repository<Session>` directly —
 there is no `SessionRepository` class in the codebase. The live-engine map itself lives in
 `EngineRegistry` (`src/engine/engine-registry.service.ts`), the narrow port that capability services
-inject when they only need the running engine for a session; `SessionService` is its only writer.
+inject when they only need the running engine for a session; `SessionEngineLifecycle` is its only writer.
 
 ```mermaid
 classDiagram

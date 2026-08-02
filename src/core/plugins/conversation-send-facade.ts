@@ -15,8 +15,8 @@ export interface ConversationSendDeps {
   resolveChatId: (env: ConversationSendEnvelope) => Promise<string>;
   // Seed the hook in-flight set so an adapter's own outbound message:sending hook cannot echo-loop
   // back into this same send. Only 'message:sending' is reachable this way — MessageService fires it
-  // synchronously inside sendText/reply. 'message:sent' is emitted later by SessionService's engine
-  // callback (onMessageCreate), outside this call's async scope, so seeding it here would be a no-op.
+  // synchronously inside sendText/reply. 'message:sent' is emitted later by SessionEngineLifecycle's
+  // engine callback (onMessageCreate), outside this call's async scope, so seeding it here would be a no-op.
   runGuarded: <T>(events: string[], run: () => Promise<T>) => Promise<T>;
   sendText: (sessionId: string, opts: { chatId: string; text: string }) => Promise<unknown>;
   reply: (sessionId: string, opts: { chatId: string; quotedMessageId: string; text: string }) => Promise<unknown>;

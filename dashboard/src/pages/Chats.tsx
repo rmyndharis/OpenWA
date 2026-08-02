@@ -2,26 +2,15 @@ import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } fr
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
-import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatList';
+import { applyIncomingToChatList } from '../utils/chatList';
 import { filterChats, filterChannels, groupStatusesByContact } from '../utils/chatFilters';
 import {
-  Search,
-  Send,
   ArrowLeft,
   Loader2,
-  User,
-  Users,
   Megaphone,
   CircleDashed,
   AlertCircle,
   MessageSquare,
-  Paperclip,
-  Smile,
-  X,
-  CornerUpLeft,
-  Trash2,
-  ChevronDown,
-  Plus,
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
@@ -30,29 +19,25 @@ import { formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
-  contactApi,
   asMessageType,
   type Session,
   type Chat,
   type ChatKind,
   type Channel,
-  type MessageType,
   type SearchHit,
   type ContactStatusGroup,
 } from '../services/api';
 import {
   applyMessageEdit,
   mergeDeliveryStatus,
-  mergeOrAppend,
   findRevokedIndex,
-  senderKey,
+  getMediaSrc,
   type ChatMessageView,
+  type MessageMedia,
 } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useRole } from '../hooks/useRole';
-import { useToast } from '../components/Toast';
-import { Modal } from '../components/Modal';
+import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/PageHeader';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { useChatMessages, useChatMessagesActions, messagesQueryKey } from '../hooks/useChatMessages';
@@ -63,12 +48,16 @@ import { useCurrentEngineQuery } from '../hooks/queries';
 import { createTrailingCoalescer } from '../utils/trailingCoalescer';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
+import KindIcon from '../components/chats/KindIcon';
+import ChatSidebar from '../components/chats/ChatSidebar';
+import ChatThread from '../components/chats/ChatThread';
+import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
+import StatusMedia from '../components/chats/StatusMedia';
+import StatusComposeModal from '../components/chats/StatusComposeModal';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
 const MARK_READ_DEBOUNCE_MS = 750;
-
-type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
 
 // mergeDeliveryStatus (forward-only delivery-tick merge) is shared with mergeOrAppend in utils/chatMessages
 // so the WS append path and the ack path apply the exact same rule.
@@ -93,106 +82,6 @@ interface IncomingWsMessage {
   contact?: { id?: string; name?: string; pushName?: string };
   author?: string;
 }
-
-// Stable per-sender colour for group message labels, like WhatsApp gives each participant a colour.
-// Hashed from the sender's name so the same person keeps the same colour across a session. The palette
-// is tuned to stay legible on both the light and dark incoming-bubble backgrounds.
-const SENDER_COLORS = ['#d1416f', '#7c5cff', '#0a86c4', '#1a8f5c', '#c26a00', '#c0392b', '#0e7c86', '#8e44ad'];
-const senderColor = (name: string): string => {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
-};
-
-// Map an attachment MIME type to the neutral MessageType for the optimistic outgoing bubble, so the
-// placeholder matches what the backend will persist (e.g. a PDF is `document`, not `application`).
-const messageTypeFromMime = (mimetype: string): MessageType => {
-  if (mimetype.startsWith('image/')) return 'image';
-  if (mimetype.startsWith('video/')) return 'video';
-  if (mimetype.startsWith('audio/')) return 'audio';
-  return 'document';
-};
-
-const getMediaSrc = (media?: MessageMedia): string => {
-  if (!media || !media.data) return '';
-  if (media.data.startsWith('data:') || media.data.startsWith('http://') || media.data.startsWith('https://')) {
-    return media.data;
-  }
-  return `data:${media.mimetype};base64,${media.data}`;
-};
-
-// Chat list avatar. Renders from the sidebar's ONE batch request (useProfilePictures) — firing a
-// query per row burst the per-IP throttle into 429s. The generic icon stays while the batch loads
-// or when the contact hides their picture.
-function KindIcon({ kind }: { kind: ChatKind }) {
-  if (kind === 'group' || kind === 'broadcast') return <Users size={20} />;
-  if (kind === 'channel') return <Megaphone size={20} />;
-  if (kind === 'status') return <CircleDashed size={20} />;
-  return <User size={20} />;
-}
-
-function ChatAvatar({ pictureUrl, kind }: { pictureUrl?: string | null; kind: ChatKind }) {
-  if (pictureUrl) {
-    return (
-      <div className="chat-avatar">
-        <img src={pictureUrl} alt="" />
-      </div>
-    );
-  }
-  return (
-    <div className="chat-avatar">
-      <KindIcon kind={kind} />
-    </div>
-  );
-}
-
-// Status image item. <img src="/api/..."> can't carry the X-API-Key header, so the bytes are
-// fetched via sessionApi (which does) and re-exposed as a local object URL. The URL is revoked on
-// unmount/statusId change to avoid leaking blob memory as the viewer browses items.
-function StatusMedia({
-  sessionId,
-  statusId,
-  type,
-}: {
-  sessionId: string | null;
-  statusId: string;
-  type: 'image' | 'video';
-}) {
-  const { t } = useTranslation();
-  const [src, setSrc] = useState<string | null>(null);
-  const [error, setError] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (!sessionId) return undefined;
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    setSrc(null);
-    setError(false);
-    sessionApi
-      .getStatusMediaBlob(sessionId, statusId)
-      .then(blob => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setError(true);
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [sessionId, statusId]);
-
-  if (error) return <span className="status-media-placeholder">{t('chats.status.mediaUnavailable')}</span>;
-  if (!src) return null;
-  if (type === 'video') return <video className="channel-media" src={src} controls />;
-  return <img className="channel-media" src={src} alt="" />;
-}
-
-// Mirrors @ArrayMaxSize(256) on the send-status DTOs — the picker caps selection client-side so the
-// user can't build a list the backend is guaranteed to reject.
-const STATUS_RECIPIENTS_MAX = 256;
 
 // WhatsApp's text-status font slots — the current wire enum is {0,1,2,6,7,8,9,10} (6 is the bold
 // system face); 3–5 are legacy slots older clients still emit. Approximated with generic
@@ -225,8 +114,7 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
 export function Chats() {
   const { t } = useTranslation();
   useDocumentTitle(t('nav.chats'));
-  const { canWrite } = useRole();
-  const { success: showSuccessToast, error: showErrorToast, warning: showWarningToast } = useToast();
+  const { error: showErrorToast, warning: showWarningToast } = useToast();
 
   // Sessions list & active session
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -283,130 +171,9 @@ export function Chats() {
   }, [activeChannel?.id, channelMessages.data]);
 
   // --- Status compose modal ---
-  // Baileys targets a status post to an explicit allow-list (statusJidList); whatsapp-web.js has no
-  // per-recipient concept and broadcasts to the account's status-privacy audience instead, so the
-  // recipient picker is Baileys-only.
-  const isBaileysEngine = currentEngine.data?.engineType === 'baileys';
-
+  // The page owns only the open flag (its trigger sits in the sidebar header below); the form
+  // itself — state, contacts query, submit — is components/chats/StatusComposeModal.
   const [composeOpen, setComposeOpen] = useState<boolean>(false);
-  const [composeType, setComposeType] = useState<'text' | 'image'>('text');
-  const [composeText, setComposeText] = useState<string>('');
-  const [composeBgColor, setComposeBgColor] = useState<string>('');
-  const [composeFont, setComposeFont] = useState<string>('');
-  const [composeImageUrl, setComposeImageUrl] = useState<string>('');
-  const [composeImageBase64, setComposeImageBase64] = useState<string | null>(null);
-  const [composeCaption, setComposeCaption] = useState<string>('');
-  const [composeRecipients, setComposeRecipients] = useState<string[]>([]);
-  const [composeRecipientSearch, setComposeRecipientSearch] = useState<string>('');
-  const [composePosting, setComposePosting] = useState<boolean>(false);
-  const composeFileInputRef = useRef<HTMLInputElement | null>(null);
-  // Monotonic token invalidating an in-flight FileReader: picking a file reads asynchronously, and
-  // a URL edit (or form reset) before `onload` fires must win over the late-arriving file bytes.
-  const composeImageReadSeq = useRef(0);
-
-  // Sourced only while the modal is actually open on Baileys — no reason to fetch the full contact
-  // list on wwjs (no picker) or before the user has opened compose.
-  const composeContactsQuery = useQuery({
-    queryKey: ['status-compose-contacts', selectedSessionId],
-    queryFn: () => contactApi.list(selectedSessionId!),
-    enabled: composeOpen && isBaileysEngine && Boolean(selectedSessionId),
-  });
-  const composeContacts = composeContactsQuery.data ?? [];
-  const composeRecipientSearchLower = composeRecipientSearch.toLowerCase();
-  const filteredComposeContacts = composeContacts.filter(c =>
-    // Match against every identity field — a named contact must still be findable by number/JID.
-    [c.name, c.pushName, c.number, c.id].some(v => v?.toLowerCase().includes(composeRecipientSearchLower)),
-  );
-
-  const resetComposeForm = useCallback(() => {
-    composeImageReadSeq.current += 1;
-    setComposeType('text');
-    setComposeText('');
-    setComposeBgColor('');
-    setComposeFont('');
-    setComposeImageUrl('');
-    setComposeImageBase64(null);
-    setComposeCaption('');
-    setComposeRecipients([]);
-    setComposeRecipientSearch('');
-    if (composeFileInputRef.current) composeFileInputRef.current.value = '';
-  }, []);
-
-  const closeComposeModal = useCallback(() => {
-    setComposeOpen(false);
-    resetComposeForm();
-  }, [resetComposeForm]);
-
-  const toggleComposeRecipient = (id: string) => {
-    setComposeRecipients(prev =>
-      prev.includes(id)
-        ? prev.filter(r => r !== id)
-        : prev.length >= STATUS_RECIPIENTS_MAX
-          ? prev
-          : [...prev, id],
-    );
-  };
-
-  const handleComposeImageUrlChange = (value: string) => {
-    composeImageReadSeq.current += 1;
-    setComposeImageUrl(value);
-    if (value) {
-      setComposeImageBase64(null);
-      if (composeFileInputRef.current) composeFileInputRef.current.value = '';
-    }
-  };
-
-  const handleComposeImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setComposeImageUrl('');
-    const myRead = ++composeImageReadSeq.current;
-    const reader = new FileReader();
-    reader.onload = event => {
-      // A URL edit or form reset since the read started supersedes these bytes — drop them.
-      if (composeImageReadSeq.current !== myRead) return;
-      // The backend's stripBase64DataUri unwraps a `data:...;base64,` prefix, so passing the raw
-      // data URL through as `base64` is safe — no need to slice it ourselves.
-      setComposeImageBase64(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const composeCanSubmit =
-    Boolean(selectedSessionId) &&
-    !composePosting &&
-    // The engine type decides whether recipients are required (Baileys) or omitted (wwjs) — while
-    // it's still unknown, a Baileys submit would go out with no recipients and 400.
-    Boolean(currentEngine.data) &&
-    (composeType === 'text' ? composeText.trim().length > 0 : Boolean(composeImageBase64 || composeImageUrl.trim())) &&
-    (!isBaileysEngine || composeRecipients.length > 0);
-
-  const handleComposeSubmit = async () => {
-    if (!selectedSessionId || !composeCanSubmit) return;
-    setComposePosting(true);
-    try {
-      // whatsapp-web.js ignores `recipients` entirely (it broadcasts to status@broadcast), so none
-      // are sent — the backend DTO treats the list as optional and only the Baileys engine requires
-      // (and honors) it. The picker is hidden on wwjs since it has no effect there.
-      const recipients = isBaileysEngine ? composeRecipients : undefined;
-      if (composeType === 'text') {
-        await sessionApi.postTextStatus(selectedSessionId, composeText.trim(), recipients, {
-          backgroundColor: composeBgColor || undefined,
-          font: composeFont === '' ? undefined : Number(composeFont),
-        });
-      } else {
-        const image = composeImageBase64 ? { base64: composeImageBase64 } : { url: composeImageUrl.trim() };
-        await sessionApi.postImageStatus(selectedSessionId, image, recipients, composeCaption.trim() || undefined);
-      }
-      showSuccessToast(t('chats.status.posted'));
-      closeComposeModal();
-      statusesQuery.refetch();
-    } catch (err) {
-      showErrorToast(t('chats.status.postFailed'), err instanceof Error ? err.message : undefined);
-    } finally {
-      setComposePosting(false);
-    }
-  };
 
   const {
     data: messages = [],
@@ -415,38 +182,44 @@ export function Chats() {
   } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
-  const [messageInput, setMessageInput] = useState<string>('');
-  const [sending, setSending] = useState<boolean>(false);
 
   // Lightbox state for media viewer
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
-  // File attachments
-  const [attachment, setAttachment] = useState<{
-    file: File;
-    base64: string;
-    mimetype: string;
-    filename: string;
-  } | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
-  // Monotonic token invalidating an in-flight attachment FileReader: picking a second file (or
-  // removing the attachment) before `onload` fires must win over the late-arriving bytes —
-  // otherwise the slower read overwrites the newer pick. Same pattern as composeImageReadSeq.
-  const attachmentReadSeq = useRef(0);
-
-  // Unmounting the page with a read still in flight: invalidate both readers so their late
-  // onload handlers drop the bytes instead of setting state on a dead component.
-  useEffect(() => {
-    return () => {
-      attachmentReadSeq.current += 1;
-      composeImageReadSeq.current += 1;
-    };
-  }, []);
-
-  // References
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
+  // Draft text lives here (not in ChatComposer) so it survives closing/switching the room.
+  const [messageInput, setMessageInput] = useState<string>('');
+  // The staged attachment lives here for the same reason the draft text does — ChatComposer
+  // unmounts when the room closes, which would silently discard a picked file. Unlike the text
+  // draft it is dropped when a DIFFERENT chat is opened (see the effect below): a file that
+  // follows the user into another conversation can be sent to the wrong recipient.
+  const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // Revoke the object URL created for an image-attachment preview once it is replaced or cleared.
+  // The cleanup runs with the previous value on every change, so this single effect covers all
+  // paths (new file, remove, send, chat switch) — otherwise each preview leaks a blob held for the
+  // lifetime of the document. It lives here, not in ChatComposer: revoking on the composer's
+  // unmount would hand a reopened room a dead blob URL for an attachment that is still staged.
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  // Drop a staged attachment when the user moves to a DIFFERENT chat. Closing the room
+  // (`activeChat` → null) deliberately keeps it, so close/reopen is a lossless round trip; only an
+  // actual change of conversation clears. The composer invalidates its in-flight FileReader on the
+  // same transition, so a late read cannot re-stage the file against the new chat.
+  const lastRoomIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const current = activeChat?.id ?? null;
+    if (current === null) return;
+    const previous = lastRoomIdRef.current;
+    lastRoomIdRef.current = current;
+    if (previous === null || previous === current) return;
+    setAttachment(null);
+    setPreviewUrl(null);
+  }, [activeChat]);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
   // Pass `messages.length > 0` as the loaded signal: it stays stable once the
@@ -480,57 +253,6 @@ export function Chats() {
   );
   const activePhoneText =
     activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
-
-  // Scroll-to-bottom button visibility. The main scroll-position memory is owned by
-  // useChatScrollPosition, which doesn't expose its pin state (intentionally — that would re-render
-  // the whole room on every scroll). This small listener tracks only the boolean "user is far from
-  // the bottom" so we can float the jump button.
-  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-  useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return undefined;
-    const onScroll = () => {
-      // 120px gap = a couple of message bubbles before counting as "scrolled up".
-      setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
-    };
-    onScroll(); // sync initial position (e.g. saved restore landed above the bottom)
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  });
-
-  const handleJumpToBottom = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [messagesContainerRef]);
-
-  // Reset the jump button whenever the active chat changes: the new chat's content is restored by
-  // useChatScrollPosition and our listener will resync on its first scroll tick.
-  useEffect(() => {
-    setShowJumpToBottom(false);
-  }, [activeChat?.id]);
-
-  // Popular emojis
-  const popularEmojis = [
-    '😀',
-    '😂',
-    '👍',
-    '❤️',
-    '🔥',
-    '👏',
-    '🙏',
-    '🎉',
-    '💡',
-    '🤔',
-    '😅',
-    '😍',
-    '😊',
-    '😭',
-    '😎',
-    '😜',
-    '🚀',
-    '✨',
-  ];
 
   // 1. Fetch available connected sessions on mount
   useEffect(() => {
@@ -577,19 +299,15 @@ export function Chats() {
       setActiveChat(null);
       setActiveChannel(null);
       setActiveStatusContactId(null);
+      // A staged attachment belongs to a chat in the session being left, so it is dropped here
+      // rather than carried across — the close/reopen round trip that preserves it is scoped to a
+      // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
+      // unmounts with the closed room and invalidates its own in-flight FileReader.
       setAttachment(null);
       setPreviewUrl(null);
+      lastRoomIdRef.current = null;
     }
   }, [selectedSessionId, loadChats]);
-
-  // Revoke the object URL created for an image-attachment preview once it is replaced, cleared, or
-  // the page unmounts. The cleanup runs with the previous value on every change, so this single
-  // effect covers all paths (new file, remove, session switch) — otherwise each preview leaks a
-  // blob held for the lifetime of the document.
-  useEffect(() => {
-    if (!previewUrl) return;
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
 
   // Coalesce mark-as-read RPCs per chat: every incoming message in the visible chat raises a
   // read event, and a per-event POST sprays the gateway into 429s. One trailing call per chat
@@ -1010,169 +728,7 @@ export function Chats() {
     pendingHitRef.current = null;
   }, [activeChat, loadingMessages, messages, messagesContainerRef]);
 
-  // 5. Handle file selection & base64 conversion
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.type.startsWith('image/')) {
-      setPreviewUrl(URL.createObjectURL(file));
-    } else {
-      setPreviewUrl(null);
-    }
-
-    const myRead = ++attachmentReadSeq.current;
-    const reader = new FileReader();
-    reader.onload = event => {
-      // A newer pick, a removal, or an unmount since the read started supersedes these bytes.
-      if (attachmentReadSeq.current !== myRead) return;
-      const dataUrl = event.target?.result as string;
-      const base64Data = dataUrl.split(',')[1];
-      setAttachment({ file, base64: base64Data, mimetype: file.type, filename: file.name });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleRemoveAttachment = () => {
-    attachmentReadSeq.current += 1; // an in-flight read must not resurrect the removed attachment
-    setAttachment(null);
-    setPreviewUrl(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const triggerFileSelect = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleEmojiClick = (emoji: string) => {
-    setMessageInput(prev => prev + emoji);
-    setShowEmojiPicker(false);
-  };
-
-  // 7. Handle sending a message / media
-  const handleSend = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!selectedSessionId || !activeChat || sending) return;
-
-    const textToSend = messageInput.trim();
-    if (!textToSend && !attachment) return;
-
-    setMessageInput('');
-    setSending(true);
-
-    const tempId = `temp_${Date.now()}`;
-    const tempMessage: ChatMessageView = {
-      id: tempId,
-      chatId: activeChat.id,
-      from: 'me',
-      to: activeChat.id,
-      body: attachment
-        ? attachment.mimetype.startsWith('image/') ||
-          attachment.mimetype.startsWith('video/') ||
-          attachment.mimetype.startsWith('audio/')
-          ? textToSend
-          : attachment.filename
-        : textToSend,
-      type: attachment ? messageTypeFromMime(attachment.mimetype) : 'text',
-      direction: 'outgoing',
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      metadata: attachment
-        ? {
-            media: {
-              mimetype: attachment.mimetype,
-              filename: attachment.filename,
-              data: attachment.base64,
-            },
-          }
-        : replyingTo
-          ? {
-              quotedMessage: {
-                id: replyingTo.waMessageId || replyingTo.id,
-                body: replyingTo.type !== 'text' ? `[${replyingTo.type}]` : replyingTo.body,
-              },
-            }
-          : undefined,
-    };
-
-    appendMessage(selectedSessionId, activeChat.id, tempMessage);
-    onMessageAppended('outgoing');
-
-    const currentAttachment = attachment;
-    const currentReplyingTo = replyingTo;
-    handleRemoveAttachment();
-    setReplyingTo(null);
-
-    try {
-      let result;
-
-      if (currentAttachment) {
-        let mediaType: 'image' | 'video' | 'audio' | 'document' = 'document';
-        const mime = currentAttachment.mimetype;
-        if (mime.startsWith('image/')) mediaType = 'image';
-        else if (mime.startsWith('video/')) mediaType = 'video';
-        else if (mime.startsWith('audio/')) mediaType = 'audio';
-
-        result = await messageApi.sendMedia(selectedSessionId, activeChat.id, mediaType, {
-          base64: currentAttachment.base64,
-          mimetype: currentAttachment.mimetype,
-          filename: currentAttachment.filename,
-          caption: mediaType !== 'audio' ? textToSend : undefined,
-        });
-      } else if (currentReplyingTo) {
-        result = await messageApi.reply(selectedSessionId, {
-          chatId: activeChat.id,
-          quotedMessageId: currentReplyingTo.waMessageId || currentReplyingTo.id,
-          text: textToSend,
-        });
-      } else {
-        result = await messageApi.sendText(selectedSessionId, activeChat.id, textToSend);
-      }
-
-      // Race guard: the realtime `message.sent` echo can arrive before this response and already
-      // append the message by its real WA id (the dedup at receive time misses because the
-      // optimistic placeholder still carries the temp id). If so, fold the placeholder INTO the
-      // echo's row via mergeOrAppend instead of just dropping it — the echo carries no media
-      // payload (engine parity marker), so dropping the placeholder would erase the attachment's
-      // base64 and leave a bare "📎 Media" bubble until the next refetch.
-      const sendKey = messagesQueryKey(selectedSessionId, activeChat.id);
-      queryClient.setQueryData<ChatMessageView[]>(sendKey, (prev = []) => {
-        const reconciled: ChatMessageView = {
-          ...tempMessage,
-          id: result.messageId,
-          waMessageId: result.messageId,
-          status: 'sent',
-        };
-        const echoAlreadyAdded = prev.some(m => m.id === result.messageId || m.waMessageId === result.messageId);
-        if (echoAlreadyAdded) {
-          return mergeOrAppend(
-            prev.filter(m => m.id !== tempId),
-            reconciled,
-          );
-        }
-        return prev.map(m => (m.id === tempId ? reconciled : m));
-      });
-
-      // Update sidebar chat list (move active chat to the top with the new snippet)
-      const snippet = currentAttachment ? `[${currentAttachment.mimetype.split('/')[0]}]` : textToSend;
-      const sentAt = Math.floor(Date.now() / 1000);
-      setChats(prevChats => promoteChatWithSnippet(prevChats, activeChat.id, snippet, sentAt));
-    } catch (err) {
-      showErrorToast(t('chats.errors.send'), err instanceof Error ? err.message : undefined);
-      updateMessage(selectedSessionId, activeChat.id, tempId, { status: 'failed' });
-    } finally {
-      setSending(false);
-    }
-  };
-
   // Helper formats
-  const formatTime = (timestamp?: number) => {
-    if (!timestamp) return '';
-    return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
-
   const formatChatTime = useCallback(
     (timestamp?: number) => {
       if (!timestamp) return '';
@@ -1213,46 +769,6 @@ export function Chats() {
     const el = statusFeedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [activeStatusGroup?.contact.id, activeStatusGroup?.items]);
-
-  // Shared row markup for the Chats and Status lists — a plain function (not memoized) since it
-  // closes over render-scoped state (activeChat, listPics) that already changes every render.
-  const renderChatRow = (chat: Chat) => {
-    const isActive = activeChat?.id === chat.id;
-    return (
-      <div key={chat.id} className={`chat-item-card ${isActive ? 'active' : ''}`} onClick={() => setActiveChat(chat)}>
-        <ChatAvatar pictureUrl={listPics.data?.[chat.id]} kind={chat.kind} />
-
-        <div className="chat-item-info">
-          <div className="chat-item-top">
-            <span className="chat-item-name" title={chat.name || chat.id}>
-              {chat.name || chat.id.split('@')[0]}
-            </span>
-            {chat.kind !== 'individual' && chat.kind !== 'unknown' && (
-              <span className={`chat-kind-badge kind-${chat.kind}`}>{t(`chats.kind.${chat.kind}`)}</span>
-            )}
-            {/* Ternary, not `&&`: a chat with no messages carries timestamp 0, and React
-                renders the number 0 as text — so `0 && <span/>` painted a literal "0"
-                where the time belongs, on every such row. */}
-            {chat.timestamp ? <span className="chat-item-time">{formatChatTime(chat.timestamp)}</span> : null}
-          </div>
-          <div className="chat-item-bottom">
-            <span className="chat-item-snippet" title={formatLastMessageSnippet(chat)}>
-              {formatLastMessageSnippet(chat) || <span className="no-message">{t('chats.noMessageYet')}</span>}
-            </span>
-            {chat.unreadCount > 0 && (
-              <span
-                className="chat-unread-badge"
-                title={t('chats.unreadBadge', { count: chat.unreadCount })}
-                aria-label={t('chats.unreadBadge', { count: chat.unreadCount })}
-              >
-                {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
 
   // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
   // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
@@ -1308,180 +824,39 @@ export function Chats() {
       ) : (
         <div className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''}`}>
           {/* LEFT SIDEBAR: session & chat rooms */}
-          <aside className="chats-sidebar">
-            <div className="sidebar-header-box">
-              {/* Session selector */}
-              <div className="session-select-group">
-                <label className="form-label">{t('chats.sessionLabel')}</label>
-                <select
-                  value={selectedSessionId}
-                  onChange={e => setSelectedSessionId(e.target.value)}
-                  className="session-selector"
-                >
-                  {sessions.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.phone || t('chats.noPhone')})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Chats / Channels / Status tabs */}
-              <div className="chats-tabs" role="tablist">
-                {(['chats', 'channels', 'status'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === tab}
-                    className={`chats-tab ${activeTab === tab ? 'active' : ''}`}
-                    onClick={() => switchTab(tab)}
-                  >
-                    {t(`chats.tab.${tab}`)}
-                  </button>
-                ))}
-              </div>
-
-              {/* Search bar */}
-              <div className="chat-search-input">
-                <Search size={18} />
-                <input
-                  type="text"
-                  placeholder={t('chats.searchPlaceholder')}
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                />
-              </div>
-
-              {/* Compose a new status — only meaningful on the Status tab. */}
-              {activeTab === 'status' && (
-                <button type="button" className="btn-primary status-compose-trigger" onClick={() => setComposeOpen(true)}>
-                  <Plus size={16} />
-                  {t('chats.status.compose')}
-                </button>
-              )}
-            </div>
-
-            {/* Chat list */}
-            {activeTab === 'chats' && (
-              <div className="chats-list">
-                {loadingChats ? (
-                  <div className="chats-list-loading">
-                    <Loader2 className="animate-spin" size={24} />
-                    <span>{t('chats.loadingChats')}</span>
-                  </div>
-                ) : filteredChats.length === 0 ? (
-                  <div className="chats-list-empty">
-                    <span>{t('chats.empty')}</span>
-                  </div>
-                ) : (
-                  filteredChats.map(renderChatRow)
-                )}
-              </div>
-            )}
-
-            {/* Channels list — wwjs-only (newsletter/channel API isn't implemented on Baileys, which
-                throws 501 for both listing and reading). channelsQuery is gated off entirely on that
-                engine, so the branch order below never depends on a request having actually run. */}
-            {activeTab === 'channels' && (
-              <div className="chats-list">
-                {currentEngine.isLoading ? (
-                  <div className="chats-list-loading">
-                    <Loader2 className="animate-spin" size={24} />
-                  </div>
-                ) : !channelsSupported ? (
-                  <div className="chats-list-empty">
-                    <span>{t('chats.channels.notSupported')}</span>
-                  </div>
-                ) : channelsQuery.isLoading ? (
-                  <div className="chats-list-loading">
-                    <Loader2 className="animate-spin" size={24} />
-                  </div>
-                ) : channelsQuery.error ? (
-                  <div className="chats-list-empty">
-                    <AlertCircle size={24} className="text-warn" />
-                    <span>{t('chats.channels.notReady')}</span>
-                  </div>
-                ) : (channelsQuery.data?.length ?? 0) === 0 ? (
-                  <div className="chats-list-empty">
-                    <span>{t('chats.channels.empty')}</span>
-                  </div>
-                ) : (
-                  filteredChannels.map(ch => (
-                    <div
-                      key={ch.id}
-                      className={`chat-item-card ${activeChannel?.id === ch.id ? 'active' : ''}`}
-                      onClick={() => setActiveChannel(ch)}
-                    >
-                      <div className="chat-avatar">
-                        <Megaphone size={20} />
-                      </div>
-                      <div className="chat-item-info">
-                        <div className="chat-item-top">
-                          <span className="chat-item-name">{ch.name}</span>
-                        </div>
-                        {ch.subscriberCount != null && (
-                          <div className="chat-item-bottom">
-                            <span className="chat-item-snippet">
-                              {t('chats.channels.subscribers', { count: ch.subscriberCount })}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {/* Status list — per-contact status groups read from the 24h store. Not engine-gated:
-                both engines now have status content. */}
-            {activeTab === 'status' && (
-              <div className="chats-list">
-                {statusesQuery.isLoading ? (
-                  <div className="chats-list-loading">
-                    <Loader2 className="animate-spin" size={24} />
-                  </div>
-                ) : statusesQuery.isError ? (
-                  <div className="chats-list-empty">
-                    <AlertCircle size={24} className="text-warn" />
-                    <span>{t('chats.status.loadError')}</span>
-                  </div>
-                ) : groupedStatuses.length === 0 ? (
-                  <div className="chats-list-empty">
-                    <span>{t('chats.status.empty')}</span>
-                  </div>
-                ) : (
-                  groupedStatuses.map(group => (
-                    <div
-                      key={group.contact.id}
-                      className={`chat-item-card ${activeStatusContactId === group.contact.id ? 'active' : ''}`}
-                      onClick={() => setActiveStatusContactId(group.contact.id)}
-                    >
-                      <div className="chat-avatar">
-                        <CircleDashed size={20} />
-                      </div>
-                      <div className="chat-item-info">
-                        <div className="chat-item-top">
-                          <span className="chat-item-name">
-                            {group.contact.name ?? group.contact.pushName ?? group.contact.id}
-                          </span>
-                          <span className="chat-item-time">
-                            {formatChatTime(Math.floor(new Date(group.latest).getTime() / 1000))}
-                          </span>
-                        </div>
-                        <div className="chat-item-bottom">
-                          <span className="chat-item-snippet">
-                            {t('chats.status.itemCount', { count: group.items.length })}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </aside>
+          <ChatSidebar
+            sessions={sessions}
+            selectedSessionId={selectedSessionId}
+            onSelectSession={setSelectedSessionId}
+            activeTab={activeTab}
+            onSwitchTab={switchTab}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            onComposeStatus={() => setComposeOpen(true)}
+            formatChatTime={formatChatTime}
+            chatsTab={{
+              loading: loadingChats,
+              chats: filteredChats,
+              activeChatId: activeChat?.id,
+              pictures: listPics.data,
+              onSelectChat: setActiveChat,
+            }}
+            channelsTab={{
+              engineLoading: currentEngine.isLoading,
+              supported: channelsSupported,
+              query: channelsQuery,
+              channels: filteredChannels,
+              activeChannelId: activeChannel?.id,
+              onSelectChannel: setActiveChannel,
+            }}
+            statusTab={{
+              loading: statusesQuery.isLoading,
+              error: statusesQuery.isError,
+              groups: groupedStatuses,
+              activeContactId: activeStatusContactId,
+              onSelectContact: setActiveStatusContactId,
+            }}
+          />
 
           {/* RIGHT VIEW: active chat room */}
           <main className="chats-room">
@@ -1523,380 +898,39 @@ export function Chats() {
                   </div>
                 </header>
 
-                {/* Messages body. position:relative so the scroll-to-bottom button can float inside. */}
-                <div className="room-messages" ref={messagesContainerRef}>
-                  {/* Floating scroll-to-bottom button. Hidden while loading (no height to measure yet)
-                      and when the user is already at/near the bottom. */}
-                  {showJumpToBottom && !loadingMessages && (
-                    <button
-                      type="button"
-                      className="scroll-to-bottom-btn"
-                      onClick={handleJumpToBottom}
-                      aria-label={t('chats.scrollToBottom')}
-                      title={t('chats.scrollToBottom')}
-                    >
-                      <ChevronDown size={22} />
-                    </button>
-                  )}
-                  {loadingMessages ? (
-                    <div className="messages-loading">
-                      <Loader2 className="animate-spin" size={32} />
-                      <span>{t('chats.loadingMessages')}</span>
-                    </div>
-                  ) : messagesError ? (
-                    <div className="messages-empty">
-                      <MessageSquare size={32} />
-                      <span>{t('chats.loadMessagesError')}</span>
-                    </div>
-                  ) : messages.length === 0 ? (
-                    <div className="messages-empty">
-                      <MessageSquare size={32} />
-                      <span>{t('chats.noMessagesInChat')}</span>
-                    </div>
-                  ) : (
-                    messages.map((msg, index) => {
-                      const isMe = msg.direction === 'outgoing';
-                      const formattedTime = formatTime(
-                        msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000),
-                      );
+                {/* Messages body (list, media, reactions, scroll-to-bottom) — components/chats/ChatThread. */}
+                <ChatThread
+                  activeChat={activeChat}
+                  messages={messages}
+                  loadingMessages={loadingMessages}
+                  messagesError={messagesError}
+                  messagesContainerRef={messagesContainerRef}
+                  onMediaLoad={onMediaLoad}
+                  onOpenImage={messageId => {
+                    const idx = imageMedia.findIndex(x => x.id === messageId);
+                    if (idx >= 0) setLightboxIndex(idx);
+                  }}
+                  onReply={setReplyingTo}
+                  onReact={handleReactMessage}
+                  onDelete={handleDeleteMessage}
+                />
 
-                      // Label who posted, WhatsApp-style: only in groups, only on incoming messages,
-                      // and only on the first of a consecutive run from the same sender (so a burst
-                      // from one person isn't repeated on every bubble).
-                      const prev = messages[index - 1];
-                      const showSender = Boolean(
-                        activeChat?.isGroup &&
-                          !isMe &&
-                          msg.chatName &&
-                          // Key the run on the stable sender id (participant JID), not the display
-                          // name — two participants who share a pushName must still start a new run.
-                          (!prev || prev.direction === 'outgoing' || senderKey(prev) !== senderKey(msg)),
-                      );
-
-                      const isMediaMessage = msg.type !== 'text';
-                      const mediaInfo = msg.metadata?.media;
-
-                      const renderMedia = () => {
-                        if (msg.type === 'revoked') return null;
-                        // location/call have no downloadable media payload — render them before the
-                        // mediaInfo gate. The raw body (a base64 thumbnail / empty token) is suppressed below.
-                        if (msg.type === 'location') {
-                          // WhatsApp location messages carry a base64 JPEG map-preview thumbnail in `body`.
-                          const thumb = msg.body && msg.body.length > 100 ? `data:image/jpeg;base64,${msg.body}` : '';
-                          return (
-                            <div className="message-location">
-                              {thumb && (
-                                <img
-                                  src={thumb}
-                                  alt=""
-                                  onLoad={onMediaLoad}
-                                  style={{ maxWidth: 220, borderRadius: 8, display: 'block', marginBottom: 4 }}
-                                />
-                              )}
-                              <span className="message-media-omitted">📍 {t('chats.media.location')}</span>
-                            </div>
-                          );
-                        }
-                        if (msg.type === 'call') {
-                          const call = msg.metadata?.call;
-                          const callKey = call?.video
-                            ? call.missed
-                              ? 'callVideoMissed'
-                              : 'callVideo'
-                            : call?.missed
-                              ? 'callMissed'
-                              : 'call';
-                          return (
-                            <div className="message-media-omitted">
-                              {`${call?.video ? '📹' : '📞'} ${t(`chats.media.${callKey}`)}`}
-                            </div>
-                          );
-                        }
-                        if (!mediaInfo) return null;
-                        if (mediaInfo.omitted) {
-                          return <div className="message-media-omitted">📎 {t('chats.media.omitted')}</div>;
-                        }
-                        const mediaSrc = getMediaSrc(mediaInfo);
-                        if (!mediaSrc) return null;
-
-                        switch (msg.type) {
-                          case 'image':
-                          case 'sticker':
-                            return (
-                              <div className="message-media-image">
-                                <img
-                                  src={mediaSrc}
-                                  alt={mediaInfo.filename || t('chats.media.image')}
-                                  className="chat-image-media"
-                                  onLoad={onMediaLoad}
-                                  onClick={() => {
-                                    const idx = imageMedia.findIndex(x => x.id === msg.id);
-                                    if (idx >= 0) setLightboxIndex(idx);
-                                  }}
-                                />
-                              </div>
-                            );
-                          case 'video':
-                            return (
-                              <div className="message-media-video">
-                                <video
-                                  src={mediaSrc}
-                                  controls
-                                  className="chat-video-media"
-                                  onLoadedData={onMediaLoad}
-                                />
-                              </div>
-                            );
-                          case 'audio':
-                          case 'voice':
-                            return (
-                              <div className="message-media-audio">
-                                <audio src={mediaSrc} controls className="chat-audio-media" />
-                              </div>
-                            );
-                          case 'document':
-                          default:
-                            return (
-                              <div className="message-media-document">
-                                <a
-                                  href={mediaSrc}
-                                  download={mediaInfo.filename || 'document'}
-                                  className="chat-document-media"
-                                >
-                                  📎 {mediaInfo.filename || t('chats.downloadDocument')}
-                                </a>
-                              </div>
-                            );
-                        }
-                      };
-
-                      const reactions = msg.metadata?.reactions || {};
-                      const hasReactions = Object.keys(reactions).length > 0;
-                      const isRevoked = msg.type === 'revoked';
-                      const isMasked = msg.type === 'masked';
-
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`message-bubble-wrapper ${isMe ? 'outgoing' : 'incoming'}`}
-                          data-wa-message-id={msg.waMessageId}
-                        >
-                          <div className="message-bubble-container">
-                            <div
-                              className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${msg.status} ${
-                                isMediaMessage ? 'media-type' : ''
-                              } ${isRevoked ? 'revoked-type' : ''}`}
-                            >
-                              {/* Group sender label (WhatsApp-style: coloured name atop the bubble) */}
-                              {/* Group sender label (WhatsApp-style: coloured name atop the bubble).
-                                  Colour keys on the stable sender id, so same-named participants
-                                  still get distinct colours; the label shows the human name. */}
-                              {showSender && (
-                                <div className="message-sender" style={{ color: senderColor(senderKey(msg)!) }}>
-                                  {msg.chatName}
-                                </div>
-                              )}
-
-                              {/* Quoted message display */}
-                              {msg.metadata?.quotedMessage && (
-                                <div className="message-quote-box">
-                                  <MessageBody text={msg.metadata.quotedMessage.body} className="quote-body" />
-                                </div>
-                              )}
-
-                              {renderMedia()}
-
-                              {isRevoked ? (
-                                <div className="message-text">{t('chats.messageDeleted')}</div>
-                              ) : isMasked ? (
-                                <div className="message-text message-masked">{t('chats.messageMasked')}</div>
-                              ) : (
-                                msg.body &&
-                                (!mediaInfo || msg.body !== mediaInfo.filename) &&
-                                msg.type !== 'location' &&
-                                msg.type !== 'call' && <MessageBody text={msg.body} className="message-text" />
-                              )}
-
-                              <div className="message-meta">
-                                <span className="message-time">{formattedTime}</span>
-                                {isMe && (
-                                  <span className={`message-status-icon ${msg.status}`}>
-                                    {msg.status === 'pending' && '🕒'}
-                                    {msg.status === 'sent' && '✓'}
-                                    {msg.status === 'delivered' && '✓✓'}
-                                    {msg.status === 'read' && '✓✓'}
-                                    {msg.status === 'failed' && '⚠️'}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Reactions display */}
-                              {hasReactions && (
-                                <div className="message-reactions-badge">
-                                  {Object.values(reactions)
-                                    .slice(0, 3)
-                                    .map((emoji, idx) => (
-                                      <span key={idx} className="reaction-emoji-span">
-                                        {emoji}
-                                      </span>
-                                    ))}
-                                  {Object.keys(reactions).length > 1 && (
-                                    <span className="reactions-count-span">{Object.keys(reactions).length}</span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Message actions menu (hover) */}
-                            {!isRevoked && (
-                              <div className="message-actions-menu">
-                                <button
-                                  type="button"
-                                  className="action-btn"
-                                  onClick={() => setReplyingTo(msg)}
-                                  title={t('chats.actions.reply')}
-                                >
-                                  <CornerUpLeft size={14} />
-                                </button>
-
-                                <div className="reaction-trigger-wrapper">
-                                  <button
-                                    type="button"
-                                    className="action-btn reaction-btn"
-                                    title={t('chats.actions.react')}
-                                  >
-                                    <Smile size={14} />
-                                  </button>
-                                  <div className="reaction-quick-popover">
-                                    {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
-                                      <button key={emoji} type="button" onClick={() => handleReactMessage(msg, emoji)}>
-                                        {emoji}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-
-                                {isMe && msg.status !== 'pending' && (
-                                  <button
-                                    type="button"
-                                    className="action-btn delete-btn"
-                                    onClick={() => handleDeleteMessage(msg)}
-                                    title={t('chats.actions.delete')}
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* Attachment preview banner */}
-                {attachment && (
-                  <div className="attachment-preview-banner">
-                    {previewUrl ? (
-                      <img src={previewUrl} alt={attachment.filename} className="preview-thumbnail" />
-                    ) : (
-                      <div className="preview-file-icon">📎</div>
-                    )}
-                    <div className="preview-file-info">
-                      <span className="preview-filename">{attachment.filename}</span>
-                      <span className="preview-filesize">({(attachment.file.size / 1024).toFixed(1)} KB)</span>
-                    </div>
-                    <button className="btn-remove-attachment" onClick={handleRemoveAttachment}>
-                      <X size={18} />
-                    </button>
-                  </div>
-                )}
-
-                {/* Popular emojis panel */}
-                {showEmojiPicker && (
-                  <div className="chats-emoji-picker">
-                    <div className="emoji-grid">
-                      {popularEmojis.map(emoji => (
-                        <button key={emoji} type="button" className="emoji-btn" onClick={() => handleEmojiClick(emoji)}>
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Replying preview banner */}
-                {replyingTo && (
-                  <div className="replying-preview-banner">
-                    <div className="replying-preview-content">
-                      <div className="replying-to-title">
-                        {t('chats.replyingTo', {
-                          name:
-                            replyingTo.direction === 'outgoing'
-                              ? t('chats.you')
-                              : activeChat.name || activeChat.id.split('@')[0],
-                        })}
-                      </div>
-                      <div className="replying-to-body">
-                        {replyingTo.type !== 'text' ? `[${replyingTo.type}]` : replyingTo.body}
-                      </div>
-                    </div>
-                    <button className="btn-close-reply" onClick={() => setReplyingTo(null)}>
-                      <X size={18} />
-                    </button>
-                  </div>
-                )}
-
-                {/* Message input bar */}
-                <footer className="room-input-footer">
-                  <form onSubmit={handleSend} className="input-form">
-                    <input type="file" ref={fileInputRef} onChange={handleFileChange} style={{ display: 'none' }} />
-
-                    <button
-                      type="button"
-                      onClick={triggerFileSelect}
-                      disabled={!canWrite || sending}
-                      className="btn-input-accessory"
-                      title={t('chats.attachTitle')}
-                    >
-                      <Paperclip size={20} />
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                      disabled={!canWrite || sending}
-                      className={`btn-input-accessory ${showEmojiPicker ? 'active' : ''}`}
-                      title={t('chats.emojiTitle')}
-                    >
-                      <Smile size={20} />
-                    </button>
-
-                    <input
-                      type="text"
-                      placeholder={
-                        canWrite
-                          ? attachment
-                            ? t('chats.captionPlaceholder')
-                            : t('chats.messagePlaceholder')
-                          : t('chats.noPermission')
-                      }
-                      value={messageInput}
-                      onChange={e => setMessageInput(e.target.value)}
-                      disabled={!canWrite || sending}
-                      className="message-text-input"
-                    />
-                    <button
-                      type="submit"
-                      disabled={!canWrite || (!messageInput.trim() && !attachment) || sending}
-                      className="btn-send-message"
-                      aria-label={t('chats.send')}
-                    >
-                      {sending ? <Loader2 className="animate-spin" size={24} /> : <Send size={28} strokeWidth={2.5} />}
-                    </button>
-                  </form>
-                </footer>
+                {/* Composer: attachment preview, emoji panel, reply banner, input bar —
+                    components/chats/ChatComposer. */}
+                <ChatComposer
+                  selectedSessionId={selectedSessionId}
+                  activeChat={activeChat}
+                  replyingTo={replyingTo}
+                  setReplyingTo={setReplyingTo}
+                  onMessageAppended={onMessageAppended}
+                  setChats={setChats}
+                  messageInput={messageInput}
+                  setMessageInput={setMessageInput}
+                  attachment={attachment}
+                  setAttachment={setAttachment}
+                  previewUrl={previewUrl}
+                  setPreviewUrl={setPreviewUrl}
+                />
               </div>
             ) : activeChannel ? (
               // Read-only channel pane: no send footer, reactions, delete, reply, or markChatRead —
@@ -2008,138 +1042,11 @@ export function Chats() {
       />
 
       {composeOpen && (
-        <Modal
-          open
-          onClose={closeComposeModal}
-          title={t('chats.status.compose')}
-          closeLabel={t('common.close')}
-          className="status-compose-modal"
-          footer={
-            <>
-              <button className="btn-secondary" onClick={closeComposeModal} disabled={composePosting}>
-                {t('common.cancel')}
-              </button>
-              <button className="btn-primary" onClick={handleComposeSubmit} disabled={!composeCanSubmit}>
-                {composePosting ? <Loader2 className="animate-spin" size={16} /> : t('chats.status.post')}
-              </button>
-            </>
-          }
-        >
-          <div className="compose-type-toggle">
-            <button type="button" className={composeType === 'text' ? 'active' : ''} onClick={() => setComposeType('text')}>
-              {t('chats.status.composeText')}
-            </button>
-            <button
-              type="button"
-              className={composeType === 'image' ? 'active' : ''}
-              onClick={() => setComposeType('image')}
-            >
-              {t('chats.status.composeImage')}
-            </button>
-          </div>
-
-          {composeType === 'text' ? (
-            <>
-              <div className="compose-field">
-                <label>{t('chats.status.composeText')}</label>
-                <textarea
-                  value={composeText}
-                  onChange={e => setComposeText(e.target.value)}
-                  maxLength={4096}
-                  placeholder={t('chats.status.composeText')}
-                />
-              </div>
-              <div className="compose-row">
-                <div className="compose-field">
-                  <label>{t('chats.status.backgroundColor')}</label>
-                  <input
-                    type="color"
-                    value={composeBgColor || '#000000'}
-                    onChange={e => setComposeBgColor(e.target.value)}
-                  />
-                </div>
-                <div className="compose-field">
-                  <label>{t('chats.status.font')}</label>
-                  <select value={composeFont} onChange={e => setComposeFont(e.target.value)}>
-                    <option value="">{t('chats.status.fontDefault')}</option>
-                    {/* The WhatsApp status font enum: 6 is the bold system face; 3–5 don't exist on
-                        the wire and the backend rejects them. */}
-                    {[0, 1, 2, 6, 7, 8, 9, 10].map(f => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="compose-field">
-                <label>{t('chats.status.composeImage')}</label>
-                <input
-                  type="url"
-                  placeholder="https://example.com/image.jpg"
-                  value={composeImageUrl}
-                  onChange={e => handleComposeImageUrlChange(e.target.value)}
-                />
-              </div>
-              <p className="compose-image-or">{t('chats.status.orLabel')}</p>
-              <div className="compose-field">
-                <input
-                  type="file"
-                  accept="image/*"
-                  ref={composeFileInputRef}
-                  onChange={handleComposeImageFile}
-                />
-              </div>
-              <div className="compose-field">
-                <label>{t('chats.status.caption')}</label>
-                <input
-                  type="text"
-                  placeholder={t('chats.captionPlaceholder')}
-                  value={composeCaption}
-                  onChange={e => setComposeCaption(e.target.value)}
-                  maxLength={1024}
-                />
-              </div>
-            </>
-          )}
-
-          {isBaileysEngine && (
-            <div className="compose-field">
-              <label>{t('chats.status.recipients')}</label>
-              <input
-                type="text"
-                placeholder={t('common.search')}
-                value={composeRecipientSearch}
-                onChange={e => setComposeRecipientSearch(e.target.value)}
-              />
-              <div className="compose-recipients">
-                {composeContactsQuery.isLoading ? (
-                  <div className="compose-recipients-empty">
-                    <Loader2 className="animate-spin" size={16} />
-                  </div>
-                ) : filteredComposeContacts.length === 0 ? (
-                  <div className="compose-recipients-empty">{t('chats.status.noContacts')}</div>
-                ) : (
-                  filteredComposeContacts.map(c => (
-                    <label key={c.id} className="compose-recipient-row">
-                      <input
-                        type="checkbox"
-                        checked={composeRecipients.includes(c.id)}
-                        disabled={!composeRecipients.includes(c.id) && composeRecipients.length >= STATUS_RECIPIENTS_MAX}
-                        onChange={() => toggleComposeRecipient(c.id)}
-                      />
-                      <span>{c.name || c.pushName || c.number || c.id}</span>
-                    </label>
-                  ))
-                )}
-              </div>
-              <p className="input-hint">{t('chats.status.recipientsHint')}</p>
-            </div>
-          )}
-        </Modal>
+        <StatusComposeModal
+          sessionId={selectedSessionId}
+          onClose={() => setComposeOpen(false)}
+          onPosted={() => statusesQuery.refetch()}
+        />
       )}
     </div>
   );

@@ -197,7 +197,8 @@ describe('MessageService', () => {
         expect.objectContaining({ type: 'text' }),
         expect.any(Object),
       );
-      // message:sent is no longer fired here — it is emitted solely by SessionService.onMessageCreate
+      // message:sent is no longer fired here — it is emitted solely by the onMessageCreate wiring in
+      // SessionEngineLifecycle (via MessageProjector)
       // with a consistent IncomingMessage payload for ALL sends (avoids the prior double dispatch).
       expect(hookManager.execute).not.toHaveBeenCalledWith('message:sent', expect.anything(), expect.anything());
     });

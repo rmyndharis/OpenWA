@@ -27,7 +27,7 @@ import {
 } from '../utils/sessionActions';
 import { invalidateSessionQueries, reconcileSessionCache } from '../utils/sessionMutation';
 import { canCreateSession, filterSessions, isValidPairingPhone, sessionNameIssues } from '../utils/sessionForm';
-import { useToast } from '../components/Toast';
+import { useToast } from '../hooks/useToast';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
 import {

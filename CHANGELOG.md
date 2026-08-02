@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-08-02
+
+A large internal release with a deliberately small external surface: roughly 30,000 changed lines,
+almost all of it code motion. The five largest god objects at 0.12.3 were decomposed into cohesive
+units — both engine adapters into per-domain delegates, `SessionService` into a lifecycle owner plus
+focused collaborators, `InfraController` into four controllers by resource, the plugin sandbox IPC
+bridge out of the plugin loader, and the `Chats` dashboard page into per-section components — along
+with the largest god methods in the webhook dispatcher, the queue processor, the bulk-message
+batcher and the storage service. The largest single method in the codebase went from 8,366 to 4,819
+characters.
+
+None of it was meant to change behavior, and the HTTP contract bears that out: the 129 paths in
+`openapi.json`, their methods, parameters, request bodies, response schemas, security requirements
+and all 68 component schemas are identical to 0.12.3. The entries below cover the externally visible
+consequences.
+
+### Changed
+
+- **12 `operationId` values in `openapi.json` were renamed.** `InfraController` was split into four
+  controllers by resource — `InfraStatusController`, `InfraConfigController`, `InfraDataController`
+  and `InfraStorageController` — and NestJS derives an operation's id from its controller class name,
+  so every `/api/infra` operation is now `Infra<Resource>Controller_<method>` instead of
+  `InfraController_<method>` (for example `InfraController_getStatus` →
+  `InfraStatusController_getStatus`). 12 of the specification's 158 operations are affected, all of
+  them under `/api/infra`.
+
+  Nothing on the wire moved. The 129 paths, their HTTP methods, parameters, request bodies, response
+  schemas, security requirements and the 68 component schemas are byte-identical to 0.12.3 — a client
+  that calls the REST API by URL needs no change at all. The rename matters only if you generate a
+  client from the specification and its generator names methods after `operationId`: those method
+  names change, and the generated client has to be regenerated.
+
+- **A file attached but not yet sent in Dashboard > Chats is now dropped when you open a different
+  conversation.** Previously the staged file outlived the room it was picked in: attaching in one
+  chat, going back, and opening another left the attachment sitting in the second chat's composer,
+  where the next send would deliver it to the wrong recipient. It is now cleared as soon as another
+  chat is opened, and cleared when the session is switched.
+
+  Closing and reopening the *same* room still keeps it, so the round trip is lossless — the same
+  guarantee the typed message draft already had. Both lifetimes are pinned by regression tests.
+
+## [0.12.3] - 2026-08-01
+
 ### Fixed
 
 - **A plugin whose code is missing can now be switched off.** `enabledByOperator` is the standing
@@ -15,8 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is exactly the state an install lands in when its package directory is gone: an interrupted update,
   or a directory that was never on the data volume. The registry entry survives with its config,
   `ctx.storage` and the enable decision intact, so reinstalling the code brought the plugin straight
-  back up and no API call could prevent it. The only ways out were uninstalling, which also deletes
-  the plugin's stored data, or hand-editing `registry.json`.
+  back up and no API call could prevent it. The only way out was hand-editing `registry.json`:
+  `DELETE /api/plugins/{id}` answers 404 in the same state and for the same reason, so uninstalling
+  was not an escape either.
 
   `disable` records intent rather than performing a runtime operation, so it now clears the decision
   against the registry when the plugin is not loaded and reports
@@ -24,6 +68,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already applied to a plugin sitting in `error` after a failed restore. 404 is now reserved for an id
   with no registry entry at all. Nothing is skipped in the process: there is no runtime in this state,
   so no lifecycle hook goes unrun and no worker is left behind.
+
+- **Eight settings written to `data/.env.generated` were silently ignored under the bundled Docker
+  Compose stack.** `docker-compose.yml` forwards a variable as `- KEY=${KEY:-}` so a real host value
+  reaches the container; with nothing set, that line renders an *empty* value. An empty value still
+  occupies `process.env`, and both lower-priority layers — the project `.env` and
+  `data/.env.generated` — are loaded with dotenv `override: false`, which will not replace a key that
+  is already present, blank or not. `clearBlankEnv` exists to delete exactly those blanks before the
+  files load, but its key list had drifted behind the compose file: `AUTO_START_SESSIONS`,
+  `BODY_SIZE_LIMIT`, `API_MASTER_KEY`, `TRUSTED_PROXIES`, `CSP_UPGRADE_INSECURE_REQUESTS`,
+  `WWEBJS_WEB_VERSION`, `WWEBJS_WEB_VERSION_REMOTE_PATH` and `WWEBJS_AUTH_TIMEOUT_MS` were forwarded
+  but never cleared. Setting any of them in `data/.env.generated` — a file the first-run header
+  invites operators to edit directly — did nothing, with no error and no warning.
+
+  `AUTO_START_SESSIONS` is the one that got noticed, and it is worth being precise about the shape of
+  the regression. The bundled *production* compose gained its forward in 0.12.0 — before that it had
+  none, so an operator's `data/.env.generated` supplied the flag unobstructed, because there was no
+  blank value to shadow it. (The *dev* compose has forwarded it since 0.10.0, defaulting it to `true`.)
+  Adding the production forward without the matching clear entry therefore did not relocate an older
+  failure; it switched off the one route that had been working. The flag resolved to off,
+  `SessionService`'s bootstrap hook returned before it looked at a single session, and previously
+  authenticated sessions stayed at `disconnected` with no engine ever created and a null
+  `lastError`. (#981)
+
+  The clear list is now covered by a test that derives the expected set from `docker-compose.yml` and
+  `docker-compose.dev.yml`, so a forward added without its clear entry fails in CI rather than
+  shipping inert.
+
+- **Restarting from Dashboard > Infrastructure no longer reloads the page into an error.** The restart
+  modal polls the server and reloads once it answers, but it polled `GET /api/infra/health` — a plain
+  ping with no knowledge of shutdown. That endpoint keeps answering `200` for the entire drain window
+  and the engine teardown that follows, so the very first poll, three seconds in, was answered by the
+  process that had just been asked to exit. The modal declared success and reloaded two seconds later,
+  by which time the old process was gone and the new one had not yet bound its port — leaving the
+  operator on a 502/503 from their reverse proxy until they refreshed by hand several times.
+
+  The poll now targets `GET /api/health/ready`, which reports `503` the moment draining starts and
+  keeps reporting it until both databases answer. The page therefore reloads only once the new process
+  is genuinely serving, and it waits for the databases too rather than only for the port to open.
+
+  With the poll now waiting for real readiness, its deadline started to matter for the first time.
+  It was a fixed 60 attempts at one second, while `POST /api/infra/restart` estimates up to 63 seconds
+  for a restart that brings up PostgreSQL, Redis and MinIO together — so a full-profile restart could
+  have reported failure while the stack was still coming up correctly. The deadline is now derived
+  from the estimate the server already returns, with the old 60 as a floor. (#1019)
+
+- **`backup.sh` could archive a database the application had stopped using.** Both scripts resolved
+  every path from the process environment alone, while the application fills the same settings from
+  three layers: the environment, then `./.env`, then `<data dir>/.env.generated` — the file Dashboard >
+  Infrastructure writes. An install configured through the dashboard was therefore backed up at the
+  *default* paths.
+
+  That is not reliably loud. A missing database already failed the run, but a database left at a
+  default path from before the operator switched was archived instead and the run exited 0. A backup
+  that captured an abandoned database announces itself only during a restore. `backup.sh` was already
+  copying `.env.generated` into the archive without ever reading it.
+
+  Both scripts now resolve through the same three layers, in the application's order, so an explicit
+  environment value still wins. Only plain `KEY=value` lines are honoured: a value containing a quote
+  or a `#` anywhere is reported on stderr and skipped rather than guessed at, because a silently
+  mis-parsed path is the failure being fixed. That is deliberately broader than trailing comments — a
+  password containing `#` is skipped too, loudly, and must be passed in the environment. The Postgres
+  connection details `pg_dump` uses resolve the same way, so a dashboard-provisioned database no
+  longer needs its credentials restated in the operator's shell.
+
+- **`cp .env.example .env` pinned 23 settings the dashboard is supposed to own.** Configuration is
+  filled from the process environment, then `.env`, then `data/.env.generated`, each supplying only
+  what the previous layer left unset. Every value shipped uncommented in `.env.example` therefore
+  became a permanent pin the moment an operator followed the documented setup step: the matching
+  dashboard control still moved, saved and reported success, while the running value never changed.
+
+  The blank-forward fix above cannot reach this. `clearBlankEnv` runs before `.env` is read, so it
+  only clears blanks arriving from the process environment. A value in `.env` — including an *empty*
+  one, since dotenv treats `KEY=` as present rather than absent — is never cleared. The copied
+  `DATABASE_TYPE=sqlite` was enough on its own to shadow a dashboard switch to Postgres, leaving the
+  app quietly on SQLite; and for an operator who had also set `DATABASE_TYPE=postgres` by hand, the
+  copied `DATABASE_PASSWORD=` then shadowed the password the dashboard had provisioned and the next
+  production boot refused to start. The dashboard could not warn about either, because the save-time
+  guard reads a snapshot taken before `.env` was loaded and so validated the file value it was writing
+  rather than the one that would win.
+
+  All 23 blank-forwarded keys are now commented out with their defaults shown, so copying the file no
+  longer pins any of them, and a test derives that set from both compose files and fails if one is
+  shipped uncommented again. Each was checked against its application-level default first; none
+  changes behaviour *silently* when absent — `DATABASE_USERNAME` has no application default at all, so
+  under `DATABASE_TYPE=postgres` it now fails boot validation naming the variable instead of resolving
+  to `openwa`. One further exception is called out in the file: the dev compose defaults an unset
+  `AUTO_START_SESSIONS` to `true`, so a dev stack that had inherited `false` from a copied
+  `.env.example` now gets the dev default it was always meant to have.
+
+  Five dashboard-managed keys are **not** covered, because they have no compose forward and so fall
+  outside both the fix and its guard: `POSTGRES_BUILTIN`, `REDIS_BUILTIN`, `MINIO_BUILTIN`,
+  `DATABASE_SSL` and `DATABASE_SSL_REJECT_UNAUTHORIZED`. Copying `.env.example` still pins those.
+
+- **A link posted to a Channel gets a sharp preview thumbnail again** (whatsapp-web.js engine).
+  WhatsApp Web selects a different preview transport for newsletters, and `whatsapp-web.js` 1.34.7
+  calls `WAWebLinkPreviewChatAction.getLinkPreview(link)` with the destination chat omitted — so the
+  action could not select that transport even though the message was afterwards handed to the
+  newsletter send job. The preview was built as if for an ordinary chat, which is why the same URL
+  rendered correctly in a 1-on-1 conversation and arrived blurred or empty on a Channel.
+
+  The function takes two parameters — read off the live WhatsApp Web build, `getLinkPreview` reports
+  arity 2 — so the chat now fills a parameter the function actually declares rather than one that
+  would be ignored. It is applied the way the existing `201832` fix already is: an exact transform of
+  the installed dependency, skipped when already present and refused outright on any other shape.
+  `postinstall` applies it best-effort so a local install never hard-fails, while the production image
+  build runs it strictly, turning dependency drift into a build failure rather than an image that
+  silently ships without it. The message-edit path is unchanged and still uses the old call. (#1006)
 
 ## [0.12.2] - 2026-08-01
 

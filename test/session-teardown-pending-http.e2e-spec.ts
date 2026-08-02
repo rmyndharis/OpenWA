@@ -20,7 +20,7 @@ import { SessionService } from './../src/modules/session/session.service';
  *
  * Driven through the real HTTP stack (AppModule + applyGlobalValidation, the exact production bootstrap)
  * with NO custom exception filter registered, so the object-response ConflictException that
- * `SessionService.awaitPendingTeardown()` throws is serialized by Nest's default filter — proving the
+ * `SessionEngineLifecycle.awaitPendingTeardown()` throws is serialized by Nest's default filter — proving the
  * stable `code` field reaches the response body unchanged. The service is overridden to throw the exact
  * ConflictException shape the source constructs, so this exercises the real Nest serialization path
  * (controller + DI + filter) rather than re-running the 10s bounded-wait (which needs fake timers and

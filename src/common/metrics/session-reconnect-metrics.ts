@@ -1,6 +1,6 @@
 /**
  * Process-local monotonic counters for session reconnect observability, incremented one-for-one in
- * `SessionService.scheduleReconnect`. Kept as plain in-process counters rather than a `COUNT(*)` over
+ * `SessionEngineLifecycle.scheduleReconnect`. Kept as plain in-process counters rather than a `COUNT(*)` over
  * any persisted table because reconnect scheduling itself is not persisted at all — there is no
  * durable source to count, and a pruned/rotated one would be non-monotonic and therefore invalid as a
  * Prometheus `counter` (a prune would look like a counter reset to `rate()`/`increase()`). An

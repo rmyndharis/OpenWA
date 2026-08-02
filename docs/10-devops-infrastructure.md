@@ -265,7 +265,8 @@ volumes:
 
 > [!IMPORTANT]
 > **Keep `replicas: 1`.** OpenWA is a single-process application: live engine state lives in an
-> in-memory `Map` in `SessionService` (`src/modules/session/session.service.ts`). Multi-replica is
+> in-memory `Map` in `EngineRegistry` (`src/engine/engine-registry.service.ts`), written solely by
+> `SessionEngineLifecycle`. Multi-replica is
 > **not** a supported topology — running two replicas against a shared `SESSION_DATA_PATH` makes two
 > browsers write the same WhatsApp LocalAuth directory and **corrupts the session** (forced logout /
 > ban). Shared storage and sticky sessions do **not** make multi-replica safe. See

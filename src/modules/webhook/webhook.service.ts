@@ -85,6 +85,13 @@ const DEFAULT_WEBHOOK_MEDIA_INLINE_MAX_BYTES = 1024 * 1024;
  */
 const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
 
+/** Per-event-occurrence context threaded through the dispatch pipeline stages (was closure state). */
+interface DispatchEventContext {
+  sessionId: string;
+  event: string;
+  baseData: Record<string, unknown>;
+}
+
 @Injectable()
 export class WebhookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = createLogger('WebhookService');
@@ -393,27 +400,8 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
-    // Callers fire-and-forget this (`void dispatch(...)`), so a failure looking up webhooks must be
-    // logged and swallowed here — otherwise it surfaces as an unhandled promise rejection.
-    let webhooks: Webhook[];
-    try {
-      webhooks = await this.webhookRepository.find({
-        where: { sessionId, active: true },
-      });
-    } catch (error) {
-      this.logger.error(`Webhook dispatch lookup failed for ${event}`, String(error), {
-        sessionId,
-        action: 'webhook_dispatch_lookup_failed',
-      });
-      return;
-    }
-
-    // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
-    // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
-    const resolveLid = (jid: string): string | null => this.lidMappingStore?.getCached(userPart(jid)) ?? null;
-    const matchingWebhooks = webhooks.filter(
-      w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
-    );
+    const webhooks = await this.loadActiveWebhooks(sessionId, event);
+    const matchingWebhooks = this.filterMatchingWebhooks(webhooks, event, data);
 
     // Base idempotency key for this event occurrence. occurredAt is captured once here and reused for
     // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key
@@ -433,313 +421,418 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
           )
         : data;
 
-    const recordUndelivered = async (
-      webhook: Webhook,
-      deliveryId: string,
-      idempotencyKey: string,
-      error: unknown,
-      action: string,
-    ): Promise<void> => {
-      const lastError = redactSsrfError(error, this.logger, 'webhook dispatch');
-      await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
-        webhookId: webhook.id,
+    const ctx: DispatchEventContext = { sessionId, event, baseData };
+    // allSettled preserves the per-webhook isolation: one failing delivery never rejects the others.
+    await Promise.allSettled(matchingWebhooks.map(webhook => this.dispatchWithLimit(webhook, baseIdempotencyKey, ctx)));
+  }
+
+  /**
+   * Callers fire-and-forget this (`void dispatch(...)`), so a failure looking up webhooks must be
+   * logged and swallowed here — otherwise it surfaces as an unhandled promise rejection.
+   */
+  private async loadActiveWebhooks(sessionId: string, event: string): Promise<Webhook[]> {
+    try {
+      return await this.webhookRepository.find({
+        where: { sessionId, active: true },
+      });
+    } catch (error) {
+      this.logger.error(`Webhook dispatch lookup failed for ${event}`, String(error), {
         sessionId,
+        action: 'webhook_dispatch_lookup_failed',
+      });
+      return [];
+    }
+  }
+
+  private filterMatchingWebhooks(webhooks: Webhook[], event: string, data: Record<string, unknown>): Webhook[] {
+    // Resolve a lid actor to its phone through the persistent table so a phone filter matches a
+    // lid-addressed sender (e.g. an unresolved @lid group participant). Absent store -> no resolution.
+    const resolveLid = (jid: string): string | null => this.lidMappingStore?.getCached(userPart(jid)) ?? null;
+    return webhooks.filter(
+      w => (w.events.includes(event) || w.events.includes('*')) && evaluateFilters(w.filters, event, data, resolveLid),
+    );
+  }
+
+  private async recordUndelivered(
+    webhook: Webhook,
+    deliveryId: string,
+    idempotencyKey: string,
+    error: unknown,
+    action: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const { sessionId, event } = ctx;
+    const lastError = redactSsrfError(error, this.logger, 'webhook dispatch');
+    await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
+      webhookId: webhook.id,
+      sessionId,
+      event,
+      url: webhook.url,
+      idempotencyKey,
+      deliveryId,
+      attempts: 0,
+      lastStatusCode: null,
+      lastError,
+    });
+    incrementWebhookDeliveryFailures();
+    try {
+      await this.hookManager.execute(
+        'webhook:error',
+        { sessionId, event, webhookId: webhook.id, deliveryId, error: lastError },
+        { sessionId, source: 'WebhookService' },
+      );
+    } catch (hookError) {
+      this.logger.error('webhook:error hook failed while reporting an undelivered webhook', String(hookError), {
+        webhookId: webhook.id,
+        deliveryId,
+        action: 'webhook_error_hook_failed',
+      });
+    }
+    this.logger.error(`Webhook ${webhook.id} was not dispatched`, lastError, {
+      webhookId: webhook.id,
+      deliveryId,
+      action,
+    });
+  }
+
+  /**
+   * Build one webhook delivery: payload + webhook:before hooks + identity re-assertion + size gate +
+   * headers. Returns null when the delivery must not proceed — either cancelled by a plugin (a debug
+   * log, not a failure) or after a failure already recorded via recordUndelivered.
+   */
+  private async preflightDelivery(
+    webhook: Webhook,
+    deliveryId: string,
+    idempotencyKey: string,
+    ctx: DispatchEventContext,
+  ): Promise<{ finalPayload: WebhookPayload; body: string; headers: Record<string, string> } | null> {
+    const { sessionId, event, baseData } = ctx;
+    try {
+      const payload: WebhookPayload = {
         event,
-        url: webhook.url,
+        timestamp: new Date().toISOString(),
+        sessionId,
         idempotencyKey,
         deliveryId,
-        attempts: 0,
-        lastStatusCode: null,
-        lastError,
+        // Give each webhook its own copy of the event data: a webhook:before hook that mutates
+        // payload.data in place would otherwise bleed that change into sibling webhooks.
+        data: structuredClone(baseData),
+      };
+      // Captured BEFORE the hook chain: a hook may return the same payload object mutated in
+      // place, so reading the canonical timestamp off the hook result afterwards is not safe.
+      const payloadTimestamp = payload.timestamp;
+
+      const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
+        'webhook:before',
+        { sessionId, event, payload },
+        { sessionId, source: 'WebhookService' },
+      );
+
+      if (!shouldContinue) {
+        this.logger.debug(`Webhook dispatch cancelled by plugin for ${event}`, {
+          webhookId: webhook.id,
+          action: 'webhook_cancelled_by_plugin',
+        });
+        return null;
+      }
+
+      // Null/undefined hook results mean "no override", matching an object without payload.
+      const finalPayload = (hookResult as { payload?: WebhookPayload } | null | undefined)?.payload ?? payload;
+      // Re-assert EVERY identity field after the (untrusted) hook chain. A hook may rewrite data,
+      // but event/sessionId/timestamp and the dedupe ids must remain the server's values: the
+      // receiver verifies the signature over this body and compares it against the X-OpenWA-*
+      // headers, and failure records are filed by these fields — a rewritten sessionId/event
+      // misfiles them across sessions.
+      finalPayload.event = event;
+      finalPayload.sessionId = sessionId;
+      finalPayload.timestamp = payloadTimestamp;
+      finalPayload.idempotencyKey = idempotencyKey;
+      finalPayload.deliveryId = deliveryId;
+
+      // Bound what a hook mutation can make us send. Serializing here also catches a poisoned
+      // (BigInt/circular) hook result as a preflight failure, on BOTH the queued and direct paths.
+      // The bytes are serialized ONCE and reused for the size gate, the HMAC signature, and the
+      // direct-delivery body (BullMQ re-serializes jobData itself — unavoidable).
+      const maxPayloadBytes = this.configService.get<number>(
+        'webhook.maxPayloadBytes',
+        DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES,
+      );
+      let body = JSON.stringify(finalPayload);
+      let payloadBytes = Buffer.byteLength(body, 'utf8');
+      if (payloadBytes > maxPayloadBytes) {
+        // Size-gated body shedding: over budget, strip ANY remaining inline media blob (threshold
+        // 0 — the marker form keeps the event deliverable) and re-check, instead of dropping the
+        // event or queueing a giant payload.
+        const shedData = this.shedInlineMedia(finalPayload.data, 0);
+        if (shedData !== finalPayload.data) {
+          finalPayload.data = shedData;
+          body = JSON.stringify(finalPayload);
+          payloadBytes = Buffer.byteLength(body, 'utf8');
+        }
+      }
+      if (payloadBytes > maxPayloadBytes) {
+        await this.recordUndelivered(
+          webhook,
+          deliveryId,
+          idempotencyKey,
+          new Error(
+            `Webhook payload is ${payloadBytes} bytes after webhook:before hooks, exceeding the ${maxPayloadBytes}-byte cap`,
+          ),
+          'webhook_payload_oversize',
+          ctx,
+        );
+        return null;
+      }
+
+      const headers = {
+        ...this.sanitizeCustomHeaders(webhook.headers),
+        'Content-Type': 'application/json',
+        'User-Agent': 'OpenWA-Webhook/1.0.0',
+        'X-OpenWA-Event': event,
+        'X-OpenWA-Idempotency-Key': idempotencyKey,
+        'X-OpenWA-Delivery-Id': deliveryId,
+        'X-OpenWA-Retry-Count': '0',
+      };
+      return { finalPayload, body, headers };
+    } catch (error) {
+      await this.recordUndelivered(
+        webhook,
+        deliveryId,
+        idempotencyKey,
+        error,
+        'webhook_dispatch_preflight_failed',
+        ctx,
+      );
+      return null;
+    }
+  }
+
+  private async deliverOne(
+    webhook: Webhook,
+    deliveryId: string,
+    idempotencyKey: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const preflight = await this.preflightDelivery(webhook, deliveryId, idempotencyKey, ctx);
+    if (!preflight) {
+      return;
+    }
+    const { finalPayload, body, headers } = preflight;
+    // Use queue if available, otherwise fallback to direct delivery
+    if (this.queueEnabled && this.webhookQueue) {
+      await this.enqueueWithFallback(webhook, finalPayload, body, headers, deliveryId, idempotencyKey, ctx);
+    } else {
+      await this.deliverDirect(webhook, finalPayload, body, headers, deliveryId, ctx);
+    }
+  }
+
+  private async enqueueWithFallback(
+    webhook: Webhook,
+    finalPayload: WebhookPayload,
+    body: string,
+    headers: Record<string, string>,
+    deliveryId: string,
+    idempotencyKey: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const { sessionId, event } = ctx;
+    try {
+      // Sign the exact pre-serialized body from preflight. The processor re-serializes the same
+      // payload object at delivery time (JSON key order survives the Redis round-trip), so the
+      // signature stays valid over the bytes the receiver sees.
+      const signature = webhook.secret ? this.generateSignature(body, webhook.secret) : '';
+
+      if (webhook.secret) {
+        headers['X-OpenWA-Signature'] = signature;
+      }
+
+      const jobData: WebhookJobData = {
+        webhookId: webhook.id,
+        url: webhook.url,
+        event,
+        payload: finalPayload,
+        headers,
+        attempt: 1,
+        maxRetries: webhook.retryCount,
+      };
+
+      await this.webhookQueue!.add(`webhook-${webhook.id}`, jobData, {
+        attempts: webhook.retryCount,
+        backoff: {
+          type: 'exponential',
+          delay: this.configService.get<number>('webhook.retryDelay', 5000),
+        },
       });
-      incrementWebhookDeliveryFailures();
+
+      // Execute hook after successful queue (NOT delivery - that happens in processor)
+      await this.hookManager.execute(
+        'webhook:queued',
+        { sessionId, event, webhookId: webhook.id, deliveryId },
+        { sessionId, source: 'WebhookService' },
+      );
+
+      this.logger.debug(`Webhook job queued for ${webhook.id}`, {
+        webhookId: webhook.id,
+        event,
+        idempotencyKey,
+        deliveryId,
+        action: 'webhook_queued',
+      });
+    } catch (error) {
+      // Execute hook on queue error (not delivery error - that happens in processor)
+      await this.hookManager.execute(
+        'webhook:error',
+        { sessionId, event, webhookId: webhook.id, error: `Queue failed: ${String(error)}` },
+        { sessionId, source: 'WebhookService' },
+      );
+
+      this.logger.error(`Failed to queue webhook ${webhook.id}`, String(error), {
+        webhookId: webhook.id,
+        action: 'webhook_queue_failed',
+      });
+
+      // Fallback: deliver directly when the queue add failed (e.g. Redis unreachable with the
+      // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
+      // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
+      // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
       try {
+        await this.deliverWebhook(webhook, finalPayload, headers, body);
+
+        await this.hookManager.execute(
+          'webhook:delivered',
+          { sessionId, event, webhookId: webhook.id, deliveryId, fallback: 'queue_failed' },
+          { sessionId, source: 'WebhookService' },
+        );
+
+        await this.hookManager.execute(
+          'webhook:after',
+          { sessionId, event, webhookId: webhook.id, success: true, fallback: 'queue_failed' },
+          { sessionId, source: 'WebhookService' },
+        );
+      } catch (fallbackError) {
         await this.hookManager.execute(
           'webhook:error',
-          { sessionId, event, webhookId: webhook.id, deliveryId, error: lastError },
+          {
+            sessionId,
+            event,
+            webhookId: webhook.id,
+            error: `Queue fallback delivery failed: ${redactSsrfError(fallbackError, this.logger, 'webhook fallback delivery')}`,
+          },
           { sessionId, source: 'WebhookService' },
         );
-      } catch (hookError) {
-        this.logger.error('webhook:error hook failed while reporting an undelivered webhook', String(hookError), {
+
+        this.logger.error(`Queue fallback delivery failed for webhook ${webhook.id}`, String(fallbackError), {
           webhookId: webhook.id,
-          deliveryId,
-          action: 'webhook_error_hook_failed',
+          action: 'webhook_queue_fallback_failed',
         });
       }
-      this.logger.error(`Webhook ${webhook.id} was not dispatched`, lastError, {
+    }
+  }
+
+  /** Direct delivery when the queue is disabled. */
+  private async deliverDirect(
+    webhook: Webhook,
+    finalPayload: WebhookPayload,
+    body: string,
+    headers: Record<string, string>,
+    deliveryId: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const { sessionId, event } = ctx;
+    try {
+      await this.deliverWebhook(webhook, finalPayload, headers, body);
+
+      // Execute hook after successful delivery
+      await this.hookManager.execute(
+        'webhook:delivered',
+        { sessionId, event, webhookId: webhook.id, deliveryId },
+        { sessionId, source: 'WebhookService' },
+      );
+
+      // Legacy hook for backward compatibility
+      await this.hookManager.execute(
+        'webhook:after',
+        { sessionId, event, webhookId: webhook.id, success: true },
+        { sessionId, source: 'WebhookService' },
+      );
+    } catch (error) {
+      // Execute hook on error
+      await this.hookManager.execute(
+        'webhook:error',
+        { sessionId, event, webhookId: webhook.id, error: redactSsrfError(error, this.logger, 'webhook delivery') },
+        { sessionId, source: 'WebhookService' },
+      );
+
+      this.logger.error(`Failed to deliver webhook ${webhook.id}`, String(error), {
         webhookId: webhook.id,
-        deliveryId,
-        action,
+        action: 'webhook_delivery_failed',
       });
-    };
+    }
+  }
 
-    // Dispatch to all matching webhooks concurrently — one slow/hanging receiver must not head-of-line-
-    // block delivery to the sibling webhooks of the same event (the direct/fallback paths await a
-    // recursive retry with backoff sleeps).
-    const deliverOne = async (webhook: Webhook, deliveryId: string, idempotencyKey: string): Promise<void> => {
-      let finalPayload: WebhookPayload;
-      let body: string;
-      let headers: Record<string, string>;
-      try {
-        const payload: WebhookPayload = {
-          event,
-          timestamp: new Date().toISOString(),
+  /**
+   * Bound fan-out: deliver to all matching webhooks concurrently, but cap in-flight deliveries at
+   * WEBHOOK_DISPATCH_CONCURRENCY so an event matching many webhooks (or slow receivers) can't open an
+   * unbounded number of outbound sockets at once.
+   */
+  private async dispatchWithLimit(
+    webhook: Webhook,
+    baseIdempotencyKey: string,
+    ctx: DispatchEventContext,
+  ): Promise<void> {
+    const { sessionId, event } = ctx;
+    const deliveryId = generateDeliveryId();
+    // Salt per webhook so sibling subscriptions cannot collide at the receiver's dedup boundary.
+    const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
+    await this.dispatchLimiter
+      .run(async () => {
+        this.inFlightDeliveries.set(deliveryId, {
+          webhookId: webhook.id,
           sessionId,
+          event,
           idempotencyKey,
-          deliveryId,
-          // Give each webhook its own copy of the event data: a webhook:before hook that mutates
-          // payload.data in place would otherwise bleed that change into sibling webhooks.
-          data: structuredClone(baseData),
-        };
-        // Captured BEFORE the hook chain: a hook may return the same payload object mutated in
-        // place, so reading the canonical timestamp off the hook result afterwards is not safe.
-        const payloadTimestamp = payload.timestamp;
-
-        const { continue: shouldContinue, data: hookResult } = await this.hookManager.execute(
-          'webhook:before',
-          { sessionId, event, payload },
-          { sessionId, source: 'WebhookService' },
-        );
-
-        if (!shouldContinue) {
-          this.logger.debug(`Webhook dispatch cancelled by plugin for ${event}`, {
-            webhookId: webhook.id,
-            action: 'webhook_cancelled_by_plugin',
-          });
-          return;
+          url: webhook.url,
+        });
+        try {
+          await this.deliverOne(webhook, deliveryId, idempotencyKey, ctx);
+        } finally {
+          this.inFlightDeliveries.delete(deliveryId);
         }
-
-        // Null/undefined hook results mean "no override", matching an object without payload.
-        finalPayload = (hookResult as { payload?: WebhookPayload } | null | undefined)?.payload ?? payload;
-        // Re-assert EVERY identity field after the (untrusted) hook chain. A hook may rewrite data,
-        // but event/sessionId/timestamp and the dedupe ids must remain the server's values: the
-        // receiver verifies the signature over this body and compares it against the X-OpenWA-*
-        // headers, and failure records are filed by these fields — a rewritten sessionId/event
-        // misfiles them across sessions.
-        finalPayload.event = event;
-        finalPayload.sessionId = sessionId;
-        finalPayload.timestamp = payloadTimestamp;
-        finalPayload.idempotencyKey = idempotencyKey;
-        finalPayload.deliveryId = deliveryId;
-
-        // Bound what a hook mutation can make us send. Serializing here also catches a poisoned
-        // (BigInt/circular) hook result as a preflight failure, on BOTH the queued and direct paths.
-        // The bytes are serialized ONCE and reused for the size gate, the HMAC signature, and the
-        // direct-delivery body (BullMQ re-serializes jobData itself — unavoidable).
-        const maxPayloadBytes = this.configService.get<number>(
-          'webhook.maxPayloadBytes',
-          DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES,
-        );
-        body = JSON.stringify(finalPayload);
-        let payloadBytes = Buffer.byteLength(body, 'utf8');
-        if (payloadBytes > maxPayloadBytes) {
-          // Size-gated body shedding: over budget, strip ANY remaining inline media blob (threshold
-          // 0 — the marker form keeps the event deliverable) and re-check, instead of dropping the
-          // event or queueing a giant payload.
-          const shedData = this.shedInlineMedia(finalPayload.data, 0);
-          if (shedData !== finalPayload.data) {
-            finalPayload.data = shedData;
-            body = JSON.stringify(finalPayload);
-            payloadBytes = Buffer.byteLength(body, 'utf8');
-          }
-        }
-        if (payloadBytes > maxPayloadBytes) {
-          await recordUndelivered(
+      })
+      .catch(async error => {
+        if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
+          await this.recordUndelivered(
             webhook,
             deliveryId,
             idempotencyKey,
-            new Error(
-              `Webhook payload is ${payloadBytes} bytes after webhook:before hooks, exceeding the ${maxPayloadBytes}-byte cap`,
-            ),
-            'webhook_payload_oversize',
+            error,
+            'webhook_dispatch_capacity_exceeded',
+            ctx,
           );
           return;
         }
-
-        headers = {
-          ...this.sanitizeCustomHeaders(webhook.headers),
-          'Content-Type': 'application/json',
-          'User-Agent': 'OpenWA-Webhook/1.0.0',
-          'X-OpenWA-Event': event,
-          'X-OpenWA-Idempotency-Key': idempotencyKey,
-          'X-OpenWA-Delivery-Id': deliveryId,
-          'X-OpenWA-Retry-Count': '0',
-        };
-      } catch (error) {
-        await recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_preflight_failed');
-        return;
-      }
-
-      // Use queue if available, otherwise fallback to direct delivery
-      if (this.queueEnabled && this.webhookQueue) {
-        try {
-          // Sign the exact pre-serialized body from preflight. The processor re-serializes the same
-          // payload object at delivery time (JSON key order survives the Redis round-trip), so the
-          // signature stays valid over the bytes the receiver sees.
-          const signature = webhook.secret ? this.generateSignature(body, webhook.secret) : '';
-
-          if (webhook.secret) {
-            headers['X-OpenWA-Signature'] = signature;
-          }
-
-          const jobData: WebhookJobData = {
-            webhookId: webhook.id,
-            url: webhook.url,
-            event,
-            payload: finalPayload,
-            headers,
-            attempt: 1,
-            maxRetries: webhook.retryCount,
-          };
-
-          await this.webhookQueue.add(`webhook-${webhook.id}`, jobData, {
-            attempts: webhook.retryCount,
-            backoff: {
-              type: 'exponential',
-              delay: this.configService.get<number>('webhook.retryDelay', 5000),
-            },
-          });
-
-          // Execute hook after successful queue (NOT delivery - that happens in processor)
-          await this.hookManager.execute(
-            'webhook:queued',
-            { sessionId, event, webhookId: webhook.id, deliveryId },
-            { sessionId, source: 'WebhookService' },
-          );
-
-          this.logger.debug(`Webhook job queued for ${webhook.id}`, {
-            webhookId: webhook.id,
-            event,
-            idempotencyKey,
+        if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
+          // Rejected by the shutdown drain before dispatching — record it like any other
+          // undelivered delivery, and track the write so onModuleDestroy can await it (the
+          // limiter slot bookkeeping no longer covers this task).
+          const record = this.recordUndelivered(
+            webhook,
             deliveryId,
-            action: 'webhook_queued',
-          });
-        } catch (error) {
-          // Execute hook on queue error (not delivery error - that happens in processor)
-          await this.hookManager.execute(
-            'webhook:error',
-            { sessionId, event, webhookId: webhook.id, error: `Queue failed: ${String(error)}` },
-            { sessionId, source: 'WebhookService' },
-          );
-
-          this.logger.error(`Failed to queue webhook ${webhook.id}`, String(error), {
-            webhookId: webhook.id,
-            action: 'webhook_queue_failed',
-          });
-
-          // Fallback: deliver directly when the queue add failed (e.g. Redis unreachable with the
-          // producer's enableOfflineQueue:false). This is at-least-once — if add() actually reached
-          // Redis before rejecting, the queued job AND this fallback may both POST. Both paths carry the
-          // same X-OpenWA-Idempotency-Key / X-OpenWA-Delivery-Id, so a conformant receiver dedupes.
-          try {
-            await this.deliverWebhook(webhook, finalPayload, headers, body);
-
-            await this.hookManager.execute(
-              'webhook:delivered',
-              { sessionId, event, webhookId: webhook.id, deliveryId, fallback: 'queue_failed' },
-              { sessionId, source: 'WebhookService' },
-            );
-
-            await this.hookManager.execute(
-              'webhook:after',
-              { sessionId, event, webhookId: webhook.id, success: true, fallback: 'queue_failed' },
-              { sessionId, source: 'WebhookService' },
-            );
-          } catch (fallbackError) {
-            await this.hookManager.execute(
-              'webhook:error',
-              {
-                sessionId,
-                event,
-                webhookId: webhook.id,
-                error: `Queue fallback delivery failed: ${redactSsrfError(fallbackError, this.logger, 'webhook fallback delivery')}`,
-              },
-              { sessionId, source: 'WebhookService' },
-            );
-
-            this.logger.error(`Queue fallback delivery failed for webhook ${webhook.id}`, String(fallbackError), {
-              webhookId: webhook.id,
-              action: 'webhook_queue_fallback_failed',
-            });
-          }
-        }
-      } else {
-        // Direct delivery when queue is disabled
-        try {
-          await this.deliverWebhook(webhook, finalPayload, headers, body);
-
-          // Execute hook after successful delivery
-          await this.hookManager.execute(
-            'webhook:delivered',
-            { sessionId, event, webhookId: webhook.id, deliveryId },
-            { sessionId, source: 'WebhookService' },
-          );
-
-          // Legacy hook for backward compatibility
-          await this.hookManager.execute(
-            'webhook:after',
-            { sessionId, event, webhookId: webhook.id, success: true },
-            { sessionId, source: 'WebhookService' },
-          );
-        } catch (error) {
-          // Execute hook on error
-          await this.hookManager.execute(
-            'webhook:error',
-            { sessionId, event, webhookId: webhook.id, error: redactSsrfError(error, this.logger, 'webhook delivery') },
-            { sessionId, source: 'WebhookService' },
-          );
-
-          this.logger.error(`Failed to deliver webhook ${webhook.id}`, String(error), {
-            webhookId: webhook.id,
-            action: 'webhook_delivery_failed',
-          });
-        }
-      }
-    };
-    // Bound fan-out: deliver to all matching webhooks concurrently, but cap in-flight deliveries at
-    // WEBHOOK_DISPATCH_CONCURRENCY so an event matching many webhooks (or slow receivers) can't open an
-    // unbounded number of outbound sockets at once. allSettled preserves the per-webhook isolation.
-    const tasks = matchingWebhooks.map(webhook => {
-      const deliveryId = generateDeliveryId();
-      // Salt per webhook so sibling subscriptions cannot collide at the receiver's dedup boundary.
-      const idempotencyKey = `${baseIdempotencyKey}_${webhook.id}`;
-      return this.dispatchLimiter
-        .run(async () => {
-          this.inFlightDeliveries.set(deliveryId, {
-            webhookId: webhook.id,
-            sessionId,
-            event,
             idempotencyKey,
-            url: webhook.url,
-          });
+            error,
+            'webhook_dispatch_shutdown',
+            ctx,
+          );
+          this.pendingBookkeeping.add(record);
           try {
-            await deliverOne(webhook, deliveryId, idempotencyKey);
+            await record;
           } finally {
-            this.inFlightDeliveries.delete(deliveryId);
+            this.pendingBookkeeping.delete(record);
           }
-        })
-        .catch(async error => {
-          if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
-            await recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_capacity_exceeded');
-            return;
-          }
-          if (error instanceof Error && error.message === 'ConcurrencyLimiter closed') {
-            // Rejected by the shutdown drain before dispatching — record it like any other
-            // undelivered delivery, and track the write so onModuleDestroy can await it (the
-            // limiter slot bookkeeping no longer covers this task).
-            const record = recordUndelivered(webhook, deliveryId, idempotencyKey, error, 'webhook_dispatch_shutdown');
-            this.pendingBookkeeping.add(record);
-            try {
-              await record;
-            } finally {
-              this.pendingBookkeeping.delete(record);
-            }
-            return;
-          }
-          throw error;
-        });
-    });
-    await Promise.allSettled(tasks);
+          return;
+        }
+        throw error;
+      });
   }
 
   /**

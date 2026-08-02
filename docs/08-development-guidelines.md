@@ -202,8 +202,9 @@ resolve an engine directly from a controller. Engine-specific details belong beh
 services and engine adapters.
 
 A capability service reaches the live engine through `EngineRegistry`, the narrow port exported by
-the (global) `EngineModule` — not through `SessionService`, which owns the session *lifecycle*
-(start/stop/delete/reconnect) and should only be injected by code that actually drives it:
+the (global) `EngineModule` — not through `SessionService`, which drives the session *lifecycle*
+(start/stop/delete/reconnect, owned by `SessionEngineLifecycle`) and should only be injected by code
+that actually drives it:
 
 ```typescript
 @Injectable()

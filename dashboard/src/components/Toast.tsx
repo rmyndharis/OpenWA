@@ -1,19 +1,8 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { useState, useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, XCircle, AlertCircle, Info, X } from 'lucide-react';
+import { ToastContext, type Toast } from '../hooks/useToast';
 import './Toast.css';
-
-type ToastType = 'success' | 'error' | 'warning' | 'info';
-
-interface Toast {
-  id: string;
-  type: ToastType;
-  title: string;
-  message?: string;
-  duration?: number;
-  /** Stable, non-rendered key for de-duplicating recurring toasts. Independent of the (translated) title. */
-  dedupeKey?: string;
-}
 
 // A toast id needs no cryptographic strength; crypto.randomUUID is undefined over plain HTTP on a LAN IP.
 const createToastId = (): string => crypto.randomUUID?.() ?? `t-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -21,26 +10,6 @@ const createToastId = (): string => crypto.randomUUID?.() ?? `t-${Date.now()}-${
 // De-dupe sentinel for the "backend unreachable" toast. Kept separate from the displayed title so
 // translating the title never silently breaks the de-dupe.
 const CONNECTION_LOST_DEDUPE_KEY = 'connection-lost';
-
-interface ToastContextValue {
-  toasts: Toast[];
-  addToast: (toast: Omit<Toast, 'id'>) => void;
-  removeToast: (id: string) => void;
-  success: (title: string, message?: string) => void;
-  error: (title: string, message?: string) => void;
-  warning: (title: string, message?: string) => void;
-  info: (title: string, message?: string) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
-
-export function useToast() {
-  const context = useContext(ToastContext);
-  if (!context) {
-    throw new Error('useToast must be used within a ToastProvider');
-  }
-  return context;
-}
 
 interface ToastProviderProps {
   children: ReactNode;

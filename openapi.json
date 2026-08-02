@@ -2559,7 +2559,7 @@
     },
     "/api/infra/status": {
       "get": {
-        "operationId": "InfraController_getStatus",
+        "operationId": "InfraStatusController_getStatus",
         "parameters": [],
         "responses": {
           "200": {
@@ -2574,7 +2574,7 @@
     },
     "/api/infra/engines": {
       "get": {
-        "operationId": "InfraController_getEngines",
+        "operationId": "InfraStatusController_getEngines",
         "parameters": [],
         "responses": {
           "200": {
@@ -2589,7 +2589,7 @@
     },
     "/api/infra/engines/current": {
       "get": {
-        "operationId": "InfraController_getCurrentEngine",
+        "operationId": "InfraStatusController_getCurrentEngine",
         "parameters": [],
         "responses": {
           "200": {
@@ -2602,9 +2602,25 @@
         ]
       }
     },
+    "/api/infra/health": {
+      "get": {
+        "operationId": "InfraStatusController_healthCheck",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Server is healthy"
+          }
+        },
+        "summary": "Health check endpoint",
+        "tags": [
+          "infrastructure"
+        ],
+        "security": []
+      }
+    },
     "/api/infra/config": {
       "get": {
-        "operationId": "InfraController_getConfig",
+        "operationId": "InfraConfigController_getConfig",
         "parameters": [],
         "responses": {
           "200": {
@@ -2617,7 +2633,7 @@
         ]
       },
       "put": {
-        "operationId": "InfraController_saveConfig",
+        "operationId": "InfraConfigController_saveConfig",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -2643,7 +2659,7 @@
     },
     "/api/infra/restart": {
       "post": {
-        "operationId": "InfraController_requestRestart",
+        "operationId": "InfraConfigController_requestRestart",
         "parameters": [],
         "requestBody": {
           "required": false,
@@ -2666,25 +2682,9 @@
         ]
       }
     },
-    "/api/infra/health": {
-      "get": {
-        "operationId": "InfraController_healthCheck",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Server is healthy"
-          }
-        },
-        "summary": "Health check endpoint",
-        "tags": [
-          "infrastructure"
-        ],
-        "security": []
-      }
-    },
     "/api/infra/export-data": {
       "get": {
-        "operationId": "InfraController_exportData",
+        "operationId": "InfraDataController_exportData",
         "parameters": [],
         "responses": {
           "200": {
@@ -2699,7 +2699,7 @@
     },
     "/api/infra/import-data": {
       "post": {
-        "operationId": "InfraController_importData",
+        "operationId": "InfraDataController_importData",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -2758,7 +2758,7 @@
     },
     "/api/infra/storage/files/count": {
       "get": {
-        "operationId": "InfraController_getStorageFileCount",
+        "operationId": "InfraStorageController_getStorageFileCount",
         "parameters": [],
         "responses": {
           "200": {
@@ -2773,7 +2773,7 @@
     },
     "/api/infra/storage/export": {
       "get": {
-        "operationId": "InfraController_exportStorage",
+        "operationId": "InfraStorageController_exportStorage",
         "parameters": [],
         "responses": {
           "200": {
@@ -2788,7 +2788,7 @@
     },
     "/api/infra/storage/import": {
       "post": {
-        "operationId": "InfraController_importStorage",
+        "operationId": "InfraStorageController_importStorage",
         "parameters": [],
         "requestBody": {
           "required": true,
@@ -5877,7 +5877,7 @@
   "info": {
     "title": "OpenWA API",
     "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API",
-    "version": "0.12.2",
+    "version": "0.12.4",
     "contact": {
       "name": "OpenWA",
       "url": "https://github.com/rmyndharis/OpenWA",

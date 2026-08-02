@@ -12,7 +12,7 @@ import {
 import { isValidInstanceId, isValidInstanceSecret, parseInstanceConfig } from '../utils/instanceForm';
 import { copyToClipboard } from '../utils/clipboard';
 import { Modal } from './Modal';
-import { useToast } from './Toast';
+import { useToast } from '../hooks/useToast';
 import './PluginInstances.css';
 
 const emptyForm = { instanceId: '', sessionScope: '', verifyToken: '', secret: '', config: '' };
