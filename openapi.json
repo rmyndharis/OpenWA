@@ -3002,6 +3002,46 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/contacts/{contactId}/profile-picture/image": {
+      "get": {
+        "operationId": "ContactController_getProfilePictureImage",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contactId",
+            "required": true,
+            "in": "path",
+            "description": "Contact ID (e.g., 628xxx@c.us)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile picture JPEG image",
+            "content": {
+              "image/jpeg": {}
+            }
+          },
+          "204": {
+            "description": "No profile picture available"
+          }
+        },
+        "summary": "Get the cached profile picture image for a contact",
+        "tags": [
+          "contacts"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/contacts/{contactId}/phone": {
       "get": {
         "operationId": "ContactController_resolvePhone",

@@ -123,18 +123,10 @@ export function Dashboard() {
 
   if (error) {
     return (
-<<<<<<< HEAD
       <div className="dashboard">
         <div className="error-banner" role="alert">
           <AlertCircle size={20} />
           <span className="error-banner-text">{t('dashboard.errorPrefix', { message: error })}</span>
-=======
-      <div className="dashboard" style={{ padding: '2rem' }}>
-        <div
-          style={{ background: 'rgba(239, 68, 68, 0.12)', padding: '1rem', borderRadius: '8px', color: 'var(--error)' }}
-        >
-          {t('dashboard.errorPrefix', { message: error })}
->>>>>>> upstream/main
         </div>
       </div>
     );
