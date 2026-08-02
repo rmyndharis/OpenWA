@@ -16,12 +16,22 @@ import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 const downloadMediaMessage = jest.fn();
 
 /**
- * Minimal Baileys lib stub. `mapMessage` calls `normalizeMessageContent` to unwrap
- * ephemeral / viewOnce / documentWithCaption wrappers; identity is the correct
- * behaviour for already-unwrapped content.
+ * mapMessage reads NORMALIZED content in four places and says so three times in its own comments:
+ * a disappearing (ephemeralMessage), view-once, or captioned-document message nests the real
+ * payload under a wrapper. An identity stub makes `normalized === content`, which cannot fail when
+ * a caller is handed the raw content by mistake — the likeliest slip when these regions move.
  */
+const normalizeMessageContent = (content: Record<string, unknown> | null | undefined): unknown => {
+  const inner =
+    (content as { ephemeralMessage?: { message?: unknown } })?.ephemeralMessage?.message ??
+    (content as { viewOnceMessage?: { message?: unknown } })?.viewOnceMessage?.message ??
+    (content as { viewOnceMessageV2?: { message?: unknown } })?.viewOnceMessageV2?.message ??
+    (content as { documentWithCaptionMessage?: { message?: unknown } })?.documentWithCaptionMessage?.message;
+  return inner ?? content;
+};
+
 const libStub = {
-  normalizeMessageContent: (content: unknown) => content,
+  normalizeMessageContent,
   downloadMediaMessage,
 } as unknown as Awaited<ReturnType<BaileysEventsHost['loadLib']>>;
 
@@ -280,5 +290,62 @@ describe('BaileysEvents.mapMessage', () => {
     expect(incoming.quotedMessage?.body).toBe('quoted image caption');
     expect(incoming.ephemeralDuration).toBe(604800);
     expect(incoming.mentionedIds).toEqual(['15559998888@s.whatsapp.net']);
+  });
+
+  it('reads a location nested under an ephemeral wrapper, not the raw content', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.wrapped', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          ephemeralMessage: {
+            message: {
+              locationMessage: {
+                degreesLatitude: -6.2,
+                degreesLongitude: 106.8,
+                name: 'Monas',
+                address: 'Jakarta Pusat',
+              },
+            },
+          },
+        },
+      },
+      'locationMessage',
+    );
+
+    expect(incoming.location).toEqual({
+      latitude: -6.2,
+      longitude: 106.8,
+      description: 'Monas',
+      address: 'Jakarta Pusat',
+    });
+  });
+
+  it('reads a quoted reply and disappearing timer nested under an ephemeral wrapper, not the raw content', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.wrapped2', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          ephemeralMessage: {
+            message: {
+              extendedTextMessage: {
+                text: 'replying',
+                contextInfo: {
+                  stanzaId: 'wamid.original3',
+                  expiration: 86400,
+                  quotedMessage: { conversation: 'the original, wrapped' },
+                },
+              },
+            },
+          },
+        },
+      },
+      'extendedTextMessage',
+    );
+
+    expect(incoming.quotedMessage?.id).toBe('wamid.original3');
+    expect(incoming.quotedMessage?.body).toBe('the original, wrapped');
+    expect(incoming.ephemeralDuration).toBe(86400);
   });
 });
