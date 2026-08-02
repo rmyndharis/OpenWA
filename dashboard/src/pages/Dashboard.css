@@ -10,7 +10,14 @@
 
 /* H1 inherited from global */
 
+<<<<<<< HEAD
+.dashboard .status-badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+=======
 .dashboard .status-badge {
+>>>>>>> upstream/main
   padding: 0.375rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.6875rem;
@@ -24,17 +31,74 @@
   color: var(--primary);
 }
 
+<<<<<<< HEAD
+.dashboard .status-badge.disconnected{
+=======
 .dashboard .status-badge.disconnected {
+>>>>>>> upstream/main
   background: var(--bg-light);
   color: var(--text-muted);
 }
 
+<<<<<<< HEAD
+/* Signature: a small voice-note-style waveform standing in for the connection LED. Flat and
+   dim when no session is ready (a flatline); a staggered breathing wave once one is. Reads as
+   status at a glance without another word ("connected") competing for attention. */
+.dashboard .pulse-bars{
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.dashboard .pulse-bars span{
+  width: 2.5px;
+  height: 22%;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.dashboard .pulse-bars.live span{
+  opacity: 0.95;
+  animation: pulse-wave 1.2s ease-in-out infinite;
+}
+
+.dashboard .pulse-bars.live span:nth-child(1){ animation-delay: 0s; }
+.dashboard .pulse-bars.live span:nth-child(2){ animation-delay: 0.15s; }
+.dashboard .pulse-bars.live span:nth-child(3){ animation-delay: 0.3s; }
+.dashboard .pulse-bars.live span:nth-child(4){ animation-delay: 0.15s; }
+.dashboard .pulse-bars.live span:nth-child(5){ animation-delay: 0s; }
+
+@keyframes pulse-wave{
+  0%, 100%{ height: 25%; }
+  50%{ height: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .dashboard .pulse-bars.live span{
+    animation: none;
+    height: 70%;
+    opacity: 0.95;
+  }
+}
+
+/* Stat cards read as one instrument panel — hairline dividers between segments rather than four
+   separate boxed cards competing for the eye. */
+.dashboard .stats-grid{
+=======
 .dashboard .stats-grid {
+>>>>>>> upstream/main
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1.5rem;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0;
   margin-bottom: 2rem;
   width: 100%;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 /* Collapse the 4-up tile grid to 2 columns on iPad Mini portrait (768px wide) and other narrow
@@ -54,21 +118,29 @@
 
 .dashboard .stat-card {
   position: relative;
-  background: var(--bg-white);
-  border-radius: 12px;
   padding: 1.5rem;
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   min-width: 0;
   overflow: hidden;
-  transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
+  transition: background 0.2s ease;
 }
 
+.dashboard .stat-card:first-child{
+  border-left: none;
+}
+
+.dashboard .stat-card:nth-child(5n+1){
+  border-left: none;
+}
+
+<<<<<<< HEAD
+.dashboard .stat-card:hover{
+  background: var(--bg-light);
+=======
 .dashboard .stat-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
+>>>>>>> upstream/main
 }
 
 .dashboard .stat-header {
@@ -107,8 +179,15 @@
   z-index: 2;
 }
 
+<<<<<<< HEAD
+.dashboard .stat-value{
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.875rem;
+=======
 .dashboard .stat-value {
   font-size: 2rem;
+>>>>>>> upstream/main
   font-weight: 700;
   color: var(--text-primary);
   position: relative;
@@ -141,7 +220,10 @@
   margin-bottom: 1.5rem;
 }
 
-/* H2 inherited from global */
+.dashboard .sessions-section h2{
+  border-left: 3px solid var(--primary);
+  padding-left: 0.6rem;
+}
 
 .dashboard .section-subtitle {
   font-size: 0.875rem;
@@ -206,7 +288,12 @@
   max-width: 140px;
 }
 
+<<<<<<< HEAD
+.dashboard .phone{
+  font-family: 'JetBrains Mono', monospace;
+=======
 .dashboard .phone {
+>>>>>>> upstream/main
   color: var(--text-primary);
   font-size: 0.8125rem;
   white-space: nowrap;
@@ -242,9 +329,14 @@
   color: var(--error);
 }
 
+<<<<<<< HEAD
+.dashboard .last-active{
+  font-family: 'JetBrains Mono', monospace;
+=======
 .dashboard .last-active {
+>>>>>>> upstream/main
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
 .dashboard .actions {
@@ -280,9 +372,36 @@
   background: rgba(239, 68, 68, 0.18);
 }
 
+<<<<<<< HEAD
+@media (max-width: 1400px) {
+  .dashboard .stats-grid{
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .dashboard .stat-card:nth-child(3n+1){
+    border-left: none;
+  }
+
+  .dashboard .stat-card:nth-child(n+4){
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 1000px) {
+  .dashboard .stats-grid{
+=======
 @media (max-width: 1200px) {
   .dashboard .stats-grid {
+>>>>>>> upstream/main
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard .stat-card:nth-child(2n+1){
+    border-left: none;
+  }
+
+  .dashboard .stat-card:nth-child(n+3){
+    border-top: 1px solid var(--border);
   }
 }
 
@@ -293,7 +412,16 @@
 
   .dashboard .stats-grid {
     grid-template-columns: 1fr;
-    gap: 1rem;
+    gap: 0;
+    border-radius: 12px;
+  }
+
+  .dashboard .stat-card{
+    border-left: none;
+  }
+
+  .dashboard .stat-card:nth-child(n+2){
+    border-top: 1px solid var(--border);
   }
 
   .dashboard .stat-value {

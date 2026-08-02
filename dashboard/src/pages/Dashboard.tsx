@@ -1,8 +1,8 @@
-import { Suspense } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { lazyWithRetry as lazy } from '../utils/lazyWithRetry';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, Send, Webhook, Activity, Loader2 } from 'lucide-react';
+import { MessageSquare, Send, Webhook, Activity, AlertTriangle, Loader2, AlertCircle } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import {
   useSessionsQuery,
@@ -11,6 +11,7 @@ import {
   useStopSessionMutation,
   useStatsOverviewQuery,
 } from '../hooks/queries';
+import { useWebSocket } from '../hooks/useWebSocket';
 import { PageHeader } from '../components/PageHeader';
 import './Dashboard.css';
 
@@ -29,12 +30,50 @@ export function Dashboard() {
   // message cards fall back to '—' without breaking the (un-gated) session cards.
   const { data: overview } = useStatsOverviewQuery();
   const stopMutation = useStopSessionMutation();
-  const messagesToday = overview ? overview.messages.today.sent + overview.messages.today.received : '—';
+
+  // Live counter bumped by WS so the dashboard feels real-time between overview stat refreshes.
+  const [liveSentToday, setLiveSentToday] = useState(0);
+  const [liveReceivedToday, setLiveReceivedToday] = useState(0);
+  const [liveFailed, setLiveFailed] = useState(0);
+  const overviewSentToday = overview ? overview.messages.today.sent : 0;
+  const overviewReceivedToday = overview ? overview.messages.today.received : 0;
+  const messagesToday = overview ? overviewSentToday + overviewReceivedToday + liveSentToday + liveReceivedToday : '—';
   const totalMessages = overview ? overview.messages.sent + overview.messages.received : '—';
+  const failedMessages = overview ? overview.messages.failed + liveFailed : '—';
   const loading = loadingSessions;
   const error =
     sessionsError instanceof Error ? sessionsError.message : sessionsError ? t('dashboard.loadError') : null;
   const webhookCount = webhooks.length;
+
+  // ── WebSocket: live stat bumps ──────────────────────────────────────
+  const { isConnected, subscribe, unsubscribe } = useWebSocket({
+    onMessage: useCallback(() => {
+      setLiveSentToday(n => n + 1);
+    }, []),
+    onMessageAck: useCallback((event) => {
+      if (event.status === 'failed') {
+        setLiveFailed(n => n + 1);
+      }
+    }, []),
+  });
+  // Reset live counters when overview refetches (so they don't double-count). Use a ref to avoid
+  // the overview-is-defined check resetting on every render.
+  const prevOverviewRef = useRef(overview);
+  useEffect(() => {
+    if (overview && prevOverviewRef.current !== overview) {
+      setLiveSentToday(0);
+      setLiveReceivedToday(0);
+      setLiveFailed(0);
+    }
+    prevOverviewRef.current = overview;
+  }, [overview]);
+  // Subscribe to wildcard for all session message events.
+  useEffect(() => {
+    if (isConnected) {
+      subscribe('*', ['message.received', 'message.sent', 'message.ack']);
+      return () => unsubscribe('*');
+    }
+  }, [isConnected, subscribe, unsubscribe]);
 
   const handleDisconnect = async (id: string) => {
     try {
@@ -54,9 +93,10 @@ export function Dashboard() {
       icon: MessageSquare,
       detail: stats ? t('dashboard.stats.sessionsDetail', { running: stats.active, total: stats.total }) : undefined,
     },
-    { label: t('dashboard.stats.messagesToday'), value: messagesToday, icon: Send },
-    { label: t('dashboard.stats.webhooksConfigured'), value: webhookCount, icon: Webhook },
-    { label: t('dashboard.stats.totalMessages'), value: totalMessages, icon: Activity },
+    { label: t('dashboard.stats.messagesToday'), value: messagesToday, icon: Send, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.failedMessages'), value: failedMessages, icon: AlertTriangle, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.webhooksConfigured'), value: webhookCount, icon: Webhook, trend: '0', trendUp: null },
+    { label: t('dashboard.stats.totalMessages'), value: totalMessages, icon: Activity, trend: '0', trendUp: null },
   ];
 
   const formatLastActive = (date?: string | null) => {
@@ -83,15 +123,24 @@ export function Dashboard() {
 
   if (error) {
     return (
+<<<<<<< HEAD
+      <div className="dashboard">
+        <div className="error-banner" role="alert">
+          <AlertCircle size={20} />
+          <span className="error-banner-text">{t('dashboard.errorPrefix', { message: error })}</span>
+=======
       <div className="dashboard" style={{ padding: '2rem' }}>
         <div
           style={{ background: 'rgba(239, 68, 68, 0.12)', padding: '1rem', borderRadius: '8px', color: 'var(--error)' }}
         >
           {t('dashboard.errorPrefix', { message: error })}
+>>>>>>> upstream/main
         </div>
       </div>
     );
   }
+
+  const isLive = !!(stats && stats.ready > 0);
 
   return (
     <div className="dashboard">
@@ -99,8 +148,15 @@ export function Dashboard() {
         title={t('dashboard.title')}
         subtitle={t('dashboard.subtitle')}
         badge={
-          <span className={`status-badge ${stats && stats.ready > 0 ? 'connected' : 'disconnected'}`}>
-            {stats && stats.ready > 0 ? t('common.connected') : t('common.disconnected')}
+          <span className={`status-badge ${isLive ? 'connected' : 'disconnected'}`}>
+            <span className={`pulse-bars ${isLive ? 'live' : ''}`} aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+              <span />
+            </span>
+            {isLive ? t('common.connected') : t('common.disconnected')}
           </span>
         }
       />

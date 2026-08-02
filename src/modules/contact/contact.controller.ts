@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Delete, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Query, HttpCode, HttpStatus, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { ContactService } from './contact.service';
 import { RequireRole } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -102,6 +103,31 @@ export class ContactController {
   async getProfilePicture(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
     const url = await this.contactService.getProfilePicture(sessionId, contactId);
     return { url };
+  }
+
+  @Get(':contactId/profile-picture/image')
+  @ApiOperation({ summary: 'Get the cached profile picture image for a contact' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'contactId', description: 'Contact ID (e.g., 628xxx@c.us)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Profile picture JPEG image',
+    content: { 'image/jpeg': {} },
+  })
+  @ApiResponse({ status: 204, description: 'No profile picture available' })
+  async getProfilePictureImage(
+    @Param('sessionId') sessionId: string,
+    @Param('contactId') contactId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const buffer = await this.contactService.readProfilePicture(sessionId, contactId);
+    if (!buffer) {
+      res.status(204).end();
+      return;
+    }
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.status(200).end(buffer);
   }
 
   @Get(':contactId/phone')

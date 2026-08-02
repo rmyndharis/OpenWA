@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ResponsiveContainer,
@@ -15,54 +15,44 @@ import {
   BarChart,
   Bar,
 } from 'recharts';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, X } from 'lucide-react';
 import { useStatsMessagesQuery } from '../hooks/queries';
 import type { StatsPeriod } from '../services/api';
+import { colorForType, formatTick, shortChat } from '../utils/chartHelpers';
 import './DashboardCharts.css';
 
 const PERIODS: StatsPeriod[] = ['24h', '7d', '30d'];
 
-// Stable, distinct color per message type (recharts needs literal colors). Keyed by type name —
-// not array index — so two types can never share a color, and a slice keeps its color even when the
-// set of present types changes between requests. Covers every type mapMessageType() can emit.
-const TYPE_COLORS: Record<string, string> = {
-  text: '#25d366',
-  image: '#3b82f6',
-  contact: '#a855f7',
-  document: '#f59e0b',
-  audio: '#06b6d4',
-  voice: '#ec4899',
-  video: '#14b8a6',
-  sticker: '#ef4444',
-  location: '#84cc16',
-  poll: '#6366f1',
-  revoked: '#f43f5e',
-  masked: '#8b5cf6',
-  unknown: '#64748b',
+// Numbers read as instrument readouts, not prose — same monospace rule as stat values and table
+// data cells (Dashboard.css), applied to every axis tick and tooltip figure recharts renders.
+const AXIS_TICK_STYLE = { fontSize: 12, fontFamily: "'JetBrains Mono', monospace", fill: 'var(--text-secondary)' };
+const TOOLTIP_STYLE = {
+  contentStyle: {
+    background: 'var(--bg-white)',
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    fontSize: 12,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  labelStyle: { color: 'var(--text-secondary)' },
+  itemStyle: { color: 'var(--text-primary)' },
 };
 
-// Deterministic fallback for any unmapped type, so its color is stable across renders.
-const FALLBACK_COLORS = ['#0ea5e9', '#d946ef', '#f97316', '#10b981', '#6366f1', '#eab308'];
-function colorForType(name: string): string {
-  if (TYPE_COLORS[name]) return TYPE_COLORS[name];
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  return FALLBACK_COLORS[Math.abs(hash) % FALLBACK_COLORS.length];
-}
 
-// '2026-06-24 14:00:00' (hour buckets) → '14:00'; '2026-06-24' (day buckets) → '06-24'.
-function formatTick(ts: string, period: StatsPeriod): string {
-  return period === '24h' ? ts.slice(11, 16) : ts.slice(5);
-}
-
-// WhatsApp ids look like '62812...@c.us' / '...@g.us' / '...@lid' — show just the local part.
-function shortChat(chatId: string): string {
-  return chatId.split('@')[0] || chatId;
-}
 
 export function DashboardCharts() {
   const { t } = useTranslation();
+<<<<<<< HEAD
+  const [period, setPeriod] = useState<StatsPeriod>('7d');
+  const [activeType, setActiveType] = useState<string | null>(null);
+
+  const handleSliceClick = useCallback((entry: { name: string }) => {
+    if (!entry.name) return;
+    setActiveType(prev => (prev === entry.name ? null : entry.name));
+  }, []);
+=======
   const [period, setPeriod] = useState<StatsPeriod>('24h');
+>>>>>>> upstream/main
   const { data, isLoading, isError, error } = useStatsMessagesQuery(period);
 
   // Non-admin keys 403 on /stats/messages → hide the section entirely. Any OTHER error (e.g. a
@@ -125,9 +115,9 @@ export function DashboardCharts() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="label" tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-                <Tooltip />
+                <XAxis dataKey="label" tick={AXIS_TICK_STYLE} />
+                <YAxis allowDecimals={false} tick={AXIS_TICK_STYLE} />
+                <Tooltip {...TOOLTIP_STYLE} />
                 <Legend />
                 <Area
                   type="monotone"
@@ -150,18 +140,44 @@ export function DashboardCharts() {
           </div>
 
           <div className="chart-card">
-            <h3>{t('dashboard.charts.byType')}</h3>
+            <h3 className="chart-type-title">
+              {t('dashboard.charts.byType')}
+              {activeType && (
+                <button
+                  className="chart-filter-clear"
+                  onClick={() => setActiveType(null)}
+                  title={t('common.clear')}
+                  type="button"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </h3>
             {byType.length === 0 ? (
               <div className="charts-empty small">{t('dashboard.charts.empty')}</div>
             ) : (
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
-                  <Pie data={byType} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
+                  <Pie
+                    data={byType}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={55}
+                    outerRadius={90}
+                    paddingAngle={2}
+                    onClick={(entry: { name?: string }) => handleSliceClick(entry as { name: string })}
+                    style={{ cursor: 'pointer' }}
+                  >
                     {byType.map(entry => (
-                      <Cell key={entry.name} fill={colorForType(entry.name)} />
+                      <Cell
+                        key={entry.name}
+                        fill={colorForType(entry.name)}
+                        onClick={() => handleSliceClick(entry)}
+                        style={{ cursor: 'pointer' }}
+                      />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip {...TOOLTIP_STYLE} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
@@ -176,14 +192,9 @@ export function DashboardCharts() {
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={topChats} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: 'var(--text-secondary)' }} />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={120}
-                    tick={{ fontSize: 12, fill: 'var(--text-secondary)' }}
-                  />
-                  <Tooltip />
+                  <XAxis type="number" allowDecimals={false} tick={AXIS_TICK_STYLE} />
+                  <YAxis type="category" dataKey="name" width={120} tick={AXIS_TICK_STYLE} />
+                  <Tooltip {...TOOLTIP_STYLE} />
                   <Bar dataKey="count" name={t('dashboard.charts.messages')} fill="#25d366" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>

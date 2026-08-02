@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { paginate, ListOptions } from '../../common/utils/paginate';
@@ -103,5 +105,23 @@ export class ContactService {
 
   unblockContact(sessionId: string, contactId: string) {
     return this.getEngine(sessionId).unblockContact(contactId);
+  }
+
+  /**
+   * Read a cached profile picture from disk and return its buffer.
+   * Calls getProfilePicture first to ensure the image is cached.
+   */
+  async readProfilePicture(sessionId: string, contactId: string): Promise<Buffer | null> {
+    // Ensure the image is cached (downloads from WhatsApp if not already on disk)
+    const key = await this.getEngine(sessionId).getProfilePicture(contactId);
+    if (!key) return null;
+
+    // key looks like: profiles/<sessionId>/<safeContactId>.jpg
+    const filePath = path.join('data', key);
+    try {
+      return await fs.promises.readFile(filePath);
+    } catch {
+      return null;
+    }
   }
 }
