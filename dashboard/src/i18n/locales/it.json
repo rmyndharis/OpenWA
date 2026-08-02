@@ -133,7 +133,7 @@
       "composeText": "Testo",
       "composeImage": "Immagine",
       "recipients": "Chi può vedere questo",
-      "recipientsHint": "Baileys richiede un elenco di destinatari; whatsapp-web.js utilizza il tuo pubblico di privacy dello stato.",
+      "recipientsHint": "Baileys richiede un elenco di destinatari; whatsapp-web.js utilizza il tuo stato pubblico di privacy.",
       "noContacts": "Nessun contatto trovato",
       "caption": "Didascalia",
       "backgroundColor": "Colore di sfondo",
