@@ -28,13 +28,10 @@ import {
 import { invalidateSessionQueries, reconcileSessionCache } from '../utils/sessionMutation';
 import { canCreateSession, filterSessions, isValidPairingPhone, sessionNameIssues } from '../utils/sessionForm';
 import { useToast } from '../hooks/useToast';
-import { useWebSocket } from '../hooks/useWebSocket';
 import { useRole } from '../hooks/useRole';
-import {
-  createSessionFeedState,
-  noteSessionFeedError,
-  subscribeSessionFeed,
-} from '../utils/sessionFeedSubscription';
+import { useSessionPairing } from '../hooks/useSessionPairing';
+import { useSessionFeed } from '../hooks/useSessionFeed';
+import { useSessionCreateForm } from '../hooks/useSessionCreateForm';
 import { PageHeader } from '../components/PageHeader';
 import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
@@ -49,15 +46,6 @@ export function Sessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newSessionName, setNewSessionName] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [qrData, setQrData] = useState<{ sessionId: string; sessionName: string; qrCode: string } | null>(null);
-  const [pairingMode, setPairingMode] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [requestingPairing, setRequestingPairing] = useState(false);
-  const [pairingError, setPairingError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -96,39 +84,56 @@ export function Sessions() {
     sessionsRef.current = sessions;
   }, [sessions]);
 
+  const {
+    qrData,
+    pairingMode,
+    phoneNumber,
+    pairingCode,
+    requestingPairing,
+    pairingError,
+    setPhoneNumber,
+    selectPairingTab,
+    handleChangeNumber,
+    handleGeneratePairingCode,
+    handleShowQR,
+    handleCloseQRModal,
+    applyQrPush,
+    dismissQrForSession,
+  } = useSessionPairing({ sessions, sessionsRef, reloadSessions: fetchSessions });
+
+  const { showCreateModal, setShowCreateModal, newSessionName, setNewSessionName, creating, handleCreate } =
+    useSessionCreateForm({
+      onCreated: newSession => {
+        // Functional append: never capture a stale `sessions` (a WS or fetch between the await and the
+        // setState would otherwise drop a row). Then invalidate the prefix so stats/groups/chats refresh.
+        setSessions(current => [...current, newSession]);
+        void invalidateSessionQueries(queryClient, queryKeys.sessions);
+      },
+      onFailed: msg => setError(msg),
+    });
+
   // Reconcile the LOCAL view with an authoritative Session response. The previous handlers discarded
   // the response and fabricated `{ status: 'disconnected' }`, losing phone:null, timestamps, and other
   // server-owned fields; this keeps the card and the selected-session modal byte-for-byte with the
   // server. Functional updates (no captured stale `sessions`) feed both the list and the selected row,
   // and the shared cache is reconciled + invalidated so sibling views refetch. The QR modal is cleared
-  // when the session that owned it stops, so it never hangs on a disconnected session's stale code.
+  // (via the pairing hook's dismisser) when the session that owned it stops, so it never hangs on a
+  // disconnected session's stale code.
   const applySessionResponse = useCallback(
     async (updated: Session) => {
       sessionsRef.current = replaceSession(sessionsRef.current, updated);
       setSessions(sessionsRef.current);
       setSelectedSession(current => (current?.id === updated.id ? updated : current));
-      // Functional form deliberately: reading `qrData` here would make it a dependency, and this
-      // callback is held by three lifecycle handlers (start/stop/logout). Opening or closing the QR
-      // modal would then rotate all three for a reason none of them care about. The updater also sees
-      // the CURRENT modal rather than the one captured when this callback was built.
-      setQrData(current => (current?.sessionId === updated.id ? null : current));
+      dismissQrForSession(updated.id);
       await reconcileSessionCache(queryClient, queryKeys.sessions, updated);
     },
-    [queryClient],
+    [queryClient, dismissQrForSession],
   );
 
-  // Live session-feed subscription state: wildcard first, per-session fallback for scoped keys.
-  const feedStateRef = useRef(createSessionFeedState());
-  // Most recent server error frame; folded into feedStateRef by the effect below (kept as state
-  // so the fallback runs after `subscribe` exists — the handler can't reference it directly).
-  const [feedErrorFrame, setFeedErrorFrame] = useState<{ code: string } | null>(null);
-
-  const { isConnected, subscribe } = useWebSocket({
-    onQRCode: useCallback((event: { sessionId: string; qrCode: string }) => {
-      // Fill the open QR modal straight from the push — the REST endpoint 400s BY DESIGN until a QR
-      // exists, so fetching it eagerly just spams the console with expected failures.
-      setQrData(prev => (prev && prev.sessionId === event.sessionId ? { ...prev, qrCode: event.qrCode } : prev));
-    }, []),
+  useSessionFeed({
+    sessions,
+    sessionsRef,
+    onQRCode: applyQrPush,
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
         const prev = sessionsRef.current.find(s => s.id === event.sessionId);
@@ -143,9 +148,7 @@ export function Sessions() {
         // authoritative response arrives — and for `disconnected`, where that fallback is knowingly
         // wrong, the branch below refetches.
         sessionsRef.current = sessionsRef.current.map(s =>
-          s.id === event.sessionId
-            ? { ...s, status: event.status as Session['status'], engineLoaded: undefined }
-            : s,
+          s.id === event.sessionId ? { ...s, status: event.status as Session['status'], engineLoaded: undefined } : s,
         );
         setSessions(sessionsRef.current);
         // Mark the shared session queries stale so sibling views refetch — but ONLY on a real
@@ -173,151 +176,12 @@ export function Sessions() {
       },
       [toast, t, fetchSessions, queryClient],
     ),
-    onServerError: useCallback((frame: { code: string }) => {
-      setFeedErrorFrame(frame);
-    }, []),
   });
-
-  // Fold a server error frame into the feed state: a session-scoped key may not join the '*'
-  // room — silently fall back to one subscription per listed session (the list endpoint is
-  // already scope-filtered server-side), otherwise no status/QR push ever arrives and the QR
-  // modal sits on "generating" forever.
-  useEffect(() => {
-    if (!feedErrorFrame) return;
-    if (noteSessionFeedError(feedStateRef.current, feedErrorFrame.code)) {
-      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessionsRef.current.map(s => s.id));
-    }
-  }, [feedErrorFrame, subscribe]);
-
-  // Join the live session feed (wildcard attempt, or per-session rooms after a scope fallback).
-  useEffect(() => {
-    if (isConnected) {
-      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessionsRef.current.map(s => s.id));
-    }
-  }, [isConnected, subscribe]);
-
-  // Rooms are per-socket on the backend: a reconnect lands on a fresh socket with no
-  // subscriptions, so the per-session dedup set must be forgotten or the join effect
-  // above would skip every already-listed id and no feed frame would arrive again.
-  useEffect(() => {
-    if (!isConnected) feedStateRef.current.subscribedIds.clear();
-  }, [isConnected]);
-
-  // In per-session mode, sessions loaded/created after the fallback still need their rooms.
-  useEffect(() => {
-    if (isConnected && feedStateRef.current.scope === 'per-session') {
-      subscribeSessionFeed({ subscribe }, feedStateRef.current, sessions.map(s => s.id));
-    }
-  }, [isConnected, sessions, subscribe]);
 
   useEffect(() => {
     fetchSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const currentSessionName = useRef<string>('');
-
-  const fetchQR = useCallback(
-    async (sessionId: string) => {
-      // Guard: if session is already connected, stop polling immediately. Read the ref (not `sessions`)
-      // so fetchQR keeps a stable identity — otherwise the polling interval is torn down and restarted on
-      // every sessions update.
-      const currentSession = sessionsRef.current.find(s => s.id === sessionId);
-      if (currentSession?.status === 'ready') {
-        setQrData(null);
-        currentSessionName.current = '';
-        return;
-      }
-      // Poll only while a QR actually exists to refresh (qr_ready): before that the endpoint 400s
-      // by design (the engine hasn't produced one), and the WS session.qr push covers first display.
-      if (currentSession?.status !== 'qr_ready') return;
-      try {
-        const qr = await sessionApi.getQR(sessionId);
-        setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
-        if (qr.status === 'ready') {
-          setQrData(null);
-          currentSessionName.current = '';
-          fetchSessions();
-        }
-      } catch {
-        // Keep qrData alive so the polling interval keeps retrying until the QR
-        // is ready. Only stop polling if the session itself has failed. 'authenticating' is included so
-        // the modal (and the pairing-code panel mounted in it) survives the brief post-link handshake
-        // instead of being torn down mid-pairing — it closes on the real 'ready'/'failed' transition.
-        const updated = await sessionApi.get(sessionId).catch(() => null);
-        const stillInitializing =
-          updated && ['initializing', 'qr_ready', 'authenticating'].includes(updated.status);
-        if (!stillInitializing) {
-          setQrData(null);
-          currentSessionName.current = '';
-          fetchSessions();
-        }
-      }
-    },
-    [fetchSessions],
-  );
-  useEffect(() => {
-    if (qrData) {
-      currentSessionName.current = qrData.sessionName;
-      qrRefreshInterval.current = setInterval(() => {
-        fetchQR(qrData.sessionId);
-      }, 5000);
-    }
-    return () => {
-      if (qrRefreshInterval.current) clearInterval(qrRefreshInterval.current);
-    };
-  }, [qrData, fetchQR]);
-
-  const handleCloseQRModal = useCallback(() => {
-    setQrData(null);
-    setPairingMode(false);
-    setPhoneNumber('');
-    setPairingCode(null);
-    setPairingError(null);
-  }, []);
-
-  const handleGeneratePairingCode = async () => {
-    // Guard against a second concurrent request: the button is disabled while in flight, but the
-    // input's Enter handler is not, so a rapid double-Enter would otherwise fire overlapping POSTs.
-    if (requestingPairing) return;
-    if (!qrData || !phoneNumber.trim()) return;
-    if (!isValidPairingPhone(phoneNumber)) {
-      setPairingError(t('sessions.pairing.invalidPhone'));
-      return;
-    }
-    try {
-      setRequestingPairing(true);
-      setPairingError(null);
-      const res = await sessionApi.requestPairingCode(qrData.sessionId, phoneNumber.trim());
-      setPairingCode(res.pairingCode);
-    } catch (err) {
-      setPairingError(err instanceof Error ? err.message : t('common.errorGeneric'));
-    } finally {
-      setRequestingPairing(false);
-    }
-  };
-
-  const handleCreate = async () => {
-    if (!newSessionName.trim()) return;
-    try {
-      setCreating(true);
-      const newSession = await sessionApi.create(newSessionName);
-      // Functional append: never capture a stale `sessions` (a WS or fetch between the await and the
-      // setState would otherwise drop a row). Then invalidate the prefix so stats/groups/chats refresh.
-      setSessions(current => [...current, newSession]);
-      await invalidateSessionQueries(queryClient, queryKeys.sessions);
-      setNewSessionName('');
-      setShowCreateModal(false);
-      toast.success(t('sessions.create.successTitle'), t('sessions.create.successDesc', { name: newSession.name }));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t('sessions.create.errorDefault');
-      setError(msg);
-      toast.error(t('sessions.create.errorTitle'), msg);
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handleDelete = async (id: string) => {
     const session = sessions.find(s => s.id === id);
@@ -373,36 +237,6 @@ export function Sessions() {
       const fresh = await fetchSessions();
       const current = fresh.find(s => s.id === id);
       if (current?.status !== 'ready') handleShowQR(id);
-    }
-  };
-
-  const handleShowQR = async (id: string) => {
-    const session = sessions.find(s => s.id === id);
-    // Nothing to show for an already-connected session.
-    if (session?.status === 'ready') return;
-    const sessionName = session?.name || '';
-    // Reset any pairing sub-state from a previous open so a freshly opened modal never shows a
-    // stale code/phone belonging to a different session.
-    setPairingMode(false);
-    setPhoneNumber('');
-    setPairingCode(null);
-    setPairingError(null);
-    // Show loading state immediately so the modal opens and polling starts
-    // even before Chromium has finished initializing.
-    setQrData({ sessionId: id, sessionName, qrCode: '' });
-    currentSessionName.current = sessionName;
-    // Eager-fetch only when a QR already exists (qr_ready): before that the endpoint 400s BY DESIGN
-    // (the engine hasn't produced one), and the WS session.qr push + gated 5s poll deliver it
-    // without spamming the console with expected failures.
-    if (session?.status === 'qr_ready') {
-      try {
-        const qr = await sessionApi.getQR(id);
-        setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
-      } catch (err) {
-        console.error('Failed to get QR:', err);
-        // Do not clear qrData here — keep the loading modal open so the
-        // polling interval (every 5 s) retries until the QR becomes available.
-      }
     }
   };
 
@@ -606,10 +440,7 @@ export function Sessions() {
                   role="tab"
                   aria-selected={!pairingMode}
                   className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
-                  onClick={() => {
-                    setPairingMode(false);
-                    setPairingError(null);
-                  }}
+                  onClick={() => selectPairingTab(false)}
                 >
                   {t('sessions.pairing.tabQr')}
                 </button>
@@ -617,10 +448,7 @@ export function Sessions() {
                   role="tab"
                   aria-selected={pairingMode}
                   className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
-                  onClick={() => {
-                    setPairingMode(true);
-                    setPairingError(null);
-                  }}
+                  onClick={() => selectPairingTab(true)}
                 >
                   {t('sessions.pairing.tabPhone')}
                 </button>
@@ -719,14 +547,7 @@ export function Sessions() {
                     </div>
 
                     <div style={{ marginTop: '1.5rem' }}>
-                      <button
-                        className="btn-secondary"
-                        onClick={() => {
-                          setPairingCode(null);
-                          setPhoneNumber('');
-                        }}
-                        style={{ width: '100%' }}
-                      >
+                      <button className="btn-secondary" onClick={handleChangeNumber} style={{ width: '100%' }}>
                         {t('sessions.pairing.changeNumber')}
                       </button>
                     </div>
@@ -938,8 +759,7 @@ export function Sessions() {
                     <Square size={16} />
                     {t('sessions.actions.stop')}
                   </button>
-                ) : canWrite &&
-                  (session.status === 'created' || session.status === 'disconnected') ? (
+                ) : canWrite && (session.status === 'created' || session.status === 'disconnected') ? (
                   <button className="btn-action" onClick={() => handleStart(session.id)}>
                     <Play size={16} />
                     {t('sessions.actions.start')}
