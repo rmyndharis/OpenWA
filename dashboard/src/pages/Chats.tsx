@@ -4,14 +4,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { nextReconnectState } from '../utils/reconnectState';
 import { applyIncomingToChatList } from '../utils/chatList';
 import { filterChats, filterChannels, groupStatusesByContact } from '../utils/chatFilters';
-import {
-  ArrowLeft,
-  Loader2,
-  Megaphone,
-  CircleDashed,
-  AlertCircle,
-  MessageSquare,
-} from 'lucide-react';
+import { ArrowLeft, Loader2, Megaphone, CircleDashed, AlertCircle, MessageSquare } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone } from '../hooks/useResolvedPhone';
@@ -937,11 +930,7 @@ export function Chats() {
               // subscribed channels are a broadcast feed, not a two-way conversation.
               <div key={activeChannel.id} className="channel-room">
                 <header className="chats-room-header">
-                  <button
-                    className="room-back"
-                    onClick={() => setActiveChannel(null)}
-                    aria-label={t('common.back')}
-                  >
+                  <button className="room-back" onClick={() => setActiveChannel(null)} aria-label={t('common.back')}>
                     <ArrowLeft size={20} />
                   </button>
                   <Megaphone size={20} />
@@ -987,7 +976,11 @@ export function Chats() {
                     <ArrowLeft size={20} />
                   </button>
                   <CircleDashed size={20} />
-                  <h2>{activeStatusGroup.contact.name ?? activeStatusGroup.contact.pushName ?? activeStatusGroup.contact.id}</h2>
+                  <h2>
+                    {activeStatusGroup.contact.name ??
+                      activeStatusGroup.contact.pushName ??
+                      activeStatusGroup.contact.id}
+                  </h2>
                 </header>
                 <div className="messages-list" ref={statusFeedRef}>
                   {activeStatusGroup.items.map(item => (
@@ -1000,9 +993,7 @@ export function Chats() {
                       style={
                         item.type === 'text' && (item.backgroundColor || item.font)
                           ? {
-                              ...(item.backgroundColor
-                                ? { backgroundColor: item.backgroundColor, color: '#fff' }
-                                : {}),
+                              ...(item.backgroundColor ? { backgroundColor: item.backgroundColor, color: '#fff' } : {}),
                               ...statusFontStyle(item.font),
                             }
                           : undefined

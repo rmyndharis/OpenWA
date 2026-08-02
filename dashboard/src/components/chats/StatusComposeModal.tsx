@@ -86,11 +86,7 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
 
   const toggleComposeRecipient = (id: string) => {
     setComposeRecipients(prev =>
-      prev.includes(id)
-        ? prev.filter(r => r !== id)
-        : prev.length >= STATUS_RECIPIENTS_MAX
-          ? prev
-          : [...prev, id],
+      prev.includes(id) ? prev.filter(r => r !== id) : prev.length >= STATUS_RECIPIENTS_MAX ? prev : [...prev, id],
     );
   };
 
@@ -234,12 +230,7 @@ function StatusComposeModal({ sessionId, onClose, onPosted }: Props) {
           </div>
           <p className="compose-image-or">{t('chats.status.orLabel')}</p>
           <div className="compose-field">
-            <input
-              type="file"
-              accept="image/*"
-              ref={composeFileInputRef}
-              onChange={handleComposeImageFile}
-            />
+            <input type="file" accept="image/*" ref={composeFileInputRef} onChange={handleComposeImageFile} />
           </div>
           <div className="compose-field">
             <label>{t('chats.status.caption')}</label>

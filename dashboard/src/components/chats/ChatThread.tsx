@@ -115,9 +115,7 @@ function ChatThread({
       ) : (
         messages.map((msg, index) => {
           const isMe = msg.direction === 'outgoing';
-          const formattedTime = formatTime(
-            msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000),
-          );
+          const formattedTime = formatTime(msg.timestamp || Math.floor(new Date(msg.createdAt).getTime() / 1000));
 
           // Label who posted, WhatsApp-style: only in groups, only on incoming messages,
           // and only on the first of a consecutive run from the same sender (so a burst
@@ -125,11 +123,11 @@ function ChatThread({
           const prev = messages[index - 1];
           const showSender = Boolean(
             activeChat?.isGroup &&
-              !isMe &&
-              msg.chatName &&
-              // Key the run on the stable sender id (participant JID), not the display
-              // name — two participants who share a pushName must still start a new run.
-              (!prev || prev.direction === 'outgoing' || senderKey(prev) !== senderKey(msg)),
+            !isMe &&
+            msg.chatName &&
+            // Key the run on the stable sender id (participant JID), not the display
+            // name — two participants who share a pushName must still start a new run.
+            (!prev || prev.direction === 'outgoing' || senderKey(prev) !== senderKey(msg)),
           );
 
           const isMediaMessage = msg.type !== 'text';
@@ -195,12 +193,7 @@ function ChatThread({
               case 'video':
                 return (
                   <div className="message-media-video">
-                    <video
-                      src={mediaSrc}
-                      controls
-                      className="chat-video-media"
-                      onLoadedData={onMediaLoad}
-                    />
+                    <video src={mediaSrc} controls className="chat-video-media" onLoadedData={onMediaLoad} />
                   </div>
                 );
               case 'audio':
@@ -214,11 +207,7 @@ function ChatThread({
               default:
                 return (
                   <div className="message-media-document">
-                    <a
-                      href={mediaSrc}
-                      download={mediaInfo.filename || 'document'}
-                      className="chat-document-media"
-                    >
+                    <a href={mediaSrc} download={mediaInfo.filename || 'document'} className="chat-document-media">
                       📎 {mediaInfo.filename || t('chats.downloadDocument')}
                     </a>
                   </div>
@@ -316,11 +305,7 @@ function ChatThread({
                     </button>
 
                     <div className="reaction-trigger-wrapper">
-                      <button
-                        type="button"
-                        className="action-btn reaction-btn"
-                        title={t('chats.actions.react')}
-                      >
+                      <button type="button" className="action-btn reaction-btn" title={t('chats.actions.react')}>
                         <Smile size={14} />
                       </button>
                       <div className="reaction-quick-popover">

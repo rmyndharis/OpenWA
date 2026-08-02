@@ -15,7 +15,7 @@ export type MessageNode =
 
 const FORMATS: Record<string, 'bold' | 'italic' | 'strike'> = {
   '*': 'bold',
-  '_': 'italic',
+  _: 'italic',
   '~': 'strike',
 };
 

@@ -105,7 +105,13 @@ export const senderKey = (m: Pick<ChatMessage, 'author' | 'chatName'>): string |
 
 // ChatMessageView extends ChatMessage with the view-only fields the chat page renders.
 // Lifted from Chats.tsx so hooks/utils can share the same shape.
-export type MessageMedia = { mimetype: string; filename?: string; data?: string; omitted?: boolean; sizeBytes?: number };
+export type MessageMedia = {
+  mimetype: string;
+  filename?: string;
+  data?: string;
+  omitted?: boolean;
+  sizeBytes?: number;
+};
 
 export const getMediaSrc = (media?: MessageMedia): string => {
   if (!media || !media.data) return '';
