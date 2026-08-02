@@ -196,12 +196,12 @@ describe('MessageProjector', () => {
   });
 });
 
-// Separate top-level suite: handleInboundMessage's own stale-engine fences and early returns
-// (message-projector.service.ts:114-326) were previously exercised only indirectly through
-// session.service.spec.ts. Uses the TestingModule idiom (mirrors session.service.spec.ts) rather
-// than the direct-construction style above, so the full DI surface (ConfigService, SessionLidResolver)
-// is wired the same way production does.
-describe('MessageProjector', () => {
+// Separate top-level suite: handleInboundMessage's stale-engine fence and its isStatusBroadcast
+// early return (message-projector.service.ts:114-119) were previously exercised only indirectly
+// through session.service.spec.ts. Uses the TestingModule idiom (mirrors session.service.spec.ts)
+// rather than the direct-construction style above, so the full DI surface (ConfigService,
+// SessionLidResolver) is wired the same way production does.
+describe('MessageProjector (inbound projection)', () => {
   let projector: MessageProjector;
   let engines: EngineRegistry;
   let messageRepository: { create: jest.Mock; insert: jest.Mock; findOne: jest.Mock; update: jest.Mock };
@@ -332,6 +332,11 @@ describe('MessageProjector', () => {
       expect(eventsGateway.emitMessage).toHaveBeenCalledWith(SESSION_ID, expect.anything());
       expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.received', expect.anything());
       expect(sessionRepository.update).toHaveBeenCalledTimes(1);
+      // Pins the ternary at message-projector.service.ts:255: a genuinely inbound message (fromMe:
+      // false) must be tagged INCOMING, not just "not OUTGOING".
+      expect(messageRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: MessageDirection.INCOMING }),
+      );
     });
 
     it('routes a status broadcast to the status store instead of the message table', async () => {

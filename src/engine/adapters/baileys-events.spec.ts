@@ -1,7 +1,7 @@
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
-import type { WASocket } from '@whiskeysockets/baileys';
+import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 /**
  * `downloadMediaMessage` is a jest mock, not a silent no-op: the real-download branch
@@ -115,7 +115,16 @@ describe('BaileysEvents.mapMessage', () => {
       {
         key: { id: 'wamid.3', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
         messageTimestamp: 1_700_000_000,
-        message: { liveLocationMessage: { degreesLatitude: 1.5, degreesLongitude: 2.5 } },
+        message: {
+          liveLocationMessage: {
+            degreesLatitude: 1.5,
+            degreesLongitude: 2.5,
+            // ILiveLocationMessage has neither field in the real proto; present here so a slip that
+            // reads them off the live variant (instead of the static-only `staticLm`) is caught.
+            name: 'SHOULD BE IGNORED',
+            address: 'SHOULD BE IGNORED',
+          },
+        } as WAMessage['message'],
       },
       'liveLocationMessage',
     );
@@ -162,6 +171,51 @@ describe('BaileysEvents.mapMessage', () => {
     expect(incoming.media?.omitted).toBe(true);
   });
 
+  it('classifies a sticker as media (pins stickerMessage in the isMediaType disjunction)', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.8', remoteJid: '15550001111@s.whatsapp.net', fromMe: true },
+        messageTimestamp: 1_700_000_000,
+        message: { stickerMessage: { mimetype: 'image/webp', fileLength: 555 } },
+      },
+      'stickerMessage',
+      { skipMediaDownload: true },
+    );
+
+    expect(incoming.media).toEqual({
+      mimetype: 'image/webp',
+      filename: undefined,
+      omitted: true,
+      sizeBytes: 555,
+    });
+  });
+
+  it('classifies a documentWithCaptionMessage as media (pins it in the isMediaType disjunction)', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.9', remoteJid: '15550001111@s.whatsapp.net', fromMe: true },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          documentMessage: {
+            mimetype: 'application/pdf',
+            fileLength: 321,
+            fileName: 'contract.pdf',
+            caption: 'signed',
+          },
+        },
+      },
+      'documentWithCaptionMessage',
+      { skipMediaDownload: true },
+    );
+
+    expect(incoming.media).toEqual({
+      mimetype: 'application/pdf',
+      filename: 'contract.pdf',
+      omitted: true,
+      sizeBytes: 321,
+    });
+  });
+
   it('resolves a quoted message from contextInfo', async () => {
     const incoming = await events.mapMessage(
       {
@@ -196,5 +250,35 @@ describe('BaileysEvents.mapMessage', () => {
 
     expect(incoming.quotedMessage).toBeUndefined();
     expect(downloadMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('resolves a quoted reply, mention and disappearing timer riding on an imageMessage context (not extendedTextMessage)', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.10', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          imageMessage: {
+            mimetype: 'image/jpeg',
+            caption: 'look',
+            contextInfo: {
+              stanzaId: 'wamid.original2',
+              expiration: 604800,
+              mentionedJid: ['15559998888@s.whatsapp.net'],
+              // No `conversation` on the quoted sub-message — only `imageMessage.caption` — so this
+              // also pins the qBody fallback chain beyond its first (`conversation`) arm.
+              quotedMessage: { imageMessage: { caption: 'quoted image caption' } },
+            },
+          },
+        },
+      },
+      'imageMessage',
+      { skipMediaDownload: true },
+    );
+
+    expect(incoming.quotedMessage?.id).toBe('wamid.original2');
+    expect(incoming.quotedMessage?.body).toBe('quoted image caption');
+    expect(incoming.ephemeralDuration).toBe(604800);
+    expect(incoming.mentionedIds).toEqual(['15559998888@s.whatsapp.net']);
   });
 });
