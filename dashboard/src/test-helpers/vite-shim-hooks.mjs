@@ -4,11 +4,13 @@
 //   - extensionless relative imports → resolved by trying .tsx/.ts/.js/.mjs/.json (and /index.*)
 //   - .json           → wrapped as `export default` (Node would demand import attributes)
 //   - .css            → stubbed as an empty module
+//   - .svg/.png/.jpg/.webp → stubbed as `export default '<url>'` (Vite resolves an asset import to
+//     its URL string; Node has no loader for these extensions at all)
 //   - .ts files reading import.meta.env → transpiled with a shim (import.meta.env is a Vite
 //     global Node does not provide); every other .ts falls through to --experimental-strip-types
 //
 // Registered via test-helpers/register-hooks.ts. node:test runs each test file in its own child
-// process, so these hooks only ever affect the component smoke-test process — the 261 pure-logic
+// process, so these hooks only ever affect the component smoke-test process — the pure-logic
 // tests never register them.
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -43,6 +45,11 @@ export async function resolve(specifier, context, nextResolve) {
 export async function load(url, context, nextLoad) {
   if (url.endsWith('.css')) {
     return { format: 'module', source: 'export default {};', shortCircuit: true };
+  }
+  if (url.endsWith('.svg') || url.endsWith('.png') || url.endsWith('.jpg') || url.endsWith('.webp')) {
+    // Vite resolves an asset import to its URL string. The tests never read the bytes; they only
+    // need the import to succeed and the value to be a string an <img src> can take.
+    return { format: 'module', source: `export default ${JSON.stringify(url)};`, shortCircuit: true };
   }
   if (url.endsWith('.json')) {
     const source = await readFile(fileURLToPath(url), 'utf8');
