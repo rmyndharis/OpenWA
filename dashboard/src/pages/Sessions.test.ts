@@ -259,3 +259,36 @@ test('a typed pairing phone number survives toggling to the QR tab and back', as
     'the typed pairing phone number was lost after toggling tabs',
   );
 });
+
+test('stopping a session dismisses its own open QR modal', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+
+  // Wait for the eager GET .../qr fetch triggered by opening the modal to settle, same as the
+  // toggle-persistence case above, so the assertion below isn't racing that fetch's state update.
+  await screen.findByAltText('QR');
+  assert.ok(screen.getByRole('dialog'), 'expected the QR modal to be open before stopping the session');
+
+  // SESSION_QR has engineLoaded: true, so isSessionStarted puts a no-confirmation Stop button on
+  // this same card (see the first test's engineLoaded-gate assertion) — the simplest deterministic
+  // trigger for applySessionResponse, which is what calls the pairing hook's dismissQrForSession.
+  // A neutered dismisser would leave this modal open, pointed at a session with no engine left.
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Stop' }));
+
+  await waitFor(() => {
+    assert.ok(findFetchCall('POST', '/api/sessions/sess-qr-1/stop'), 'expected a POST to the stop endpoint');
+  });
+
+  await waitFor(() => {
+    // Never hand a live DOM node to assert.equal/deepEqual: on failure Node's assert machinery
+    // inspects it for the diff, and a jsdom element wired up by React (parentNode/ownerDocument/the
+    // internal fiber back-references) is cyclic enough that the inspection can hang the process
+    // instead of failing fast. Reduce to a boolean first.
+    assert.ok(!screen.queryByRole('dialog'), 'the QR modal stayed open after its session stopped');
+  });
+});
