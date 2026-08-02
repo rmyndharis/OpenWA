@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A key pasted with a stray space now authenticates on the WebSocket, not just over REST.**
+  `validateApiKey` hashed the raw string as given, and HTTP strips surrounding whitespace from header
+  values in transit — so a padded key was accepted on every REST call while the Socket.IO handshake,
+  which carries the literal string in its `CONNECT` payload, hashed to something else and was rejected.
+  The failure was silent in the worst way: the dashboard's commands all went through, but not a single
+  event arrived, so every session rendered as disconnected and restarting one looked inert — the
+  restart ran, the UI just never heard about it. The key is now trimmed once in `validateApiKey`, which
+  REST, the WebSocket gateway and the MCP mount all route through, so every surface agrees on what the
+  credential is. Whitespace is never part of a key, so no legitimate credential changes meaning.
+
 ## [0.12.4] - 2026-08-02
 
 A large internal release with a deliberately small external surface: roughly 30,000 changed lines,
