@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Edit, Trash2, X, Zap, Info } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks';
-import { useToast } from '../components/useToast';
+import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/PageHeader';
 import { useSessionsQuery, useUpsertQuickReplyMutation, useRemoveQuickReplyMutation } from '../hooks/queries';
 import { useLocalQuickReplies, type LocalQuickReply } from '../hooks/useLocalQuickReplies';

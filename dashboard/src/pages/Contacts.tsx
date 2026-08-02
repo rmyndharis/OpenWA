@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Edit, Trash2, X, Users, AlertCircle, Ban, Loader2 } from 'lucide-react';
+import { Search, Edit, Trash2, X, Users, AlertCircle, Loader2 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks';
-import { useToast } from '../components/useToast';
+import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/PageHeader';
 import { useSessionsQuery, useContactsQuery, useUpsertContactMutation, useRemoveContactMutation } from '../hooks/queries';
 import type { Contact } from '../services/api';
@@ -34,7 +34,7 @@ export function Contacts() {
   const [newContactId, setNewContactId] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
 
-  const filtered = useMemo(() => {
+      const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return contacts;
     return contacts.filter(
@@ -42,7 +42,7 @@ export function Contacts() {
         c.id.toLowerCase().includes(q) ||
         c.name?.toLowerCase().includes(q) ||
         c.pushName?.toLowerCase().includes(q) ||
-        c.number.toLowerCase().includes(q),
+        c.number?.toLowerCase().includes(q),
     );
   }, [contacts, search]);
 
@@ -154,12 +154,6 @@ export function Contacts() {
                 <span className="contact-id">{contact.id}</span>
               </div>
               <div className="contact-badges">
-                {contact.isBlocked && (
-                  <span className="status-badge blocked">
-                    <Ban size={12} /> {t('contacts.blocked')}
-                  </span>
-                )}
-                {contact.isMyContact && <span className="status-badge saved">{t('contacts.saved')}</span>}
               </div>
               {canWrite && (
                 <div className="contact-actions">

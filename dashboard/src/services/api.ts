@@ -815,6 +815,17 @@ export const contactApi = {
         .map(encodeURIComponent)
         .join(',')}`,
     ),
+  /** Baileys only — whatsapp-web.js has no contact-book write API and returns 501. */
+  upsert: (sessionId: string, contactId: string, data: { fullName?: string; firstName?: string }) =>
+    request<{ success: boolean; message: string }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  /** Baileys only — whatsapp-web.js has no contact-book write API and returns 501. */
+  remove: (sessionId: string, contactId: string) =>
+    request<{ success: boolean; message: string }>(`/sessions/${sessionId}/contacts/${encodeURIComponent(contactId)}`, {
+      method: 'DELETE',
+    }),
 };
 
 // =============================================================================
@@ -842,6 +853,69 @@ export const apiKeyApi = {
     }),
   delete: (id: string) => request<void>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
   revoke: (id: string) => request<ApiKey>(`/auth/api-keys/${id}/revoke`, { method: 'POST' }),
+};
+
+// =============================================================================
+// Privacy API
+// =============================================================================
+
+export type PrivacyVisibility = 'all' | 'contacts' | 'contact_blacklist' | 'none';
+export type PrivacyOnlineVisibility = 'all' | 'match_last_seen';
+export type PrivacyGroupAddVisibility = 'all' | 'contacts' | 'contact_blacklist';
+export type PrivacyMessagesVisibility = 'all' | 'contacts';
+export type PrivacyCallVisibility = 'all' | 'known';
+export type PrivacyReadReceipts = 'all' | 'none';
+
+export interface UpdatePrivacySettingsInput {
+  lastSeen?: PrivacyVisibility;
+  online?: PrivacyOnlineVisibility;
+  profilePicture?: PrivacyVisibility;
+  status?: PrivacyVisibility;
+  readReceipts?: PrivacyReadReceipts;
+  groupsAdd?: PrivacyGroupAddVisibility;
+  call?: PrivacyCallVisibility;
+  messages?: PrivacyMessagesVisibility;
+  disableLinkPreviews?: boolean;
+  defaultDisappearingMode?: number;
+}
+
+export const privacyApi = {
+  /** Raw settings as WhatsApp reports them (undocumented, engine-specific keys). Baileys only. */
+  getSettings: (sessionId: string) => request<Record<string, string>>(`/sessions/${sessionId}/privacy/settings`),
+  /** Works on both engines. */
+  getBlocklist: (sessionId: string) => request<{ blocklist: string[] }>(`/sessions/${sessionId}/privacy/blocklist`),
+  /** Baileys only. Only the fields present in `data` are changed. */
+  updateSettings: (sessionId: string, data: UpdatePrivacySettingsInput) =>
+    request<{ success: boolean }>(`/sessions/${sessionId}/privacy/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+};
+
+// =============================================================================
+// Quick Reply API (WhatsApp Business canned responses, Baileys only)
+// =============================================================================
+
+// Baileys has no "list all quick replies" API (mirrors OpenWA's own quick-reply.controller). The
+// dashboard tracks what it has created client-side (see hooks/useLocalQuickReplies) so the page can
+// show/edit/delete them; a quick reply created outside this browser won't appear here.
+export interface QuickReplyInput {
+  id?: string;
+  shortcut: string;
+  message: string;
+  keywords?: string[];
+}
+
+export const quickReplyApi = {
+  upsert: (sessionId: string, data: QuickReplyInput) =>
+    request<{ success: boolean; id: string }>(`/sessions/${sessionId}/quick-replies`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  remove: (sessionId: string, id: string) =>
+    request<{ success: boolean; message: string }>(`/sessions/${sessionId}/quick-replies/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 };
 
 // =============================================================================

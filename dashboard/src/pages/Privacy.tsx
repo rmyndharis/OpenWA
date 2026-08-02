@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Ban, Loader2, ShieldAlert, Shield } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks';
-import { useToast } from '../components/useToast';
+import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/PageHeader';
 import {
   useSessionsQuery,

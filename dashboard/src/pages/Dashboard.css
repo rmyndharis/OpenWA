@@ -8,16 +8,18 @@
   margin-bottom: 2rem;
 }
 
+.dashboard .header-title {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
 /* H1 inherited from global */
 
-<<<<<<< HEAD
-.dashboard .status-badge{
+.dashboard .status-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-=======
-.dashboard .status-badge {
->>>>>>> upstream/main
   padding: 0.375rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.6875rem;
@@ -31,27 +33,22 @@
   color: var(--primary);
 }
 
-<<<<<<< HEAD
-.dashboard .status-badge.disconnected{
-=======
 .dashboard .status-badge.disconnected {
->>>>>>> upstream/main
   background: var(--bg-light);
   color: var(--text-muted);
 }
 
-<<<<<<< HEAD
 /* Signature: a small voice-note-style waveform standing in for the connection LED. Flat and
    dim when no session is ready (a flatline); a staggered breathing wave once one is. Reads as
    status at a glance without another word ("connected") competing for attention. */
-.dashboard .pulse-bars{
+.dashboard .pulse-bars {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
   height: 12px;
 }
 
-.dashboard .pulse-bars span{
+.dashboard .pulse-bars span {
   width: 2.5px;
   height: 22%;
   border-radius: 1px;
@@ -59,46 +56,16 @@
   opacity: 0.55;
 }
 
-.dashboard .pulse-bars.live span{
+.dashboard .pulse-bars.live span {
   opacity: 0.95;
-  animation: pulse-wave 1.2s ease-in-out infinite;
 }
 
-.dashboard .pulse-bars.live span:nth-child(1){ animation-delay: 0s; }
-.dashboard .pulse-bars.live span:nth-child(2){ animation-delay: 0.15s; }
-.dashboard .pulse-bars.live span:nth-child(3){ animation-delay: 0.3s; }
-.dashboard .pulse-bars.live span:nth-child(4){ animation-delay: 0.15s; }
-.dashboard .pulse-bars.live span:nth-child(5){ animation-delay: 0s; }
-
-@keyframes pulse-wave{
-  0%, 100%{ height: 25%; }
-  50%{ height: 100%; }
-}
-
-@media (prefers-reduced-motion: reduce){
-  .dashboard .pulse-bars.live span{
-    animation: none;
-    height: 70%;
-    opacity: 0.95;
-  }
-}
-
-/* Stat cards read as one instrument panel — hairline dividers between segments rather than four
-   separate boxed cards competing for the eye. */
-.dashboard .stats-grid{
-=======
 .dashboard .stats-grid {
->>>>>>> upstream/main
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 0;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.5rem;
   margin-bottom: 2rem;
   width: 100%;
-  background: var(--bg-white);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
 }
 
 /* Collapse the 4-up tile grid to 2 columns on iPad Mini portrait (768px wide) and other narrow
@@ -118,377 +85,233 @@
 
 .dashboard .stat-card {
   position: relative;
-  padding: 1.5rem;
-  border-left: 1px solid var(--border);
-  min-width: 0;
-  overflow: hidden;
-  transition: background 0.2s ease;
-}
-
-.dashboard .stat-card:first-child{
-  border-left: none;
-}
-
-.dashboard .stat-card:nth-child(5n+1){
-  border-left: none;
-}
-
-<<<<<<< HEAD
-.dashboard .stat-card:hover{
-  background: var(--bg-light);
-=======
-.dashboard .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
->>>>>>> upstream/main
-}
-
-.dashboard .stat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.75rem;
-}
-
-.dashboard .stat-icon {
-  color: var(--text-muted);
-  position: relative;
-  z-index: 2;
-}
-
-.dashboard .stat-watermark {
-  position: absolute;
-  right: -10px;
-  bottom: -15px;
-  width: 96px;
-  height: 96px;
-  opacity: 0.04;
-  color: var(--text-primary);
-  transform: rotate(-15deg);
-  pointer-events: none;
-  z-index: 1;
-}
-
-.dashboard .stat-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
-  position: relative;
-  z-index: 2;
-}
-
-<<<<<<< HEAD
-.dashboard .stat-value{
-  font-family: 'JetBrains Mono', monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 1.875rem;
-=======
-.dashboard .stat-value {
-  font-size: 2rem;
->>>>>>> upstream/main
-  font-weight: 700;
-  color: var(--text-primary);
-  position: relative;
-  z-index: 2;
-}
-
-.dashboard .stat-detail {
-  font-size: 0.75rem;
-  line-height: 1.35;
-  margin-top: 0.5rem;
-  color: var(--text-muted);
-  position: relative;
-  z-index: 2;
-}
-
-.dashboard .sessions-section {
   background: var(--bg-white);
   border-radius: 12px;
   padding: 1.5rem;
   box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border);
-  width: 100%;
-  box-sizing: border-box;
 }
 
-.dashboard .section-header {
+.dashboard .stat-card.live::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--primary), #14b8a6);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.dashboard .stat-header {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
-.dashboard .sessions-section h2{
-  border-left: 3px solid var(--primary);
-  padding-left: 0.6rem;
-}
-
-.dashboard .section-subtitle {
-  font-size: 0.875rem;
+.dashboard .stat-title {
+  font-size: 0.75rem;
+  font-weight: 600;
   color: var(--text-muted);
-}
-
-.dashboard .sessions-table {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  font-size: 0.875rem;
-}
-
-.dashboard .sessions-table .table-header,
-.dashboard .sessions-table .table-row {
-  display: grid;
-  grid-template-columns: 140px 200px 140px 1fr 180px;
-  gap: 1rem;
-  padding: 1rem 1.5rem;
-  align-items: center;
-}
-
-.dashboard .sessions-table .table-header {
-  background: var(--bg-light);
-  border-radius: var(--radius) var(--radius) 0 0;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border);
 }
 
-.dashboard .sessions-table .table-row {
-  border-bottom: 1px solid var(--border);
-}
-
-.dashboard .sessions-table .table-row:last-child {
-  border-bottom: none;
-}
-
-.dashboard .session-info-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  min-width: 0;
-}
-
-.dashboard .session-id {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.8125rem;
+.dashboard .stat-value {
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
   color: var(--text-primary);
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.dashboard .session-name {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 140px;
-}
-
-<<<<<<< HEAD
-.dashboard .phone{
-  font-family: 'JetBrains Mono', monospace;
-=======
-.dashboard .phone {
->>>>>>> upstream/main
-  color: var(--text-primary);
-  font-size: 0.8125rem;
-  white-space: nowrap;
-}
-
-.dashboard .status-pill {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
+.dashboard .stat-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
   border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  width: fit-content;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
 }
 
-.dashboard .status-pill.ready {
+.dashboard .stat-trend.up {
   background: rgba(37, 211, 102, 0.1);
   color: var(--primary);
 }
 
-.dashboard .status-pill.connecting,
-.dashboard .status-pill.authenticating {
-  background: rgba(245, 158, 11, 0.15);
-  color: var(--warning);
+.dashboard .stat-trend.down {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
 }
 
-.dashboard .status-pill.disconnected {
+.dashboard .stat-trend.neutral {
   background: var(--bg-light);
   color: var(--text-muted);
 }
 
-.dashboard .status-pill.failed {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--error);
+.dashboard .charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
 }
 
-<<<<<<< HEAD
-.dashboard .last-active{
-  font-family: 'JetBrains Mono', monospace;
-=======
-.dashboard .last-active {
->>>>>>> upstream/main
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-}
-
-.dashboard .actions {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-
-.dashboard .btn-sm {
-  padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-  background: var(--bg-light);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-}
-
-.dashboard .btn-sm:hover {
-  background: var(--bg-white);
-  border-color: var(--text-muted);
-}
-
-.dashboard .btn-sm.danger {
-  color: var(--error);
-  border-color: rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.12);
-}
-
-.dashboard .btn-sm.danger:hover {
-  background: rgba(239, 68, 68, 0.18);
-}
-
-<<<<<<< HEAD
-@media (max-width: 1400px) {
-  .dashboard .stats-grid{
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .dashboard .stat-card:nth-child(3n+1){
-    border-left: none;
-  }
-
-  .dashboard .stat-card:nth-child(n+4){
-    border-top: 1px solid var(--border);
-  }
-}
-
-@media (max-width: 1000px) {
-  .dashboard .stats-grid{
-=======
-@media (max-width: 1200px) {
-  .dashboard .stats-grid {
->>>>>>> upstream/main
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .dashboard .stat-card:nth-child(2n+1){
-    border-left: none;
-  }
-
-  .dashboard .stat-card:nth-child(n+3){
-    border-top: 1px solid var(--border);
-  }
-}
-
-@media (max-width: 768px) {
-  .dashboard {
-    padding: 1rem;
-  }
-
-  .dashboard .stats-grid {
+@media (max-width: 1024px) {
+  .dashboard .charts {
     grid-template-columns: 1fr;
-    gap: 0;
-    border-radius: 12px;
-  }
-
-  .dashboard .stat-card{
-    border-left: none;
-  }
-
-  .dashboard .stat-card:nth-child(n+2){
-    border-top: 1px solid var(--border);
-  }
-
-  .dashboard .stat-value {
-    font-size: 1.5rem;
-  }
-
-  .dashboard .sessions-section {
-    padding: 1rem;
-  }
-
-  .dashboard .section-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-
-  /* Convert table to card layout on mobile */
-  .dashboard .sessions-table .table-header {
-    display: none;
-  }
-
-  .dashboard .sessions-table .table-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .dashboard .sessions-table .table-row:last-child {
-    border-bottom: none;
-  }
-
-  .dashboard .session-info-cell {
-    order: 1;
-  }
-
-  .dashboard .session-id {
-    font-size: 0.9375rem;
-    font-weight: 600;
-  }
-
-  .dashboard .phone {
-    order: 2;
-  }
-
-  .dashboard .status-pill {
-    order: 3;
-  }
-
-  .dashboard .last-active {
-    order: 4;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-  }
-
-  .dashboard .actions {
-    order: 5;
-    justify-content: flex-start;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--border);
   }
 }
 
-@media (max-width: 480px) {
-  .dashboard {
-    padding: 0.75rem;
+.dashboard .chart-card {
+  background: var(--bg-white);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard .chart-card.wide {
+  grid-column: 1 / -1;
+}
+
+.dashboard .chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.dashboard .chart-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dashboard .chart-legend {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.dashboard .chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.dashboard .chart-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dashboard .empty-table-state,
+.dashboard .charts-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-white);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard .empty-table-state svg,
+.dashboard .charts-empty svg {
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.dashboard .empty-table-state h3,
+.dashboard .charts-empty h3 {
+  margin: 0.5rem 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.dashboard .empty-table-state p,
+.dashboard .charts-empty p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* Ambient background patterns */
+.dashboard .ambient-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.dashboard .ambient-bg::before,
+.dashboard .ambient-bg::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.15;
+  animation: ambient-float 20s ease-in-out infinite;
+}
+
+.dashboard .ambient-bg::before {
+  width: 600px;
+  height: 600px;
+  top: -200px;
+  left: -200px;
+  background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+  animation-delay: 0s;
+}
+
+.dashboard .ambient-bg::after {
+  width: 500px;
+  height: 500px;
+  bottom: -150px;
+  right: -150px;
+  background: radial-gradient(circle, #14b8a6 0%, transparent 70%);
+  animation-delay: -10s;
+}
+
+@keyframes ambient-float {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(30px, -20px) scale(1.05);
+  }
+  50% {
+    transform: translate(-20px, 30px) scale(0.95);
+  }
+  75% {
+    transform: translate(-30px, -20px) scale(1.02);
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .dashboard .ambient-bg::before,
+  .dashboard .ambient-bg::after {
+    animation: none;
+  }
+}
+
+/* Dark mode adjustments for ambient bg */
+@media (prefers-color-scheme: dark) {
+  .dashboard .ambient-bg::before {
+    opacity: 0.1;
+  }
+  .dashboard .ambient-bg::after {
+    opacity: 0.1;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  .dashboard .ambient-bg {
+    display: none;
   }
 }
