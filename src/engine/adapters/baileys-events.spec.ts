@@ -20,14 +20,43 @@ const downloadMediaMessage = jest.fn();
  * a disappearing (ephemeralMessage), view-once, or captioned-document message nests the real
  * payload under a wrapper. An identity stub makes `normalized === content`, which cannot fail when
  * a caller is handed the raw content by mistake — the likeliest slip when these regions move.
+ *
+ * Mirrors the real implementation (`node_modules/@whiskeysockets/baileys/lib/Utils/messages.js`,
+ * `normalizeMessageContent`): it loops, bounded at 5 iterations same as the real max-iterations
+ * guard, unwrapping one FutureProofMessage wrapper per pass — so a combined wrapper (e.g. a
+ * view-once photo inside a disappearing chat: ephemeralMessage → viewOnceMessage → imageMessage)
+ * fully unwraps instead of stopping one level short. `editedMessage` here is `Message.editedMessage`
+ * (the FutureProofMessage wrapper), distinct from `ProtocolMessage.editedMessage` (a plain
+ * `IMessage`), which `baileys-events.ts` handles separately in its MESSAGE_EDIT branch.
  */
+type FutureProofMessage = { message?: unknown } | null | undefined;
+
+interface WrapperEnvelope {
+  ephemeralMessage?: FutureProofMessage;
+  viewOnceMessage?: FutureProofMessage;
+  documentWithCaptionMessage?: FutureProofMessage;
+  viewOnceMessageV2?: FutureProofMessage;
+  viewOnceMessageV2Extension?: FutureProofMessage;
+  editedMessage?: FutureProofMessage;
+}
+
+const getFutureProofMessage = (message: WrapperEnvelope | null | undefined): FutureProofMessage =>
+  message?.ephemeralMessage ??
+  message?.viewOnceMessage ??
+  message?.documentWithCaptionMessage ??
+  message?.viewOnceMessageV2 ??
+  message?.viewOnceMessageV2Extension ??
+  message?.editedMessage;
+
 const normalizeMessageContent = (content: Record<string, unknown> | null | undefined): unknown => {
-  const inner =
-    (content as { ephemeralMessage?: { message?: unknown } })?.ephemeralMessage?.message ??
-    (content as { viewOnceMessage?: { message?: unknown } })?.viewOnceMessage?.message ??
-    (content as { viewOnceMessageV2?: { message?: unknown } })?.viewOnceMessageV2?.message ??
-    (content as { documentWithCaptionMessage?: { message?: unknown } })?.documentWithCaptionMessage?.message;
-  return inner ?? content;
+  if (!content) return undefined;
+  let current: unknown = content;
+  for (let i = 0; i < 5; i++) {
+    const inner = getFutureProofMessage(current as WrapperEnvelope | null | undefined);
+    if (!inner) break;
+    current = inner.message;
+  }
+  return current;
 };
 
 const libStub = {
@@ -319,6 +348,7 @@ describe('BaileysEvents.mapMessage', () => {
       description: 'Monas',
       address: 'Jakarta Pusat',
     });
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
   });
 
   it('reads a quoted reply and disappearing timer nested under an ephemeral wrapper, not the raw content', async () => {
@@ -347,5 +377,60 @@ describe('BaileysEvents.mapMessage', () => {
     expect(incoming.quotedMessage?.id).toBe('wamid.original3');
     expect(incoming.quotedMessage?.body).toBe('the original, wrapped');
     expect(incoming.ephemeralDuration).toBe(86400);
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('reads image media nested under an ephemeral wrapper, not the raw content', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.wrapped3', remoteJid: '15550001111@s.whatsapp.net', fromMe: true },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          ephemeralMessage: {
+            message: {
+              imageMessage: { mimetype: 'image/jpeg', fileLength: 2048 },
+            },
+          },
+        },
+      },
+      'imageMessage',
+      { skipMediaDownload: true },
+    );
+
+    expect(incoming.media).toEqual({
+      mimetype: 'image/jpeg',
+      filename: undefined,
+      omitted: true,
+      sizeBytes: 2048,
+    });
+  });
+
+  it('reads image media nested TWO levels deep (a view-once photo inside a disappearing chat), proving normalization recurses', async () => {
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.wrapped4', remoteJid: '15550001111@s.whatsapp.net', fromMe: true },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          ephemeralMessage: {
+            message: {
+              viewOnceMessage: {
+                message: {
+                  imageMessage: { mimetype: 'image/png', fileLength: 4096 },
+                },
+              },
+            },
+          },
+        },
+      },
+      'imageMessage',
+      { skipMediaDownload: true },
+    );
+
+    expect(incoming.media).toEqual({
+      mimetype: 'image/png',
+      filename: undefined,
+      omitted: true,
+      sizeBytes: 4096,
+    });
   });
 });
