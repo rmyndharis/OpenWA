@@ -46,7 +46,11 @@ export function useRestartFlow(): RestartFlow {
   const [dbSwitch, setDbSwitch] = useState(false);
   const [storageSwitch, setStorageSwitch] = useState(false);
 
-  const open = ({ profiles: newProfiles, dbSwitch: nextDbSwitch, storageSwitch: nextStorageSwitch }: RestartOpenRequest) => {
+  const open = ({
+    profiles: newProfiles,
+    dbSwitch: nextDbSwitch,
+    storageSwitch: nextStorageSwitch,
+  }: RestartOpenRequest) => {
     setProfiles(prev => ({ previous: prev.pending, pending: newProfiles }));
     setDbSwitch(nextDbSwitch);
     setStorageSwitch(nextStorageSwitch);

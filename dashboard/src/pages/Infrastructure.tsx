@@ -123,9 +123,15 @@ export function Infrastructure() {
   // host/.env environment variable, which wins at runtime — so a dashboard change to it won't apply
   // until that variable is unset. Surface that honestly instead of letting the control look effective.
   const dbPinnedByEnv =
-    !configSave.savePending && !!infraStatus && !!savedConfig && infraStatus.database.type !== savedConfig.database.type;
+    !configSave.savePending &&
+    !!infraStatus &&
+    !!savedConfig &&
+    infraStatus.database.type !== savedConfig.database.type;
   const redisPinnedByEnv =
-    !configSave.savePending && !!infraStatus && !!savedConfig && infraStatus.redis.enabled !== savedConfig.redis.enabled;
+    !configSave.savePending &&
+    !!infraStatus &&
+    !!savedConfig &&
+    infraStatus.redis.enabled !== savedConfig.redis.enabled;
   const storagePinnedByEnv =
     !configSave.savePending && !!infraStatus && !!savedConfig && infraStatus.storage.type !== savedConfig.storage.type;
   const envPinNote = (pinned: boolean) =>
@@ -317,7 +323,11 @@ export function Infrastructure() {
               <small>{t('infrastructure.migration.backupHint')}</small>
             </div>
             <div className="data-migration-actions">
-              <button className="btn-secondary btn-sm" onClick={dataBackup.exportBackup} disabled={dataBackup.migrating}>
+              <button
+                className="btn-secondary btn-sm"
+                onClick={dataBackup.exportBackup}
+                disabled={dataBackup.migrating}
+              >
                 {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 {t('infrastructure.migration.export')}
               </button>
@@ -605,7 +615,8 @@ export function Infrastructure() {
               // S3 selected but the backend isn't reachable → warn instead of a misleading green.
               const s3Unreachable =
                 configForm.storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
-              const cls = configForm.storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
+              const cls =
+                configForm.storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
               return (
                 <span className={`status-indicator ${cls}`}>
                   ●{' '}
@@ -764,11 +775,7 @@ export function Infrastructure() {
                         onClick={dataBackup.exportBackup}
                         disabled={dataBackup.migrating}
                       >
-                        {dataBackup.migrating ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <Download size={14} />
-                        )}
+                        {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                         {t('infrastructure.migration.downloadBackup')}
                       </button>
                     )}
@@ -801,7 +808,9 @@ export function Infrastructure() {
                   className="restart-progress-fill"
                   style={{
                     width:
-                      restartFlow.restartCountdown > 0 ? `${((30 - restartFlow.restartCountdown) / 30) * 100}%` : '100%',
+                      restartFlow.restartCountdown > 0
+                        ? `${((30 - restartFlow.restartCountdown) / 30) * 100}%`
+                        : '100%',
                   }}
                 />
               </div>
