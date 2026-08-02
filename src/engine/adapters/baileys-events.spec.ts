@@ -16,6 +16,23 @@ import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 const downloadMediaMessage = jest.fn();
 
 /**
+ * A fresh async-iterable stream of the given chunks — the shape `downloadMediaMessage(msg, 'stream', ...)`
+ * resolves to (see `downloadInboundMediaCapped`, baileys-events.ts:491-525). Mirrors the identically-named
+ * helper in `baileys.adapter.spec.ts`. Without this, the bare `jest.fn()` above resolves to `undefined`,
+ * `for await` over it throws, and the real-download branch's own try/catch (baileys-events.ts:632-637)
+ * swallows that throw before `media` is ever assigned — so that branch can never be exercised at all.
+ */
+function streamOf(...chunks: Buffer[]): AsyncIterable<Buffer> & { destroy: () => void } {
+  return {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async *[Symbol.asyncIterator]() {
+      for (const c of chunks) yield c;
+    },
+    destroy: jest.fn(),
+  };
+}
+
+/**
  * mapMessage reads NORMALIZED content in four places and says so three times in its own comments:
  * a disappearing (ephemeralMessage), view-once, or captioned-document message nests the real
  * payload under a wrapper. An identity stub makes `normalized === content`, which cannot fail when
@@ -67,9 +84,10 @@ const libStub = {
 function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost {
   const noop = (): void => undefined;
   return {
-    // getSocket/getSocketOrNull back the live-call and media-reupload paths only; mapMessage's
-    // own media path is never reached here (every media case passes skipMediaDownload: true).
-    getSocket: () => ({}) as WASocket,
+    // getSocket/getSocketOrNull back the live-call path and the media-reupload handle
+    // (`downloadInboundMediaCapped` reads `getSocket().updateMediaMessage` as the `reuploadRequest`
+    // Baileys' downloadMediaMessage expects — present so the real-download branch has a realistic host).
+    getSocket: () => ({ updateMediaMessage: jest.fn() }) as unknown as WASocket,
     getSocketOrNull: () => null,
     logger: createLogger('BaileysEventsSpec'),
     loadLib: () => Promise.resolve(libStub),
@@ -432,5 +450,37 @@ describe('BaileysEvents.mapMessage', () => {
       omitted: true,
       sizeBytes: 4096,
     });
+  });
+
+  it('downloads image media nested under an ephemeral wrapper, not the raw content (the real-download / pre-download-gate branch, not the skip-marker branch)', async () => {
+    const buf = Buffer.from('IMGDATA');
+    downloadMediaMessage.mockResolvedValueOnce(streamOf(buf));
+
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'wamid.wrapped5', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message: {
+          ephemeralMessage: {
+            message: {
+              imageMessage: { mimetype: 'image/jpeg', fileLength: buf.byteLength },
+            },
+          },
+        },
+      },
+      'imageMessage',
+      // No skipMediaDownload here — this routes through the pre-download-gate + streaming-download
+      // branch (baileys-events.ts:588-638), not the omitted-marker branch every other media case in
+      // this file exercises via `{ skipMediaDownload: true }`.
+    );
+
+    // A completed download's media carries `data` (base64), not `omitted`/`sizeBytes` — asserting the
+    // full shape (not just mimetype) proves this took the real-download path, not the omitted marker.
+    expect(incoming.media).toEqual({
+      mimetype: 'image/jpeg',
+      filename: undefined,
+      data: buf.toString('base64'),
+    });
+    expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
   });
 });
