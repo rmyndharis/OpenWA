@@ -108,7 +108,9 @@ function installFetchStub(): void {
     const sessionIdMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
     if (method === 'GET' && sessionIdMatch) {
       const found = SESSIONS.find(s => s.id === sessionIdMatch[1]);
-      return found ? Promise.resolve(jsonResponse(found)) : Promise.resolve(jsonResponse({ message: 'not found' }, 404));
+      return found
+        ? Promise.resolve(jsonResponse(found))
+        : Promise.resolve(jsonResponse({ message: 'not found' }, 404));
     }
     if (method === 'DELETE' && sessionIdMatch) {
       return Promise.resolve(new Response(null, { status: 204 }));

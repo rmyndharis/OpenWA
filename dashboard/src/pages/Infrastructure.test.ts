@@ -57,11 +57,22 @@ const SAVED_CONFIG: SavedConfig = {
   },
   // headless: false deliberately differs from the component's useState default (true) — asserting
   // it reads false is what proves this field came from /config, not from the initial state.
-  engine: { type: 'whatsapp-web.js', headless: false, sessionDataPath: '/data/custom-sessions', browserArgs: '--headless=new --custom-flag' },
+  engine: {
+    type: 'whatsapp-web.js',
+    headless: false,
+    sessionDataPath: '/data/custom-sessions',
+    browserArgs: '--headless=new --custom-flag',
+  },
 };
 
 const ENGINES: Engine[] = [
-  { id: 'whatsapp-web.js', name: 'WhatsApp Web (Puppeteer)', enabled: true, features: [], library: { name: 'whatsapp-web.js', version: '1.34.7' } },
+  {
+    id: 'whatsapp-web.js',
+    name: 'WhatsApp Web (Puppeteer)',
+    enabled: true,
+    features: [],
+    library: { name: 'whatsapp-web.js', version: '1.34.7' },
+  },
   { id: 'baileys', name: 'Baileys', enabled: true, features: [] },
 ];
 
@@ -117,7 +128,9 @@ function installFetchStub(): void {
     if (method === 'GET' && path === '/api/infra/engines') return Promise.resolve(jsonResponse(ENGINES));
     if (method === 'GET' && path === '/api/infra/engines/current') return Promise.resolve(jsonResponse(CURRENT_ENGINE));
     if (method === 'PUT' && path === '/api/infra/config') {
-      return Promise.resolve(jsonResponse({ message: 'Configuration saved', saved: true, envPath: '.env.generated', profiles: [] }));
+      return Promise.resolve(
+        jsonResponse({ message: 'Configuration saved', saved: true, envPath: '.env.generated', profiles: [] }),
+      );
     }
     if (method === 'POST' && path === '/api/infra/restart') {
       return Promise.resolve(
@@ -128,7 +141,9 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ status: 'ok', details: {} }));
     }
     if (method === 'GET' && path === '/api/infra/export-data') {
-      return Promise.resolve(jsonResponse({ exportedAt: new Date(0).toISOString(), dataDbType: 'postgres', tables: {}, counts: {} }));
+      return Promise.resolve(
+        jsonResponse({ exportedAt: new Date(0).toISOString(), dataDbType: 'postgres', tables: {}, counts: {} }),
+      );
     }
     if (method === 'POST' && path === '/api/infra/import-data') {
       return Promise.resolve(jsonResponse({ imported: true, counts: {} }));

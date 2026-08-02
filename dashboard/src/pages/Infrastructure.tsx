@@ -57,9 +57,11 @@ export function Infrastructure() {
   const configSave = useConfigSave({
     buildPayload: configForm.buildSavePayload,
     onSaved: profiles => {
-      // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
-      // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
-      // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
+      // Flag a backend switch vs what's actually running so the restart modal can warn about the
+      // empty-database / orphaned-media data move before it happens. A switch is: changing type;
+      // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
+      // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
+      // /status, so compare the edited form against the still-cached saved config.
       const dbExternalRetarget =
         configForm.dbConfig.type === 'postgres' &&
         !configForm.dbConfig.builtIn &&
@@ -72,6 +74,9 @@ export function Infrastructure() {
         (configForm.dbConfig.type !== infraStatus.database.type ||
           (configForm.dbConfig.type === 'postgres' && configForm.dbConfig.builtIn !== infraStatus.database.builtIn) ||
           dbExternalRetarget);
+      // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
+      // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
+      // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
       const storageSwitch =
         !!infraStatus &&
         (configForm.storageConfig.type !== infraStatus.storage.type ||
