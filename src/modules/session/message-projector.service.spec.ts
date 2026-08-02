@@ -325,8 +325,12 @@ describe('MessageProjector', () => {
       await new Promise(resolve => setImmediate(resolve));
 
       expect(messageRepository.insert).toHaveBeenCalledTimes(1);
-      expect(eventsGateway.emitMessage).toHaveBeenCalledTimes(1);
-      expect(webhookService.dispatch).toHaveBeenCalledTimes(1);
+      // Pinned to the exact event name and args dispatchInboundMessage passes
+      // (message-projector.service.ts:321,323), matching the assertion style
+      // session.service.spec.ts uses for the same call sites — a bare call-count assertion would
+      // stay green even if the event name flipped to 'message.sent' or the wrong payload was sent.
+      expect(eventsGateway.emitMessage).toHaveBeenCalledWith(SESSION_ID, expect.anything());
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.received', expect.anything());
       expect(sessionRepository.update).toHaveBeenCalledTimes(1);
     });
 
