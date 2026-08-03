@@ -64,7 +64,10 @@ export function Templates() {
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
-  const { data: templates = [], isLoading: loadingTemplates } = useTemplatesQuery(selectedSessionId, !!selectedSessionId);
+  const { data: templates = [], isLoading: loadingTemplates } = useTemplatesQuery(
+    selectedSessionId,
+    !!selectedSessionId,
+  );
   const createMutation = useCreateTemplateMutation();
   const updateMutation = useUpdateTemplateMutation();
   const deleteMutation = useDeleteTemplateMutation();
@@ -371,7 +374,9 @@ export function Templates() {
                   type="button"
                 >
                   {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
-                  {canWrite ? t(editingTemplate ? 'templates.saveChanges' : 'templates.createTemplate') : t('templates.viewOnly')}
+                  {canWrite
+                    ? t(editingTemplate ? 'templates.saveChanges' : 'templates.createTemplate')
+                    : t('templates.viewOnly')}
                 </button>
               </div>
             </div>

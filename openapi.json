@@ -5877,7 +5877,7 @@
   "info": {
     "title": "OpenWA API",
     "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API",
-    "version": "0.12.4",
+    "version": "0.12.5",
     "contact": {
       "name": "OpenWA",
       "url": "https://github.com/rmyndharis/OpenWA",

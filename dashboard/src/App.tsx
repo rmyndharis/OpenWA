@@ -103,28 +103,32 @@ function AppContent() {
   );
 
   if (!isAuthenticated) {
-    return <Suspense fallback={loadingFallback}><Login onLogin={handleLogin} /></Suspense>;
+    return (
+      <Suspense fallback={loadingFallback}>
+        <Login onLogin={handleLogin} />
+      </Suspense>
+    );
   }
 
   return (
     <ToastProvider>
       <BrowserRouter>
         <Suspense fallback={loadingFallback}>
-        <Routes>
-          <Route path="/" element={<Layout onLogout={handleLogout} userRole={role} />}>
-            <Route index element={<Dashboard />} />
-            <Route path="sessions" element={<Sessions />} />
-            <Route path="chats" element={<Chats />} />
-            <Route path="webhooks" element={<Webhooks />} />
-            <Route path="templates" element={<Templates />} />
-            {role === 'admin' && <Route path="api-keys" element={<ApiKeys />} />}
-            <Route path="logs" element={<Logs />} />
-            <Route path="message-tester" element={<MessageTester />} />
-            {role === 'admin' && <Route path="infrastructure" element={<Infrastructure />} />}
-            {role === 'admin' && <Route path="plugins" element={<Plugins />} />}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Route>
-        </Routes>
+          <Routes>
+            <Route path="/" element={<Layout onLogout={handleLogout} userRole={role} />}>
+              <Route index element={<Dashboard />} />
+              <Route path="sessions" element={<Sessions />} />
+              <Route path="chats" element={<Chats />} />
+              <Route path="webhooks" element={<Webhooks />} />
+              <Route path="templates" element={<Templates />} />
+              {role === 'admin' && <Route path="api-keys" element={<ApiKeys />} />}
+              <Route path="logs" element={<Logs />} />
+              <Route path="message-tester" element={<MessageTester />} />
+              {role === 'admin' && <Route path="infrastructure" element={<Infrastructure />} />}
+              {role === 'admin' && <Route path="plugins" element={<Plugins />} />}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
         </Suspense>
       </BrowserRouter>
     </ToastProvider>

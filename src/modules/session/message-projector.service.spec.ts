@@ -1,13 +1,16 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { MessageProjector } from './message-projector.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import type { Repository } from 'typeorm';
-import type { Message } from '../message/entities/message.entity';
-import type { Session } from './entities/session.entity';
-import type { EventsGateway } from '../events/events.gateway';
-import type { WebhookService } from '../webhook/webhook.service';
-import type { HookManager } from '../../core/hooks';
-import type { StatusStoreService } from '../status-store/status-store.service';
-import type { SessionLidResolver } from './session-lid-resolver.service';
+import { Message, MessageDirection } from '../message/entities/message.entity';
+import { Session } from './entities/session.entity';
+import { EventsGateway } from '../events/events.gateway';
+import { WebhookService } from '../webhook/webhook.service';
+import { HookManager } from '../../core/hooks';
+import { StatusStoreService } from '../status-store/status-store.service';
+import { SessionLidResolver } from './session-lid-resolver.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 // Lets a queued mutation settle: the projector's chains are fire-and-forget, so the assertions need
@@ -189,6 +192,162 @@ describe('MessageProjector', () => {
       await projector.persistHistoryMessages('s1', [historyMessage({ id: 'DUP' }), historyMessage({ id: 'DUP' })]);
 
       expect(dedupIds(messageRepository.find)).toEqual(['DUP']);
+    });
+  });
+});
+
+// Separate top-level suite: handleInboundMessage's stale-engine fence and its isStatusBroadcast
+// early return (message-projector.service.ts:114-119) were previously exercised only indirectly
+// through session.service.spec.ts. Uses the TestingModule idiom (mirrors session.service.spec.ts)
+// rather than the direct-construction style above, so the full DI surface (ConfigService,
+// SessionLidResolver) is wired the same way production does.
+describe('MessageProjector (inbound projection)', () => {
+  let projector: MessageProjector;
+  let engines: EngineRegistry;
+  let messageRepository: { create: jest.Mock; insert: jest.Mock; findOne: jest.Mock; update: jest.Mock };
+  let sessionRepository: { update: jest.Mock; findOne: jest.Mock };
+  let eventsGateway: { emitMessage: jest.Mock; emitMessageAck: jest.Mock; emitMessageRevoked: jest.Mock };
+  let webhookService: { dispatch: jest.Mock };
+  let hookManager: { execute: jest.Mock };
+  let statusStore: { ingest: jest.Mock };
+  let lidResolver: { resolveSenderPhone: jest.Mock };
+
+  const SESSION_ID = 'session-1';
+
+  /** A distinct object per test: EngineRegistry compares engine IDENTITY, not shape. */
+  const makeEngine = (): IWhatsAppEngine => ({}) as IWhatsAppEngine;
+
+  const makeIncoming = (overrides: Partial<IncomingMessage> = {}): IncomingMessage => ({
+    id: 'wamid.1',
+    chatId: '15550001111@c.us',
+    from: '15550001111@c.us',
+    to: 'me',
+    body: 'hello',
+    type: 'text',
+    timestamp: 1_700_000_000,
+    fromMe: false,
+    isGroup: false,
+    kind: 'individual',
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    messageRepository = {
+      create: jest.fn((row: unknown) => row),
+      insert: jest.fn().mockResolvedValue({ identifiers: [{ id: 1 }], generatedMaps: [{}] }),
+      findOne: jest.fn().mockResolvedValue(null),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    sessionRepository = { update: jest.fn().mockResolvedValue(undefined), findOne: jest.fn().mockResolvedValue(null) };
+    eventsGateway = { emitMessage: jest.fn(), emitMessageAck: jest.fn(), emitMessageRevoked: jest.fn() };
+    webhookService = { dispatch: jest.fn() };
+    // Mirrors the real HookManager contract (hook-manager.service.ts `execute`/`runHandlers`): resolves
+    // `{ continue, data }`, passing `data` through unchanged when no hooks are registered — exactly
+    // this unit test's environment. `mockResolvedValue(undefined)` would make handleInboundMessage's
+    // `.then(({ data }) => ...)` destructure throw, silently short-circuiting every path below the hook
+    // call via its trailing `.catch(err => this.logger.error(...))` — every assertion past that point
+    // would then fail for a reason unrelated to the behaviour under test.
+    hookManager = { execute: jest.fn((_event: string, data: unknown) => Promise.resolve({ continue: true, data })) };
+    statusStore = { ingest: jest.fn().mockResolvedValue({ row: {}, created: false }) };
+    lidResolver = { resolveSenderPhone: jest.fn().mockResolvedValue(null) };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        MessageProjector,
+        // Real EngineRegistry, not a mock: the liveness fences under test are exactly its
+        // identity semantics. Mirrors session.service.spec.ts.
+        EngineRegistry,
+        { provide: getRepositoryToken(Message, 'data'), useValue: messageRepository },
+        { provide: getRepositoryToken(Session, 'data'), useValue: sessionRepository },
+        { provide: EventsGateway, useValue: eventsGateway },
+        { provide: WebhookService, useValue: webhookService },
+        { provide: HookManager, useValue: hookManager },
+        { provide: StatusStoreService, useValue: statusStore },
+        { provide: SessionLidResolver, useValue: lidResolver },
+        { provide: ConfigService, useValue: { get: jest.fn() } },
+      ],
+    }).compile();
+
+    projector = module.get<MessageProjector>(MessageProjector);
+    engines = module.get<EngineRegistry>(EngineRegistry);
+  });
+
+  describe('handleInboundMessage', () => {
+    it('drops the message when the engine is no longer the live one for the session', () => {
+      const retired = makeEngine();
+      const current = makeEngine();
+      engines.set(SESSION_ID, current);
+
+      projector.handleInboundMessage(SESSION_ID, retired, makeIncoming());
+
+      // The fence returns before ANY side effect, including the fire-and-forget lastActiveAt
+      // update and the message:received hook call themselves — both are invoked synchronously
+      // (their own resolution is async, but the call into the mock is not), so asserting on them
+      // here, without awaiting the microtask queue, is what actually exercises the fence: the
+      // persist/dispatch/emit assertions below would hold regardless of this fence, since nothing
+      // downstream of a promise `.then()` can run before this synchronous block finishes.
+      expect(sessionRepository.update).not.toHaveBeenCalled();
+      expect(hookManager.execute).not.toHaveBeenCalled();
+      expect(messageRepository.insert).not.toHaveBeenCalled();
+      expect(eventsGateway.emitMessage).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+
+    // handleInboundMessage (:114-140) has no `fromMe` gate of its own — only handleOwnSendEcho
+    // (:328-334) drops a non-fromMe event. In production this method is wired to the engine's
+    // inbound-only `message`/`onMessage` callback (session-engine-event-wiring.ts:102), which by
+    // contract never delivers a fromMe echo (the comment at :329-331 spells out why: message_create
+    // is the only event that fires for those). But nothing inside handleInboundMessage itself enforces
+    // that contract — a fromMe message handed to it is still projected as an ordinary inbound row,
+    // just tagged OUTGOING (:255). Pinning this down protects the refactor from silently adding (or
+    // removing) a fromMe drop that does not exist today.
+    it('has no fromMe gate: a fromMe event on the inbound path is still persisted, tagged OUTGOING', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ fromMe: true }));
+      // The projection continues on a promise chain; let the microtask queue drain.
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(messageRepository.insert).toHaveBeenCalledTimes(1);
+      expect(messageRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: MessageDirection.OUTGOING }),
+      );
+      expect(eventsGateway.emitMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('persists, broadcasts and dispatches a normal inbound message', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+      // The projection continues on a promise chain; let the microtask queue drain.
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(messageRepository.insert).toHaveBeenCalledTimes(1);
+      // Pinned to the exact event name and args dispatchInboundMessage passes
+      // (message-projector.service.ts:321,323), matching the assertion style
+      // session.service.spec.ts uses for the same call sites — a bare call-count assertion would
+      // stay green even if the event name flipped to 'message.sent' or the wrong payload was sent.
+      expect(eventsGateway.emitMessage).toHaveBeenCalledWith(SESSION_ID, expect.anything());
+      expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.received', expect.anything());
+      expect(sessionRepository.update).toHaveBeenCalledTimes(1);
+      // Pins the ternary at message-projector.service.ts:255: a genuinely inbound message (fromMe:
+      // false) must be tagged INCOMING, not just "not OUTGOING".
+      expect(messageRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: MessageDirection.INCOMING }),
+      );
+    });
+
+    it('routes a status broadcast to the status store instead of the message table', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ isStatusBroadcast: true }));
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(statusStore.ingest).toHaveBeenCalledTimes(1);
+      expect(messageRepository.insert).not.toHaveBeenCalled();
     });
   });
 });

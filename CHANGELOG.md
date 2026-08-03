@@ -19,6 +19,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REST, the WebSocket gateway and the MCP mount all route through, so every surface agrees on what the
   credential is. Whitespace is never part of a key, so no legitimate credential changes meaning.
 
+## [0.12.5] - 2026-08-03
+
+The follow-up to 0.12.4, and the end of the decomposition work. **Nothing here is visible to a user or
+to an API client**: no route, payload, schema or `operationId` changed, and `openapi.json` is identical
+to 0.12.4 — 129 paths, 68 schemas. It is published so the shipped image matches a codebase whose
+riskiest paths are now genuinely under test.
+
+Three units that 0.12.4 left oversized were finished off. `infra-data.controller.ts` went from 997 to
+467 lines — only ~430 of it was ever a controller, with 13 row interfaces and a 300-line
+INSERT-descriptor table sitting in front of two route handlers. `infra-config.controller.ts` went from
+703 to 487: four config-section appliers that already took everything as parameters became free
+functions. And `mapMessage`, at 186 lines the largest method in the codebase, is now 44 — its two pure
+regions moved to the mapper module, while the media region stayed a private method because it
+downloads, logs and reads the environment.
+
+On the dashboard, `Infrastructure.tsx` went from 17 pieces of component state to 1 and `Sessions.tsx`
+from 20 to 10, moved into seven custom hooks. The split is deliberately asymmetric: hooks take state,
+components would take only markup. A hook's state lives in its caller, so moving it there preserves
+its lifetime, whereas moving it into a child destroys it when the child unmounts — the bug that cost a
+typed chat draft in 0.12.4 and a staged attachment right after. In the end no child component was
+extracted at all, which makes that failure mode unreachable here rather than merely avoided.
+
+Two long-standing coverage gaps closed with it: `MessageProjector` and `BaileysEvents` now have specs
+of their own instead of being covered only through their callers.
+
+### The verification, since that is what this release is actually for
+
+No refactor commit was allowed to modify a test. Every extraction had to prove itself against
+assertions written before the code moved, and the dashboard suite was re-run in a worktree at the
+pre-refactor commit to confirm the same tests pass on both sides.
+
+Writing those tests first exposed how little the old ones constrained. Six assertions passed on their
+first run yet could not fail against the defect they existed to catch: a fence test that only asserted
+on effects occurring after an `await`; a "no media" check that could not tell a skipped branch from a
+crashed one; a negative assertion whose fixture supplied no value to ignore; a media-type list where
+deleting `stickerMessage` passed all 4,067 tests; a quoted-context chain covered for one of seven
+arms; and an inbound test that never asserted direction, so tagging every inbound message as outgoing
+stayed green. Each is now mutation-sensitive.
+
+The data-import descriptor table also gained a load-time completeness check, because `importData`
+casts its counts object — a descriptor dropped while transcribing 300 lines would have compiled,
+silently skipped its table, and vanished from the restored-row total that guards against wiping a
+database with an empty payload.
+
+Backend suite 4,051 → 4,070; dashboard 266 → 272.
+
 ## [0.12.4] - 2026-08-02
 
 A large internal release with a deliberately small external surface: roughly 30,000 changed lines,

@@ -303,9 +303,7 @@ function ChatComposer({
             <div className="replying-to-title">
               {t('chats.replyingTo', {
                 name:
-                  replyingTo.direction === 'outgoing'
-                    ? t('chats.you')
-                    : activeChat.name || activeChat.id.split('@')[0],
+                  replyingTo.direction === 'outgoing' ? t('chats.you') : activeChat.name || activeChat.id.split('@')[0],
               })}
             </div>
             <div className="replying-to-body">

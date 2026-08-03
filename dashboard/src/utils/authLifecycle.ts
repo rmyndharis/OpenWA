@@ -22,10 +22,7 @@ export function clearActorState(...caches: ClearableCache[]): void {
   for (const cache of caches) cache.clear();
 }
 
-export type StartupValidation =
-  | { action: 'role'; role: UserRole }
-  | { action: 'logout' }
-  | { action: 'keep' };
+export type StartupValidation = { action: 'role'; role: UserRole } | { action: 'logout' } | { action: 'keep' };
 
 /**
  * Fold the startup /auth/validate answer into an auth decision:

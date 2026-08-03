@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   Database,
@@ -13,11 +13,14 @@ import {
   Download,
   Upload,
 } from 'lucide-react';
-import { infraApi, API_BASE_URL } from '../services/api';
+import { API_BASE_URL } from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
-import { restartPollAttempts } from '../utils/restartPoll';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useInfraStatusQuery, useInfraConfigQuery, useEnginesQuery, useCurrentEngineQuery } from '../hooks/queries';
+import { useInfraConfigForm } from '../hooks/useInfraConfigForm';
+import { useConfigSave } from '../hooks/useConfigSave';
+import { useRestartFlow } from '../hooks/useRestartFlow';
+import { useDataBackup } from '../hooks/useDataBackup';
 import { PageHeader } from '../components/PageHeader';
 import { Modal } from '../components/Modal';
 import { useToast } from '../hooks/useToast';
@@ -27,46 +30,6 @@ import sqliteIcon from '../assets/icons/sqlite.svg';
 import postgresIcon from '../assets/icons/postgresql.svg';
 import folderIcon from '../assets/icons/folder.svg';
 import s3Icon from '../assets/icons/s3.svg';
-
-interface DatabaseConfig {
-  type: 'sqlite' | 'postgres';
-  builtIn: boolean;
-  host: string;
-  port: string;
-  username: string;
-  password: string;
-  database: string;
-  schema: string;
-  poolSize: number;
-  sslEnabled: boolean;
-  sslRejectUnauthorized: boolean;
-}
-
-interface RedisConfig {
-  builtIn: boolean;
-  host: string;
-  port: string;
-  password: string;
-  connected: boolean;
-}
-
-interface StorageConfig {
-  type: 'local' | 's3';
-  builtIn: boolean;
-  localPath: string;
-  s3Bucket: string;
-  s3Region: string;
-  s3AccessKey: string;
-  s3SecretKey: string;
-  s3Endpoint: string;
-}
-
-interface EngineConfig {
-  type: string;
-  headless: boolean;
-  sessionDataPath: string;
-  browserArgs: string;
-}
 
 interface QueueStats {
   pending: number;
@@ -83,175 +46,57 @@ export function Infrastructure() {
   const { data: engines = [] } = useEnginesQuery();
   const { data: currentEngineData } = useCurrentEngineQuery();
   const currentEngine = currentEngineData?.engineType ?? '';
-  const [saving, setSaving] = useState(false);
-  const [showRestartModal, setShowRestartModal] = useState(false);
-  const [restartCountdown, setRestartCountdown] = useState(0);
-  const [restartStatus, setRestartStatus] = useState<'idle' | 'restarting' | 'waiting' | 'success' | 'error'>('idle');
 
-  const [dbConfig, setDbConfig] = useState<DatabaseConfig>({
-    type: 'sqlite',
-    builtIn: false,
-    host: 'localhost',
-    port: '5432',
-    username: 'postgres',
-    password: '',
-    database: 'openwa',
-    schema: 'public',
-    poolSize: 10,
-    sslEnabled: false,
-    sslRejectUnauthorized: true,
-  });
+  const configForm = useInfraConfigForm(infraStatus, savedConfig, currentEngine);
+  const restartFlow = useRestartFlow();
+  const dataBackup = useDataBackup();
 
-  const [redisConfig, setRedisConfig] = useState<RedisConfig>({
-    builtIn: false,
-    host: 'localhost',
-    port: '6379',
-    password: '',
-    connected: false,
-  });
-
-  const [storageConfig, setStorageConfig] = useState<StorageConfig>({
-    type: 'local',
-    builtIn: false,
-    localPath: './data/media',
-    s3Bucket: '',
-    s3Region: 'ap-southeast-1',
-    s3AccessKey: '',
-    s3SecretKey: '',
-    s3Endpoint: '',
+  // Reads dbConfig/storageConfig (from configForm) plus infraStatus/savedConfig to decide whether the
+  // just-saved config crosses to a different backend, then hands the restart flow everything it needs
+  // to open — the one-way edge between the save and restart hooks.
+  const configSave = useConfigSave({
+    buildPayload: configForm.buildSavePayload,
+    onSaved: profiles => {
+      // Flag a backend switch vs what's actually running so the restart modal can warn about the
+      // empty-database / orphaned-media data move before it happens. A switch is: changing type;
+      // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
+      // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
+      // /status, so compare the edited form against the still-cached saved config.
+      const dbExternalRetarget =
+        configForm.dbConfig.type === 'postgres' &&
+        !configForm.dbConfig.builtIn &&
+        !!savedConfig &&
+        (configForm.dbConfig.host !== savedConfig.database.host ||
+          configForm.dbConfig.port !== savedConfig.database.port ||
+          configForm.dbConfig.database !== savedConfig.database.database);
+      const dbSwitch =
+        !!infraStatus &&
+        (configForm.dbConfig.type !== infraStatus.database.type ||
+          (configForm.dbConfig.type === 'postgres' && configForm.dbConfig.builtIn !== infraStatus.database.builtIn) ||
+          dbExternalRetarget);
+      // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
+      // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
+      // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
+      const storageSwitch =
+        !!infraStatus &&
+        (configForm.storageConfig.type !== infraStatus.storage.type ||
+          (configForm.storageConfig.type === 's3' && configForm.storageConfig.builtIn !== infraStatus.storage.builtIn));
+      restartFlow.open({ profiles, dbSwitch, storageSwitch });
+    },
   });
 
   const [queueStats, setQueueStats] = useState({
     webhooks: { pending: 0, completed: 0, failed: 0 } as QueueStats,
   });
 
-  const [engineConfig, setEngineConfig] = useState<EngineConfig>({
-    type: 'whatsapp-web.js',
-    headless: true,
-    sessionDataPath: './data/sessions',
-    browserArgs: '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu',
-  });
-
-  const [redisEnabled, setRedisEnabled] = useState(false);
-  const [queueEnabled, setQueueEnabled] = useState(false);
-  const [pendingProfiles, setPendingProfiles] = useState<string[]>([]);
-  const [previousProfiles, setPreviousProfiles] = useState<string[]>([]);
-  // Set when the just-saved config changes the DB or storage backend vs what's running, so the restart
-  // modal can warn that the new backend starts empty and offer a data backup before switching (#488).
-  const [dbSwitch, setDbSwitch] = useState(false);
-  const [storageSwitch, setStorageSwitch] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  // After a successful save (before the restart reloads the page), /config holds the new value but
-  // /status still holds the old one — so suppress the "pinned by environment" note, which infers a pin
-  // from exactly that divergence and would otherwise mislabel a pending change.
-  const [savePending, setSavePending] = useState(false);
-
-  // Whether the editable form has been seeded from the server once. After that, a background refetch
-  // (react-query refetchOnWindowFocus) must NOT re-seed the editable fields or it would wipe the
-  // operator's in-progress, unsaved edits. A successful save restarts → full page reload, re-arming it.
-  const formHydrated = useRef(false);
-
-  // The engine radio seeds ONCE from the running engine (which honours a real ENGINE_TYPE env override
-  // over the saved .env.generated value — see the effect below), then is never re-stamped by a background
-  // refetch. `engineTouched` additionally wins over a late first resolution: if the operator clicked a
-  // different engine before /engines/current resolved, the delayed seed must not revert their selection (#735).
-  const engineHydrated = useRef(false);
-  const engineTouched = useRef(false);
-
-  /** Whether engineConfig.type reflects a real value (seeded from the running engine or user-picked)
-   * rather than the useState default — the save payload omits `type` when it doesn't. */
-  const engineTypeKnown = (): boolean => engineHydrated.current || engineTouched.current;
-
   // LIVE indicators (not editable) — always reflect the running process, every refetch.
   useEffect(() => {
     if (!infraStatus) return;
-    setRedisConfig(prev => ({ ...prev, connected: infraStatus.redis.connected }));
+    configForm.setRedisConnected(infraStatus.redis.connected);
     setQueueStats({ webhooks: infraStatus.queue.webhooks });
+    // configForm is a fresh object every render; only infraStatus identity should re-arm this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [infraStatus]);
-
-  // Seed the EDITABLE selections from live /status ONCE (the running selection), guarded so a refetch
-  // can't clobber an unsaved edit. These are also the badge sources, so on first paint they show what's
-  // actually running (#488 family).
-  useEffect(() => {
-    if (!infraStatus || formHydrated.current) return;
-    setDbConfig(prev => ({
-      ...prev,
-      type: (infraStatus.database.type as 'sqlite' | 'postgres') || 'sqlite',
-      host: infraStatus.database.host || 'localhost',
-      // builtIn reflects whether OpenWA's bundled container is actually running (live), not saved intent.
-      builtIn: infraStatus.database.builtIn,
-    }));
-    setRedisConfig(prev => ({
-      ...prev,
-      host: infraStatus.redis.host,
-      port: String(infraStatus.redis.port),
-      builtIn: infraStatus.redis.builtIn,
-    }));
-    setRedisEnabled(infraStatus.redis.enabled);
-    setStorageConfig(prev => ({
-      ...prev,
-      type: infraStatus.storage.type,
-      localPath: infraStatus.storage.path || './uploads',
-      builtIn: infraStatus.storage.builtIn,
-    }));
-    setQueueEnabled(infraStatus.queue.enabled);
-  }, [infraStatus]);
-
-  // Hydrate the editable form from the saved config (data/.env.generated) ONCE — only the detail fields
-  // /status does not expose (username, pool size, SSL flags, S3 details, host/port). The "what's
-  // running" fields (type, redis enabled, storage type, built-in) are owned by the live /status effect
-  // above. Secrets are never returned, so their inputs stay empty; an empty submit preserves the stored
-  // secret on the backend (#226).
-  useEffect(() => {
-    if (!savedConfig || formHydrated.current) return;
-    // NOTE: builtIn for db/redis/storage is owned by the live /status effect above (it reflects the
-    // actually-running bundled container), so it is intentionally NOT set here from saved intent.
-    setDbConfig(prev => ({
-      ...prev,
-      host: savedConfig.database.host || prev.host,
-      port: savedConfig.database.port || prev.port,
-      username: savedConfig.database.username || prev.username,
-      database: savedConfig.database.database || prev.database,
-      schema: savedConfig.database.schema || prev.schema,
-      poolSize: savedConfig.database.poolSize,
-      sslEnabled: savedConfig.database.sslEnabled,
-      sslRejectUnauthorized: savedConfig.database.sslRejectUnauthorized,
-    }));
-    setRedisConfig(prev => ({
-      ...prev,
-      host: savedConfig.redis.host || prev.host,
-      port: savedConfig.redis.port || prev.port,
-    }));
-    setStorageConfig(prev => ({
-      ...prev,
-      localPath: savedConfig.storage.localPath || prev.localPath,
-      s3Bucket: savedConfig.storage.s3Bucket || prev.s3Bucket,
-      s3Region: savedConfig.storage.s3Region || prev.s3Region,
-      s3Endpoint: savedConfig.storage.s3Endpoint || prev.s3Endpoint,
-    }));
-    setEngineConfig(prev => ({
-      ...prev,
-      headless: savedConfig.engine.headless,
-      sessionDataPath: savedConfig.engine.sessionDataPath || prev.sessionDataPath,
-      browserArgs: savedConfig.engine.browserArgs || prev.browserArgs,
-    }));
-  }, [savedConfig]);
-
-  // Lock the editable form once both sources have seeded it, so later background refetches only refresh
-  // the live indicators above and never overwrite unsaved edits.
-  useEffect(() => {
-    if (infraStatus && savedConfig) formHydrated.current = true;
-  }, [infraStatus, savedConfig]);
-
-  // The active engine reflects what's actually running (honours a real-env ENGINE_TYPE override),
-  // so seed the selected radio from it rather than the saved .env.generated value — but only ONCE, and
-  // never after the operator has touched it. Without this guard a background refetch (or a late first
-  // resolution racing an early click) re-stamps the running engine over an in-progress selection (#735).
-  useEffect(() => {
-    if (!currentEngine || engineHydrated.current || engineTouched.current) return;
-    engineHydrated.current = true;
-    setEngineConfig(prev => (prev.type === currentEngine ? prev : { ...prev, type: currentEngine }));
-  }, [currentEngine]);
 
   if (loading) {
     return (
@@ -279,242 +124,21 @@ export function Infrastructure() {
     );
   }
 
-  const updateDbConfig = (key: keyof DatabaseConfig, value: string | number | boolean) =>
-    setDbConfig(prev => ({ ...prev, [key]: value }));
-  const updateRedisConfig = (key: keyof RedisConfig, value: string | boolean) =>
-    setRedisConfig(prev => ({ ...prev, [key]: value }));
-  const updateStorageConfig = (key: keyof StorageConfig, value: string | boolean) =>
-    setStorageConfig(prev => ({ ...prev, [key]: value }));
-  const updateEngineConfig = (key: keyof EngineConfig, value: string | boolean) => {
-    if (key === 'type') engineTouched.current = true;
-    setEngineConfig(prev => ({ ...prev, [key]: value }));
-  };
-
-  const handleSaveConfig = async () => {
-    setSaving(true);
-    try {
-      const payload = {
-        database: { ...dbConfig },
-        // `connected` is runtime-only status, not persisted configuration. Keep it out of the
-        // whitelisted backend DTO so a valid dashboard save cannot be rejected as an unknown field.
-        redis: {
-          enabled: redisEnabled,
-          builtIn: redisConfig.builtIn,
-          host: redisConfig.host,
-          port: redisConfig.port,
-          password: redisConfig.password,
-        },
-        queue: { enabled: queueEnabled },
-        storage: { ...storageConfig },
-        // Only send `type` once we actually know it — either the radio seeded from the running engine
-        // or the operator picked one. If /engines/current never resolved (endpoint down), engineConfig.type
-        // still holds its useState default, and sending that would persist ENGINE_TYPE and silently flip
-        // the engine on the next restart. The backend treats an absent `type` as "leave ENGINE_TYPE alone".
-        engine: engineTypeKnown() ? { ...engineConfig } : { ...engineConfig, type: undefined },
-      };
-
-      const result = await infraApi.saveConfig(payload);
-      if (result.saved) {
-        setSavePending(true);
-        setPreviousProfiles(pendingProfiles);
-        setPendingProfiles(result.profiles || []);
-        // Flag a backend switch vs what's actually running so the restart modal can warn about the
-        // empty-database / orphaned-media data move before it happens. A switch is: changing type;
-        // flipping built-in↔external (different physical backend); OR retargeting an external Postgres
-        // to a different host/port/database (also a different, empty DB). Host/port/db aren't all in
-        // /status, so compare the edited form against the still-cached saved config.
-        const dbExternalRetarget =
-          dbConfig.type === 'postgres' &&
-          !dbConfig.builtIn &&
-          !!savedConfig &&
-          (dbConfig.host !== savedConfig.database.host ||
-            dbConfig.port !== savedConfig.database.port ||
-            dbConfig.database !== savedConfig.database.database);
-        setDbSwitch(
-          !!infraStatus &&
-            (dbConfig.type !== infraStatus.database.type ||
-              (dbConfig.type === 'postgres' && dbConfig.builtIn !== infraStatus.database.builtIn) ||
-              dbExternalRetarget),
-        );
-        // Scope: this warns on a backend-TYPE change (local↔s3) and a built-in↔external flip — the cases
-        // that point at a different store. It does NOT warn on same-backend repointing (e.g. a new S3
-        // bucket/endpoint or a new local path); region/endpoint aren't on /status to compare reliably.
-        setStorageSwitch(
-          !!infraStatus &&
-            (storageConfig.type !== infraStatus.storage.type ||
-              (storageConfig.type === 's3' && storageConfig.builtIn !== infraStatus.storage.builtIn)),
-        );
-        setShowRestartModal(true);
-      } else {
-        toast.error(t('infrastructure.toasts.saveFailed'), result.message);
-      }
-    } catch (err) {
-      toast.error(t('infrastructure.toasts.saveFailed'), err instanceof Error ? err.message : t('common.unknownError'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Download a JSON backup of all Data-DB tables. Called BEFORE a DB switch (while still on the old
-  // database) so the data can be re-imported into the new one — switching otherwise starts empty (#488).
-  const handleExportBackup = async () => {
-    setMigrating(true);
-    try {
-      const dump = await infraApi.exportData();
-      const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `openwa-backup-${dump.exportedAt?.slice(0, 10) || 'data'}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      toast.error(
-        t('infrastructure.migration.exportFailed'),
-        err instanceof Error ? err.message : t('common.unknownError'),
-      );
-    } finally {
-      setMigrating(false);
-    }
-  };
-
-  // POST the replace-all restore and fold the backend's orphan-engine contract into the UI. A 409
-  // means live engines exist for sessions the backup would remove (the server message lists them);
-  // the contract's preferred retry is stopOrphans=true, which stops those engines inside the
-  // request, so offer it as a confirm. force=true is deliberately not offered (the api client does
-  // not even send it): it leaves the engines running until a restart.
-  const runImport = async (tables: Record<string, unknown[]>, stopOrphans = false): Promise<void> => {
-    try {
-      const res = await infraApi.importData(tables, stopOrphans ? { stopOrphans: true } : undefined);
-      if (res.imported) {
-        // notices carry non-fatal operator messages (orphan teardown details); restartRequired
-        // means a teardown failed and only a restart guarantees cleanup — surface both on success.
-        if (res.restartRequired || (res.notices && res.notices.length > 0)) {
-          toast.warning(t('infrastructure.migration.importOk'), (res.notices ?? []).join('; ') || undefined);
-        } else {
-          toast.success(t('infrastructure.migration.importOk'));
-        }
-      } else {
-        toast.error(
-          t('infrastructure.migration.importFailed'),
-          (res.warnings || []).slice(0, 3).join('; ') || res.message,
-        );
-      }
-    } catch (err) {
-      const status = (err as { status?: number } | null)?.status;
-      if (status === 409 && !stopOrphans && err instanceof Error) {
-        // The confirm doubles as the refusal display: OK retries with stopOrphans=true, Cancel
-        // leaves the engines (and the current data) untouched. A 409 on the retry itself (an
-        // engine started mid-import) falls through to the plain error toast — no confirm loop.
-        if (window.confirm(err.message)) await runImport(tables, true);
-        else toast.error(t('infrastructure.migration.importFailed'), err.message);
-        return;
-      }
-      // A large backup can exceed the request body cap (default 25mb) — give an actionable message
-      // instead of a bare "Payload Too Large". The status is carried on the Error by the api client.
-      const detail =
-        status === 413
-          ? t('infrastructure.migration.importTooLarge')
-          : err instanceof Error
-            ? err.message
-            : t('common.unknownError');
-      toast.error(t('infrastructure.migration.importFailed'), detail);
-    }
-  };
-
-  // Restore a previously-exported backup into the CURRENT database (use after switching + restart).
-  // Import REPLACES all current data, so validate + confirm (showing the row count) before any call.
-  const handleImportBackup = async (file: File) => {
-    let parsed: { tables?: Record<string, unknown[]> };
-    try {
-      parsed = JSON.parse(await file.text()) as { tables?: Record<string, unknown[]> };
-    } catch {
-      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
-      return;
-    }
-    if (!parsed?.tables || typeof parsed.tables !== 'object') {
-      toast.error(t('infrastructure.migration.importFailed'), t('infrastructure.migration.invalidFile'));
-      return;
-    }
-    const rows = Object.values(parsed.tables).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
-    if (!window.confirm(t('infrastructure.migration.importConfirm', { rows }))) return;
-    setMigrating(true);
-    try {
-      await runImport(parsed.tables);
-    } finally {
-      setMigrating(false);
-    }
-  };
-
-  const handleRestart = async () => {
-    setRestartStatus('restarting');
-    setRestartCountdown(30);
-
-    const profilesToRemove = previousProfiles.filter(p => !pendingProfiles.includes(p));
-
-    // Kept outside the try: the poll deadline is derived from it, and the restart call is expected to
-    // fail sometimes (the server may go down before it answers).
-    let estimatedTime: number | undefined;
-    try {
-      const response = await infraApi.restart(pendingProfiles, profilesToRemove);
-      estimatedTime = response.estimatedTime;
-      if (response.estimatedTime) setRestartCountdown(response.estimatedTime);
-    } catch {
-      // Expected — server shutting down
-    }
-
-    setRestartStatus('waiting');
-    let intervalRef: ReturnType<typeof setInterval> | null = null;
-    const stopCountdown = () => {
-      if (intervalRef) {
-        clearInterval(intervalRef);
-        intervalRef = null;
-      }
-    };
-
-    intervalRef = setInterval(() => {
-      setRestartCountdown(prev => {
-        if (prev <= 1) {
-          stopCountdown();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    checkServerHealth(stopCountdown, estimatedTime);
-  };
-
-  const checkServerHealth = async (stopCountdown?: () => void, estimatedTime?: number) => {
-    let attempts = 0;
-    const maxAttempts = restartPollAttempts(estimatedTime);
-
-    const check = async () => {
-      try {
-        await infraApi.healthCheck();
-        stopCountdown?.();
-        setRestartCountdown(0);
-        setRestartStatus('success');
-        setTimeout(() => window.location.reload(), 2000);
-      } catch {
-        attempts++;
-        if (attempts < maxAttempts) setTimeout(check, 1000);
-        else setRestartStatus('error');
-      }
-    };
-
-    setTimeout(check, 3000);
-  };
-
   // A setting whose RUNNING value (/status) differs from the SAVED file (/config) is being pinned by a
   // host/.env environment variable, which wins at runtime — so a dashboard change to it won't apply
   // until that variable is unset. Surface that honestly instead of letting the control look effective.
   const dbPinnedByEnv =
-    !savePending && !!infraStatus && !!savedConfig && infraStatus.database.type !== savedConfig.database.type;
+    !configSave.savePending &&
+    !!infraStatus &&
+    !!savedConfig &&
+    infraStatus.database.type !== savedConfig.database.type;
   const redisPinnedByEnv =
-    !savePending && !!infraStatus && !!savedConfig && infraStatus.redis.enabled !== savedConfig.redis.enabled;
+    !configSave.savePending &&
+    !!infraStatus &&
+    !!savedConfig &&
+    infraStatus.redis.enabled !== savedConfig.redis.enabled;
   const storagePinnedByEnv =
-    !savePending && !!infraStatus && !!savedConfig && infraStatus.storage.type !== savedConfig.storage.type;
+    !configSave.savePending && !!infraStatus && !!savedConfig && infraStatus.storage.type !== savedConfig.storage.type;
   const envPinNote = (pinned: boolean) =>
     pinned ? (
       <p className="env-pin-note">
@@ -534,30 +158,30 @@ export function Infrastructure() {
               <Database size={20} />
               <h2>{t('infrastructure.database.title')}</h2>
             </div>
-            <span className={`status-indicator ${dbConfig.type === 'postgres' ? 'connected' : 'sqlite'}`}>
-              ● {dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
+            <span className={`status-indicator ${configForm.dbConfig.type === 'postgres' ? 'connected' : 'sqlite'}`}>
+              ● {configForm.dbConfig.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}
             </span>
           </div>
           {envPinNote(dbPinnedByEnv)}
 
           <div className="radio-group">
-            <label className={`radio-option ${dbConfig.type === 'sqlite' ? 'selected' : ''}`}>
+            <label className={`radio-option ${configForm.dbConfig.type === 'sqlite' ? 'selected' : ''}`}>
               <input
                 type="radio"
                 name="dbType"
-                checked={dbConfig.type === 'sqlite'}
-                onChange={() => updateDbConfig('type', 'sqlite')}
+                checked={configForm.dbConfig.type === 'sqlite'}
+                onChange={() => configForm.updateDbConfig('type', 'sqlite')}
               />
               <img src={sqliteIcon} alt="" className="watermark-icon" />
               <span>{t('infrastructure.database.sqlite')}</span>
               <small>{t('infrastructure.database.sqliteDesc')}</small>
             </label>
-            <label className={`radio-option ${dbConfig.type === 'postgres' ? 'selected' : ''}`}>
+            <label className={`radio-option ${configForm.dbConfig.type === 'postgres' ? 'selected' : ''}`}>
               <input
                 type="radio"
                 name="dbType"
-                checked={dbConfig.type === 'postgres'}
-                onChange={() => updateDbConfig('type', 'postgres')}
+                checked={configForm.dbConfig.type === 'postgres'}
+                onChange={() => configForm.updateDbConfig('type', 'postgres')}
               />
               <img src={postgresIcon} alt="" className="watermark-icon" />
               <span>{t('infrastructure.database.postgres')}</span>
@@ -565,7 +189,7 @@ export function Infrastructure() {
             </label>
           </div>
 
-          {dbConfig.type === 'postgres' && (
+          {configForm.dbConfig.type === 'postgres' && (
             <>
               <div className="toggle-row toggle-row-spaced">
                 <div className="toggle-info">
@@ -575,23 +199,31 @@ export function Infrastructure() {
                 <label className="toggle-switch">
                   <input
                     type="checkbox"
-                    checked={dbConfig.builtIn}
-                    onChange={e => updateDbConfig('builtIn', e.target.checked)}
+                    checked={configForm.dbConfig.builtIn}
+                    onChange={e => configForm.updateDbConfig('builtIn', e.target.checked)}
                   />
                   <span className="toggle-slider"></span>
                 </label>
               </div>
 
-              {!dbConfig.builtIn && (
+              {!configForm.dbConfig.builtIn && (
                 <div className="config-form">
                   <div className="form-row">
                     <div className="form-group">
                       <label>{t('common.host')}</label>
-                      <input type="text" value={dbConfig.host} onChange={e => updateDbConfig('host', e.target.value)} />
+                      <input
+                        type="text"
+                        value={configForm.dbConfig.host}
+                        onChange={e => configForm.updateDbConfig('host', e.target.value)}
+                      />
                     </div>
                     <div className="form-group small">
                       <label>{t('common.port')}</label>
-                      <input type="text" value={dbConfig.port} onChange={e => updateDbConfig('port', e.target.value)} />
+                      <input
+                        type="text"
+                        value={configForm.dbConfig.port}
+                        onChange={e => configForm.updateDbConfig('port', e.target.value)}
+                      />
                     </div>
                   </div>
                   <div className="form-row">
@@ -599,16 +231,16 @@ export function Infrastructure() {
                       <label>{t('common.username')}</label>
                       <input
                         type="text"
-                        value={dbConfig.username}
-                        onChange={e => updateDbConfig('username', e.target.value)}
+                        value={configForm.dbConfig.username}
+                        onChange={e => configForm.updateDbConfig('username', e.target.value)}
                       />
                     </div>
                     <div className="form-group">
                       <label>{t('common.password')}</label>
                       <input
                         type="password"
-                        value={dbConfig.password}
-                        onChange={e => updateDbConfig('password', e.target.value)}
+                        value={configForm.dbConfig.password}
+                        onChange={e => configForm.updateDbConfig('password', e.target.value)}
                       />
                     </div>
                   </div>
@@ -617,8 +249,8 @@ export function Infrastructure() {
                       <label>{t('infrastructure.database.dbName')}</label>
                       <input
                         type="text"
-                        value={dbConfig.database}
-                        onChange={e => updateDbConfig('database', e.target.value)}
+                        value={configForm.dbConfig.database}
+                        onChange={e => configForm.updateDbConfig('database', e.target.value)}
                       />
                     </div>
                     <div className="form-group small">
@@ -627,8 +259,8 @@ export function Infrastructure() {
                         type="number"
                         min="1"
                         max="50"
-                        value={dbConfig.poolSize}
-                        onChange={e => updateDbConfig('poolSize', parseInt(e.target.value))}
+                        value={configForm.dbConfig.poolSize}
+                        onChange={e => configForm.updateDbConfig('poolSize', parseInt(e.target.value))}
                       />
                     </div>
                   </div>
@@ -637,8 +269,8 @@ export function Infrastructure() {
                       <label>{t('infrastructure.database.schema')}</label>
                       <input
                         type="text"
-                        value={dbConfig.schema}
-                        onChange={e => updateDbConfig('schema', e.target.value)}
+                        value={configForm.dbConfig.schema}
+                        onChange={e => configForm.updateDbConfig('schema', e.target.value)}
                         placeholder="public"
                       />
                       <small>{t('infrastructure.database.schemaDesc')}</small>
@@ -652,13 +284,13 @@ export function Infrastructure() {
                     <label className="toggle-switch">
                       <input
                         type="checkbox"
-                        checked={dbConfig.sslEnabled}
-                        onChange={e => updateDbConfig('sslEnabled', e.target.checked)}
+                        checked={configForm.dbConfig.sslEnabled}
+                        onChange={e => configForm.updateDbConfig('sslEnabled', e.target.checked)}
                       />
                       <span className="toggle-slider"></span>
                     </label>
                   </div>
-                  {dbConfig.sslEnabled && (
+                  {configForm.dbConfig.sslEnabled && (
                     <div className="toggle-row">
                       <div className="toggle-info">
                         <span>{t('infrastructure.database.sslRejectUnauthorized')}</span>
@@ -667,8 +299,8 @@ export function Infrastructure() {
                       <label className="toggle-switch">
                         <input
                           type="checkbox"
-                          checked={dbConfig.sslRejectUnauthorized}
-                          onChange={e => updateDbConfig('sslRejectUnauthorized', e.target.checked)}
+                          checked={configForm.dbConfig.sslRejectUnauthorized}
+                          onChange={e => configForm.updateDbConfig('sslRejectUnauthorized', e.target.checked)}
                         />
                         <span className="toggle-slider"></span>
                       </label>
@@ -696,21 +328,25 @@ export function Infrastructure() {
               <small>{t('infrastructure.migration.backupHint')}</small>
             </div>
             <div className="data-migration-actions">
-              <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
-                {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              <button
+                className="btn-secondary btn-sm"
+                onClick={dataBackup.exportBackup}
+                disabled={dataBackup.migrating}
+              >
+                {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 {t('infrastructure.migration.export')}
               </button>
-              <label className="btn-secondary btn-sm" style={{ cursor: migrating ? 'default' : 'pointer' }}>
+              <label className="btn-secondary btn-sm" style={{ cursor: dataBackup.migrating ? 'default' : 'pointer' }}>
                 <Upload size={14} />
                 {t('infrastructure.migration.import')}
                 <input
                   type="file"
                   accept="application/json,.json"
                   className="hidden-file-input"
-                  disabled={migrating}
+                  disabled={dataBackup.migrating}
                   onChange={e => {
                     const file = e.target.files?.[0];
-                    if (file) void handleImportBackup(file);
+                    if (file) void dataBackup.importBackup(file);
                     e.target.value = '';
                   }}
                 />
@@ -726,17 +362,20 @@ export function Infrastructure() {
               <Cpu size={20} />
               <h2>{t('infrastructure.engine.title')}</h2>
             </div>
-            <span className="status-indicator connected">● {currentEngine || engineConfig.type}</span>
+            <span className="status-indicator connected">● {currentEngine || configForm.engineConfig.type}</span>
           </div>
 
           <div className="radio-group">
             {engines.map(engine => (
-              <label key={engine.id} className={`radio-option ${engineConfig.type === engine.id ? 'selected' : ''}`}>
+              <label
+                key={engine.id}
+                className={`radio-option ${configForm.engineConfig.type === engine.id ? 'selected' : ''}`}
+              >
                 <input
                   type="radio"
                   name="engineType"
-                  checked={engineConfig.type === engine.id}
-                  onChange={() => updateEngineConfig('type', engine.id)}
+                  checked={configForm.engineConfig.type === engine.id}
+                  onChange={() => configForm.updateEngineConfig('type', engine.id)}
                 />
                 <Cpu className="watermark-icon" />
                 <span>{engine.name}</span>
@@ -763,7 +402,7 @@ export function Infrastructure() {
             </p>
           )}
 
-          {engineConfig.type === 'whatsapp-web.js' ? (
+          {configForm.engineConfig.type === 'whatsapp-web.js' ? (
             <div className="config-form">
               <div className="toggle-row">
                 <div className="toggle-info">
@@ -773,8 +412,8 @@ export function Infrastructure() {
                 <label className="toggle-switch">
                   <input
                     type="checkbox"
-                    checked={engineConfig.headless}
-                    onChange={e => updateEngineConfig('headless', e.target.checked)}
+                    checked={configForm.engineConfig.headless}
+                    onChange={e => configForm.updateEngineConfig('headless', e.target.checked)}
                   />
                   <span className="toggle-slider"></span>
                 </label>
@@ -783,16 +422,16 @@ export function Infrastructure() {
                 <label>{t('infrastructure.engine.sessionDataPath')}</label>
                 <input
                   type="text"
-                  value={engineConfig.sessionDataPath}
-                  onChange={e => updateEngineConfig('sessionDataPath', e.target.value)}
+                  value={configForm.engineConfig.sessionDataPath}
+                  onChange={e => configForm.updateEngineConfig('sessionDataPath', e.target.value)}
                 />
               </div>
               <div className="form-group">
                 <label>{t('infrastructure.engine.browserArgs')}</label>
                 <input
                   type="text"
-                  value={engineConfig.browserArgs}
-                  onChange={e => updateEngineConfig('browserArgs', e.target.value)}
+                  value={configForm.engineConfig.browserArgs}
+                  onChange={e => configForm.updateEngineConfig('browserArgs', e.target.value)}
                   placeholder="--no-sandbox --disable-gpu"
                 />
               </div>
@@ -812,11 +451,13 @@ export function Infrastructure() {
               <h2>{t('infrastructure.redis.title')}</h2>
             </div>
             <span
-              className={`status-indicator ${redisEnabled && redisConfig.connected ? 'connected' : 'disconnected'}`}
+              className={`status-indicator ${
+                configForm.redisEnabled && configForm.redisConfig.connected ? 'connected' : 'disconnected'
+              }`}
             >
               ●{' '}
-              {redisEnabled
-                ? redisConfig.connected
+              {configForm.redisEnabled
+                ? configForm.redisConfig.connected
                   ? t('infrastructure.statusLabels.connected')
                   : t('infrastructure.statusLabels.disconnected')
                 : t('infrastructure.statusLabels.disabled')}
@@ -827,9 +468,9 @@ export function Infrastructure() {
           <div
             className="toggle-row"
             style={{
-              borderBottom: redisEnabled ? '1px solid var(--border)' : 'none',
-              marginBottom: redisEnabled ? '1.5rem' : 0,
-              paddingBottom: redisEnabled ? '1.25rem' : 0,
+              borderBottom: configForm.redisEnabled ? '1px solid var(--border)' : 'none',
+              marginBottom: configForm.redisEnabled ? '1.5rem' : 0,
+              paddingBottom: configForm.redisEnabled ? '1.25rem' : 0,
             }}
           >
             <div className="toggle-info">
@@ -839,17 +480,14 @@ export function Infrastructure() {
             <label className="toggle-switch">
               <input
                 type="checkbox"
-                checked={redisEnabled}
-                onChange={e => {
-                  setRedisEnabled(e.target.checked);
-                  if (!e.target.checked) setQueueEnabled(false);
-                }}
+                checked={configForm.redisEnabled}
+                onChange={e => configForm.setRedisEnabled(e.target.checked)}
               />
               <span className="toggle-slider"></span>
             </label>
           </div>
 
-          {redisEnabled ? (
+          {configForm.redisEnabled ? (
             <>
               <div className="toggle-row toggle-row-spaced-bottom">
                 <div className="toggle-info">
@@ -859,38 +497,38 @@ export function Infrastructure() {
                 <label className="toggle-switch">
                   <input
                     type="checkbox"
-                    checked={redisConfig.builtIn}
-                    onChange={e => updateRedisConfig('builtIn', e.target.checked)}
+                    checked={configForm.redisConfig.builtIn}
+                    onChange={e => configForm.updateRedisConfig('builtIn', e.target.checked)}
                   />
                   <span className="toggle-slider"></span>
                 </label>
               </div>
 
-              {!redisConfig.builtIn && (
+              {!configForm.redisConfig.builtIn && (
                 <div className="config-form">
                   <div className="form-row">
                     <div className="form-group">
                       <label>{t('common.host')}</label>
                       <input
                         type="text"
-                        value={redisConfig.host}
-                        onChange={e => updateRedisConfig('host', e.target.value)}
+                        value={configForm.redisConfig.host}
+                        onChange={e => configForm.updateRedisConfig('host', e.target.value)}
                       />
                     </div>
                     <div className="form-group small">
                       <label>{t('common.port')}</label>
                       <input
                         type="text"
-                        value={redisConfig.port}
-                        onChange={e => updateRedisConfig('port', e.target.value)}
+                        value={configForm.redisConfig.port}
+                        onChange={e => configForm.updateRedisConfig('port', e.target.value)}
                       />
                     </div>
                     <div className="form-group">
                       <label>{t('common.password')}</label>
                       <input
                         type="password"
-                        value={redisConfig.password}
-                        onChange={e => updateRedisConfig('password', e.target.value)}
+                        value={configForm.redisConfig.password}
+                        onChange={e => configForm.updateRedisConfig('password', e.target.value)}
                         placeholder={t('infrastructure.redis.passwordOptional')}
                       />
                     </div>
@@ -904,12 +542,16 @@ export function Infrastructure() {
                   <small>{t('infrastructure.redis.queueDesc')}</small>
                 </div>
                 <label className="toggle-switch">
-                  <input type="checkbox" checked={queueEnabled} onChange={e => setQueueEnabled(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={configForm.queueEnabled}
+                    onChange={e => configForm.setQueueEnabled(e.target.checked)}
+                  />
                   <span className="toggle-slider"></span>
                 </label>
               </div>
 
-              {queueEnabled && (
+              {configForm.queueEnabled && (
                 <div className="queue-stats">
                   <h3>{t('infrastructure.redis.statsTitle')}</h3>
                   <div className="stats-row">
@@ -976,12 +618,14 @@ export function Infrastructure() {
             </div>
             {(() => {
               // S3 selected but the backend isn't reachable → warn instead of a misleading green.
-              const s3Unreachable = storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
-              const cls = storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
+              const s3Unreachable =
+                configForm.storageConfig.type === 's3' && infraStatus?.storage.s3Available === false;
+              const cls =
+                configForm.storageConfig.type !== 's3' ? 'sqlite' : s3Unreachable ? 'disconnected' : 'connected';
               return (
                 <span className={`status-indicator ${cls}`}>
                   ●{' '}
-                  {storageConfig.type === 's3'
+                  {configForm.storageConfig.type === 's3'
                     ? s3Unreachable
                       ? t('infrastructure.storage.s3Unreachable')
                       : 'S3'
@@ -993,23 +637,23 @@ export function Infrastructure() {
           {envPinNote(storagePinnedByEnv)}
 
           <div className="radio-group">
-            <label className={`radio-option ${storageConfig.type === 'local' ? 'selected' : ''}`}>
+            <label className={`radio-option ${configForm.storageConfig.type === 'local' ? 'selected' : ''}`}>
               <input
                 type="radio"
                 name="storageType"
-                checked={storageConfig.type === 'local'}
-                onChange={() => updateStorageConfig('type', 'local')}
+                checked={configForm.storageConfig.type === 'local'}
+                onChange={() => configForm.updateStorageConfig('type', 'local')}
               />
               <img src={folderIcon} alt="" className="watermark-icon" />
               <span>{t('infrastructure.storage.local')}</span>
               <small>{t('infrastructure.storage.localDesc')}</small>
             </label>
-            <label className={`radio-option ${storageConfig.type === 's3' ? 'selected' : ''}`}>
+            <label className={`radio-option ${configForm.storageConfig.type === 's3' ? 'selected' : ''}`}>
               <input
                 type="radio"
                 name="storageType"
-                checked={storageConfig.type === 's3'}
-                onChange={() => updateStorageConfig('type', 's3')}
+                checked={configForm.storageConfig.type === 's3'}
+                onChange={() => configForm.updateStorageConfig('type', 's3')}
               />
               <img src={s3Icon} alt="" className="watermark-icon" />
               <span>{t('infrastructure.storage.s3')}</span>
@@ -1018,18 +662,18 @@ export function Infrastructure() {
           </div>
 
           <div className="config-form">
-            {storageConfig.type === 'local' && (
+            {configForm.storageConfig.type === 'local' && (
               <div className="form-group">
                 <label>{t('infrastructure.storage.storagePath')}</label>
                 <input
                   type="text"
-                  value={storageConfig.localPath}
-                  onChange={e => updateStorageConfig('localPath', e.target.value)}
+                  value={configForm.storageConfig.localPath}
+                  onChange={e => configForm.updateStorageConfig('localPath', e.target.value)}
                 />
               </div>
             )}
 
-            {storageConfig.type === 's3' && (
+            {configForm.storageConfig.type === 's3' && (
               <>
                 <div className="toggle-row toggle-row-spaced">
                   <div className="toggle-info">
@@ -1039,30 +683,30 @@ export function Infrastructure() {
                   <label className="toggle-switch">
                     <input
                       type="checkbox"
-                      checked={storageConfig.builtIn}
-                      onChange={e => updateStorageConfig('builtIn', e.target.checked)}
+                      checked={configForm.storageConfig.builtIn}
+                      onChange={e => configForm.updateStorageConfig('builtIn', e.target.checked)}
                     />
                     <span className="toggle-slider"></span>
                   </label>
                 </div>
 
-                {!storageConfig.builtIn && (
+                {!configForm.storageConfig.builtIn && (
                   <>
                     <div className="form-row">
                       <div className="form-group">
                         <label>{t('infrastructure.storage.bucket')}</label>
                         <input
                           type="text"
-                          value={storageConfig.s3Bucket}
-                          onChange={e => updateStorageConfig('s3Bucket', e.target.value)}
+                          value={configForm.storageConfig.s3Bucket}
+                          onChange={e => configForm.updateStorageConfig('s3Bucket', e.target.value)}
                         />
                       </div>
                       <div className="form-group">
                         <label>{t('infrastructure.storage.region')}</label>
                         <input
                           type="text"
-                          value={storageConfig.s3Region}
-                          onChange={e => updateStorageConfig('s3Region', e.target.value)}
+                          value={configForm.storageConfig.s3Region}
+                          onChange={e => configForm.updateStorageConfig('s3Region', e.target.value)}
                         />
                       </div>
                     </div>
@@ -1071,16 +715,16 @@ export function Infrastructure() {
                         <label>{t('infrastructure.storage.accessKey')}</label>
                         <input
                           type="text"
-                          value={storageConfig.s3AccessKey}
-                          onChange={e => updateStorageConfig('s3AccessKey', e.target.value)}
+                          value={configForm.storageConfig.s3AccessKey}
+                          onChange={e => configForm.updateStorageConfig('s3AccessKey', e.target.value)}
                         />
                       </div>
                       <div className="form-group">
                         <label>{t('infrastructure.storage.secretKey')}</label>
                         <input
                           type="password"
-                          value={storageConfig.s3SecretKey}
-                          onChange={e => updateStorageConfig('s3SecretKey', e.target.value)}
+                          value={configForm.storageConfig.s3SecretKey}
+                          onChange={e => configForm.updateStorageConfig('s3SecretKey', e.target.value)}
                         />
                       </div>
                     </div>
@@ -1088,8 +732,8 @@ export function Infrastructure() {
                       <label>{t('infrastructure.storage.endpoint')}</label>
                       <input
                         type="text"
-                        value={storageConfig.s3Endpoint}
-                        onChange={e => updateStorageConfig('s3Endpoint', e.target.value)}
+                        value={configForm.storageConfig.s3Endpoint}
+                        onChange={e => configForm.updateStorageConfig('s3Endpoint', e.target.value)}
                         placeholder={t('infrastructure.storage.endpointHint')}
                       />
                     </div>
@@ -1101,42 +745,42 @@ export function Infrastructure() {
         </section>
       </div>
 
-      {showRestartModal && (
+      {restartFlow.showRestartModal && (
         <Modal
           open
-          onClose={() => {
-            // Dismissal is only offered in the idle state (the "Later" path) — while a restart is
-            // running there is deliberately no way to close the progress view.
-            if (restartStatus === 'idle') setShowRestartModal(false);
-          }}
+          onClose={restartFlow.close}
           title={
             <>
-              {restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
-              {restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
-              {restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
-              {restartStatus === 'success' && t('infrastructure.restart.successTitle')}
-              {restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
+              {restartFlow.restartStatus === 'idle' && t('infrastructure.restart.idleTitle')}
+              {restartFlow.restartStatus === 'restarting' && t('infrastructure.restart.restartingTitle')}
+              {restartFlow.restartStatus === 'waiting' && t('infrastructure.restart.waitingTitle')}
+              {restartFlow.restartStatus === 'success' && t('infrastructure.restart.successTitle')}
+              {restartFlow.restartStatus === 'error' && t('infrastructure.restart.errorTitle')}
             </>
           }
           className="restart-modal"
           closeLabel={t('common.close')}
           hideCloseButton
         >
-          {restartStatus === 'idle' && (
+          {restartFlow.restartStatus === 'idle' && (
             <>
               <p className="restart-idle-desc">
                 <Trans i18nKey="infrastructure.restart.idleDesc" components={{ code: <code />, br: <br /> }} />
               </p>
-              {(dbSwitch || storageSwitch) && (
+              {(restartFlow.dbSwitch || restartFlow.storageSwitch) && (
                 <div className="migration-warning">
                   <AlertTriangle size={18} />
                   <div>
                     <strong>{t('infrastructure.migration.title')}</strong>
-                    {dbSwitch && <p>{t('infrastructure.migration.dbWarning')}</p>}
-                    {storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
-                    {dbSwitch && (
-                      <button className="btn-secondary btn-sm" onClick={handleExportBackup} disabled={migrating}>
-                        {migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                    {restartFlow.dbSwitch && <p>{t('infrastructure.migration.dbWarning')}</p>}
+                    {restartFlow.storageSwitch && <p>{t('infrastructure.migration.storageWarning')}</p>}
+                    {restartFlow.dbSwitch && (
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={dataBackup.exportBackup}
+                        disabled={dataBackup.migrating}
+                      >
+                        {dataBackup.migrating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                         {t('infrastructure.migration.downloadBackup')}
                       </button>
                     )}
@@ -1144,44 +788,49 @@ export function Infrastructure() {
                 </div>
               )}
               <div className="restart-actions">
-                <button className="btn-secondary" onClick={() => setShowRestartModal(false)}>
+                <button className="btn-secondary" onClick={restartFlow.close}>
                   {t('infrastructure.restart.later')}
                 </button>
-                <button className="btn-primary" onClick={handleRestart}>
+                <button className="btn-primary" onClick={restartFlow.start}>
                   {t('infrastructure.restart.now')}
                 </button>
               </div>
             </>
           )}
 
-          {(restartStatus === 'restarting' || restartStatus === 'waiting') && (
+          {(restartFlow.restartStatus === 'restarting' || restartFlow.restartStatus === 'waiting') && (
             <>
               <div className="restart-countdown">
                 <Loader2 className="animate-spin restart-status-icon" size={48} />
                 <p className="restart-countdown-msg">
-                  {restartCountdown > 0
-                    ? t('infrastructure.restart.restartingMsg', { count: restartCountdown })
+                  {restartFlow.restartCountdown > 0
+                    ? t('infrastructure.restart.restartingMsg', { count: restartFlow.restartCountdown })
                     : t('infrastructure.restart.checking')}
                 </p>
               </div>
               <div className="restart-progress-track">
                 <div
                   className="restart-progress-fill"
-                  style={{ width: restartCountdown > 0 ? `${((30 - restartCountdown) / 30) * 100}%` : '100%' }}
+                  style={{
+                    width:
+                      restartFlow.restartCountdown > 0
+                        ? `${((30 - restartFlow.restartCountdown) / 30) * 100}%`
+                        : '100%',
+                  }}
                 />
               </div>
               <p className="restart-dont-close">{t('infrastructure.restart.dontClose')}</p>
             </>
           )}
 
-          {restartStatus === 'success' && (
+          {restartFlow.restartStatus === 'success' && (
             <>
               <CheckCircle size={48} className="restart-status-icon" />
               <p className="restart-success-msg">{t('infrastructure.restart.successMsg')}</p>
             </>
           )}
 
-          {restartStatus === 'error' && (
+          {restartFlow.restartStatus === 'error' && (
             <>
               <p className="restart-error-msg">{t('infrastructure.restart.errorMsg')}</p>
               <button className="btn-primary" onClick={() => window.location.reload()}>
@@ -1193,9 +842,9 @@ export function Infrastructure() {
       )}
 
       <footer className="page-footer">
-        <button className="btn-primary large" onClick={handleSaveConfig} disabled={saving}>
-          {saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
-          {saving ? t('infrastructure.saving') : t('infrastructure.saveConfig')}
+        <button className="btn-primary large" onClick={configSave.saveConfig} disabled={configSave.saving}>
+          {configSave.saving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
+          {configSave.saving ? t('infrastructure.saving') : t('infrastructure.saveConfig')}
         </button>
       </footer>
     </div>

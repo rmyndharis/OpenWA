@@ -348,10 +348,7 @@ test('capMediaPayloads: past the limit the OLDEST payloads strip to the omitted 
   assert.equal(capped[1].metadata?.media?.data, 'PAYLOAD_1');
   assert.equal(capped[MEDIA_PAYLOAD_CACHE_LIMIT].metadata?.media?.data, `PAYLOAD_${MEDIA_PAYLOAD_CACHE_LIMIT}`);
   // The retained payload count is exactly the cap.
-  assert.equal(
-    capped.filter(m => m.metadata?.media?.data).length,
-    MEDIA_PAYLOAD_CACHE_LIMIT,
-  );
+  assert.equal(capped.filter(m => m.metadata?.media?.data).length, MEDIA_PAYLOAD_CACHE_LIMIT);
   // Input is not mutated.
   assert.equal(list[0].metadata?.media?.data, 'PAYLOAD_0');
 });

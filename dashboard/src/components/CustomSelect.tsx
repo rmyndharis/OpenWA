@@ -95,10 +95,10 @@ export function CustomSelect({ value, onChange, options, ariaLabel }: CustomSele
           if (e.key.length === 1) {
             typeAheadBuffer.current += e.key.toLowerCase();
             clearTimeout(typeAheadTimer.current);
-            typeAheadTimer.current = setTimeout(() => { typeAheadBuffer.current = ''; }, 500);
-            const match = options.findIndex(opt =>
-              opt.label.toLowerCase().startsWith(typeAheadBuffer.current),
-            );
+            typeAheadTimer.current = setTimeout(() => {
+              typeAheadBuffer.current = '';
+            }, 500);
+            const match = options.findIndex(opt => opt.label.toLowerCase().startsWith(typeAheadBuffer.current));
             if (match >= 0) setFocusedIndex(match);
           }
           break;

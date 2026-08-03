@@ -119,7 +119,10 @@ test('replaceSession: unrelated rows keep their identity and order', () => {
   const updated = makeSession({ id: 'b', status: 'disconnected' });
   const result = replaceSession([a, b, c], updated);
 
-  assert.deepEqual(result.map(s => s.id), ['a', 'b', 'c']);
+  assert.deepEqual(
+    result.map(s => s.id),
+    ['a', 'b', 'c'],
+  );
   assert.equal(result[0], a, 'unrelated row keeps identity');
   assert.equal(result[2], c, 'unrelated row keeps identity');
   assert.equal(result[1], updated, 'matching row is the exact response object');
@@ -138,7 +141,10 @@ test('replaceSession: a response whose id is absent does not drop other rows (no
   const b = makeSession({ id: 'b' });
   const orphan = makeSession({ id: 'zzz', status: 'disconnected' });
   const result = replaceSession([a, b], orphan);
-  assert.deepEqual(result.map(s => s.id), ['a', 'b']);
+  assert.deepEqual(
+    result.map(s => s.id),
+    ['a', 'b'],
+  );
   assert.equal(result[0], a);
   assert.equal(result[1], b);
 });

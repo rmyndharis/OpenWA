@@ -13,13 +13,7 @@ import type { Session } from '../services/api.ts';
 // The fallback below is for a dashboard talking to a gateway that predates the field. It reproduces
 // the old status set, whose known wrong answer is exactly that `disconnected` case — a stale
 // dashboard keeps the old behaviour instead of guessing differently.
-const STARTED_STATUSES_FALLBACK = new Set([
-  'initializing',
-  'qr_ready',
-  'authenticating',
-  'ready',
-  'action_required',
-]);
+const STARTED_STATUSES_FALLBACK = new Set(['initializing', 'qr_ready', 'authenticating', 'ready', 'action_required']);
 
 export function isSessionStarted(session: Pick<Session, 'status' | 'engineLoaded'>): boolean {
   return session.engineLoaded ?? STARTED_STATUSES_FALLBACK.has(session.status);
