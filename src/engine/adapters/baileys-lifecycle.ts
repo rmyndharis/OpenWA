@@ -243,6 +243,13 @@ export class BaileysLifecycle {
       // RECENT window + the full contact/app-state snapshot, not the entire message history.
       shouldSyncHistoryMessage: () => true,
       syncFullHistory: process.env.BAILEYS_SYNC_FULL_HISTORY === 'true',
+      // Baileys defaults markOnlineOnConnect to true: every (re)connect broadcasts `available`,
+      // and WhatsApp suppresses the paired phone's push notifications while any linked device is
+      // online — a 24/7 gateway then permanently silences the phone (#871). Set
+      // BAILEYS_MARK_ONLINE_ON_CONNECT=false to stay invisible; the default preserves prior
+      // behavior. Note this only gates the on-connect presence: the typing / chat-state API still
+      // sends per-chat presence for that call regardless.
+      markOnlineOnConnect: process.env.BAILEYS_MARK_ONLINE_ON_CONNECT !== 'false',
       // Baileys defaults this to `async () => undefined` (Defaults/index.js). Without a real
       // implementation, WhatsApp's message-retry protocol — triggered whenever a recipient's client
       // fails to decrypt on the first attempt — has nothing to resend, so the recipient is stuck on

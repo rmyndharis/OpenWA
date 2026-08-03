@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `BAILEYS_MARK_ONLINE_ON_CONNECT=false` keeps phone push notifications alive while a Baileys gateway is connected (default `true`, prior behavior). (#871)
+
 ### Fixed
 
 - **A key pasted with a stray space now authenticates on the WebSocket, not just over REST.**
