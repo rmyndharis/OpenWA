@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A media storage root the app cannot write to is now caught at boot, with an error that says what
+  to change.** The check ran on the wrong question: `StorageService` created the root only when it did
+  not already exist, so a root that existed but belonged to another user sailed through startup and
+  failed much later, on the first media write — surfacing as a bare `EACCES` from `mkdir` deep inside
+  status ingestion, naming neither the setting at fault nor the file that set it.
+  Startup now probes writability, and refuses to start with the value of
+  `STORAGE_LOCAL_PATH`, the absolute path it resolved to, and the uid the process is running as. (#1065)
+
+  One value self-heals instead of stopping the boot. `./uploads` was never an operator's choice:
+  `GET /infra/status` read a config key that never existed and returned it as the storage path on every
+  request in v0.2.0–v0.7.3, so any save on the dashboard's Infrastructure page in that window wrote
+  `STORAGE_LOCAL_PATH=./uploads` into `data/.env.generated` — which lives on the data volume and
+  outlives every upgrade. #472 fixed the endpoint; nothing migrated the stored value. An **unwritable**
+  `./uploads` is therefore treated as damage this project caused and is moved to `./data/media` with a
+  warning. A **writable** one is left exactly as it is, so a bare-metal install already serving media
+  from that directory is never relocated out from under it.
+
+  Installs carrying this value have been losing media quietly, not loudly: until v0.13.0 the image
+  chowned all of `/app`, so writes to `/app/uploads` succeeded — into the container's ephemeral layer,
+  outside the mounted volume, discarded on every container recreate. v0.13.0 narrowed that chown to
+  `./data`, which is what finally turned a silent loss into a visible error.
+
 ## [0.13.0] - 2026-08-03
 
 ### Added

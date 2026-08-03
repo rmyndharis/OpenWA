@@ -13,6 +13,7 @@ import { LoggerService, LogLevel, createLogger } from './common/services/logger.
 import { createSwaggerConfig, exemptPublicOperations } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
+import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { createInflightBodyBudget, resolveInflightBodyBudgetBytes } from './config/inflight-body-budget';
 import { applyGlobalValidation } from './config/app-validation';
@@ -84,6 +85,15 @@ async function bootstrap() {
         'Set API_KEY_PEPPER and re-issue keys to enable HMAC hashing.',
     );
   }
+
+  // Fail fast on a media storage root the app cannot write to, BEFORE Nest builds the module graph:
+  // StorageService only checks that the root EXISTS, so a root owned by another user passes boot and
+  // fails later on the first media write instead (#1065). Runs ahead of NestFactory.create so
+  // configuration.ts reads the resolved value.
+  process.env.STORAGE_LOCAL_PATH = resolveStorageRoot({
+    configured: process.env.STORAGE_LOCAL_PATH,
+    logger: bootstrapLogger,
+  });
 
   // Disable Nest's default body parser so we can set an explicit size cap below.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
