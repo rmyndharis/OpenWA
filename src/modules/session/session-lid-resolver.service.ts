@@ -41,8 +41,17 @@ export class SessionLidResolver {
       return cached;
     }
     let phone: string | null;
+    // `resolved` marks a definitive engine answer: a rejection or a missing engine is a transient
+    // unknown, NOT "this contact has no phone", and must never overwrite a stored mapping (#1058).
+    let resolved = false;
     try {
-      phone = (await this.engines.get(sessionId)?.resolveContactPhone(contactId)) ?? null;
+      const engine = this.engines.get(sessionId);
+      if (engine) {
+        phone = (await engine.resolveContactPhone(contactId)) ?? null;
+        resolved = true;
+      } else {
+        phone = null;
+      }
     } catch {
       phone = null;
     }
@@ -54,10 +63,12 @@ export class SessionLidResolver {
       }
     }
     this.cache.set(key, phone);
-    // Persist a real @lid -> phone resolution so the read-path can bridge this contact's `@lid` and
-    // `@c.us` rows even when the operator never sent to them (#583 R3 Phase 2). Reuses the resolution
-    // above — no extra network call — and is fire-and-forget so dispatch never blocks/fails on it.
-    if (phone) {
+    // Persist the resolution so the read-path can bridge this contact's `@lid` and `@c.us` rows even
+    // when the operator never sent to them (#583 R3 Phase 2). A definitive null is persisted too, so
+    // a phone that later becomes hidden overwrites its stale mapping instead of being served forever
+    // (#1058). Reuses the resolution above — no extra network call — and is fire-and-forget so
+    // dispatch never blocks/fails on it.
+    if (phone || resolved) {
       void this.lidMappingStore?.remember(userPart(contactId), phone, sessionId)?.catch(() => {});
     }
     return phone;

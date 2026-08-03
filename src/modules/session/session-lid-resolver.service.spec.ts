@@ -63,10 +63,24 @@ describe('SessionLidResolver', () => {
     expect(remember).toHaveBeenCalledWith('111', '628111222333', 's1');
   });
 
-  it('does not persist a miss', async () => {
+  it('persists a definitive null resolution so a stale mapping converges (#1058)', async () => {
     resolveContactPhone.mockResolvedValue(null);
 
     await resolver.resolveSenderPhone('s1', '404@lid');
+
+    expect(remember).toHaveBeenCalledWith('404', null, 's1');
+  });
+
+  it('does not persist a transient failure (engine rejects) as a null mapping', async () => {
+    resolveContactPhone.mockRejectedValue(new Error('socket closed'));
+
+    await resolver.resolveSenderPhone('s1', '111@lid');
+
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('does not persist when there is no live engine (transient, not definitive)', async () => {
+    await resolver.resolveSenderPhone('not-started', '111@lid');
 
     expect(remember).not.toHaveBeenCalled();
   });

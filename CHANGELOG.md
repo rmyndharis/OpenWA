@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contact who hides their number no longer keeps a stale `lid -> phone` mapping forever.**
+  `SessionLidResolver` only persisted positive resolutions, so once a `@lid` sender's phone became
+  unresolvable (e.g. username adoption) the stored mapping was never corrected — the message `from`
+  filter and the reverse lookup kept attributing that lid to the old number, and API responses kept
+  returning a phone the user chose to hide. A definitive `null` answer from the engine now overwrites
+  the mapping; transient failures (no live engine, call rejected) still never touch it. (#1058)
+
 - **A key pasted with a stray space now authenticates on the WebSocket, not just over REST.**
   `validateApiKey` hashed the raw string as given, and HTTP strips surrounding whitespace from header
   values in transit — so a padded key was accepted on every REST call while the Socket.IO handshake,
