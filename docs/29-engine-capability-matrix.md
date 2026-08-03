@@ -1,6 +1,6 @@
 # 29 - Engine Capability Matrix
 
-This page is the operator- and engineer-facing view of which `IWhatsAppEngine` capabilities are real on each adapter — `wwjs` (whatsapp-web.js, the default) and `baileys` (the browser-free alternative) — and, for the ones that are missing, *why* and *where to start*.
+This page is the operator- and engineer-facing view of which `IWhatsAppEngine` capabilities are real on each adapter — `wwjs` (whatsapp-web.js, the default) and `baileys` (the browser-free alternative) — and, for the ones that are missing, _why_ and _where to start_.
 
 The committed source of truth is `src/engine/engine-capability-matrix.ts`. Every `IWhatsAppEngine` method has a row with two adapters; each adapter is either `supported` (works end-to-end) or `not-available`, and each `not-available` cell carries a **rootCause**:
 
@@ -26,75 +26,77 @@ The `rootCause`/`evidence` fields are hand-curated from source traces of the ins
 
 ### Channels / Newsletter
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `getChannelMessages` | not-available — **adapter-gap** | supported |
-| `getSubscribedChannels` | not-available — **library-limitation** | supported |
-| `subscribeToChannel` | supported | not-available — **adapter-gap** |
+| Method                  | baileys                                | wwjs                            |
+| ----------------------- | -------------------------------------- | ------------------------------- |
+| `getChannelMessages`    | not-available — **adapter-gap**        | supported                       |
+| `getSubscribedChannels` | not-available — **library-limitation** | supported                       |
+| `subscribeToChannel`    | supported                              | not-available — **adapter-gap** |
 
 > **Wired.** ✅ `getChannelById`, `subscribeToChannel`, `unsubscribeFromChannel` on Baileys — via `newsletterMetadata('jid'|'invite', …)` → `NewsletterMetadata` mapped to `Channel` (id/name/description/inviteCode/subscriberCount/picture/verified/createdAt), `newsletterFollow` (subscribe, invite→jid bridge), `newsletterUnfollow` (unsubscribe, 1:1). `getChannelById` on Baileys resolves ANY channel by jid (richer than the wwjs subscribed-list lookup).
+
 - **`subscribeToChannel` (wwjs, adapter-gap).** whatsapp-web.js `Client.subscribeToChannel(channelId)` takes a channel ID and resolves a boolean (`Client.js:2533`) — it cannot satisfy the subscribe-by-invite-code contract on its own. The correct wiring is two-step: `getChannelByInviteCode(inviteCode)` (`Client.js:1707`) → `subscribeToChannel(channel.id)`. The adapter previously passed the invite code straight in and fabricated a `Channel` out of the returned boolean (`{ id: "undefined" }` — a reported success that never subscribed); it now throws an honest `EngineNotSupportedError` (501) until the two-step flow is verified against a live session.
 - **`getChannelMessages` (baileys, adapter-gap).** `sock.newsletterFetchMessages(channelId, limit, 0, 0)` (`Socket/newsletter.d.ts:19`) returns the **raw `BinaryNode`** of `<message_updates>` children (`newsletter.js:149`). The fetch is one line; the real work is walking the children and mapping each to `ChannelMessage{id,body,timestamp,hasMedia}` — no library parser is exposed. Not wired: a hand-written BinaryNode walk can't be verified without a live WhatsApp session, so it stays a documented gap rather than an unverified implementation.
 - **`getSubscribedChannels` (baileys, library-limitation).** No enumerate-subscribed-newsletters query in the library. All 19 newsletter members of `Socket/newsletter.d.ts` address a single newsletter — by jid, by invite key, or by creating one (`newsletterMetadata('invite'|'jid', key)` requires a key; `newsletterSubscribers(jid)` returns the count of one newsletter; `newsletterCreate(name, description?)` makes a new one). The `newsletter` event surfaces jids opportunistically during live sync, but that is incremental, not a list-all. Would require a raw WMex/app-state hack against an undocumented XWAPath.
 
 ### Labels (WhatsApp Business)
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `getLabels` | not-available — **library-limitation** | supported |
-| `getLabelById` | not-available — **library-limitation** | supported |
+| Method          | baileys                                | wwjs      |
+| --------------- | -------------------------------------- | --------- |
+| `getLabels`     | not-available — **library-limitation** | supported |
+| `getLabelById`  | not-available — **library-limitation** | supported |
 | `getChatLabels` | not-available — **library-limitation** | supported |
 
-> **Wired.** ✅ `addLabelToChat` / `removeLabelFromChat` on the Baileys engine — 1:1 to `sock.addChatLabel(chatId, labelId)` / `sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70-71`). WhatsApp-Business-only (rejects on personal accounts). Do **not** use `addLabel(jid, LabelActionBody)` (`chats.d.ts:69`) — that creates/edits the label *definition*, not the chat association.
+> **Wired.** ✅ `addLabelToChat` / `removeLabelFromChat` on the Baileys engine — 1:1 to `sock.addChatLabel(chatId, labelId)` / `sock.removeChatLabel(chatId, labelId)` (`Socket/chats.d.ts:70-71`). WhatsApp-Business-only (rejects on personal accounts). Do **not** use `addLabel(jid, LabelActionBody)` (`chats.d.ts:69`) — that creates/edits the label _definition_, not the chat association.
+
 - **`getLabels` / `getLabelById` / `getChatLabels` (baileys, library-limitation).** No label read/fetch symbol anywhere in `lib/**/*.d.ts` (`Types/Label.d.ts` has only the interface + `LabelColor` enum; `chats.d.ts`/`business.d.ts` expose only writes). Label data does arrive via app-state sync (`messaging-history.set`), so a determined adapter could capture+cache labels from the event stream — but that is a relay/cache hack, not a first-class getter, and there is no network fetch to seed/refresh it on demand.
 
 ### Catalog / Products / Orders (WhatsApp Business)
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `getCatalog` | not-available — **adapter-gap** (medium-confidence) | not-available — **library-limitation** |
-| `getProducts` | not-available — **adapter-gap** | not-available — **library-limitation** |
-| `getProduct` | not-available — **adapter-gap** (medium-confidence) | not-available — **library-limitation** |
-| `sendProduct` | not-available — **adapter-gap** | not-available — **library-limitation** |
+| Method        | baileys                                | wwjs                                   |
+| ------------- | -------------------------------------- | -------------------------------------- |
+| `getCatalog`  | supported                              | not-available — **library-limitation** |
+| `getProducts` | supported                              | not-available — **library-limitation** |
+| `getProduct`  | supported                              | not-available — **library-limitation** |
+| `sendProduct` | supported                              | not-available — **library-limitation** |
 | `sendCatalog` | not-available — **library-limitation** | not-available — **library-limitation** |
 
-- **`getProducts` (baileys, adapter-gap).** `sock.getCatalog({jid, limit, cursor})` (`Socket/business.d.ts:7`) returns `{products, nextPageCursor}` — paginated, maps to `PaginatedProducts`. Caveat: cursor-based, so `total` is unknown (approximate or iterate).
-- **`getCatalog` (baileys, adapter-gap, medium-confidence).** `getCatalog` returns a product list + cursor, **not** the OpenWA `Catalog` metadata wrapper. Name needs `getCollections(jid)` (`business.d.ts:11`); `id`/`description`/`url` have no source — the adapter would synthesize a partial Catalog (`productCount=products.length`, rest best-effort).
-- **`getProduct` (baileys, adapter-gap, medium-confidence).** No direct `getProduct(id)`; call `getCatalog({jid,limit})` then `products.find(p=>p.id===productId)` — loads the whole page to fetch one product.
-- **`sendProduct` (baileys, adapter-gap).** `AnyRegularMessageContent` accepts `{product: WASendableProduct, businessOwnerJid, body}` (`Types/Message.d.ts:203`, built in `messages.js:397`). Two-step wiring: `getCatalog` lookup to resolve the product's image/title/price, then `sock.sendMessage(chatId, {product:{...}, body})`. `productId`-only send without the lookup is not possible.
+> **Wired (#905).** ✅ `getCatalog` / `getProducts` / `getProduct` / `sendProduct` on the Baileys engine (`src/engine/adapters/baileys-catalog.ts`, `baileys-messaging.ts`). `getProducts` cursor-walks `sock.getCatalog({jid, limit, cursor})` (`Socket/business.d.ts:7`) to exhaustion, then slices page/limit in memory — `pagination.total`/`totalPages` are exact. `getCatalog` synthesizes the `Catalog` metadata from the first `getCollections(jid)` entry (`business.d.ts:11`; `null` when the business has no collections). `getProduct` reuses the walk + find-by-id. `sendProduct` is the documented 2-step: the adapter resolves the product, then sends `{product: WASendableProduct, businessOwnerJid, body}` (`Types/Message.d.ts:203`) with `priceAmount1000 = price × 1000` and the catalog image handed to Baileys as a URL upload; a product without an image is rejected `400`, an unknown id `404`.
+
 - **`sendCatalog` (both, library-limitation).** No catalog-share message type exists in either library. Baileys `AnyMessageContent` has only `{product}` (single product); the catalog CRUD nodes (`Socket/business.js:294-362`) mutate the catalog, they don't send it. Would require raw-proto relay hacks (unverified).
 - **wwjs catalog (library-limitation).** `whatsapp-web.js` has no `Client.getCatalog`/`getProducts`/`getProduct`/`sendProduct`/`sendCatalog` (`index.d.ts` grep = 0 hits). `Product`/`Order` are inbound-only parsers. The adapter throws an explicit `EngineNotSupportedError` (501) for the reads (they used to be phantom `null`/`[]` stubs) and the sends alike.
 
 ### Status — post / delete
 
 > **Wired.** ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` + `deleteStatus` on whatsapp-web.js. Posts route via `sendMessage('status@broadcast', …)` (`{ extra: { backgroundColor, fontStyle } }` for text; `{ caption }` for media); `deleteStatus` calls `revokeStatusMessage(statusId)` (own-status only). **Caveat:** whatsapp-web.js has no status-recipient arg, so `StatusPostOptions.recipients` is not honored on this engine (it broadcasts to the account's status-privacy audience; a one-time warning is logged). The Baileys engine honors `recipients` (`statusJidList`).
-- **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as *empirically unverified* (`baileys.adapter.ts`, the `deleteStatus()` doc comment) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
+
+- **`deleteStatus` (baileys) caveat.** Marked `supported` (no throw), but the adapter self-describes its `sendMessage(status@broadcast,{delete})` revoke shape as _empirically unverified_ (`baileys.adapter.ts`, the `deleteStatus()` doc comment) — only posting was live-spiked. May need a fallback to `EngineNotSupportedError` if WA rejects the shape.
 
 ### Status — read (contact stories)
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `getContactStatus` | not-available — **library-limitation** | supported |
+| Method               | baileys                                | wwjs      |
+| -------------------- | -------------------------------------- | --------- |
+| `getContactStatus`   | not-available — **library-limitation** | supported |
 | `getContactStatuses` | not-available — **library-limitation** | supported |
 
 > **Wired.** ✅ `getContactStatus` / `getContactStatuses` on whatsapp-web.js — `getBroadcastById(id)` / `getBroadcasts()` flattened to `Status[]` (contact via `broadcast.getContact()`; type from `MessageTypes`; 24h TTL). **Caveat:** `Status.type` is the `text|image|video` union — audio/other story types collapse to `text`.
-- **`getContactStatus` / `getContactStatuses` (baileys, library-limitation).** `fetchStatus` (`Socket/chats.d.ts:42` via `USyncStatusProtocol`) returns the *about/profile text* line (`{status, setAt}`), **not** 24h stories. No story-read getter exists; story broadcasts surface only as `status@broadcast` messages via `messages.upsert` / `messaging-history.set` events. These raw engine methods are still unimplemented on Baileys and still throw `EngineNotSupportedError` (`501`) if called directly.
+
+- **`getContactStatus` / `getContactStatuses` (baileys, library-limitation).** `fetchStatus` (`Socket/chats.d.ts:42` via `USyncStatusProtocol`) returns the _about/profile text_ line (`{status, setAt}`), **not** 24h stories. No story-read getter exists; story broadcasts surface only as `status@broadcast` messages via `messages.upsert` / `messaging-history.set` events. These raw engine methods are still unimplemented on Baileys and still throw `EngineNotSupportedError` (`501`) if called directly.
 - **API-level parity shipped without adapter wiring.** The `status@broadcast` accumulator this row calls for exists now — as an OpenWA-side store (`StatusStoreService`, `src/modules/status-store/`) fed by inbound status ingestion on both engines, not inside the Baileys adapter. `GET /sessions/:id/status` and `GET /sessions/:id/status/:contactId` read from that store instead of calling `getContactStatus`/`getContactStatuses`, so the REST API is at parity across engines even though these two adapter cells remain, correctly, `not-available`.
 
 ### Messaging misc — delete / history / reactions
 
-| Method | baileys | wwjs |
-|---|---|---|
-| `getChatHistory` | not-available — **library-limitation** | supported |
+| Method                | baileys                                | wwjs      |
+| --------------------- | -------------------------------------- | --------- |
+| `getChatHistory`      | not-available — **library-limitation** | supported |
 | `getMessageReactions` | not-available — **library-limitation** | supported |
 
-- **`getChatHistory` (baileys, library-limitation).** The only history primitive is `fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp)` (`Socket/business.d.ts:25`) — it returns a sync-token *string*, not messages; the messages are delivered later via the `messaging-history.set` event. There is no per-chat `fetchMessages(chatId, limit)` on the socket. A synchronous `Promise<IncomingMessage[]>` for one chat would require an OpenWA-side chat-indexed store populated from `messages.upsert` + `messaging-history.set` events.
+- **`getChatHistory` (baileys, library-limitation).** The only history primitive is `fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp)` (`Socket/business.d.ts:25`) — it returns a sync-token _string_, not messages; the messages are delivered later via the `messaging-history.set` event. There is no per-chat `fetchMessages(chatId, limit)` on the socket. A synchronous `Promise<IncomingMessage[]>` for one chat would require an OpenWA-side chat-indexed store populated from `messages.upsert` + `messaging-history.set` events.
 - **`getMessageReactions` (baileys, library-limitation).** No on-demand server fetch. Reactions exist only as event-augmented state on `WAMessage.reactions` (`proto.IReaction[]` at `WAProto/index.d.ts:10623`), mutated by `updateMessageWithReaction` and surfaced via the `messages.reaction` event. The adapter already processes `reactionMessage` events (`baileys.adapter.ts`, the `reactionMessage` branch of `processInboundMessage()`) and emits `onMessageReaction`, but it does **not** persist `.reactions` into its `messageStore` (that branch returns before the `messageStore.put`). A store-backed read would need that persistence added first; even then, only reactions observed since session start are known (no historical backfill).
 
 ### Groups — disappearing messages
 
-| Method | baileys | wwjs |
-|---|---|---|
+| Method              | baileys   | wwjs                                   |
+| ------------------- | --------- | -------------------------------------- |
 | `setGroupEphemeral` | supported | not-available — **library-limitation** |
 
 - **`setGroupEphemeral` (wwjs, library-limitation).** whatsapp-web.js 1.34.7 exposes no disappearing-timer setter (0 hits for `ephemeral` in `index.d.ts`); the only timer surface is the create-time `messageTimer` option (`Client.js:2371`). The adapter throws `EngineNotSupportedError` (501). Baileys wires `groupToggleEphemeral(jid, ephemeralExpiration)` (`Socket/groups.d.ts:40`).
@@ -110,6 +112,7 @@ These are the capabilities the underlying library already supports but the OpenW
 ### Tier 1 — small effort, high value ✅ shipped
 
 All Tier-1 adapter-gaps have been wired:
+
 - ✅ `deleteMessage(forEveryone=false)` — Baileys (`chatModify({ deleteForMe })`)
 - ✅ `postTextStatus` / `postImageStatus` / `postVideoStatus` — whatsapp-web.js (`sendMessage('status@broadcast', …)`; `recipients` not honored)
 - ✅ `addLabelToChat` / `removeLabelFromChat` — Baileys (`addChatLabel` / `removeChatLabel`; WhatsApp-Business-only)
@@ -121,19 +124,19 @@ _All Tier-2 items wired (see progress above). Remaining channel work is Tier 3: 
 
 ### Tier 3 — medium effort
 
-| # | Method : engine | Library call to wire | Effort | Value |
-|---|---|---|---|---|
-| 13 | `getChannelMessages` : **baileys** | `sock.newsletterFetchMessages(jid,count,since,after)` (`Socket/newsletter.d.ts:19`) + hand-written `BinaryNode`→`ChannelMessage` parser | **M** | Read channel posts. The fetch is 1 line; the BinaryNode parsing/normalization is the real work (no library parser exposed). |
-| 14 | `getProducts` : **baileys** | `sock.getCatalog({jid,limit,cursor})` → `{products, nextPageCursor}` (`Socket/business.d.ts:7`) | **M** | Commerce. Derive `pagination.total`/`totalPages` (cursor-based, total unknown — approximate or iterate). |
-| 15 | `sendProduct` : **baileys** | 2-step: `getCatalog` lookup (image/title/price) then `sendMessage({product:{...},body})` (`Types/Message.d.ts:203`) | **M** | Outbound commerce. `productId`-only send is not possible without the lookup. |
-| 16 | `getCatalog` : **baileys** | `getCatalog` + `getCollections` (`Socket/business.d.ts:7,11`); synthesize partial `Catalog` (medium-confidence shape) | **M** | Catalog metadata. Fields `id`/`description`/`url` have no source — best-effort. |
+| #   | Method : engine                    | Library call to wire                                                                                                                    | Effort | Value                                                                                                                       |
+| --- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| 13  | `getChannelMessages` : **baileys** | `sock.newsletterFetchMessages(jid,count,since,after)` (`Socket/newsletter.d.ts:19`) + hand-written `BinaryNode`→`ChannelMessage` parser | **M**  | Read channel posts. The fetch is 1 line; the BinaryNode parsing/normalization is the real work (no library parser exposed). |
+
+_✅ #14 `getProducts`, #15 `sendProduct`, #16 `getCatalog` — wired on Baileys (#905); see §Catalog / Products / Orders above._
 
 ### Tier 4 — small effort, lower value
 
-| # | Method : engine | Library call to wire | Effort | Value |
-|---|---|---|---|---|
-| 17 | `getProduct` : **baileys** | `getCatalog({jid,limit})` then `products.find(p=>p.id===productId)` (`Socket/business.d.ts:7`) | **S** | Single-product read. Inelegant — loads a whole page to fetch one product. Ship after #14 reuses the same catalog call. |
-| 18 | `subscribeToChannel` : **wwjs** | 2-step: `getChannelByInviteCode(inviteCode)` (`index.d.ts:103`; `Client.js:1707`) → `subscribeToChannel(channel.id)` (`Client.js:2533`, boolean → throw on false) | **S** | Channel subscribe-by-invite parity with Baileys. Must be verified against a live session — the previous one-step call was a phantom (it passed the invite code where a channel id belongs and fabricated the returned Channel). |
+| #   | Method : engine                 | Library call to wire                                                                                                                                              | Effort | Value                                                                                                                                                                                                                           |
+| --- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 18  | `subscribeToChannel` : **wwjs** | 2-step: `getChannelByInviteCode(inviteCode)` (`index.d.ts:103`; `Client.js:1707`) → `subscribeToChannel(channel.id)` (`Client.js:2533`, boolean → throw on false) | **S**  | Channel subscribe-by-invite parity with Baileys. Must be verified against a live session — the previous one-step call was a phantom (it passed the invite code where a channel id belongs and fabricated the returned Channel). |
+
+_✅ #17 `getProduct` — wired on Baileys (#905); see §Catalog / Products / Orders above._
 
 ---
 
@@ -142,14 +145,16 @@ _All Tier-2 items wired (see progress above). Remaining channel work is Tier 3: 
 These are honestly out of reach of a clean adapter wiring because the installed library exposes no first-class symbol. Listed so operators can plan around them rather than file unactionable bugs.
 
 **baileys (9 cells):**
+
 - `getSubscribedChannels` — no enumerate-newsletters query; all 19 newsletter members of `Socket/newsletter.d.ts` address a single newsletter (by jid, by invite key, or by creating one). Needs a raw WMex/app-state hack.
 - `getLabels` / `getLabelById` / `getChatLabels` — no label read symbol; only writes (`Types/Label.d.ts` is types-only). Workaround: capture labels from the `messaging-history.set` app-state event into an in-memory cache (relay hack, no on-demand refresh).
 - `getChatHistory` — only `fetchMessageHistory` (event-delivered sync token); no synchronous per-chat `fetchMessages`. Needs an OpenWA-side chat-indexed store fed from `messages.upsert` + `messaging-history.set`.
 - `getMessageReactions` — no on-demand fetch; reactions only arrive via the `messages.reaction` event. Partial local path: persist each event into the `messageStore`, then read (no historical backfill).
-- `getContactStatus` / `getContactStatuses` — `fetchStatus` returns the *about* text, not 24h stories; stories only surface as `status@broadcast` messages. The engine-level Baileys adapter methods remain unimplemented (`501`); however, the REST API reads are served from the `StatusStoreService` accumulator (see §Status — read above), so API-level parity is shipped.
+- `getContactStatus` / `getContactStatuses` — `fetchStatus` returns the _about_ text, not 24h stories; stories only surface as `status@broadcast` messages. The engine-level Baileys adapter methods remain unimplemented (`501`); however, the REST API reads are served from the `StatusStoreService` accumulator (see §Status — read above), so API-level parity is shipped.
 - `sendCatalog` — no catalog-share message type in `AnyMessageContent` (only single `{product}`).
 
 **wwjs (6 cells):**
+
 - `getCatalog` / `getProducts` / `getProduct` — no catalog API at all (`index.d.ts` 0 hits; `Product` is inbound-only).
 - `sendProduct` — no outbound product content type.
 - `sendCatalog` — no outbound catalog content type.

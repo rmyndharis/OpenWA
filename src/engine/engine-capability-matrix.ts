@@ -86,9 +86,9 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   forwardMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getCatalog: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
+    baileys: { status: 'supported' },
     evidence:
-      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) + getCollections (business.d.ts:11) — adapter unwired (returns Product[]+cursor, not Catalog metadata; medium-confidence shape synthesis); wwjs index.d.ts has NO Client.getCatalog (0 hits) — adapter throws EngineNotSupportedError (was a phantom null stub)',
+      'baileys getCollections(jid) (Socket/business.d.ts:11) → first collection synthesized into Catalog metadata at BaileysCatalog (adapters/baileys-catalog.ts; #905); wwjs index.d.ts has NO Client.getCatalog (0 hits) — adapter throws EngineNotSupportedError',
   },
   getChannelById: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getChannelMessages: {
@@ -148,15 +148,15 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   getPhoneNumber: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getProduct: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
+    baileys: { status: 'supported' },
     evidence:
-      'baileys only getCatalog (Socket/business.d.ts:7); getProduct = getCatalog then find-by-id (compose-and-filter, loads whole page; medium-confidence); wwjs no Client.getProduct — only page-internal getProductMetadata (Utils.js:1253), not a public Client fn — adapter throws EngineNotSupportedError (was a phantom null stub)',
+      'baileys getCatalog cursor-walk then find-by-id (compose-and-filter over the full catalog; adapters/baileys-catalog.ts; #905); wwjs no Client.getProduct — only page-internal getProductMetadata (Utils.js:1253), not a public Client fn — adapter throws EngineNotSupportedError',
   },
   getProducts: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
+    baileys: { status: 'supported' },
     evidence:
-      'baileys Socket/business.d.ts:7 getCatalog({jid,limit,cursor}) → {products, nextPageCursor} — adapter unwired; wwjs no Client.getProducts in index.d.ts (0 hits) — adapter throws EngineNotSupportedError (was a phantom empty-list stub)',
+      'baileys getCatalog({jid,limit,cursor}) (Socket/business.d.ts:7) cursor-walked in full, then page/limit sliced at the adapter (adapters/baileys-catalog.ts; #905); wwjs no Client.getProducts in index.d.ts (0 hits) — adapter throws EngineNotSupportedError',
   },
   getProfilePicture: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   getPushName: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
@@ -220,9 +220,9 @@ export const ENGINE_CAPABILITY_MATRIX: Record<string, MethodCapability> = {
   sendPollMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   sendProduct: {
     wwjs: { status: 'not-available', rootCause: 'library-limitation' },
-    baileys: { status: 'not-available', rootCause: 'adapter-gap' },
+    baileys: { status: 'supported' },
     evidence:
-      'baileys AnyRegularMessageContent {product: WASendableProduct} (Types/Message.d.ts:203) built in messages.js:397 — adapter unwired (2-step: getCatalog lookup for image/title/price THEN sendMessage); wwjs no Client.sendProduct — Product/Order are inbound-only parsers',
+      'baileys AnyRegularMessageContent {product: WASendableProduct} (Types/Message.d.ts:203) — adapter resolves the product via getCatalog then sends the snapshot with businessOwnerJid=self (adapters/baileys-messaging.ts; #905); wwjs no Client.sendProduct — Product/Order are inbound-only parsers',
   },
   sendSeen: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },
   sendStickerMessage: { wwjs: { status: 'supported' }, baileys: { status: 'supported' } },

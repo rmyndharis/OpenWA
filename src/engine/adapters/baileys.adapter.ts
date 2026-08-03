@@ -2,6 +2,7 @@ import * as path from 'path';
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WASocket } from '@whiskeysockets/baileys';
 import { BaileysChannels } from './baileys-channels';
+import { BaileysCatalog } from './baileys-catalog';
 import { BaileysContacts } from './baileys-contacts';
 import { BaileysEvents } from './baileys-events';
 import { BaileysGroups } from './baileys-groups';
@@ -38,6 +39,7 @@ import {
   StatusPostOptions,
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { NotFoundException } from '@nestjs/common';
 import { createLogger } from '../../common/services/logger.service';
 import { BaileysAdapterConfig } from '../types/baileys.types';
 import { BaileysSessionStore } from './baileys-session-store';
@@ -65,6 +67,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
   private readonly contacts: BaileysContacts;
   private readonly statusOps: BaileysStatus;
   private readonly channels: BaileysChannels;
+  private readonly catalog: BaileysCatalog;
   private readonly history: BaileysHistory;
   private readonly events: BaileysEvents;
   private readonly lifecycle: BaileysLifecycle;
@@ -142,6 +145,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
       logger: this.logger,
       toNeutralJid: jid => this.sessionStore.toNeutralJid(jid),
       toEngineJid: jid => this.sessionStore.toEngineJid(jid),
+      normalizedSelfJid: () => this.normalizedSelfJid(),
       getEphemeralExpiration: chatId => this.sessionStore.getEphemeralExpiration(chatId),
       toUnixSeconds,
       loadLib: () => this.loadLib(),
@@ -171,6 +175,11 @@ export class BaileysAdapter implements IWhatsAppEngine {
     this.channels = new BaileysChannels({
       ensureReady: () => this.ensureReady(),
       getSocket: () => this.sock!,
+    });
+    this.catalog = new BaileysCatalog({
+      ensureReady: () => this.ensureReady(),
+      getSocket: () => this.sock!,
+      normalizedSelfJid: () => this.normalizedSelfJid(),
     });
     this.history = new BaileysHistory({
       getSocket: () => this.sock!,
@@ -531,17 +540,23 @@ export class BaileysAdapter implements IWhatsAppEngine {
     return this.statusOps.deleteStatus(statusId);
   }
   getCatalog(): Promise<Catalog | null> {
-    return this.unsupported('getCatalog');
+    return this.catalog.getCatalog();
   }
-  getProducts(_options?: ProductQueryOptions): Promise<PaginatedProducts> {
-    return this.unsupported('getProducts');
+  getProducts(options?: ProductQueryOptions): Promise<PaginatedProducts> {
+    return this.catalog.getProducts(options);
   }
-  getProduct(_productId: string): Promise<Product | null> {
-    return this.unsupported('getProduct');
+  getProduct(productId: string): Promise<Product | null> {
+    return this.catalog.getProduct(productId);
   }
-  sendProduct(_chatId: string, _productId: string, _body?: string): Promise<MessageResult> {
-    return this.unsupported('sendProduct');
+  async sendProduct(chatId: string, productId: string, body?: string): Promise<MessageResult> {
+    const product = await this.catalog.getProduct(productId);
+    if (!product) {
+      throw new NotFoundException(`Product ${productId} not found in the session catalog`);
+    }
+    return this.messaging.sendProductMessage(chatId, product, body);
   }
+  // No catalog-level message primitive exists in Baileys (only the single-product {product}
+  // content), so sendCatalog stays a documented library limitation.
   sendCatalog(_chatId: string, _body?: string): Promise<MessageResult> {
     return this.unsupported('sendCatalog');
   }

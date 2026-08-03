@@ -54,6 +54,8 @@ class FakeSock extends EventEmitter {
   public addChatLabel = jest.fn().mockResolvedValue(undefined);
   public removeChatLabel = jest.fn().mockResolvedValue(undefined);
   public newsletterMetadata = jest.fn();
+  public getCatalog = jest.fn();
+  public getCollections = jest.fn();
   public newsletterFollow = jest.fn().mockResolvedValue(undefined);
   public newsletterUnfollow = jest.fn().mockResolvedValue(undefined);
   public rejectCall = jest.fn().mockResolvedValue(undefined);
@@ -106,6 +108,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
 }));
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { BaileysAdapter, createProxyAgent } from './baileys.adapter';
 import {
@@ -3809,5 +3812,165 @@ describe('BaileysAdapter proxy support', () => {
     expect(adapter.getStatus()).toBe(EngineStatus.FAILED);
     expect(onError).toHaveBeenCalled();
     expect(makeWASocketMock()).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysAdapter catalog (#905)', () => {
+  const selfUser = { id: '628999:12@s.whatsapp.net', name: 'Me' };
+
+  const baileysProduct = (over: Record<string, unknown> = {}) => ({
+    id: 'p1',
+    name: 'Coffee',
+    description: 'Beans',
+    price: 1500,
+    currency: 'USD',
+    imageUrls: { requested: 'https://img.example/x.jpg' },
+    reviewStatus: { whatsapp: 'approved' },
+    availability: 'in stock',
+    retailerId: 'SKU1',
+    url: 'https://shop.example/p1',
+    isHidden: false,
+    ...over,
+  });
+
+  beforeEach(() => {
+    fakeSock.user = undefined;
+    fakeSock.signalRepository = undefined;
+    fakeSock.resetEmitter();
+    jest.clearAllMocks();
+  });
+
+  const ready = async (): Promise<BaileysAdapter> => {
+    const adapter = newAdapter();
+    await adapter.initialize({});
+    fakeSock.user = selfUser;
+    fakeSock.fire('connection.update', { connection: 'open' });
+    return adapter;
+  };
+
+  it('getCatalog maps the first collection to catalog metadata', async () => {
+    const adapter = await ready();
+    fakeSock.getCollections.mockResolvedValue({
+      collections: [
+        {
+          id: 'coll-1',
+          name: 'Best Sellers',
+          products: [baileysProduct(), baileysProduct({ id: 'p2' })],
+          status: { status: 'ok', canAppeal: false },
+        },
+      ],
+    });
+
+    await expect(adapter.getCatalog()).resolves.toEqual({
+      id: 'coll-1',
+      name: 'Best Sellers',
+      productCount: 2,
+      url: 'https://wa.me/c/628999',
+    });
+    expect(fakeSock.getCollections).toHaveBeenCalledWith('628999@s.whatsapp.net');
+  });
+
+  it('getCatalog returns null when the business has no collections', async () => {
+    const adapter = await ready();
+    fakeSock.getCollections.mockResolvedValue({ collections: [] });
+
+    await expect(adapter.getCatalog()).resolves.toBeNull();
+  });
+
+  it('getProducts walks the catalog cursor and slices the requested page', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog
+      .mockResolvedValueOnce({ products: [baileysProduct(), baileysProduct({ id: 'p2' })], nextPageCursor: 'C2' })
+      .mockResolvedValueOnce({ products: [baileysProduct({ id: 'p3' })], nextPageCursor: undefined });
+
+    const res = await adapter.getProducts({ page: 2, limit: 2 });
+
+    expect(res.products.map(p => p.id)).toEqual(['p3']);
+    expect(res.pagination).toEqual({ page: 2, limit: 2, total: 3, totalPages: 2 });
+    expect(fakeSock.getCatalog).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ jid: '628999@s.whatsapp.net', cursor: undefined }),
+    );
+    expect(fakeSock.getCatalog).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: 'C2' }));
+  });
+
+  it('getProducts maps the Baileys product shape onto Product', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+
+    const { products } = await adapter.getProducts({ page: 1, limit: 10 });
+
+    expect(products[0]).toEqual({
+      id: 'p1',
+      name: 'Coffee',
+      description: 'Beans',
+      price: 1500,
+      currency: 'USD',
+      priceFormatted: '$1,500.00',
+      imageUrl: 'https://img.example/x.jpg',
+      url: 'https://shop.example/p1',
+      isAvailable: true,
+      retailerId: 'SKU1',
+    });
+  });
+
+  it('getProduct returns the product with the matching id', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({
+      products: [baileysProduct(), baileysProduct({ id: 'p2', name: 'Tea' })],
+      nextPageCursor: undefined,
+    });
+
+    const res = await adapter.getProduct('p2');
+
+    expect(res?.id).toBe('p2');
+    expect(res?.name).toBe('Tea');
+  });
+
+  it('getProduct returns null for an unknown id', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+
+    await expect(adapter.getProduct('nope')).resolves.toBeNull();
+  });
+
+  it('sendProduct sends a product message built from the catalog entry', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'M1' }, messageTimestamp: 1700000005 });
+
+    const res = await adapter.sendProduct('628111@s.whatsapp.net', 'p1', 'check this');
+
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      product: {
+        productId: 'p1',
+        title: 'Coffee',
+        description: 'Beans',
+        currencyCode: 'USD',
+        priceAmount1000: 1500000,
+        retailerId: 'SKU1',
+        url: 'https://shop.example/p1',
+        productImage: { url: 'https://img.example/x.jpg' },
+      },
+      businessOwnerJid: '628999@s.whatsapp.net',
+      body: 'check this',
+    });
+    expect(res).toEqual({ id: 'M1', timestamp: 1700000005 });
+  });
+
+  it('sendProduct rejects NotFound when the product id is unknown', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct()], nextPageCursor: undefined });
+
+    await expect(adapter.sendProduct('628111@s.whatsapp.net', 'nope')).rejects.toThrow(NotFoundException);
+    expect(fakeSock.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('sendProduct rejects BadRequest when the product has no image', async () => {
+    const adapter = await ready();
+    fakeSock.getCatalog.mockResolvedValue({ products: [baileysProduct({ imageUrls: {} })], nextPageCursor: undefined });
+
+    await expect(adapter.sendProduct('628111@s.whatsapp.net', 'p1')).rejects.toThrow(BadRequestException);
+    expect(fakeSock.sendMessage).not.toHaveBeenCalled();
   });
 });

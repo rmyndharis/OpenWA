@@ -9,10 +9,12 @@ import {
   MediaInput,
   MessageResult,
   PollInput,
+  Product,
 } from '../interfaces/whatsapp-engine.interface';
 import { toEngineParticipants } from './baileys-groups';
 import { buildVCard } from './vcard';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
+import { BadRequestException } from '@nestjs/common';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { MessageNotFoundError } from '../../common/errors/message-not-found.error';
 import { type createLogger } from '../../common/services/logger.service';
@@ -29,6 +31,7 @@ export interface BaileysMessagingHost {
   readonly logger: ReturnType<typeof createLogger>;
   toNeutralJid(jid: string): string;
   toEngineJid(jid: string): string;
+  normalizedSelfJid(): string;
   /** The chat's cached disappearing-messages timer (#473), or undefined when none is known. */
   getEphemeralExpiration(chatId: string): number | undefined;
   /** Baileys timestamps are `number | Long`; normalize to unix seconds. */
@@ -124,6 +127,34 @@ export class BaileysMessaging {
         error: String(error),
       });
     }
+  }
+
+  /**
+   * Send a native product card (#905). Baileys has no catalog-lookup-then-send helper, so the
+   * adapter resolves the Product first; here it becomes a {product} message whose snapshot is
+   * priced in thousandths (priceAmount1000) and whose image is handed to Baileys as a URL upload.
+   * The card needs an image — a product whose catalog entry has none cannot be sent this way.
+   */
+  async sendProductMessage(chatId: string, product: Product, body?: string): Promise<MessageResult> {
+    this.host.ensureReady();
+    if (!product.imageUrl) {
+      throw new BadRequestException(`Product ${product.id} has no image — a product card requires one`);
+    }
+    const content: AnyMessageContent = {
+      product: {
+        productId: product.id,
+        title: product.name,
+        description: product.description,
+        currencyCode: product.currency,
+        priceAmount1000: Math.round(product.price * 1000),
+        retailerId: product.retailerId,
+        url: product.url || undefined,
+        productImage: { url: product.imageUrl },
+      },
+      businessOwnerJid: this.host.toEngineJid(this.host.normalizedSelfJid()),
+      body,
+    };
+    return this.sendContent(chatId, content);
   }
 
   async sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
