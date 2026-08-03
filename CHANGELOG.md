@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `BAILEYS_MARK_ONLINE_ON_CONNECT=false` keeps phone push notifications alive while a Baileys gateway is connected (default `true`, prior behavior). (#871)
 
+- **Helm chart for Kubernetes deployments, under `charts/openwa/`.** A single-replica
+  StatefulSet with a PVC for `/app/data` (session auth, main DB, media, plugins), the
+  docker-compose hardening mirrored (read-only rootfs, dropped capabilities, writable
+  `emptyDir` at `/tmp`), free-form `env`/`secretEnv` maps covering every variable in
+  `.env.example`, and optional Ingress, PodDisruptionBudget and ServiceMonitor.
+  Datastores are not bundled — point `env` at your own or stay on the SQLite default.
+  Closes #695.
+
 ### Fixed
 
 - **A key pasted with a stray space now authenticates on the WebSocket, not just over REST.**
