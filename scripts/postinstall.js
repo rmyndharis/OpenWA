@@ -4,11 +4,13 @@
  * Three conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
- *   1. `npm run dashboard:ci` when dashboard/ exists — the dashboard carries its own lockfile and
- *      the root install would otherwise leave it without dependencies. A failure here MUST abort
- *      the install: the old inline hook swallowed spawnSync's exit status, so a red dashboard
- *      install still reported `npm install` success and the breakage surfaced only at build/run
- *      time.
+ *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
+ *      the root install would otherwise leave it without dependencies. We run `npm ci` directly in
+ *      dashboard/ with any `npm_config_allow_scripts` environment variable stripped so that npm 11
+ *      does not reject `allow-scripts=true` from user `.npmrc` with EALLOWSCRIPTS. A failure here
+ *      MUST abort the install: the old inline hook swallowed spawnSync's exit status, so a red
+ *      dashboard install still reported `npm install` success and the breakage surfaced only at
+ *      build/run time.
  *   2. `node scripts/patch-wwebjs-201832.js --best-effort` when the patcher exists. The patcher
  *      itself decides fatality: under --best-effort it warns and exits 0 for a pristine-but-
  *      unpatched tree (no `patch` binary, Baileys-only user), but exits 1 for a HALF-patched
@@ -27,14 +29,35 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 
+/**
+ * Sanitize an environment object for child invocations.
+ *
+ * npm 11 rejects `--allow-scripts` in project-scoped installs (`npm ci`, `npm install`) when it
+ * originates from the environment (`npm_config_allow_scripts`) rather than `.npmrc` or
+ * `package.json`. When a root install is invoked with `allow-scripts=true` in `.npmrc`, npm
+ * exports that setting to the lifecycle environment as `npm_config_allow_scripts`. Stripping it
+ * prevents nested npm executions (`npm run dashboard:ci` -> `cd dashboard && npm ci`) from
+ * failing with EALLOWSCRIPTS while preserving the user's `.npmrc` configuration.
+ */
+function sanitizeEnv(env = process.env) {
+  const clean = { ...env };
+  for (const key of Object.keys(clean)) {
+    if (/^npm_config_allow[_-]scripts$/i.test(key)) {
+      delete clean[key];
+    }
+  }
+  return clean;
+}
+
 /** The steps to run for a given repo root, in order. */
-function planSteps(root) {
+function planSteps(root, env = process.env) {
+  const cleanEnv = sanitizeEnv(env);
   const steps = [];
   if (fs.existsSync(path.join(root, 'dashboard'))) {
     steps.push({
-      name: 'dashboard dependencies (npm run dashboard:ci)',
-      command: 'npm run dashboard:ci',
-      options: { stdio: 'inherit', shell: true, cwd: root },
+      name: 'dashboard dependencies (npm ci)',
+      command: 'npm ci',
+      options: { stdio: 'inherit', shell: true, cwd: path.join(root, 'dashboard'), env: cleanEnv },
     });
   }
   const patcher = path.join(root, 'scripts', 'patch-wwebjs-201832.js');
@@ -43,7 +66,7 @@ function planSteps(root) {
       name: 'whatsapp-web.js backport (scripts/patch-wwebjs-201832.js --best-effort)',
       command: process.execPath,
       args: [patcher, '--best-effort'],
-      options: { stdio: 'inherit', cwd: root },
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
   const previewPatcher = path.join(root, 'scripts', 'patch-wwebjs-newsletter-preview.js');
@@ -52,7 +75,7 @@ function planSteps(root) {
       name: 'whatsapp-web.js newsletter preview backport (scripts/patch-wwebjs-newsletter-preview.js --best-effort)',
       command: process.execPath,
       args: [previewPatcher, '--best-effort'],
-      options: { stdio: 'inherit', cwd: root },
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
     });
   }
   return steps;
@@ -70,8 +93,8 @@ function failureReason(res) {
  * Run the planned steps, stopping at the first failure. Returns the process exit code (0 = all
  * steps ran clean or were absent). `spawn` is injectable for tests.
  */
-function run(root = ROOT, spawn = spawnSync) {
-  const steps = planSteps(root);
+function run(root = ROOT, spawn = spawnSync, env = process.env) {
+  const steps = planSteps(root, env);
   if (!steps.length) {
     console.log('postinstall: no dashboard/ or patch script present — nothing to do.');
     return 0;
@@ -94,4 +117,4 @@ if (require.main === module) {
   process.exit(run());
 }
 
-module.exports = { planSteps, failureReason, run, ROOT };
+module.exports = { sanitizeEnv, planSteps, failureReason, run, ROOT };

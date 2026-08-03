@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { planSteps, failureReason, run } = require('./postinstall.js');
+const { sanitizeEnv, planSteps, failureReason, run } = require('./postinstall.js');
 
 const OK = { status: 0, signal: null, error: null };
 
@@ -49,11 +49,13 @@ test('planSteps: empty root plans nothing', () => {
 });
 
 test('planSteps: dashboard only plans the dashboard install (shell, inherited stdio)', () => {
-  const steps = planSteps(makeRoot({ dashboard: true }));
+  const root = makeRoot({ dashboard: true });
+  const steps = planSteps(root);
   assert.equal(steps.length, 1);
-  assert.equal(steps[0].command, 'npm run dashboard:ci');
+  assert.equal(steps[0].command, 'npm ci');
   assert.equal(steps[0].options.shell, true);
   assert.equal(steps[0].options.stdio, 'inherit');
+  assert.equal(steps[0].options.cwd, path.join(root, 'dashboard'));
 });
 
 test('planSteps: patcher only plans the best-effort backport via the current node', () => {
@@ -75,14 +77,14 @@ test('planSteps: newsletter preview patcher plans its own best-effort backport',
 test('planSteps: both present plans dashboard first, patcher second', () => {
   const steps = planSteps(makeRoot({ dashboard: true, patcher: true }));
   assert.equal(steps.length, 2);
-  assert.equal(steps[0].command, 'npm run dashboard:ci');
+  assert.equal(steps[0].command, 'npm ci');
   assert.equal(steps[1].command, process.execPath);
 });
 
 test('planSteps: dashboard and both patchers run in stable order', () => {
   const steps = planSteps(makeRoot({ dashboard: true, patcher: true, previewPatcher: true }));
   assert.equal(steps.length, 3);
-  assert.equal(steps[0].command, 'npm run dashboard:ci');
+  assert.equal(steps[0].command, 'npm ci');
   assert.match(steps[1].args[0], /patch-wwebjs-201832\.js$/);
   assert.match(steps[2].args[0], /patch-wwebjs-newsletter-preview\.js$/);
 });
@@ -103,7 +105,7 @@ test('run: non-zero dashboard install exits 1 and never reaches the patcher (fai
   const { calls, spawn } = fakeSpawn([{ status: 1, signal: null, error: null }]);
   assert.equal(run(makeRoot({ dashboard: true, patcher: true }), spawn), 1);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, 'npm run dashboard:ci');
+  assert.equal(calls[0].command, 'npm ci');
 });
 
 test('run: spawn error (npm not found) exits 1', () => {
@@ -127,4 +129,45 @@ test('failureReason: maps each spawnSync outcome to a cause (null = success)', (
   assert.equal(failureReason({ status: 2, signal: null, error: null }), 'exit code 2');
   assert.equal(failureReason({ status: null, signal: 'SIGKILL', error: null }), 'killed by SIGKILL');
   assert.match(failureReason({ status: null, signal: null, error: new Error('boom') }), /failed to start — boom/);
+});
+
+test('sanitizeEnv: strips allow-scripts environment variables across case and separator variations', () => {
+  const input = {
+    PATH: '/usr/bin',
+    npm_config_allow_scripts: 'true',
+    NPM_CONFIG_ALLOW_SCRIPTS: 'true',
+    'npm_config_allow-scripts': 'true',
+    'NPM_CONFIG_ALLOW-SCRIPTS': 'true',
+    npm_config_allow_scripts_extra: 'keep',
+  };
+  const result = sanitizeEnv(input);
+  assert.deepEqual(result, {
+    PATH: '/usr/bin',
+    npm_config_allow_scripts_extra: 'keep',
+  });
+  assert.equal(input.npm_config_allow_scripts, 'true');
+});
+
+test('planSteps: strips npm_config_allow_scripts from step options.env to avoid EALLOWSCRIPTS in npm 11', () => {
+  const env = {
+    PATH: '/usr/bin',
+    npm_config_allow_scripts: 'true',
+    NPM_CONFIG_ALLOW_SCRIPTS: 'true',
+  };
+  const steps = planSteps(makeRoot({ dashboard: true, patcher: true, previewPatcher: true }), env);
+  assert.equal(steps.length, 3);
+  for (const step of steps) {
+    assert.equal('npm_config_allow_scripts' in step.options.env, false);
+    assert.equal('NPM_CONFIG_ALLOW_SCRIPTS' in step.options.env, false);
+    assert.equal(step.options.env.PATH, '/usr/bin');
+  }
+});
+
+test('run: passes sanitized environment to spawn calls', () => {
+  const { calls, spawn } = fakeSpawn([OK]);
+  const env = { PATH: '/usr/bin', npm_config_allow_scripts: 'true' };
+  run(makeRoot({ dashboard: true }), spawn, env);
+  assert.equal(calls.length, 1);
+  assert.equal('npm_config_allow_scripts' in calls[0].options.env, false);
+  assert.equal(calls[0].options.env.PATH, '/usr/bin');
 });
