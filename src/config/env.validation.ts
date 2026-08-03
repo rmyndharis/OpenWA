@@ -233,6 +233,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'MCP_ENABLED',
     'SERVE_DASHBOARD',
     'AUTO_START_SESSIONS',
+    'STATUS_SEED_ON_READY',
     'STORE_EPHEMERAL_MESSAGES',
     'RESOLVE_LID_TO_PHONE',
     'SIMULATE_TYPING',

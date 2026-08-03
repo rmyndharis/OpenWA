@@ -133,13 +133,21 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ QUEUE_ENABLED: '1' })).toThrow(/QUEUE_ENABLED/);
     expect(() => validateEnv({ MCP_ENABLED: 'yes' })).toThrow(/MCP_ENABLED/);
     expect(() => validateEnv({ SERVE_DASHBOARD: 'no' })).toThrow(/SERVE_DASHBOARD/);
+    expect(() => validateEnv({ STATUS_SEED_ON_READY: 'yes' })).toThrow(/STATUS_SEED_ON_READY/);
     // The raw value is checked, NOT a trimmed one: a trailing space / CR (Windows-edited env file
     // forwarded verbatim by `docker run --env-file`) must still be rejected — otherwise the flag reads
     // false at every `=== 'true'` site while validation passes, giving false assurance.
     expect(() => validateEnv({ QUEUE_ENABLED: 'true ' })).toThrow(/QUEUE_ENABLED/);
     expect(() => validateEnv({ MCP_ENABLED: 'true\r' })).toThrow(/MCP_ENABLED/);
     // Canonical values, unset, and blank (a compose `${KEY:-}` forward renders '') all pass.
-    expect(() => validateEnv({ QUEUE_ENABLED: 'true', MCP_ENABLED: 'false', SERVE_DASHBOARD: 'true' })).not.toThrow();
+    expect(() =>
+      validateEnv({
+        QUEUE_ENABLED: 'true',
+        MCP_ENABLED: 'false',
+        SERVE_DASHBOARD: 'true',
+        STATUS_SEED_ON_READY: 'false',
+      }),
+    ).not.toThrow();
     expect(() => validateEnv({ QUEUE_ENABLED: '', SERVE_DASHBOARD: '' })).not.toThrow();
     expect(() => validateEnv({})).not.toThrow();
   });

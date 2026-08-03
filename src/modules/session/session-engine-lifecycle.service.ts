@@ -32,8 +32,7 @@ import { SessionEngineControls } from './session-engine-controls';
  * fetching status@broadcast before WhatsApp Web's first scheduled reload makes WhatsApp revoke the
  * companion at that reload. Live status events remain unaffected when this backfill is disabled.
  */
-const isStatusSeedOnReadyEnabled = (): boolean =>
-  ['true', '1', 'yes', 'on'].includes((process.env.STATUS_SEED_ON_READY ?? 'false').trim().toLowerCase());
+const isStatusSeedOnReadyEnabled = (): boolean => process.env.STATUS_SEED_ON_READY === 'true';
 
 // Message types that carry downloadable media. Any persisted row of these types must have a media
 // marker in metadata — never NULL — or the dashboard renders an empty bubble (no placeholder) and the
