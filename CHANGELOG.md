@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REST, the WebSocket gateway and the MCP mount all route through, so every surface agrees on what the
   credential is. Whitespace is never part of a key, so no legitimate credential changes meaning.
 
+- **Image builds no longer walk all of `node_modules` to chown it.** The production stage ended with
+  `chown -R openwa:openwa /app`, which touched every installed dependency file — over half an hour on
+  a small VPS, the slowest step of the build — and duplicated their metadata into a new image layer.
+  It was redundant: runtime writes only happen under `/app/data` and `/tmp`, the entrypoint re-chowns
+  `/app/data` at every container start, and the app tree only needs read access. The chown now covers
+  `./data` only, so the step is instant and the layer is gone. (#1045)
+
 ## [0.12.5] - 2026-08-03
 
 The follow-up to 0.12.4, and the end of the decomposition work. **Nothing here is visible to a user or
