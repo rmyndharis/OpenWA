@@ -107,7 +107,10 @@ test('sessionStatus.failed and sessionStatus.authenticating resolve in every loc
     for (const status of ['failed', 'authenticating']) {
       const key = `sessionStatus.${status}`;
       const value = i18n.t(key, { lng });
-      assert.ok(value && value !== key && value !== status, `${lng}: ${key} missing — status pill would render raw "${status}"`);
+      assert.ok(
+        value && value !== key && value !== status,
+        `${lng}: ${key} missing — status pill would render raw "${status}"`,
+      );
     }
   }
   assert.equal(i18n.t('sessionStatus.failed'), 'Failed');

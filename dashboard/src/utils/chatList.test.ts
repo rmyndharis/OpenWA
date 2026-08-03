@@ -27,7 +27,11 @@ test('an arriving message moves its chat to the top and refreshes the snippet', 
   );
   assert.equal(chats[0].lastMessage, 'hi');
   assert.equal(chats[0].timestamp, 200);
-  assert.deepEqual(before.map(c => c.id), ['a@c.us', 'b@c.us'], 'input is not mutated');
+  assert.deepEqual(
+    before.map(c => c.id),
+    ['a@c.us', 'b@c.us'],
+    'input is not mutated',
+  );
 });
 
 test('a location message shows the label, never its base64 body', () => {
@@ -110,7 +114,11 @@ test('promoteChatWithSnippet moves the sent-into chat to the top', () => {
   );
   assert.equal(after[0].lastMessage, '[image]');
   assert.equal(after[0].timestamp, 999);
-  assert.deepEqual(before.map(c => c.id), ['a@c.us', 'b@c.us'], 'input is not mutated');
+  assert.deepEqual(
+    before.map(c => c.id),
+    ['a@c.us', 'b@c.us'],
+    'input is not mutated',
+  );
 });
 
 test('promoteChatWithSnippet leaves an unknown chat alone rather than inventing a row', () => {

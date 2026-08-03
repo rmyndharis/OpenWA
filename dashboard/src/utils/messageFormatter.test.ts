@@ -21,45 +21,31 @@ test('*bold* wraps with bold', () => {
 });
 
 test('_italic_ wraps with italic', () => {
-  assert.deepEqual(parseMessageBody('_em_'), [
-    { type: 'italic', children: [text('em')] },
-  ]);
+  assert.deepEqual(parseMessageBody('_em_'), [{ type: 'italic', children: [text('em')] }]);
 });
 
 test('~strike~ wraps with strike', () => {
-  assert.deepEqual(parseMessageBody('~gone~'), [
-    { type: 'strike', children: [text('gone')] },
-  ]);
+  assert.deepEqual(parseMessageBody('~gone~'), [{ type: 'strike', children: [text('gone')] }]);
 });
 
 test('`inline` produces a code node with literal value', () => {
-  assert.deepEqual(parseMessageBody('use `npm i` now'), [
-    text('use '),
-    { type: 'code', value: 'npm i' },
-    text(' now'),
-  ]);
+  assert.deepEqual(parseMessageBody('use `npm i` now'), [text('use '), { type: 'code', value: 'npm i' }, text(' now')]);
 });
 
 test('```block``` produces a codeblock node with literal value', () => {
-  assert.deepEqual(parseMessageBody('```line1\nline2```'), [
-    { type: 'codeblock', value: 'line1\nline2' },
-  ]);
+  assert.deepEqual(parseMessageBody('```line1\nline2```'), [{ type: 'codeblock', value: 'line1\nline2' }]);
 });
 
 test('code segments do not get formatted inside', () => {
   // The `*not*` inside the code segment stays literal.
-  assert.deepEqual(parseMessageBody('`*not*`'), [
-    { type: 'code', value: '*not*' },
-  ]);
+  assert.deepEqual(parseMessageBody('`*not*`'), [{ type: 'code', value: '*not*' }]);
 });
 
 test('nesting: *_a_* -> bold(italic(a))', () => {
   assert.deepEqual(parseMessageBody('*_a_*'), [
     {
       type: 'bold',
-      children: [
-        { type: 'italic', children: [text('a')] },
-      ],
+      children: [{ type: 'italic', children: [text('a')] }],
     },
   ]);
 });
@@ -88,9 +74,7 @@ test('multiple consecutive formats: *a* _b_', () => {
 test('marker without outside boundary stays literal (no over-formatting)', () => {
   // 'word*bold*end' has no boundary char before the opening '*' nor after the closer.
   // Per WhatsApp rules this is literal text — the boundary guard prevents over-formatting.
-  assert.deepEqual(parseMessageBody('word*bold*end'), [
-    { type: 'text', value: 'word*bold*end' },
-  ]);
+  assert.deepEqual(parseMessageBody('word*bold*end'), [{ type: 'text', value: 'word*bold*end' }]);
 });
 
 // Deepest bold/italic/strike nesting in a parsed tree; text/code leaves count as 0.
@@ -104,8 +88,7 @@ test('hostile input: deep marker nesting is capped instead of overflowing the st
   const nodes = parseMessageBody(evil);
   assert.ok(treeDepth(nodes) <= 20, `nesting depth ${treeDepth(nodes)} exceeds the cap`);
   // Beyond the cap the leftover markers degrade to literal text — nothing is dropped.
-  const flat = (ns: MessageNode[]): string =>
-    ns.map(n => ('children' in n ? flat(n.children) : n.value)).join('');
+  const flat = (ns: MessageNode[]): string => ns.map(n => ('children' in n ? flat(n.children) : n.value)).join('');
   const rendered = flat(nodes);
   assert.ok(rendered.includes('a'));
   assert.ok(rendered.includes('*_'), 'unparsed markers must survive as literal text');

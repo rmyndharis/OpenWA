@@ -698,11 +698,11 @@ curl -X DELETE "$BASE/api/sessions/$SESSION_ID/templates/$TEMPLATE_ID" \
 
 ### 07.8 Catalog & Channels
 
-The five catalog routes are registered but **no engine implements them**: both whatsapp-web.js and Baileys raise `EngineNotSupportedError`, so each of them returns `501 Not Implemented` once the session is READY. On whatsapp-web.js the readiness check runs first, so a session that exists but is not yet READY returns `409` instead; Baileys raises the unsupported error unconditionally. They are listed for route completeness only. The channel routes that follow are a separate group with real engine support — the per-engine gaps are listed in `docs/29-engine-capability-matrix.md`.
+The catalog routes work on the **Baileys** engine (WhatsApp Business accounts) — `getCatalog`/`getProducts`/`getProduct` read the session's own catalog and `sendProduct` sends a native product card. On **whatsapp-web.js** they raise `EngineNotSupportedError` (`501 Not Implemented`) — the library has no catalog API at all; on that engine the readiness check runs first, so a session that exists but is not yet READY returns `409` instead. The exception is `send-catalog`, which returns `501` on **both** engines (no catalog-share message type exists in either library). The per-engine gaps are listed in `docs/29-engine-capability-matrix.md`. The channel routes that follow are a separate group with real engine support.
 
 #### GET /api/sessions/:sessionId/catalog
 
-Get business catalog info for the session. Returns `501` on both engines.
+Get business catalog info for the session. On Baileys returns the first catalog collection's metadata (`200`, or `null` when the business has no collections); on whatsapp-web.js returns `501`.
 
 ```bash
 curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog" \
@@ -711,7 +711,7 @@ curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog" \
 
 #### GET /api/sessions/:sessionId/catalog/products
 
-List catalog products with pagination. Returns `501` on both engines.
+List catalog products with pagination. Works on Baileys (page/limit over the full catalog walk); returns `501` on whatsapp-web.js.
 
 ```bash
 curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog/products?page=1&limit=20" \
@@ -720,7 +720,7 @@ curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog/products?page=1&limit=20" \
 
 #### GET /api/sessions/:sessionId/catalog/products/:productId
 
-Get a specific catalog product by id. Returns `501` on both engines, whatever the id.
+Get a specific catalog product by id. On Baileys returns the product (`200`) or `null` for an unknown id; on whatsapp-web.js returns `501`.
 
 ```bash
 curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog/products/PROD_12345" \
@@ -729,7 +729,7 @@ curl -X GET "$BASE/api/sessions/$SESSION_ID/catalog/products/PROD_12345" \
 
 #### POST /api/sessions/:sessionId/messages/send-product
 
-Send a product card to a chat (OPERATOR key required). Returns `501` on both engines.
+Send a product card to a chat (OPERATOR key required). On Baileys returns `404` for an unknown product id and `400` when the product has no image; on whatsapp-web.js returns `501`.
 
 ```bash
 curl -X POST "$BASE/api/sessions/$SESSION_ID/messages/send-product" \
@@ -1444,7 +1444,7 @@ socket.on('connect', () => {
   });
 });
 
-socket.on('message', (msg) => {
+socket.on('message', msg => {
   if (msg.type === 'event') {
     console.log(`[${msg.payload.event}] ${msg.payload.sessionId}`, msg.payload.data);
   } else {
@@ -1452,6 +1452,6 @@ socket.on('message', (msg) => {
   }
 });
 
-socket.on('connect_error', (err) => console.error('connect_error:', err.message));
-socket.on('disconnect', (reason) => console.log('disconnected:', reason));
+socket.on('connect_error', err => console.error('connect_error:', err.message));
+socket.on('disconnect', reason => console.log('disconnected:', reason));
 ```

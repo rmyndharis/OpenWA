@@ -32,11 +32,18 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          justifyContent: 'center', minHeight: '100vh', padding: '2rem',
-          fontFamily: 'system-ui, sans-serif', color: 'var(--text-primary)',
-        }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '100vh',
+            padding: '2rem',
+            fontFamily: 'system-ui, sans-serif',
+            color: 'var(--text-primary)',
+          }}
+        >
           <AlertCircle size={48} style={{ color: 'var(--error)', marginBottom: '1rem' }} />
           <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{i18n.t('errorBoundary.title')}</h1>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', textAlign: 'center' }}>
@@ -45,10 +52,16 @@ export class ErrorBoundary extends Component<Props, State> {
           <button
             onClick={this.handleReload}
             style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem',
-              padding: '0.75rem 1.5rem', backgroundColor: 'var(--primary)',
-              color: 'white', border: 'none', borderRadius: '0.5rem',
-              cursor: 'pointer', fontSize: '1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.75rem 1.5rem',
+              backgroundColor: 'var(--primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.5rem',
+              cursor: 'pointer',
+              fontSize: '1rem',
             }}
           >
             <RefreshCw size={18} />

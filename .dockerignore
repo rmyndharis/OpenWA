@@ -66,3 +66,6 @@ temp/
 
 # Debug
 .pnpm-debug.log*
+
+# Helm chart — deployment artifact, not a build input
+charts/

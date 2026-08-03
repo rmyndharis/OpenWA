@@ -183,16 +183,28 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
                 {inst.enabled ? t('plugins.instances.enabled') : t('plugins.instances.disabled')}
               </span>
               <div className="pi-actions">
-                <button className="icon-btn" onClick={() => void toggleEnabled(inst)} title={t(`plugins.instances.actions.${inst.enabled ? 'disable' : 'enable'}`)}>
+                <button
+                  className="icon-btn"
+                  onClick={() => void toggleEnabled(inst)}
+                  title={t(`plugins.instances.actions.${inst.enabled ? 'disable' : 'enable'}`)}
+                >
                   <Power size={16} />
                 </button>
-                <button className="icon-btn" onClick={() => setConfirm({ type: 'regenerate', inst })} title={t('plugins.instances.actions.regenerate')}>
+                <button
+                  className="icon-btn"
+                  onClick={() => setConfirm({ type: 'regenerate', inst })}
+                  title={t('plugins.instances.actions.regenerate')}
+                >
                   <RefreshCw size={16} />
                 </button>
                 <button className="icon-btn" onClick={() => openEdit(inst)} title={t('plugins.instances.actions.edit')}>
                   <Pencil size={16} />
                 </button>
-                <button className="icon-btn danger" onClick={() => setConfirm({ type: 'delete', inst })} title={t('plugins.instances.actions.delete')}>
+                <button
+                  className="icon-btn danger"
+                  onClick={() => setConfirm({ type: 'delete', inst })}
+                  title={t('plugins.instances.actions.delete')}
+                >
                   <Trash2 size={16} />
                 </button>
               </div>
@@ -213,7 +225,11 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
               <button className="btn-secondary" onClick={() => setShowForm(false)}>
                 {t('common.cancel')}
               </button>
-              <button className="btn-primary" onClick={() => void submitCreate()} disabled={createM.isPending || !form.instanceId}>
+              <button
+                className="btn-primary"
+                onClick={() => void submitCreate()}
+                disabled={createM.isPending || !form.instanceId}
+              >
                 {createM.isPending ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
               </button>
             </>
@@ -264,7 +280,11 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
         <Modal
           open
           onClose={() => setMinted(null)}
-          title={mintedKind === 'regenerated' ? t('plugins.instances.regenerate.title') : t('plugins.instances.created.title')}
+          title={
+            mintedKind === 'regenerated'
+              ? t('plugins.instances.regenerate.title')
+              : t('plugins.instances.created.title')
+          }
           closeLabel={t('common.close')}
           footer={
             <button className="btn-secondary" onClick={() => setMinted(null)}>
@@ -305,7 +325,11 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
                 {t('common.cancel')}
               </button>
               <button className="btn-primary" onClick={() => void submitEdit()} disabled={updateM.isPending}>
-                {updateM.isPending ? <Loader2 className="animate-spin" size={16} /> : t('plugins.instances.actions.save')}
+                {updateM.isPending ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  t('plugins.instances.actions.save')
+                )}
               </button>
             </>
           }

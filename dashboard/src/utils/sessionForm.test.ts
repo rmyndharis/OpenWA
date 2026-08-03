@@ -78,8 +78,21 @@ test('filterSessions combines the search box and the status group', () => {
     { id: 'u3', name: 'sales-backup', status: 'disconnected' },
   ];
 
-  assert.deepEqual(filterSessions(sessions, 'sales', 'all').map(s => s.id), ['u1', 'u3']);
-  assert.deepEqual(filterSessions(sessions, 'sales', 'inactive').map(s => s.id), ['u3']);
-  assert.deepEqual(filterSessions(sessions, '', 'active').map(s => s.id), ['u1']);
-  assert.deepEqual(filterSessions(sessions, 'u2', 'all').map(s => s.id), ['u2'], 'id matches too');
+  assert.deepEqual(
+    filterSessions(sessions, 'sales', 'all').map(s => s.id),
+    ['u1', 'u3'],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, 'sales', 'inactive').map(s => s.id),
+    ['u3'],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, '', 'active').map(s => s.id),
+    ['u1'],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, 'u2', 'all').map(s => s.id),
+    ['u2'],
+    'id matches too',
+  );
 });

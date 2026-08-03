@@ -25,17 +25,30 @@ function selectors(css: string): string[] {
     let j = i;
     while (j < n && css[j] !== '{' && css[j] !== '}') j++;
     if (j >= n) break;
-    if (css[j] === '}') { i = j + 1; continue; }
+    if (css[j] === '}') {
+      i = j + 1;
+      continue;
+    }
     const header = css.slice(i, j).trim();
-    let depth = 1, k = j + 1;
-    while (k < n && depth) { if (css[k] === '{') depth++; else if (css[k] === '}') depth--; k++; }
+    let depth = 1,
+      k = j + 1;
+    while (k < n && depth) {
+      if (css[k] === '{') depth++;
+      else if (css[k] === '}') depth--;
+      k++;
+    }
     const body = css.slice(j + 1, k - 1);
     if (/^@keyframes|^@font-face|^@page/.test(header)) {
       /* keyframe/font selectors are not class-scoped — skip */
     } else if (/^@media|^@supports|^@container/.test(header)) {
       out.push(...selectors(body)); // recurse: inner rules must still be scoped
     } else if (header) {
-      out.push(...header.split(',').map(s => s.trim()).filter(Boolean));
+      out.push(
+        ...header
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean),
+      );
     }
     i = k;
   }

@@ -5,9 +5,7 @@
  * text-node content, the unescaped body becomes inert characters. NEVER use `dangerouslySetInnerHTML`
  * on the raw snippet.
  */
-export function renderHighlightedSnippet(
-  snippet: string,
-): { text: string; marked: boolean }[] {
+export function renderHighlightedSnippet(snippet: string): { text: string; marked: boolean }[] {
   if (!snippet) return [{ text: '', marked: false }];
   // Split on <mark>/</mark>; odd indices (1, 3, …) were between the tags → highlighted.
   // The marked flag is derived from the pre-filter index, then empty boundary segments
@@ -16,7 +14,7 @@ export function renderHighlightedSnippet(
   return snippet
     .split(/<\/?mark>/)
     .map((text, i) => ({ text, marked: i % 2 === 1 }))
-    .filter((seg) => seg.text.length > 0);
+    .filter(seg => seg.text.length > 0);
 }
 
 /** Build the SearchParams for a debounced query (trims, drops empty). */

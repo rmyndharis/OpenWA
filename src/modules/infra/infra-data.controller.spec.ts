@@ -198,6 +198,83 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     expect(dlf.payload).toEqual({ foo: 'bar' });
   });
 
+  // conversation_mappings' map() was never invoked by any prior test — a param transcription slip
+  // (e.g. swapping pluginId/instanceId) would leave the whole suite green. Every mapped column gets
+  // a distinct value so a swap of any two adjacent params is guaranteed to flip an assertion.
+  it('round-trips conversation mappings (handover state survives a restore)', async () => {
+    await seedSession('s1');
+    const cmRepo = ds.getRepository(ConversationMapping);
+    await cmRepo.save(
+      cmRepo.create({
+        sessionId: 's1',
+        chatId: '628111@s.whatsapp.net',
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        providerConversationId: 'conv-42',
+        handoverState: 'human',
+        metadata: { agent: 'alice' },
+      }),
+    );
+
+    const dump = await controller.exportData();
+    expect(dump.counts.conversationMappings).toBe(1);
+
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.conversationMappings).toBe(1);
+
+    const restored = await cmRepo.findOneByOrFail({ chatId: '628111@s.whatsapp.net' });
+    expect(restored.sessionId).toBe('s1');
+    expect(restored.chatId).toBe('628111@s.whatsapp.net');
+    expect(restored.pluginId).toBe('chatwoot');
+    expect(restored.instanceId).toBe('acct1');
+    expect(restored.providerConversationId).toBe('conv-42');
+    expect(restored.handoverState).toBe('human');
+    expect(restored.metadata).toEqual({ agent: 'alice' });
+  });
+
+  // webhook_delivery_failures' map() was never invoked by any prior test either — same risk as
+  // conversation_mappings above. Every mapped column gets a distinct value for the same reason.
+  it('round-trips webhook delivery failures (webhook DLQ survives a restore)', async () => {
+    await seedSession('s1');
+    const wdfRepo = ds.getRepository(WebhookDeliveryFailure);
+    await wdfRepo.save(
+      wdfRepo.create({
+        webhookId: 'w1',
+        sessionId: 's1',
+        event: 'message',
+        url: 'https://example.com/hook',
+        idempotencyKey: 'idem-1',
+        deliveryId: 'dlv-7',
+        attempts: 5,
+        lastStatusCode: 502,
+        lastError: 'Bad Gateway',
+      }),
+    );
+
+    const dump = await controller.exportData();
+    expect(dump.counts.webhookDeliveryFailures).toBe(1);
+
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(res.imported).toBe(true);
+    expect(res.counts.webhookDeliveryFailures).toBe(1);
+
+    const restored = await wdfRepo.findOneByOrFail({ deliveryId: 'dlv-7' });
+    expect(restored.webhookId).toBe('w1');
+    expect(restored.sessionId).toBe('s1');
+    expect(restored.event).toBe('message');
+    expect(restored.url).toBe('https://example.com/hook');
+    expect(restored.idempotencyKey).toBe('idem-1');
+    expect(restored.deliveryId).toBe('dlv-7');
+    expect(restored.attempts).toBe(5);
+    expect(restored.lastStatusCode).toBe(502);
+    expect(restored.lastError).toBe('Bad Gateway');
+  });
+
   it('round-trips the ingress dispatch-lifecycle columns so a restored pending event still replays', async () => {
     await seedSession('s1');
     const ingressRepo = ds.getRepository(IngressEvent);
@@ -252,10 +329,18 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
     expect(pending.lastDispatchAt).toEqual(new Date('2026-01-02T03:04:05.000Z'));
     expect(pending.payloadHash).toBe('abc123');
     expect(pending.payload).toEqual({ headers: {}, query: {}, body: '{}', rawBody: '{}' });
+    // These columns were never pinned before — the map() param order is the whole point of the
+    // descriptor, and each value here is distinct so a swap of any two adjacent params fails.
+    expect(pending.instanceId).toBe('acct1');
+    expect(pending.pluginId).toBe('chatwoot');
+    expect(pending.providerDeliveryId).toBe('dlv-1');
+    expect(pending.route).toBe('chatwoot/acct1');
+    expect(pending.sessionId).toBe('s1');
 
     const retired = await ingressRepo.findOneByOrFail({ id: 'ie-retired' });
     expect(retired.dispatchState).toBe('dispatched');
     expect(retired.payloadHash).toBe('def456');
+    expect(retired.providerDeliveryId).toBe('dlv-2');
     // A retired payload must stay NULL — re-materializing it as '{}' would make the slimmed dedup
     // row read as a pending event with an empty body.
     expect(retired.payload).toBeNull();
@@ -783,6 +868,14 @@ describe('InfraDataController.importData status_updates + runtime reconciliation
     expect(restored.font).toBe(2);
     expect(restored.postedAt).toBe(1750000000000);
     expect(restored.expiresAt).toBe(1750086400000);
+    // These columns were never pinned before — the map() param order is the whole point of the
+    // descriptor, and each value here is distinct so a swap of any two adjacent params fails.
+    expect(restored.sessionId).toBe('s1');
+    expect(restored.contactJid).toBe('628111@c.us');
+    expect(restored.contactName).toBe('Alice');
+    expect(restored.contactPushName).toBe('alice');
+    expect(restored.type).toBe('text');
+    expect(restored.backgroundColor).toBe('#FF0000');
   });
 
   it('tolerates body_ts on imported message rows (backup made before the strip)', async () => {

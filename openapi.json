@@ -4552,10 +4552,10 @@
         ],
         "responses": {
           "501": {
-            "description": "Not supported: neither engine implements catalog reads."
+            "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
           }
         },
-        "summary": "Get business catalog info (not implemented by any engine)",
+        "summary": "Get business catalog info (Baileys engine only)",
         "tags": [
           "catalog"
         ]
@@ -4598,10 +4598,10 @@
         ],
         "responses": {
           "501": {
-            "description": "Not supported: neither engine implements catalog reads."
+            "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
           }
         },
-        "summary": "List catalog products (not implemented by any engine)",
+        "summary": "List catalog products (Baileys engine only)",
         "tags": [
           "catalog"
         ]
@@ -4630,10 +4630,10 @@
         ],
         "responses": {
           "501": {
-            "description": "Not supported: neither engine implements catalog reads."
+            "description": "Not supported by the active engine: whatsapp-web.js has no catalog API."
           }
         },
-        "summary": "Get a specific product (not implemented by any engine)",
+        "summary": "Get a specific product (Baileys engine only)",
         "tags": [
           "catalog"
         ]
@@ -4663,11 +4663,17 @@
           }
         },
         "responses": {
+          "400": {
+            "description": "Product has no image — a product card requires one."
+          },
+          "404": {
+            "description": "Product id not found in the session catalog."
+          },
           "501": {
-            "description": "Not supported by the active engine: no engine can send product messages."
+            "description": "Not supported by the active engine: whatsapp-web.js cannot send product messages."
           }
         },
-        "summary": "Send a product message (not supported by any engine)",
+        "summary": "Send a product message (Baileys engine only)",
         "tags": [
           "catalog"
         ]
@@ -5877,7 +5883,7 @@
   "info": {
     "title": "OpenWA API",
     "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API",
-    "version": "0.12.4",
+    "version": "0.13.0",
     "contact": {
       "name": "OpenWA",
       "url": "https://github.com/rmyndharis/OpenWA",

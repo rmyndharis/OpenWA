@@ -66,7 +66,11 @@ function ChatSidebar({
   const renderChatRow = (chat: Chat) => {
     const isActive = chatsTab.activeChatId === chat.id;
     return (
-      <div key={chat.id} className={`chat-item-card ${isActive ? 'active' : ''}`} onClick={() => chatsTab.onSelectChat(chat)}>
+      <div
+        key={chat.id}
+        className={`chat-item-card ${isActive ? 'active' : ''}`}
+        onClick={() => chatsTab.onSelectChat(chat)}
+      >
         <ChatAvatar pictureUrl={chatsTab.pictures?.[chat.id]} kind={chat.kind} />
 
         <div className="chat-item-info">

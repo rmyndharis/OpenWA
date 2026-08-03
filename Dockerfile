@@ -151,9 +151,13 @@ COPY --from=builder /app/dist ./dist
 # (app.module.ts resolves dashboard/dist relative to dist/). Single container, single port.
 COPY --from=builder /app/dashboard/dist ./dashboard/dist
 
-# Create data directories with correct ownership
-RUN mkdir -p ./data/sessions ./data/media && \
-    chown -R openwa:openwa /app
+# Create data directories with correct ownership. Only ./data is chowned, NOT all of /app: the app
+# tree (node_modules, dist) only needs read access, which root-owned files already grant, and the
+# entrypoint re-chowns /app/data at every container start for the mounted-volume case. A full
+# /app chown walks every production dependency file (issue #1045: ~35 minutes on a small VPS) and
+# duplicates their metadata into a new image layer.
+RUN mkdir -p ./data/sessions ./data/media ./data/plugins && \
+    chown -R openwa:openwa ./data
 
 # The non-root openwa user has no home of its own (`useradd -r`, no -m). Chromium resolves the home
 # dir from the passwd entry via glib's getpwuid() — it IGNORES $HOME — so it tries to read/write

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { decideScroll, type ScrollGeometry } from './scrollDecision.ts';
 
 const at = (scrollTop: number, scrollHeight = 1000, clientHeight = 500): ScrollGeometry => ({
-  scrollTop, scrollHeight, clientHeight,
+  scrollTop,
+  scrollHeight,
+  clientHeight,
 });
 
 test('outgoing message always scrolls to bottom', () => {

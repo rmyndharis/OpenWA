@@ -52,5 +52,5 @@ test('the restart poll targets readiness, not a ping that survives the drain', (
 });
 
 test('the poll deadline comes from the helper rather than a bare constant', () => {
-  assert.match(read('../pages/Infrastructure.tsx'), /const maxAttempts = restartPollAttempts\(/);
+  assert.match(read('../hooks/useRestartFlow.ts'), /const maxAttempts = restartPollAttempts\(/);
 });

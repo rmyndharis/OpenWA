@@ -31,7 +31,11 @@ function renderNode(node: MessageNode, key: number): ReactNode {
     case 'code':
       return <code key={key}>{node.value}</code>;
     case 'codeblock':
-      return <pre key={key}><code>{node.value}</code></pre>;
+      return (
+        <pre key={key}>
+          <code>{node.value}</code>
+        </pre>
+      );
   }
 }
 
@@ -39,9 +43,7 @@ function MessageBodyBase({ text, className, enableLinks = true }: Props) {
   const nodes = parseMessageBody(text);
   const rendered = <>{nodes.map(renderNode)}</>;
   return (
-    <div className={className}>
-      {enableLinks ? <Linkify options={linkifyOptions}>{rendered}</Linkify> : rendered}
-    </div>
+    <div className={className}>{enableLinks ? <Linkify options={linkifyOptions}>{rendered}</Linkify> : rendered}</div>
   );
 }
 

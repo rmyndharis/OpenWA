@@ -211,6 +211,12 @@ jobs:
       - name: Run ESLint
         run: cd dashboard && npm run lint
 
+      # ESLint here carries no Prettier plugin, and the root `format:check` globs `src/**/*.ts` from
+      # the repository root — it never reaches `dashboard/`. Without this step nothing in CI checks
+      # dashboard formatting, which is how 35 files drifted before this gate existed.
+      - name: Check formatting
+        run: cd dashboard && npm run format:check
+
       - name: Type-check dashboard tests
         run: cd dashboard && npm run typecheck
 

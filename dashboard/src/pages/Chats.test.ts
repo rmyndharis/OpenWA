@@ -200,11 +200,7 @@ function renderChats(): { container: HTMLElement } {
     createElement(
       QueryClientProvider,
       { client: queryClient },
-      createElement(
-        RoleProvider,
-        null,
-        createElement(ToastProvider, null, createElement(Chats)),
-      ),
+      createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Chats))),
     ),
   );
 }

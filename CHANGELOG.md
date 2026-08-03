@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-03
+
+### Added
+
+- `BAILEYS_MARK_ONLINE_ON_CONNECT=false` keeps phone push notifications alive while a Baileys gateway is connected (default `true`, prior behavior). (#871)
+- **The catalog endpoints now work on the Baileys engine.** `GET /catalog`, `GET /catalog/products`,
+  `GET /catalog/products/:id` and `POST /messages/send-product` were `501` on both engines even
+  though Baileys has exposed the full catalog surface (`getCatalog`/`getCollections`) for a while —
+  the adapter simply never called it. The reads walk the library's cursor-based catalog in full and
+  slice page/limit in memory, so `pagination.total`/`totalPages` are exact rather than estimated;
+  catalog metadata is synthesized from the first collection (a business without collections gets
+  `null`). `sendProduct` resolves the product from the catalog and sends it as a native product
+  card — unknown ids come back `404`, products without an image `400`, since the card cannot render
+  without one. `send-catalog` stays `501` on both engines: neither library has a catalog-share
+  message type. whatsapp-web.js is unchanged (`501` throughout — it has no catalog API). (#905)
+
+- **Helm chart for Kubernetes deployments, under `charts/openwa/`.** A single-replica
+  StatefulSet with a PVC for `/app/data` (session auth, main DB, media, plugins), the
+  docker-compose hardening mirrored (read-only rootfs, dropped capabilities, writable
+  `emptyDir` at `/tmp`), free-form `env`/`secretEnv` maps covering every variable in
+  `.env.example`, and optional Ingress, PodDisruptionBudget and ServiceMonitor.
+  Datastores are not bundled — point `env` at your own or stay on the SQLite default.
+  Closes #695.
+
+### Fixed
+
+- **A contact who hides their number no longer keeps a stale `lid -> phone` mapping forever.**
+  `SessionLidResolver` only persisted positive resolutions, so once a `@lid` sender's phone became
+  unresolvable (e.g. username adoption) the stored mapping was never corrected — the message `from`
+  filter and the reverse lookup kept attributing that lid to the old number, and API responses kept
+  returning a phone the user chose to hide. A definitive `null` answer from the engine now overwrites
+  the mapping; transient failures (no live engine, call rejected) still never touch it. (#1058)
+
+- **A key pasted with a stray space now authenticates on the WebSocket, not just over REST.**
+  `validateApiKey` hashed the raw string as given, and HTTP strips surrounding whitespace from header
+  values in transit — so a padded key was accepted on every REST call while the Socket.IO handshake,
+  which carries the literal string in its `CONNECT` payload, hashed to something else and was rejected.
+  The failure was silent in the worst way: the dashboard's commands all went through, but not a single
+  event arrived, so every session rendered as disconnected and restarting one looked inert — the
+  restart ran, the UI just never heard about it. The key is now trimmed once in `validateApiKey`, which
+  REST, the WebSocket gateway and the MCP mount all route through, so every surface agrees on what the
+  credential is. Whitespace is never part of a key, so no legitimate credential changes meaning.
+
+- **Image builds no longer walk all of `node_modules` to chown it.** The production stage ended with
+  `chown -R openwa:openwa /app`, which touched every installed dependency file — over half an hour on
+  a small VPS, the slowest step of the build — and duplicated their metadata into a new image layer.
+  It was redundant: runtime writes only happen under `/app/data` and `/tmp`, the entrypoint re-chowns
+  `/app/data` at every container start, and the app tree only needs read access. The chown now covers
+  `./data` only, so the step is instant and the layer is gone. (#1045)
+
+## [0.12.5] - 2026-08-03
+
+The follow-up to 0.12.4, and the end of the decomposition work. **Nothing here is visible to a user or
+to an API client**: no route, payload, schema or `operationId` changed, and `openapi.json` is identical
+to 0.12.4 — 129 paths, 68 schemas. It is published so the shipped image matches a codebase whose
+riskiest paths are now genuinely under test.
+
+Three units that 0.12.4 left oversized were finished off. `infra-data.controller.ts` went from 997 to
+467 lines — only ~430 of it was ever a controller, with 13 row interfaces and a 300-line
+INSERT-descriptor table sitting in front of two route handlers. `infra-config.controller.ts` went from
+703 to 487: four config-section appliers that already took everything as parameters became free
+functions. And `mapMessage`, at 186 lines the largest method in the codebase, is now 44 — its two pure
+regions moved to the mapper module, while the media region stayed a private method because it
+downloads, logs and reads the environment.
+
+On the dashboard, `Infrastructure.tsx` went from 17 pieces of component state to 1 and `Sessions.tsx`
+from 20 to 10, moved into seven custom hooks. The split is deliberately asymmetric: hooks take state,
+components would take only markup. A hook's state lives in its caller, so moving it there preserves
+its lifetime, whereas moving it into a child destroys it when the child unmounts — the bug that cost a
+typed chat draft in 0.12.4 and a staged attachment right after. In the end no child component was
+extracted at all, which makes that failure mode unreachable here rather than merely avoided.
+
+Two long-standing coverage gaps closed with it: `MessageProjector` and `BaileysEvents` now have specs
+of their own instead of being covered only through their callers.
+
+### The verification, since that is what this release is actually for
+
+No refactor commit was allowed to modify a test. Every extraction had to prove itself against
+assertions written before the code moved, and the dashboard suite was re-run in a worktree at the
+pre-refactor commit to confirm the same tests pass on both sides.
+
+Writing those tests first exposed how little the old ones constrained. Six assertions passed on their
+first run yet could not fail against the defect they existed to catch: a fence test that only asserted
+on effects occurring after an `await`; a "no media" check that could not tell a skipped branch from a
+crashed one; a negative assertion whose fixture supplied no value to ignore; a media-type list where
+deleting `stickerMessage` passed all 4,067 tests; a quoted-context chain covered for one of seven
+arms; and an inbound test that never asserted direction, so tagging every inbound message as outgoing
+stayed green. Each is now mutation-sensitive.
+
+The data-import descriptor table also gained a load-time completeness check, because `importData`
+casts its counts object — a descriptor dropped while transcribing 300 lines would have compiled,
+silently skipped its table, and vanished from the restored-row total that guards against wiping a
+database with an empty payload.
+
+Backend suite 4,051 → 4,070; dashboard 266 → 272.
+
 ## [0.12.4] - 2026-08-02
 
 A large internal release with a deliberately small external surface: roughly 30,000 changed lines,
@@ -45,7 +141,7 @@ consequences.
   where the next send would deliver it to the wrong recipient. It is now cleared as soon as another
   chat is opened, and cleared when the session is switched.
 
-  Closing and reopening the *same* room still keeps it, so the round trip is lossless — the same
+  Closing and reopening the _same_ room still keeps it, so the round trip is lossless — the same
   guarantee the typed message draft already had. Both lifetimes are pinned by regression tests.
 
 ## [0.12.3] - 2026-08-01
@@ -71,7 +167,7 @@ consequences.
 
 - **Eight settings written to `data/.env.generated` were silently ignored under the bundled Docker
   Compose stack.** `docker-compose.yml` forwards a variable as `- KEY=${KEY:-}` so a real host value
-  reaches the container; with nothing set, that line renders an *empty* value. An empty value still
+  reaches the container; with nothing set, that line renders an _empty_ value. An empty value still
   occupies `process.env`, and both lower-priority layers — the project `.env` and
   `data/.env.generated` — are loaded with dotenv `override: false`, which will not replace a key that
   is already present, blank or not. `clearBlankEnv` exists to delete exactly those blanks before the
@@ -82,9 +178,9 @@ consequences.
   invites operators to edit directly — did nothing, with no error and no warning.
 
   `AUTO_START_SESSIONS` is the one that got noticed, and it is worth being precise about the shape of
-  the regression. The bundled *production* compose gained its forward in 0.12.0 — before that it had
+  the regression. The bundled _production_ compose gained its forward in 0.12.0 — before that it had
   none, so an operator's `data/.env.generated` supplied the flag unobstructed, because there was no
-  blank value to shadow it. (The *dev* compose has forwarded it since 0.10.0, defaulting it to `true`.)
+  blank value to shadow it. (The _dev_ compose has forwarded it since 0.10.0, defaulting it to `true`.)
   Adding the production forward without the matching clear entry therefore did not relocate an older
   failure; it switched off the one route that had been working. The flag resolved to off,
   `SessionService`'s bootstrap hook returned before it looked at a single session, and previously
@@ -117,7 +213,7 @@ consequences.
   every path from the process environment alone, while the application fills the same settings from
   three layers: the environment, then `./.env`, then `<data dir>/.env.generated` — the file Dashboard >
   Infrastructure writes. An install configured through the dashboard was therefore backed up at the
-  *default* paths.
+  _default_ paths.
 
   That is not reliably loud. A missing database already failed the run, but a database left at a
   default path from before the operator switched was archived instead and the run exited 0. A backup
@@ -139,7 +235,7 @@ consequences.
   dashboard control still moved, saved and reported success, while the running value never changed.
 
   The blank-forward fix above cannot reach this. `clearBlankEnv` runs before `.env` is read, so it
-  only clears blanks arriving from the process environment. A value in `.env` — including an *empty*
+  only clears blanks arriving from the process environment. A value in `.env` — including an _empty_
   one, since dotenv treats `KEY=` as present rather than absent — is never cleared. The copied
   `DATABASE_TYPE=sqlite` was enough on its own to shadow a dashboard switch to Postgres, leaving the
   app quietly on SQLite; and for an operator who had also set `DATABASE_TYPE=postgres` by hand, the
@@ -151,7 +247,7 @@ consequences.
   All 23 blank-forwarded keys are now commented out with their defaults shown, so copying the file no
   longer pins any of them, and a test derives that set from both compose files and fails if one is
   shipped uncommented again. Each was checked against its application-level default first; none
-  changes behaviour *silently* when absent — `DATABASE_USERNAME` has no application default at all, so
+  changes behaviour _silently_ when absent — `DATABASE_USERNAME` has no application default at all, so
   under `DATABASE_TYPE=postgres` it now fails boot validation naming the variable instead of resolving
   to `openwa`. One further exception is called out in the file: the dev compose defaults an unset
   `AUTO_START_SESSIONS` to `true`, so a dev stack that had inherited `false` from a copied
@@ -201,7 +297,7 @@ consequences.
 - **Six self-contained concerns were lifted out of `SessionService`.** Each was previously reachable
   only by driving the full session lifecycle, so the trickiest logic in the file had the least direct
   coverage. The `@lid`→phone read-through cache became `SessionLidResolver` (and took an `@Optional`
-  constructor dependency with it); the reconnect backoff *decision* became a pure `decideReconnect()`
+  constructor dependency with it); the reconnect backoff _decision_ became a pure `decideReconnect()`
   with injected clock and jitter, leaving the service to apply only the effects; the liveness watchdog
   became `SessionLivenessWatchdog`, which owns its interval and failure counter and reports back
   through a single `onDead` callback; the per-message serialization chain became a general
@@ -278,7 +374,7 @@ consequences.
   same constant the registry path is built from so the two cannot drift apart again.
 
   Existing installs keep working: when `PLUGINS_DIR` is unset, the old `./plugins` is still scanned as
-  a compatibility fallback, *in addition to* the configured directory (a host part-way through
+  a compatibility fallback, _in addition to_ the configured directory (a host part-way through
   migrating keeps both halves; the configured copy loads first and wins a duplicate id). The fallback
   is keyed on actually finding a plugin package — a non-dot subdirectory with a `manifest.json` — not
   on the directory existing, because `<dataDir>/plugins/<id>` doubles as each plugin's `ctx.storage`
@@ -310,11 +406,11 @@ consequences.
   restarting a plugin to clear a fault saw the same fault reported against the healthy worker that
   replaced it.
 
-  The record is now cleared where a generation *starts*, so it holds for every way one can end rather
+  The record is now cleared where a generation _starts_, so it holds for every way one can end rather
   than for the single path that happened to be handled.
 
 - **A rolled-back `POST /api/infra/import-data` no longer denies the engines it already stopped.** The
-  orphan pre-flight runs *before* the transaction opens, and `stopOrphans: true` really destroys those
+  orphan pre-flight runs _before_ the transaction opens, and `stopOrphans: true` really destroys those
   engines there — a teardown the rollback cannot undo. Both rollback branches nevertheless returned a
   hardcoded `restartRequired: false` with three empty orphan arrays, so an operator who hit a per-row
   warning read "nothing was stopped, no restart needed" while their sessions were in fact down. They
@@ -327,7 +423,7 @@ consequences.
   unchanged and `openapi.json` is untouched — only the values were wrong.
 
 - **A missing dashboard asset returns 404 instead of the SPA shell.** `ServeStaticModule`'s built-in
-  fallback answered *every* unmatched GET with `index.html`, so a mistyped or stale `<script src>`
+  fallback answered _every_ unmatched GET with `index.html`, so a mistyped or stale `<script src>`
   came back `200 text/html` and the browser reported a JavaScript syntax error from parsing the HTML
   shell — pointing at the wrong file and hiding a broken build. `main.ts` already serves dashboard
   documents (it injects the per-response CSP nonce, so it must own them) and is correctly narrow:
@@ -664,7 +760,7 @@ races around engine teardown and re-initialization are closed.
   neither applier accepts one whose lines end CRLF — both stop at this patch's first empty context
   line (`git apply`: "corrupt patch at line 7"; `patch`: "malformed patch at line 7"). Windows checks
   the file out exactly that way whenever `core.autocrlf` is on, which is its default, so the `git
-  apply` fallback introduced for Windows could never run on Windows, and its failure was additionally
+apply` fallback introduced for Windows could never run on Windows, and its failure was additionally
   misread as a half-written tree — which turned a skippable warning into a hard install failure.
   Three changes: the patch is normalized to LF before either applier sees it, which also repairs
   clones already on disk with CRLF; a `.gitattributes` rule keeps fresh clones on LF; and a refusal to
@@ -697,7 +793,7 @@ races around engine teardown and re-initialization are closed.
   whatsapp-web.js adapter clears a session's auth directory to recover one that authenticated but never
   reached runtime readiness within 90 seconds, and that directory holds the only copy of the
   credentials — once removed, no restart can restore the link and every later start can do nothing but
-  present a fresh QR. The adapter logged only the *failure* to remove it, so a successful wipe left no
+  present a fresh QR. The adapter logged only the _failure_ to remove it, so a successful wipe left no
   trace at all: the sole symptom was a session that quietly stopped reconnecting, indistinguishable in
   the logs from a WhatsApp-side logout or a profile nothing had touched. The removal now logs a warning
   naming the directory and the session, and the readiness-timeout warning that precedes it carries the
@@ -775,7 +871,7 @@ races around engine teardown and re-initialization are closed.
   `:-false` and an absent variable are read identically. Once you do set it, spell it exactly `true`
   or `false`: the value now reaches boot validation, which rejects anything else by name rather than
   silently falling back, so a typo fails the boot instead of quietly choosing a security posture.
-  Note also that the *refusal* it opts out of is new in this release — see the Security item for the
+  Note also that the _refusal_ it opts out of is new in this release — see the Security item for the
   upgrade impact.
 
 - **A caller's timeout now bounds the SSRF guard's own DNS resolution, and reports itself honestly.**
@@ -1215,7 +1311,7 @@ races around engine teardown and re-initialization are closed.
   the download host and seizing it would mis-verify an unrelated URL. The dashboard plugin config UI
   rendered in an `allow-scripts` sandbox that inherits the dashboard CSP (which allows any `https:`
   `img-src`/`media-src`) — a meta-CSP (`img-src 'self' data:`, `media-src 'self' data:`, `connect-src
-  'none'`) is now injected as the frame's first `<head>` element, closing the egress channel `sandbox` alone
+'none'`) is now injected as the frame's first `<head>` element, closing the egress channel `sandbox` alone
   cannot block. The audit-log CSV export quoted only `,`/`\n`/`"`, so an attacker-influenced string starting
   with `=`/`+`/`@`/`-` became a formula when an operator opened the export in a spreadsheet — cells are now
   apostrophe-prefixed before structural quoting. **Breaking (behavior):** legitimate concurrent sends that
@@ -1254,7 +1350,7 @@ races around engine teardown and re-initialization are closed.
 - **The create-instance and regenerate-secret responses no longer echo plaintext values for secret-flagged
   config fields, and the whatsapp-web.js engine no longer reports phantom success for operations it never
   performed.** Two related honesty fixes: `(POST /integration/plugins/:pluginId/instances,
-  …/regenerate-secret)` rendered the raw instance row when `reveal=true`, bypassing `maskedView` — so any
+…/regenerate-secret)` rendered the raw instance row when `reveal=true`, bypassing `maskedView` — so any
   config field flagged `secret: true` at any nesting depth (a nested `credentials.apiToken`, an array-row
   `webhooks[].signingKey`) was returned in plaintext alongside the one-time ingress secret/verifyToken
   reveal. The view builder now always starts from `maskedView` (fail-closed when the schema is unavailable)
@@ -1378,7 +1474,7 @@ races around engine teardown and re-initialization are closed.
 - **Dashboard stats aggregates now use a standalone `messages(createdAt)` index and a short TTL
   memo, and ingress replay/dedup-row growth is now bounded.** The dashboard timeline and stats
   queries (`getOverview`, `getMessageStats`) filter on `createdAt` alone (`WHERE m.createdAt >=
-  :since`, no `sessionId`), which the existing composite `(sessionId, createdAt)` cannot serve
+:since`, no `sessionId`), which the existing composite `(sessionId, createdAt)` cannot serve
   (Postgres has no skip-scan; SQLite without `ANALYZE` full-scans) — a new standalone index
   `IDX_messages_createdAt` serves the predicate directly (the migration lifts the runtime
   `statement_timeout` on Postgres to mirror the sibling index migrations), and the per-period
@@ -1400,7 +1496,7 @@ races around engine teardown and re-initialization are closed.
 
 - **The message `from`-filter now matches group authors, JID candidate expansion is scoped by chat
   kind, and session delete purges both engines' auth directories.** `GET /api/sessions/:id/messages
-  ?from=<phone>` filtered only the `from` column, but both engine mappers store a group message's
+?from=<phone>` filtered only the `from` column, but both engine mappers store a group message's
   real sender in `author` (with the group JID in `from`), so the filter silently skipped every
   group message that person wrote. It now matches `(message.from IN (:…) OR message.author IN (:…))`
   against the same lid-expanded candidate set. `resolveJidCandidates` previously expanded ANY filter
@@ -1453,7 +1549,7 @@ races around engine teardown and re-initialization are closed.
   `securityContext`, so an operator following the manifest ran the plugin sandbox without its
   OS-containment half (read-only rootfs, non-root, `cap_drop: ALL`) — weaker than the threat model
   assumes. The manifest now sets `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation:
-  false`, and `capabilities.drop: ['ALL']`, with the writable `/app/data` and `/tmp` mounts that
+false`, and `capabilities.drop: ['ALL']`, with the writable `/app/data` and `/tmp` mounts that
   `readOnlyRootFilesystem` requires. The stale image tag (`0.4.6`) was also bumped to the current
   release.
 
@@ -1531,7 +1627,7 @@ races around engine teardown and re-initialization are closed.
 ### Changed
 
 - **Status font selection now follows the real WhatsApp font enum.** `POST
-  /sessions/:id/status/send-text` accepts the font indices that actually exist on the wire — 0
+/sessions/:id/status/send-text` accepts the font indices that actually exist on the wire — 0
   (default), 1, 2, 6 (system bold), 7, 8, 9, 10 — instead of a 0–5 range that included
   non-existent indices 3–5 and rejected the valid 6–10. The dashboard viewer renders the full
   enum (bold/script/serif/mono slots approximated with generic families), and the compose
@@ -1601,7 +1697,7 @@ races around engine teardown and re-initialization are closed.
 ### Changed
 
 - **Status `recipients` is now optional on the post-status endpoints.** `POST
-  /sessions/:id/status/send-text`, `send-image`, and `send-video` accept an omitted or empty
+/sessions/:id/status/send-text`, `send-image`, and `send-video` accept an omitted or empty
   `recipients` list. The Baileys engine still requires it — it posts to exactly that allow-list, so
   an absent/empty list now 400s there with a clear message — while whatsapp-web.js, which broadcasts
   to the account's status-privacy audience and always ignored the field, no longer needs a
@@ -1665,7 +1761,7 @@ races around engine teardown and re-initialization are closed.
   stream the body (media / plugin downloads) are unchanged.
 
 - **Expired status media now 404s instead of 500ing when the purge races a stream.** A `GET
-  /sessions/:id/status/:statusId/media` landing in the sub-second window where the 24h purge deletes
+/sessions/:id/status/:statusId/media` landing in the sub-second window where the 24h purge deletes
   the backing file mid-request previously surfaced a generic 500; a missing file now maps to the
   same 404 as an unknown or omitted status.
 
@@ -1886,6 +1982,7 @@ of boolean and numeric request fields.
 >    `input.chatId` unconditionally should branch on the `source` or `type` field first.
 
 ### Added
+
 - **Outbound message edit.** `POST /api/sessions/:sessionId/messages/edit` edits the text of a
   message sent by the account, on both engines (whatsapp-web.js `Message.edit`, Baileys
   `sendMessage` with an `edit` key). Attempting to edit another sender's message fails with `403`,
@@ -1904,7 +2001,7 @@ of boolean and numeric request fields.
   `timestamp` (the engine does not forward the original occurrence time).
 - **Join groups & group settings.** `POST /api/sessions/:sessionId/groups/join` joins a group via
   invite code (an invalid/expired code returns a typed `400`). `GET`/`PUT
-  /api/sessions/:sessionId/groups/:groupId/settings` read and update the admin-only flags
+/api/sessions/:sessionId/groups/:groupId/settings` read and update the admin-only flags
   (`announce`, `locked`) and the disappearing-message timer (`ephemeralSeconds`, Baileys only — it
   returns a documented `501` on whatsapp-web.js, which has no such API). A settings patch applies
   the timer first, so a `501` can never silently follow an already-applied flag change, and
@@ -1930,6 +2027,7 @@ of boolean and numeric request fields.
   `docs/23-community-integrations.md` clarifies that it lists community projects only.
 
 ### Changed
+
 - **The security audit runs as its own CI job.** `npm audit` reports against the advisory database
   rather than against the diff, so a newly published advisory turns red on unrelated pull requests.
   While it was the first step of the Lint job, that failure aborted the job before ESLint, the
@@ -1950,6 +2048,7 @@ of boolean and numeric request fields.
   A handler that reads `input.chatId` unconditionally should branch on `source` or `type` first.
 
 ### Fixed
+
 - **`forEveryone: false` on message delete is honoured again.** `POST /api/sessions/:sessionId/messages/delete`
   defaults `forEveryone` to `true`, so sending it at all means "delete only for me" — but a request
   that carried the value as a string (any form-encoded body, since that parser produces only string
@@ -2000,6 +2099,7 @@ of boolean and numeric request fields.
   put across parent re-renders. Reported in #837, fixed in #838.
 
 ### Security
+
 - **Resolved every known advisory in the dependency tree (17 → 0, including one critical).** The
   critical one was a set of path-traversal and symlink issues in `node-tar`, reached only through
   `sqlite3@5` → `node-gyp` → `tar`. `sqlite3` moves to `6.0.1`, which drops the `node-gyp`

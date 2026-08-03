@@ -587,9 +587,7 @@ export default function Plugins() {
         plugin.status === 'enabled' ? await pluginsApi.disable(plugin.id) : await pluginsApi.enable(plugin.id);
       if (!res.success) {
         toast.warning(
-          plugin.status === 'enabled'
-            ? t('plugins.toasts.disableFailedTitle')
-            : t('plugins.toasts.enableFailedTitle'),
+          plugin.status === 'enabled' ? t('plugins.toasts.disableFailedTitle') : t('plugins.toasts.enableFailedTitle'),
           res.message,
         );
       }
@@ -1180,7 +1178,7 @@ export default function Plugins() {
                   {/* The Sessions and Instances tabs have their own actions; the footer Save is config-tab
                       only. A plugin with its own editor saves through that editor, so the footer Save is
                       omitted rather than left to save a form the operator cannot see. */}
-                  {showTabs && (configTab === 'sessions' || configTab === 'instances') ||
+                  {(showTabs && (configTab === 'sessions' || configTab === 'instances')) ||
                   configPlugin.configUi ? null : lz.configSchema &&
                     Object.keys(lz.configSchema.properties).length > 0 ? (
                     <button className="btn-primary" onClick={handleSaveSchemaConfig} disabled={savingConfig}>

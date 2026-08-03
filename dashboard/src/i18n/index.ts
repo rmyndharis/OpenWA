@@ -14,7 +14,20 @@ import it from './locales/it.json';
 import ptBR from './locales/pt-BR.json';
 import ko from './locales/ko.json';
 
-export const supportedLanguages = ['en', 'de', 'es', 'he', 'zh-CN', 'zh-HK', 'ar', 'te', 'fr', 'it', 'pt-BR', 'ko'] as const;
+export const supportedLanguages = [
+  'en',
+  'de',
+  'es',
+  'he',
+  'zh-CN',
+  'zh-HK',
+  'ar',
+  'te',
+  'fr',
+  'it',
+  'pt-BR',
+  'ko',
+] as const;
 export type SupportedLanguage = (typeof supportedLanguages)[number];
 
 export const rtlLanguages: SupportedLanguage[] = ['he', 'ar'];

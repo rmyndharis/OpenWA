@@ -273,6 +273,24 @@ volumes:
 > [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) for the `replicas: 1` stance and the
 > (unimplemented) session-claim design that would be required first.
 
+### Helm Chart (Kubernetes)
+
+The maintained way to deploy on Kubernetes is the Helm chart at `charts/openwa/`:
+
+```bash
+helm install openwa ./charts/openwa \
+  --set secretEnv.API_MASTER_KEY=$(openssl rand -base64 32)
+```
+
+It renders a single-replica StatefulSet (`replicaCount: 1` — the same constraint as
+the compose warning above) with a PVC for `/app/data`, the compose hardening mirrored
+(read-only rootfs, dropped capabilities, writable `emptyDir` at `/tmp`), and optional
+Ingress / PodDisruptionBudget / ServiceMonitor. Configuration goes through free-form
+`env` and `secretEnv` maps — any variable from `.env.example` works; see
+`charts/openwa/README.md` and the inline comments in `charts/openwa/values.yaml`.
+The k8s manifests in [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) are
+an illustrative design sketch; the chart is the authoritative artifact.
+
 ## 10.3 CI/CD Pipeline
 
 ### GitHub Actions Workflow
