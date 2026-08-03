@@ -13,6 +13,9 @@ imagePullSecrets: []
 
 # Non-secret application config, rendered into a ConfigMap and loaded via envFrom.
 # Any variable from .env.example is valid here — that file stays the canonical list.
+# NOTE: the container port is fixed at 2785 (containerPort, probes and the Service
+# targetPort are all pinned to it). Setting PORT here breaks the pod — use
+# service.port to change the Service port instead.
 env:
   NODE_ENV: production
   LOG_LEVEL: info
@@ -20,6 +23,7 @@ env:
 # Secret config, rendered into a chart-managed Secret (stringData). Leave
 # API_MASTER_KEY empty to let the app bootstrap a key into /app/data/.api-key
 # (persists on the PVC) — NOTES.txt after install shows how to read it.
+# If a key exists in both env and secretEnv, the secret value wins (envFrom ordering).
 secretEnv:
   API_MASTER_KEY: ""
 
@@ -34,6 +38,8 @@ service:
 persistence:
   # /app/data holds session auth, the main SQLite DB, media and plugins — losing
   # this volume loses the linked WhatsApp sessions and the API keys.
+  # Empty storageClass means the cluster's default StorageClass; the PVC pends if
+  # the cluster has none.
   size: 10Gi
   storageClass: ""
   accessModes:
@@ -98,6 +104,9 @@ podDisruptionBudget:
 serviceMonitor:
   enabled: false
   interval: 30s
+  # Extra labels for the ServiceMonitor — most Prometheus Operators select
+  # ServiceMonitors by a release label (e.g. release: kube-prometheus-stack).
+  additionalLabels: {}
   # Secret holding the METRICS_TOKEN value for bearer auth.
   bearerTokenSecret:
     name: ""

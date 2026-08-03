@@ -5,6 +5,9 @@ metadata:
   name: {{ include "openwa.fullname" . }}
   labels:
     {{- include "openwa.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:

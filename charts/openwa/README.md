@@ -21,6 +21,9 @@ With `secretEnv.API_MASTER_KEY` left empty the app bootstraps a key into
 `env` (→ ConfigMap) and `secretEnv` (→ Secret) are free-form maps: any variable
 from the repo's `.env.example` works, e.g.:
 
+The container port is fixed at 2785; do not set PORT in env (probes and the
+Service targetPort are pinned to it) — service.port changes the Service port.
+
 ```bash
 helm install openwa ./charts/openwa \
   --set env.DATABASE_TYPE=postgres \

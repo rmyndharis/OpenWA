@@ -17,6 +17,8 @@ spec:
     spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "openwa.serviceAccountName" . }}
+      # The app never calls the Kubernetes API — don't mount a token it can't use.
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -70,10 +72,12 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
   volumeClaimTemplates:
+    # volumeClaimTemplates is immutable in the StatefulSet API — only ever put
+    # immutable labels here (selectorLabels), never the chart/app-version labels.
     - metadata:
         name: data
         labels:
-          {{- include "openwa.labels" . | nindent 10 }}
+          {{- include "openwa.selectorLabels" . | nindent 10 }}
       spec:
         accessModes:
           {{- toYaml .Values.persistence.accessModes | nindent 10 }}
