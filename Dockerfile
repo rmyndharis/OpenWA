@@ -66,6 +66,17 @@ FROM docker.io/node:22-slim AS production
 # --no-sandbox would otherwise get a chromium that can't launch. Verified on real arm64 hardware:
 # with --no-install-recommends the package is dropped, and chromium launches fine under --no-sandbox.
 ARG TARGETARCH
+# INSTALL_CHROMIUM=false drops the entire browser stack — the arm64 chromium packages, the fonts,
+# the X11/GTK libs, and the amd64 Chrome-for-Testing download further below. Only the
+# whatsapp-web.js engine drives a browser; ENGINE_TYPE=baileys speaks the WhatsApp protocol over a
+# WebSocket and never launches one, so a Baileys-only deployment carries none of this.
+#
+# Default stays `true` so the published image, both compose files, and the CI/release workflows
+# (none of which pass build args) keep supporting BOTH engines unchanged. Opt out with
+# `--build-arg INSTALL_CHROMIUM=false`; render.yaml sets it via a service env var, which Render
+# forwards into the build. An image built with `false` CANNOT run ENGINE_TYPE=whatsapp-web.js —
+# there is no browser binary in it.
+ARG INSTALL_CHROMIUM=true
 # sqlite3 ships the CLI so an in-container scripts/backup.sh run takes online-consistent SQLite
 # snapshots (.backup) instead of plain-copying a live database (which can archive a torn file).
 #
@@ -76,24 +87,10 @@ ARG TARGETARCH
 # release image scan. It is the Debian package rather than a bundled static build precisely so that
 # codec CVEs arrive through the same security stream as everything else here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    $([ "$TARGETARCH" = arm64 ] && echo "chromium chromium-sandbox") \
-    fonts-liberation \
-    libappindicator3-1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    xdg-utils \
+    $([ "$INSTALL_CHROMIUM" = "true" ] && [ "$TARGETARCH" = arm64 ] && echo "chromium chromium-sandbox") \
+    $([ "$INSTALL_CHROMIUM" = "true" ] && echo "fonts-liberation libappindicator3-1 libasound2 \
+       libatk-bridge2.0-0 libatk1.0-0 libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 \
+       libnss3 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 xdg-utils") \
     dumb-init \
     gosu \
     patch \
@@ -143,7 +140,9 @@ RUN npm install -g npm@12 && npm cache clean --force
 # amd64: download Chrome for Testing via Puppeteer and symlink it.
 # arm64: use Debian's chromium installed above (CfT has no linux-arm64 build).
 # test -n guards against a future path mismatch failing loudly instead of shipping a broken image.
-RUN if [ "$TARGETARCH" = arm64 ]; then \
+RUN if [ "$INSTALL_CHROMIUM" != "true" ]; then \
+        echo "INSTALL_CHROMIUM=$INSTALL_CHROMIUM — skipping browser install (Baileys-only image)."; \
+    elif [ "$TARGETARCH" = arm64 ]; then \
         ln -s /usr/bin/chromium /usr/local/bin/puppeteer-chrome; \
     else \
         mkdir -p /opt/puppeteer && \
@@ -188,9 +187,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Expose port
 EXPOSE 2785
 
-# Health check
+# Health check. Honour an injected $PORT (PaaS platforms such as Render assign one at runtime and
+# main.ts binds to it) and fall back to the EXPOSEd default for compose/local runs.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:2785/api/health/ready || exit 1
+    CMD curl -f http://localhost:${PORT:-2785}/api/health/ready || exit 1
 
 # dumb-init is PID 1 and handles signal forwarding.
 # It execs docker-entrypoint.sh (as root), which fixes volume ownership and

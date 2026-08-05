@@ -1,0 +1,129 @@
+# Render Blueprint — OpenWA on the Baileys engine.
+#
+# Deploys the API and the bundled dashboard SPA as ONE Docker web service on ONE port:
+# app.module.ts mounts ServeStaticModule over dashboard/dist, which the production image
+# copies in, so there is no second service to run.
+#
+# ---------------------------------------------------------------------------------------
+# The persistent disk is not optional.
+# ---------------------------------------------------------------------------------------
+# Render's filesystem is ephemeral outside a disk, and every piece of durable state in this
+# app lives under ./data (resolved against WORKDIR /app):
+#
+#   data/baileys        Baileys auth state — this IS your WhatsApp link
+#   data/openwa.sqlite  messages, sessions, API keys
+#   data/main.sqlite    auth/audit tables
+#   data/.api-key       generated admin key
+#   data/media          stored media
+#
+# Without the disk mounted at /app/data, every deploy unlinks the account and you re-scan the
+# QR code. With it, redeploys reconnect silently from the stored credentials.
+#
+# Attaching a disk pins the service to a single instance and disables zero-downtime deploys.
+# That is a requirement here, not a regression: a WhatsApp session is a single WebSocket and
+# cannot be load-balanced or run in parallel.
+#
+# ---------------------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------------------
+# API_MASTER_KEY and API_KEY_PEPPER use `sync: false`, so Render prompts for them on first
+# deploy and never stores them in git. Generate each with `openssl rand -hex 32`.
+#
+# NODE_ENV=production activates assertNoDefaultSecretsInProduction (bootstrap-security.ts),
+# which REFUSES to boot on empty or placeholder secrets. A crash-loop on first deploy is
+# almost always this check doing its job — read the log line before working around it.
+#
+# Note the API key is all-powerful: it can send messages as your WhatsApp account AND reach
+# /api/infra/*, which rewrites config and restarts the service. Treat it accordingly.
+
+services:
+  - type: web
+    name: openwa
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Baileys has no browser to feed, so it runs comfortably here. Move up if you add
+    # several concurrent sessions or push large media.
+    plan: starter
+    # health.controller.ts @Get('ready') under main.ts's global 'api' prefix.
+    healthCheckPath: /api/health/ready
+
+    disk:
+      name: openwa-data
+      mountPath: /app/data
+      sizeGB: 5
+
+    envVars:
+      # --- Build-time -------------------------------------------------------------------
+      # Render forwards service env vars into the Docker build as build args, so this
+      # selects the Baileys-only image and skips Chromium plus its X11 stack (~400MB).
+      # Set this to true if you ever switch ENGINE_TYPE back to whatsapp-web.js — the
+      # browser binary is genuinely absent from the image otherwise.
+      - key: INSTALL_CHROMIUM
+        value: "false"
+
+      # --- Core -------------------------------------------------------------------------
+      # PORT is deliberately NOT set: Render injects it and main.ts binds to it. Pinning it
+      # here would make the service unreachable behind Render's router.
+      - key: NODE_ENV
+        value: production
+      - key: ENGINE_TYPE
+        value: baileys
+
+      # --- Storage paths (all under the mounted disk) -----------------------------------
+      - key: BAILEYS_AUTH_DIR
+        value: ./data/baileys
+      - key: SESSION_DATA_PATH
+        value: ./data/sessions
+      - key: STORAGE_TYPE
+        value: local
+      - key: STORAGE_LOCAL_PATH
+        value: ./data/media
+
+      # --- Database ---------------------------------------------------------------------
+      # DATABASE_SYNCHRONIZE=false is the important one: app.module.ts derives
+      # `migrationsRun: !synchronize`, so false means the schema is migration-managed rather
+      # than auto-synced. MAIN_DATABASE_SYNCHRONIZE is left at its default (on) so the
+      # auth/audit tables are created on first boot with no manual step.
+      - key: DATABASE_TYPE
+        value: sqlite
+      - key: DATABASE_NAME
+        value: ./data/openwa.sqlite
+      - key: DATABASE_SYNCHRONIZE
+        value: "false"
+
+      # --- Disabled infrastructure ------------------------------------------------------
+      # Baileys references Redis nowhere, and there is no Docker daemon on Render for the
+      # built-in orchestration to drive. Pinned explicitly so a stale data/.env.generated on
+      # the disk can never re-enable them (process env outranks both env files).
+      - key: REDIS_ENABLED
+        value: "false"
+      - key: REDIS_BUILTIN
+        value: "false"
+      - key: QUEUE_ENABLED
+        value: "false"
+      - key: CACHE_ENABLED
+        value: "false"
+      - key: POSTGRES_BUILTIN
+        value: "false"
+      - key: MINIO_BUILTIN
+        value: "false"
+
+      # --- Secrets (prompted at deploy, never committed) ---------------------------------
+      - key: API_MASTER_KEY
+        sync: false
+      - key: API_KEY_PEPPER
+        sync: false
+
+      # --- Optional ---------------------------------------------------------------------
+      # TRUSTED_PROXIES: your dispatcher reaches this through Render's router, so every
+      # request arrives from the same proxy address. With this unset, ProxyAwareThrottlerGuard
+      # falls back to the socket IP and ALL callers share one rate-limit bucket — one noisy
+      # client can then throttle your dispatcher. Set it to Render's forwarding address(es)
+      # once you have confirmed them, so the guard keys on the real client IP from
+      # X-Forwarded-For instead. Left unset here rather than guessed, because a wrong value
+      # makes XFF spoofable.
+      #
+      # CORS_ORIGINS: not needed for server-to-server calls (main.ts allows requests with no
+      # Origin header) and not needed for the dashboard (same-origin). Set it only if a
+      # browser app on another domain must call this API. main.ts logs a production warning
+      # when it is unset; that warning is harmless in this setup.
