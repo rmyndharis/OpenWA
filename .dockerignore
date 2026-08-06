@@ -1,19 +1,46 @@
-# Dependencies
+# Dependencies — reinstalled inside the image via npm ci
 node_modules/
+dashboard/node_modules/
 
-# Build output
+# Build output — rebuilt inside the image; local output/caches must not leak
+# into the builder's `COPY . .` (a stale tsbuildinfo can poison the build)
 dist/
+dashboard/dist/
+*.tsbuildinfo
 
 # Test coverage
 coverage/
 
-# Environment files
-.env
-.env.local
-.env.*.local
+# Environment files — secrets, never a build input (every variant, any depth)
+.env*
+**/.env*
 
-# Data files (sessions, media, database)
+# Data files — runtime state (sessions, media, databases, API keys), never
+# part of the build context
 data/
+*.db
+*.sqlite
+*.sqlite3
+
+# VCS metadata — not a build input; keeps history/hooks out of the context
+.git/
+
+# Private working material — internal notes that must never enter the build
+# context, the build cache, or any image layer
+_docs/
+
+# Agent/tool workspaces and caches — local-only, not build inputs
+.agent/
+.claude/
+.kimi-worktrees/
+.playwright-mcp/
+.remember/
+.superpowers/
+.worktrees/
+.wwebjs_cache/
+CLAUDE.md
+docs/plans/
+docs/superpowers/
 
 # IDE
 .idea/
@@ -39,3 +66,6 @@ temp/
 
 # Debug
 .pnpm-debug.log*
+
+# Helm chart — deployment artifact, not a build input
+charts/

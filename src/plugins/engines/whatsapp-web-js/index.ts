@@ -6,16 +6,21 @@
 import { PluginContext, PluginType, IEnginePlugin } from '../../../core/plugins';
 import { IWhatsAppEngine } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { WhatsAppWebJsAdapter } from '../../../engine/adapters/whatsapp-web-js.adapter';
-
-export interface WhatsAppWebJsConfig {
-  sessionDataPath?: string;
-  headless?: boolean;
-  puppeteerArgs?: string[];
-}
+import { LidMappingStore } from '../../../engine/identity/lid-mapping-store.service';
 
 export class WhatsAppWebJsPlugin implements IEnginePlugin {
   type = PluginType.ENGINE as const;
   private context?: PluginContext;
+
+  // The engine config blob is also supplied at construction so createEngine has operator
+  // config even if enablePlugin fails before onLoad runs (which would leave this.context unset).
+  // The healthy path still prefers context.config (it carries any persisted-override merge).
+  constructor(
+    private readonly registeredConfig?: Record<string, unknown>,
+    // Shared lid<->phone table, threaded to the adapter so it can persist learned phone->lid pairs
+    // (mirrors how BaileysPlugin receives it; #583 R3).
+    private readonly lidMappingStore?: LidMappingStore,
+  ) {}
 
   onLoad(context: PluginContext): Promise<void> {
     this.context = context;
@@ -35,15 +40,21 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
 
   createEngine(config: Record<string, unknown>): IWhatsAppEngine {
     const sessionId = config.sessionId as string;
-    const sessionDataPath = (this.context?.config.sessionDataPath as string) ?? './data/sessions';
-    const headless = (this.context?.config.headless as boolean) ?? true;
-    const puppeteerArgs = (this.context?.config.puppeteerArgs as string[]) ?? [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    ];
-
     const proxyUrl = config.proxyUrl as string | undefined;
     const proxyType = config.proxyType as 'http' | 'https' | 'socks4' | 'socks5' | undefined;
+
+    // Browser config is this engine's OWN namespace, read from the opaque per-engine blob the
+    // factory supplies via context.config (the `engine` sub-tree in configuration.ts). The
+    // per-call config carries only engine-neutral fields (sessionId, proxy).
+    const engineConfig = (this.context?.config ?? this.registeredConfig ?? {}) as {
+      sessionDataPath?: string;
+      puppeteer?: { headless?: boolean; args?: string[]; executablePath?: string };
+    };
+    const puppeteer = engineConfig.puppeteer ?? {};
+    const sessionDataPath = engineConfig.sessionDataPath ?? './data/sessions';
+    const headless = puppeteer.headless ?? true;
+    const puppeteerArgs = puppeteer.args ?? ['--no-sandbox', '--disable-setuid-sandbox'];
+    const executablePath = puppeteer.executablePath;
 
     return new WhatsAppWebJsAdapter({
       sessionId,
@@ -51,6 +62,7 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
       puppeteer: {
         headless,
         args: puppeteerArgs,
+        executablePath,
       },
       proxy: proxyUrl
         ? {
@@ -58,6 +70,7 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
             type: proxyType ?? 'http',
           }
         : undefined,
+      lidMappingStore: this.lidMappingStore,
     });
   }
 
@@ -77,8 +90,22 @@ export class WhatsAppWebJsPlugin implements IEnginePlugin {
       'labels',
       'channels',
       'status-updates',
-      'catalog',
+      // No 'catalog': whatsapp-web.js has no catalog/product API, so the adapter 501s those methods —
+      // advertising the feature here would promise clients a capability the engine cannot deliver.
     ];
+  }
+
+  getEngineLibrary(): { name: string; version: string } {
+    // The actual whatsapp-web.js library version (e.g. 1.34.7), surfaced so operators can see which
+    // engine version is really running — distinct from this adapter plugin's manifest version (1.0.0).
+    let version = 'unknown';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      version = (require('whatsapp-web.js/package.json') as { version: string }).version;
+    } catch {
+      // Keep 'unknown' if the package metadata can't be resolved at runtime.
+    }
+    return { name: 'whatsapp-web.js', version };
   }
 
   healthCheck(): Promise<{ healthy: boolean; message?: string }> {

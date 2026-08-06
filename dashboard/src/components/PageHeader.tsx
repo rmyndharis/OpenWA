@@ -27,13 +27,11 @@ interface PageHeaderProps {
 export function PageHeader({ title, subtitle, badge, actions }: PageHeaderProps) {
   return (
     <header className="page-header">
-      <div className="page-header__top">
-        <div className="page-header__title-group">
-          <h1>{title}</h1>
-          {badge && <span className="page-header__badge">{badge}</span>}
-        </div>
-        {actions && <div className="page-header__actions">{actions}</div>}
+      <div className="page-header__title-group">
+        <h1>{title}</h1>
+        {badge && <span className="page-header__badge">{badge}</span>}
       </div>
+      {actions && <div className="page-header__actions">{actions}</div>}
       {subtitle && <p className="page-header__subtitle">{subtitle}</p>}
     </header>
   );

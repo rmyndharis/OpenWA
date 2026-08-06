@@ -8,16 +8,68 @@ on:
 
 env:
   NODE_VERSION: '22'
+  DOCKER_PLATFORMS: linux/amd64,linux/arm64
+
+permissions:
+  contents: read
 
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      # `nest build` uses tsconfig.build.json which excludes **/*spec.ts, and ts-jest/eslint don't
+      # full-program type-check specs — so without this gate, type errors in spec files are invisible
+      # to CI. tsconfig.json already includes both `src` and `test`, so this is the cheapest full-program
+      # check covering specs (no separate tsconfig.spec.json needed).
+      - name: Type-check full program (including specs)
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check version consistency (docs track package.json)
+        run: npm run check:versions
+
+      # The builder stage ends with `COPY . .` — fail if .dockerignore stops rejecting non-build
+      # material (or starts rejecting a build input) before a Docker build finds out.
+      - name: Check Docker build context (.dockerignore)
+        run: npm run check:dockerignore
+
+      # The committed openapi.json is the machine-readable API contract. Fail if a controller/DTO
+      # change landed without regenerating the snapshot (npm run openapi:export). The generator
+      # bootstraps the app hermetically (in-memory/temp SQLite, no listen), so this is a static check.
+      - name: Check OpenAPI snapshot is up to date
+        run: npm run openapi:check
+
+  # Deliberately its own job rather than a step inside Lint. `npm audit` reports against the
+  # advisory database, not against the diff, so a newly published advisory turns red on unrelated
+  # PRs. While it lived as the first step of Lint, that failure aborted the job before ESLint, the
+  # type-check, the format check, the version check and the OpenAPI drift gate ever ran — a
+  # dependency advisory silently switched off every code-quality gate. Split out, an advisory is
+  # still blocking (`build` needs it) but can no longer mask an unrelated result.
+  audit:
+    name: Security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -26,22 +78,33 @@ jobs:
         run: npm ci
 
       - name: Security audit
-        run: npm audit --audit-level=critical
-
-      - name: Run ESLint
-        run: npm run lint
-
-      - name: Check formatting
-        run: npm run format -- --check
+        # high (not critical): the `overrides` in package.json clear the root tree's HIGH advisories
+        # (brace-expansion CVE-2026-14257, js-yaml GHSA-pm4m-ph32-ghv5), so this threshold now fences
+        # HIGH regressions instead of only catching criticals. Scoped to the root tree; the dashboard
+        # carries its own `overrides` and its remaining HIGH pair (react-router) rides Dependabot.
+        run: npm audit --audit-level=high
 
   test:
     name: Test
     runs-on: ubuntu-latest
+    # Real Redis for the queue-on e2e suite (test/queue-on.e2e-spec.ts); the rest of the e2e family
+    # boots QUEUE_ENABLED=false and never connects. Mirrors the test-postgres job's service pattern;
+    # the image pin matches docker-compose.yml.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -52,21 +115,91 @@ jobs:
       - name: Run unit tests
         run: npm test -- --coverage
 
+      # node:test specs for the repo-level scripts (postinstall exit-code propagation) — jest's
+      # rootDir is src/, so these live outside its reach and run on the plain node runner.
+      - name: Run script unit tests
+        run: npm run test:scripts
+
+      - name: Run e2e smoke tests
+        run: npm run test:e2e
+        # Point the queue-on suite at the service container (it self-skips without one). Every other
+        # suite keeps QUEUE_ENABLED=false via setup-e2e.ts and never touches Redis.
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: '6379'
+
       - name: Upload coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         if: always()
         with:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
 
+  test-postgres:
+    name: Test (PostgreSQL migrations)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openwa
+          POSTGRES_PASSWORD: openwa
+          POSTGRES_DB: openwa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openwa"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (compiles the data migrations to dist/)
+        run: npm run build
+
+      # Applies the full data-migration chain to a real Postgres and asserts every generated-uuid PK
+      # has a DB DEFAULT — the dialect gap SQLite-only tests can't see.
+      - name: Migrate + uuid-default smoke against PostgreSQL
+        run: npm run test:pg-smoke
+        env:
+          DATABASE_TYPE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USERNAME: openwa
+          DATABASE_PASSWORD: openwa
+          DATABASE_NAME: openwa
+
+      # Runtime-proves BuiltInFtsProvider on Postgres (websearch_to_tsquery + ts_headline against the
+      # STORED body_ts tsvector). The spec self-skips unless DATABASE_TYPE=postgres, so it is a no-op
+      # in the default test job and only executes here against the postgres:16 service.
+      - name: Postgres FTS provider spec
+        run: npx jest src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts
+        env:
+          DATABASE_TYPE: postgres
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USERNAME: openwa
+          DATABASE_PASSWORD: openwa
+          DATABASE_NAME: openwa
+
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -78,18 +211,60 @@ jobs:
       - name: Run ESLint
         run: cd dashboard && npm run lint
 
+      # ESLint here carries no Prettier plugin, and the root `format:check` globs `src/**/*.ts` from
+      # the repository root — it never reaches `dashboard/`. Without this step nothing in CI checks
+      # dashboard formatting, which is how 35 files drifted before this gate existed.
+      - name: Check formatting
+        run: cd dashboard && npm run format:check
+
+      - name: Type-check dashboard tests
+        run: cd dashboard && npm run typecheck
+
+      - name: Check i18n parity
+        run: cd dashboard && npm run i18n:check
+
       - name: Build dashboard
         run: cd dashboard && npm run build
+
+      - name: Run dashboard unit tests
+        run: cd dashboard && npm run test:unit
+
+  # The repo ships several host-level shell smoke scripts (scripts/smoke-test-*.sh, plus
+  # scripts/backup.sh / scripts/restore.sh exercised by smoke-test-backup-restore.sh). None of them
+  # are exercised by the jest suites, so without this gate a regression in the bash hardening lands
+  # silently. The job is cheap (no npm install, no build) and parallel to the others.
+  scripts-smoke:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install sqlite3
+        # smoke-test-backup-restore.sh skips its sqlite3 .backup roundtrip case (with a notice) when
+        # the host lacks the CLI; installing it here exercises that path on every run instead.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends sqlite3
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: shellcheck every shell script
+        # Widened from the original three (#926) now that the rest are clean too. The narrow scope was
+        # not free: `smoke-test-non-root.sh` carried a UTF-8 BOM before its shebang for months, which
+        # shellcheck reports as SC1082 and which nothing else here would ever have caught.
+        run: shellcheck scripts/*.sh
+
+      - name: Run backup/restore smoke test
+        run: ./scripts/smoke-test-backup-restore.sh
 
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test, dashboard]
+    needs: [lint, audit, test, dashboard, scripts-smoke]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -101,7 +276,7 @@ jobs:
         run: npm run build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist
           path: dist/
@@ -110,19 +285,22 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event_name == 'push'
+    needs: [build, test-postgres]
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -130,20 +308,31 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/${{ github.repository }}
+          # Branch + SHA tags only. `latest` is deliberately NOT set here: re-pointing it on
+          # every main push would bypass the boot-smoke → promote discipline in release.yml
+          # (a main-push image is build-gated only, never boot-tested). `latest` moves exclusively
+          # through the tested release path.
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build and optionally push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
-          push: true
+          # Fork pull requests receive a read-only token, so they validate both image architectures
+          # without publishing. Trusted branch pushes retain the existing GHCR publication behavior.
+          push: ${{ github.event_name == 'push' }}
+          platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # provenance is generated by default (build-push-action v7); pin it explicitly and opt into
+          # an SBOM attestation so each published image carries an in-toto SLSA provenance + SBOM pair,
+          # verifiable via `docker buildx imagetools inspect`.
+          provenance: true
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -1,0 +1,21 @@
+{
+    "id": "baileys",
+    "name": "Baileys Engine",
+    "version": "1.0.0",
+    "type": "engine",
+    "description": "Baileys (WebSocket, no-browser) engine adapter for OpenWA — minimal slice: text send/receive",
+    "author": "OpenWA Team",
+    "main": "index.ts",
+    "provides": ["whatsapp-engine", "text-messages"],
+    "configSchema": {
+        "type": "object",
+        "properties": {
+            "authDir": {
+                "type": "string",
+                "title": "Auth Directory",
+                "description": "Base directory for Baileys multi-file auth state (per-session subdirs)",
+                "default": "./data/baileys"
+            }
+        }
+    }
+}

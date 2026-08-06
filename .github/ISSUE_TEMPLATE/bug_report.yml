@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a problem with OpenWA
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill in the details below — the
+        version, deployment, and logs make a huge difference for triage.
+
+        ⚠️ **Do not report security vulnerabilities here.** See
+        [SECURITY.md](https://github.com/rmyndharis/OpenWA/blob/main/SECURITY.md).
+  - type: checkboxes
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+        - label: I'm on the latest released version (or noted my version below)
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenWA version
+      description: e.g. 0.2.1 (shown on the dashboard Login screen) or a commit SHA
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker Compose
+        - Docker (manual run)
+        - Bare metal (npm)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database
+      options:
+        - SQLite (default)
+        - PostgreSQL
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: WhatsApp engine
+      description: The default is whatsapp-web.js; note the version if you changed it.
+      value: "whatsapp-web.js"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps (including the API call or dashboard action) to reproduce.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Server/container logs around the failure (redact API keys & secrets).
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Environment / additional context
+      description: OS, Node version, reverse proxy, anything else relevant.

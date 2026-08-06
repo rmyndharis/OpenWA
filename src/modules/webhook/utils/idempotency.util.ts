@@ -24,49 +24,115 @@ function hashData(data: Record<string, unknown>): string {
  * Same event with same data will produce the same key (deterministic).
  *
  * @remarks
- * Keys are content-based and do NOT include timestamps.
- * This ensures that replayed/retried events with identical payloads
- * produce the same key for proper deduplication.
+ * Stable message keys are content-based (keyed on the unique message id), so two deliveries of the
+ * same logical message dedupe. Recurring events (message edits/reactions and session lifecycle
+ * transitions) can repeat with identical content, so they are salted with `occurredAt` (captured ONCE
+ * per dispatch and reused across retries): distinct occurrences get distinct keys while retries of
+ * the same occurrence stay stable.
+ *
+ * @param occurredAt - ISO timestamp captured once per dispatch; salts recurring occurrence keys.
  */
-export function generateIdempotencyKey(event: string, data: Record<string, unknown>): string {
+export function generateIdempotencyKey(event: string, data: Record<string, unknown>, occurredAt?: string): string {
+  // Only recurring occurrence keys consume this salt; stable message and QR keys ignore it.
+  const occurrence = occurredAt ? `_${occurredAt}` : '';
   switch (event) {
     case 'message.received':
     case 'message.sent':
-      // Message ID is unique per message
-      return `msg_${toStr(data.messageId) || toStr(data.id)}`;
+      // Dispatched payload is an IncomingMessage, which carries `id`; fall back to a legacy `messageId`.
+      // Resolve the value before toStr() — toStr() returns a truthy 'unknown' fallback, so chaining with
+      // `||` would short-circuit before reaching the second field.
+      // Scope by sessionId: waMessageIds are unique per account, not globally, so two
+      // sessions could otherwise collide on the same key and wrongly dedupe each other's events.
+      return `msg_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
 
     case 'message.ack':
-      // Message ID + ack status together are unique
-      return `ack_${toStr(data.messageId)}_${toStr(data.ack, '0')}`;
+      // Message ID + delivery status together are unique. Key on the neutral `status`; fall back to
+      // the legacy `ack` integer for backward compatibility with older payloads.
+      return `ack_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
+
+    case 'message.failed':
+      return `failed_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}_${toStr(data.status ?? data.ack, '0')}`;
 
     case 'message.revoked':
-      return `rev_${toStr(data.messageId)}`;
+      return `rev_${toStr(data.sessionId)}_${toStr(data.id ?? data.messageId)}`;
+
+    case 'message.edited':
+      // Editing the same message multiple times should produce different idempotency keys.
+      // Salt with occurredAt (captured once per dispatch, reused across retries) so distinct occurrences
+      // get distinct keys, while retries of the same delivery stay stable.
+      return `edit_${toStr(data.sessionId)}_${toStr(data.messageId)}${occurrence}`;
+
+    case 'message.reaction':
+      // A reaction carries no unique id and is a read-modify-write of the message's reactions map; the
+      // same sender can re-apply the same emoji over time (👍 → remove → 👍). Keying on
+      // (sender, target message) alone would collapse a genuine re-reaction onto the earlier one, so salt
+      // with occurredAt (captured once per dispatch, reused across retries): distinct occurrences get
+      // distinct keys while retries of the same delivery stay stable.
+      return `react_${toStr(data.sessionId)}_${toStr(data.messageId)}_${toStr(data.senderId)}${occurrence}`;
 
     case 'session.status':
-      // Session + status combo (same status emitted once per transition)
-      return `sess_${toStr(data.sessionId)}_${toStr(data.status)}`;
+      // Salted so repeated transitions to the same status (e.g. across disconnect/reconnect cycles)
+      // stay distinct instead of collapsing onto one key.
+      return `sess_${toStr(data.sessionId)}_${toStr(data.status)}${occurrence}`;
 
     case 'session.qr':
       // QR changes each time, use the QR data hash for uniqueness
       return `qr_${toStr(data.sessionId)}_${hashData({ qr: data.qr })}`;
 
     case 'session.authenticated':
-      // Auth only happens once per session lifecycle
-      return `auth_${toStr(data.sessionId)}_${hashData(data)}`;
+      // Salted so each (re)authentication is a distinct event — phone/pushName repeat across reconnects.
+      return `auth_${toStr(data.sessionId)}_${hashData(data)}${occurrence}`;
 
     case 'session.disconnected':
-      // Disconnect with reason for uniqueness
-      return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}`;
+      // Salted so repeat disconnects stay distinct — `reason` alone can be a constant (Baileys
+      // always sends 'logged out'), which would otherwise collapse every disconnect onto one key.
+      return `disc_${toStr(data.sessionId)}_${hashData({ reason: data.reason })}${occurrence}`;
+
+    case 'session.restriction':
+      // Keyed on what changed (`kind` is null when a restriction is lifted) and salted per
+      // occurrence: an account that is restricted, freed and restricted again for the same cause
+      // produces the same content twice, and the second one is genuine news that must not collapse
+      // onto the first. Without an explicit case the default branch hashes the whole payload, which
+      // would dedupe exactly that.
+      return `restr_${toStr(data.sessionId)}_${toStr(data.kind)}_${toStr(data.active)}${occurrence}`;
+
+    case 'call.accepted':
+    case 'call.rejected':
+    case 'call.missed':
+      // A call id is unique per call and each call ends exactly once, so (session, call, outcome)
+      // is already distinct — no occurrence salt, matching call.received's stable key.
+      return `call_${toStr(data.sessionId)}_${toStr(data.callId)}_${toStr(data.outcome)}`;
+
+    case 'presence.update':
+      // Keyed on the chat and salted per occurrence. Only genuine state CHANGES are dispatched, and
+      // a contact who types, stops, and types again produces the same payload each time — content
+      // hashing would collapse that back into one delivery and hide the very transitions the event
+      // exists to report.
+      return `pres_${toStr(data.sessionId)}_${toStr(data.chatId)}${occurrence}`;
 
     case 'group.join':
-      return `grp_${toStr(data.groupId)}_${toStr(data.participantId)}_join`;
+      // A membership change carries no unique id and repeats with identical content (the same user
+      // leaves and rejoins the same group). Key on the affected participants and salt with
+      // occurredAt (captured once per dispatch, reused across retries) so a genuine re-join is not
+      // deduped onto the earlier delivery.
+      return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_join${occurrence}`;
 
     case 'group.leave':
-      return `grp_${toStr(data.groupId)}_${toStr(data.participantId)}_leave`;
+      // Same recurring-occurrence treatment as group.join.
+      return `grp_${toStr(data.groupId)}_${hashData({ participants: data.participantIds })}_leave${occurrence}`;
 
     case 'group.update':
-      // Include what changed for uniqueness
-      return `grp_${toStr(data.groupId)}_update_${hashData(data)}`;
+      // Key on WHAT changed (a subject set to "X" twice is one logical change; announce toggling
+      // back and forth is several), salted per occurrence so identical repeat updates stay distinct.
+      // `changes` is pre-stringified: hashData's allowlist replacer only keeps TOP-LEVEL keys, so a
+      // nested object would serialize as {} and hash every distinct change identically.
+      return `grp_${toStr(data.groupId)}_update_${hashData({ changes: JSON.stringify(data.changes ?? null) })}${occurrence}`;
+
+    case 'call.received':
+      // A call id is unique per call, so keying on (session, callId) gives each occurrence a
+      // distinct key with no occurredAt salt, while retries of the same dispatch regenerate the
+      // same key (same stability contract as the message.* keys). Scoped by sessionId like `msg_`.
+      return `call_${toStr(data.sessionId)}_${toStr(data.callId)}`;
 
     default:
       // Fallback: hash entire payload for determinism
@@ -75,7 +141,7 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
 }
 
 /**
- * Generate a unique delivery ID for each webhook delivery attempt
+ * Generate a unique delivery ID for each webhook delivery (stable across retry attempts)
  */
 export function generateDeliveryId(): string {
   return `dlv_${randomUUID()}`;

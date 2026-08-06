@@ -1,11 +1,14 @@
-import { Controller, Get, Post, Delete, Param, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
-import { SessionService } from '../session/session.service';
+import { Body, Controller, Get, Post, Put, Delete, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ContactService } from './contact.service';
+import { RequireRole } from '../auth/decorators/auth.decorators';
+import { ApiKeyRole } from '../auth/entities/api-key.entity';
+import { UpsertContactDto } from './dto/upsert-contact.dto';
 
 @ApiTags('contacts')
 @Controller('sessions/:sessionId/contacts')
 export class ContactController {
-  constructor(private readonly sessionService: SessionService) {}
+  constructor(private readonly contactService: ContactService) {}
 
   @Get()
   @ApiOperation({ summary: 'Get all contacts for a session' })
@@ -16,12 +19,36 @@ export class ContactController {
   })
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  async findAll(@Param('sessionId') sessionId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    return engine.getContacts();
+  @ApiQuery({ name: 'limit', required: false, description: 'Max contacts to return (1–1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of contacts to skip (for paging)' })
+  async findAll(
+    @Param('sessionId') sessionId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.contactService.getContacts(sessionId, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+  }
+
+  @Get('profile-pictures')
+  @ApiOperation({
+    summary: 'Batch-resolve profile picture URLs for up to 50 contacts',
+    description:
+      'One request for a whole chat sidebar — avoids the burst of parallel single fetches that ' +
+      'would exhaust the per-IP throttle. Engine lookups run 3 at a time; per-id failures return null.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiQuery({ name: 'ids', required: true, description: 'Comma-separated contact ids (max 50 used)' })
+  // NOTE: declared BEFORE @Get(':contactId') so the literal segment wins over the param route.
+  async getProfilePictures(@Param('sessionId') sessionId: string, @Query('ids') ids?: string) {
+    const list = (ids ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const pictures = await this.contactService.getProfilePictures(sessionId, list);
+    return { pictures };
   }
 
   @Get(':contactId')
@@ -34,19 +61,18 @@ export class ContactController {
   })
   @ApiResponse({ status: 404, description: 'Contact not found' })
   async findOne(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    const contact = await engine.getContactById(contactId);
-    if (!contact) {
-      throw new Error(`Contact ${contactId} not found`);
-    }
-    return contact;
+    return this.contactService.getContactById(sessionId, contactId);
   }
 
   @Get('check/:number')
-  @ApiOperation({ summary: 'Check if a phone number exists on WhatsApp' })
+  @ApiOperation({
+    summary: 'Check if a phone number exists on WhatsApp',
+    description:
+      'Returns whether the number is a registered WhatsApp account and its canonical id. Use this to ' +
+      'pre-validate a recipient before sending: the send endpoints return 201 on accepting a message ' +
+      'even for numbers that are not on WhatsApp, so this is the only way to confirm a new number is ' +
+      'reachable before you send to it.',
+  })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'number', description: 'Phone number to check (e.g., 628123456789)' })
   @ApiResponse({
@@ -54,15 +80,13 @@ export class ContactController {
     description: 'Number existence check result',
   })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    const exists = await engine.checkNumberExists(number);
+    // The engine returns the canonical chat id in its native format; we don't build the JID here
+    // (decoupled from the whatsapp-web.js `@c.us` scheme).
+    const whatsappId = await this.contactService.getNumberId(sessionId, number);
     return {
       number,
-      exists,
-      whatsappId: exists ? `${number}@c.us` : null,
+      exists: whatsappId !== null,
+      whatsappId,
     };
   }
 
@@ -77,15 +101,56 @@ export class ContactController {
     description: 'Profile picture URL',
   })
   async getProfilePicture(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    const url = await engine.getProfilePicture(contactId);
+    const url = await this.contactService.getProfilePicture(sessionId, contactId);
     return { url };
   }
 
+  @Get(':contactId/phone')
+  @ApiOperation({ summary: 'Resolve a contact id (e.g. an @lid) to a phone number — best-effort' })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'contactId', description: 'Contact ID / JID to resolve (e.g., an @lid)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Resolved phone number (MSISDN digits), or null when the engine cannot map it',
+  })
+  async resolvePhone(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
+    const phone = await this.contactService.resolveContactPhone(sessionId, contactId);
+    return { contactId, phone };
+  }
+
+  @Put(':contactId')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Save a contact to the account's addressbook, or edit an existing entry" })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'contactId', description: 'Contact ID (e.g., 628xxx@c.us)' })
+  @ApiResponse({ status: 200, description: 'Contact saved' })
+  @ApiResponse({ status: 400, description: 'Session not active or invalid request' })
+  async upsertContact(
+    @Param('sessionId') sessionId: string,
+    @Param('contactId') contactId: string,
+    @Body() dto: UpsertContactDto,
+  ) {
+    await this.contactService.upsertContact(sessionId, contactId, dto.firstName, dto.lastName);
+    return { success: true, message: 'Contact saved' };
+  }
+
+  // Two path segments on the sibling route (`:contactId/block`) keep this single-segment DELETE
+  // from shadowing the unblock route, whichever order they are declared in.
+  @Delete(':contactId')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: "Remove a contact from the account's addressbook" })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'contactId', description: 'Contact ID (e.g., 628xxx@c.us)' })
+  @ApiResponse({ status: 200, description: 'Contact deleted' })
+  @ApiResponse({ status: 400, description: 'Session not active' })
+  async deleteContact(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
+    await this.contactService.deleteContact(sessionId, contactId);
+    return { success: true, message: 'Contact deleted' };
+  }
+
   @Post(':contactId/block')
+  @RequireRole(ApiKeyRole.OPERATOR)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Block a contact' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -95,15 +160,12 @@ export class ContactController {
     description: 'Contact blocked',
   })
   async blockContact(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    await engine.blockContact(contactId);
+    await this.contactService.blockContact(sessionId, contactId);
     return { success: true, message: 'Contact blocked' };
   }
 
   @Delete(':contactId/block')
+  @RequireRole(ApiKeyRole.OPERATOR)
   @ApiOperation({ summary: 'Unblock a contact' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'contactId', description: 'Contact ID (e.g., 628xxx@c.us)' })
@@ -112,11 +174,7 @@ export class ContactController {
     description: 'Contact unblocked',
   })
   async unblockContact(@Param('sessionId') sessionId: string, @Param('contactId') contactId: string) {
-    const engine = this.sessionService.getEngine(sessionId);
-    if (!engine) {
-      throw new Error('Session is not started');
-    }
-    await engine.unblockContact(contactId);
+    await this.contactService.unblockContact(sessionId, contactId);
     return { success: true, message: 'Contact unblocked' };
   }
 }

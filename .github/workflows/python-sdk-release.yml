@@ -1,0 +1,95 @@
+name: Python SDK Release
+
+# Publishes rmyndharis-openwa to PyPI from sdk/python.
+#
+# Authentication is PyPI Trusted Publishing (OIDC) — there is deliberately NO PyPI token in this
+# workflow or in the repository secrets. PyPI mints a short-lived credential from the GitHub OIDC
+# token, so nothing long-lived exists to leak or rotate. Same arrangement as js-sdk-release.yml.
+#
+# One-time setup on pypi.org (see sdk/python/README.md -> Releasing), required BEFORE the first tag:
+# project settings -> Publishing -> add a GitHub trusted publisher with owner `rmyndharis`,
+# repository `OpenWA`, and workflow `python-sdk-release.yml`.
+#
+# The SDK version is the pyproject.toml version on a dedicated tag (e.g. py-sdk-v0.2.0), NOT the
+# monorepo v* app tags.
+
+on:
+  push:
+    tags: ['py-sdk-v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Mints the OIDC token PyPI exchanges for its short-lived upload credential. Without this the
+      # publish has no credential at all — it is the whole mechanism.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Guards are textual and secret-free, so a misconfigured release fails BEFORE anything is built
+      # or published. Mirrors java-sdk-release.yml and js-sdk-release.yml. Textual also means they run
+      # before setup-python and depend on no interpreter.
+      - name: Guard — ref must be a py-sdk-v* release tag
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          # workflow_dispatch can start this workflow on ANY ref; publishing an arbitrary branch or a
+          # monorepo app tag to PyPI must not be possible.
+          case "$REF" in
+            refs/tags/py-sdk-v*) ;;
+            *)
+              echo "::error::This workflow publishes to PyPI and must run from a py-sdk-v* tag (got '$REF'). For workflow_dispatch, select the release tag as the run ref."
+              exit 1
+              ;;
+          esac
+
+      - name: Guard — tag version matches pyproject.toml version
+        working-directory: sdk/python
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#py-sdk-v}"
+          # First `version = "..."` in the file is the [project] version; the build-system table above
+          # it pins requirements, not a version key.
+          PKG_VERSION="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+          if [ -z "$PKG_VERSION" ]; then
+            echo "::error::could not read the project version from pyproject.toml"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag '$REF_NAME' (version '$TAG_VERSION') does not match pyproject.toml version '$PKG_VERSION'. Bump the project or fix the tag before releasing."
+            exit 1
+          fi
+          echo "Tag $REF_NAME matches pyproject.toml $PKG_VERSION"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          # One interpreter, not the SDK CI matrix: the wheel is pure Python (py3-none-any) and carries
+          # requires-python from the metadata, so the build interpreter does not shape the artifact.
+          # The 3.9/3.12 compatibility matrix already runs on every push to main.
+          python-version: '3.12'
+
+      # Same gate as SDK CI, and for the same reason the Java release runs its tests: the artifact
+      # that reaches the index must be the one that passed, not a rebuild nobody checked.
+      - name: Test
+        working-directory: sdk/python
+        run: |
+          pip install -e '.[dev]'
+          pytest
+
+      - name: Build sdist + wheel
+        working-directory: sdk/python
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: sdk/python/dist

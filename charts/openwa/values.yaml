@@ -1,0 +1,117 @@
+# replicaCount MUST stay 1. OpenWA is a single-process application: live WhatsApp
+# engine state is in-memory, and two pods driving the same session data corrupt the
+# session auth (forced logout / ban). See docs/13-horizontal-scaling.md.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/rmyndharis/openwa
+  # Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Non-secret application config, rendered into a ConfigMap and loaded via envFrom.
+# Any variable from .env.example is valid here — that file stays the canonical list.
+# NOTE: the container port is fixed at 2785 (containerPort, probes and the Service
+# targetPort are all pinned to it). Setting PORT here breaks the pod — use
+# service.port to change the Service port instead.
+env:
+  NODE_ENV: production
+  LOG_LEVEL: info
+
+# Secret config, rendered into a chart-managed Secret (stringData). Leave
+# API_MASTER_KEY empty to let the app bootstrap a key into /app/data/.api-key
+# (persists on the PVC) — NOTES.txt after install shows how to read it.
+# If a key exists in both env and secretEnv, the secret value wins (envFrom ordering).
+secretEnv:
+  API_MASTER_KEY: ""
+
+# Name of an existing, operator-managed Secret to load via envFrom instead of the
+# chart-managed one. When set, secretEnv is ignored and no Secret is created.
+existingSecret: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+persistence:
+  # /app/data holds session auth, the main SQLite DB, media and plugins — losing
+  # this volume loses the linked WhatsApp sessions and the API keys.
+  # Empty storageClass means the cluster's default StorageClass; the PVC pends if
+  # the cluster has none.
+  size: 10Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# Headless Chromium (whatsapp-web.js) is memory-heavy during QR/init; too-tight
+# limits show up as OOMKilled loops at session start.
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 2Gi
+    cpu: 1000m
+
+# Matches docker-compose stop_grace_period: graceful drain + per-engine Chromium
+# teardown can exceed the 30s k8s default.
+terminationGracePeriodSeconds: 45
+
+# Parity with docker-compose hardening. The image entrypoint STARTS AS ROOT to
+# chown /app/data + the XDG dirs, then drops to the openwa user via gosu — so do
+# NOT add runAsNonRoot here; it breaks that pattern.
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: openwa.example.com
+  paths:
+    - path: /
+      pathType: Prefix
+  tls: []
+  #  - secretName: openwa-tls
+  #    hosts:
+  #      - openwa.example.com
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# With replicaCount 1, minAvailable: 1 blocks voluntary eviction (node drains hang
+# until the pod is rescheduled). Opt in only with a matching runbook.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Requires METRICS_TOKEN set on the app (via secretEnv); without it /api/metrics
+# returns 404.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  # Extra labels for the ServiceMonitor — most Prometheus Operators select
+  # ServiceMonitors by a release label (e.g. release: kube-prometheus-stack).
+  additionalLabels: {}
+  # Secret holding the METRICS_TOKEN value for bearer auth.
+  bearerTokenSecret:
+    name: ""
+    key: token
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

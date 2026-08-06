@@ -1,6 +1,7 @@
-import { IsString, IsOptional, IsEnum, IsArray, IsDateString, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsArray, IsDateString, MinLength, MaxLength, Validate } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ApiKeyRole } from '../entities/api-key.entity';
+import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
 
 export class CreateApiKeyDto {
   @ApiProperty({
@@ -10,7 +11,7 @@ export class CreateApiKeyDto {
   @IsString()
   @MinLength(3)
   @MaxLength(100)
-  name: string;
+  name!: string;
 
   @ApiPropertyOptional({
     description: 'Role/permission level',
@@ -28,6 +29,7 @@ export class CreateApiKeyDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @Validate(IsIpOrCidrConstraint, { each: true })
   allowedIps?: string[];
 
   @ApiPropertyOptional({
@@ -50,18 +52,18 @@ export class CreateApiKeyDto {
 
 export class ApiKeyResponseDto {
   @ApiProperty()
-  id: string;
+  id!: string;
 
   @ApiProperty()
-  name: string;
+  name!: string;
 
   @ApiProperty({
     description: 'First 8 characters of the key (for identification)',
   })
-  keyPrefix: string;
+  keyPrefix!: string;
 
   @ApiProperty({ enum: ApiKeyRole })
-  role: ApiKeyRole;
+  role!: ApiKeyRole;
 
   @ApiPropertyOptional()
   allowedIps?: string[];
@@ -70,7 +72,7 @@ export class ApiKeyResponseDto {
   allowedSessions?: string[];
 
   @ApiProperty()
-  isActive: boolean;
+  isActive!: boolean;
 
   @ApiPropertyOptional()
   expiresAt?: Date;
@@ -79,10 +81,10 @@ export class ApiKeyResponseDto {
   lastUsedAt?: Date;
 
   @ApiProperty()
-  usageCount: number;
+  usageCount!: number;
 
   @ApiProperty()
-  createdAt: Date;
+  createdAt!: Date;
 }
 
 export class ApiKeyCreatedResponseDto extends ApiKeyResponseDto {
@@ -90,7 +92,7 @@ export class ApiKeyCreatedResponseDto extends ApiKeyResponseDto {
     description: 'Full API key (only shown once at creation)',
     example: 'owa_k1_abc123...',
   })
-  apiKey: string;
+  apiKey!: string;
 }
 
 export class UpdateApiKeyDto {
@@ -110,6 +112,7 @@ export class UpdateApiKeyDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @Validate(IsIpOrCidrConstraint, { each: true })
   allowedIps?: string[];
 
   @ApiPropertyOptional()

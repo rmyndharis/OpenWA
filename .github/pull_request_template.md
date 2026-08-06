@@ -1,13 +1,16 @@
 ## Description
+
 Brief description of changes
 
 ## Type of Change
+
 - [ ] Bug fix
 - [ ] New feature
 - [ ] Breaking change
 - [ ] Documentation update
 
 ## Checklist
+
 - [ ] Tests added/updated
 - [ ] Documentation updated
 - [ ] Lint passes
@@ -16,4 +19,5 @@ Brief description of changes
 ## Screenshots (if applicable)
 
 ## Related Issues
+
 Closes #

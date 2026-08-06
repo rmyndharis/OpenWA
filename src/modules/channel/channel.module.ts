@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ChannelController } from './channel.controller';
-import { SessionModule } from '../session/session.module';
+import { ChannelService } from './channel.service';
 
 @Module({
-  imports: [SessionModule],
   controllers: [ChannelController],
+  providers: [ChannelService],
 })
 export class ChannelModule {}

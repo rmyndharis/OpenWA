@@ -73,13 +73,28 @@ Start workflows when WhatsApp events occur.
 
 #### Supported Events
 
-| Event                  | Description               | Use Case                 |
-| ---------------------- | ------------------------- | ------------------------ |
-| `message.received`     | New incoming message      | Auto-reply, lead capture |
-| `message.sent`         | Message sent successfully | Delivery confirmation    |
-| `session.connected`    | Session authenticated     | Startup notifications    |
-| `session.disconnected` | Session lost connection   | Alert monitoring         |
-| `session.qr_ready`     | QR code generated         | Reconnection alerts      |
+| Event                                             | Description                                   | Use Case                                     |
+| ------------------------------------------------- | --------------------------------------------- | -------------------------------------------- |
+| `message.received`                                | New incoming message                          | Auto-reply, lead capture                     |
+| `message.sent`                                    | Message sent successfully                     | Delivery confirmation                        |
+| `message.ack`                                     | Delivery/read status advanced                 | Read receipts                                |
+| `message.failed`                                  | Outgoing message failed                       | Failure alerting                             |
+| `message.revoked`                                 | Message deleted for everyone                  | Deletion tracking                            |
+| `message.reaction`                                | Reaction added / changed / removed            | Reaction tracking                            |
+| `message.edited`                                  | Message body or caption edited                | Content synchronization                      |
+| `status.received`                                 | Contact posted a Status update                | Status archiving                             |
+| `session.status`                                  | Session status changed                        | Lifecycle tracking                           |
+| `session.qr`                                      | QR code generated                             | Reconnection alerts                          |
+| `session.authenticated`                           | Session logged in (phone available)           | Startup notifications                        |
+| `session.disconnected`                            | Session lost connection                       | Alert monitoring                             |
+| `session.reconnect_loop`                          | Every 5th consecutive reconnect attempt       | Stuck-session alerting                       |
+| `session.restriction`                             | WhatsApp restricted the account, or lifted it | Pausing outreach while an account is limited |
+| `presence.update`                                 | A watched chat's online/typing state changed  | Live agent hand-off, presence-aware routing  |
+| `call.accepted` / `call.rejected` / `call.missed` | A ringing call ended                          | Missed-call follow-up, call logging          |
+| `group.join`                                      | Participant(s) joined a group                 | Welcome messages                             |
+| `group.leave`                                     | Participant(s) left a group                   | Churn tracking                               |
+| `group.update`                                    | Group subject/description/settings changed    | Group administration                         |
+| `call.received`                                   | Incoming call started ringing                 | Auto-reject + auto-reply bots                |
 
 #### How It Works
 
@@ -94,8 +109,10 @@ Start workflows when WhatsApp events occur.
   "event": "message.received",
   "timestamp": "2024-01-15T10:30:00Z",
   "sessionId": "default",
+  "idempotencyKey": "a1b2c3d4e5f6...",
+  "deliveryId": "9f8e7d6c5b4a...",
   "data": {
-    "messageId": "3EB0F5A2B4C...",
+    "id": "3EB0F5A2B4C...",
     "chatId": "628123456789@c.us",
     "from": "628123456789@c.us",
     "body": "Hello!",
@@ -104,6 +121,13 @@ Start workflows when WhatsApp events occur.
   }
 }
 ```
+
+> **Deduplication.** Every delivery includes `idempotencyKey` and `deliveryId` in the body **and** as the
+> `X-OpenWA-Idempotency-Key` / `X-OpenWA-Delivery-Id` headers. `idempotencyKey` is **stable across retries**
+> of the same event; `deliveryId` identifies one delivery to one webhook and is stable across that
+> delivery's retry attempts too — read the `X-OpenWA-Retry-Count` header for the attempt number. Because a
+> webhook can be retried, add a dedup step keyed on `idempotencyKey` (e.g. an n8n IF or "Remove Duplicates"
+> node) so a retried delivery isn't processed twice.
 
 ## Example Workflows
 
@@ -172,6 +196,24 @@ Send daily reminders to a list of contacts.
      └── Daily 9AM          └── Get contacts                     └── Send reminder
 ```
 
+### 6. Appointment Booking
+
+Collect appointment requests over WhatsApp, check availability in an external scheduling source, and send a confirmation or alternative time slots.
+
+See [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md) for a complete example.
+
+```
+[OpenWA Trigger] → [IF: Booking intent?] → [Set: Normalize request]
+                                               │
+                                               ▼
+                                      [Availability Source]
+                                               │
+                         ┌─────────────────────┴─────────────────────┐
+                         ▼                                           ▼
+              [Create Booking] → [OpenWA: Send Text]      [OpenWA: Send Text]
+                  confirmed confirmation                  alternative slots
+```
+
 ## Best Practices
 
 ### 1. Error Handling
@@ -226,7 +268,7 @@ Always use the correct format for chat IDs:
 
 ### Message Not Sending
 
-1. Verify session status is "READY"
+1. Verify session status is `ready` (the API returns lowercase status values)
 2. Check chat ID format is correct
 3. Ensure recipient number exists on WhatsApp
 4. Check message content isn't empty
@@ -271,7 +313,8 @@ docker run -it --rm \
 ## Related Documentation
 
 - [OpenWA API Specification](./06-api-specification.md)
-- [Webhook System](./03-system-architecture.md#webhooks)
+- [Webhook System](./03-system-architecture.md#353-webhook-system)
+- [n8n Appointment Booking Workflow](./examples/n8n-appointment-booking.md)
 - [n8n Documentation](https://docs.n8n.io/)
 
 ---

@@ -1,28 +1,45 @@
 {
   "name": "openwa",
-  "version": "0.1.6",
+  "version": "0.14.2",
   "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API for WhatsApp",
   "author": "Yudhi Armyndharis & OpenWA Contributors",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scarfSettings": {
+    "enabled": false
+  },
   "scripts": {
     "build": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "build:all": "nest build && npm run dashboard:build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"**/*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"**/*.md\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "prod": "npm run build:all && node dist/main",
     "dev": "concurrently -n api,dashboard -c blue,green \"npm run start:dev\" \"npm run dashboard:dev\"",
     "dashboard:install": "cd dashboard && npm install",
+    "dashboard:ci": "cd dashboard && npm ci",
     "dashboard:dev": "cd dashboard && npm run dev",
     "dashboard:build": "cd dashboard && npm run build",
-    "postinstall": "[ -d dashboard ] && npm run dashboard:install || true",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "postinstall": "node scripts/postinstall.js",
+    "check:versions": "node scripts/check-doc-versions.mjs",
+    "check:dockerignore": "node scripts/check-dockerignore.mjs",
+    "openapi:export": "ts-node scripts/export-openapi.ts openapi.json",
+    "openapi:check": "ts-node scripts/export-openapi.ts /tmp/openapi.generated.json && diff -u openapi.json /tmp/openapi.generated.json",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
+    "lint:fix": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:scripts": "node --test scripts/postinstall.spec.js scripts/patch-wwebjs-newsletter-preview.spec.js scripts/patch-wwebjs-status.spec.js scripts/patch-wwebjs-ready-sync.spec.js",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:pg-smoke": "node scripts/pg-uuid-smoke.js",
     "typeorm": "typeorm-ts-node-commonjs",
     "typeorm:prod": "typeorm",
     "migration:create": "npm run typeorm -- migration:create src/database/migrations/$npm_config_name",
@@ -32,71 +49,87 @@
     "migration:revert": "npm run typeorm -- migration:revert -d src/database/data-source.ts",
     "migration:revert:prod": "npm run typeorm:prod -- migration:revert -d dist/database/data-source.js",
     "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
-    "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js"
+    "migration:show:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source.js",
+    "migration:generate:main": "npm run typeorm -- migration:generate src/database/migrations-main/$npm_config_name -d src/database/data-source-main.ts",
+    "migration:run:main": "npm run typeorm -- migration:run -d src/database/data-source-main.ts",
+    "migration:run:main:prod": "npm run typeorm:prod -- migration:run -d dist/database/data-source-main.js",
+    "migration:revert:main": "npm run typeorm -- migration:revert -d src/database/data-source-main.ts",
+    "migration:revert:main:prod": "npm run typeorm:prod -- migration:revert -d dist/database/data-source-main.js",
+    "migration:show:main": "npm run typeorm -- migration:show -d src/database/data-source-main.ts",
+    "migration:show:main:prod": "npm run typeorm:prod -- migration:show -d dist/database/data-source-main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1048.0",
-    "@bull-board/api": "^7.1.5",
-    "@bull-board/express": "^7.1.5",
-    "@bull-board/nestjs": "^7.1.5",
-    "@nestjs-modules/ioredis": "^2.0.2",
+    "@aws-sdk/client-s3": "^3.1101.0",
+    "@bull-board/api": "^8.5.0",
+    "@bull-board/express": "^8.5.0",
+    "@bull-board/nestjs": "^8.5.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@nestjs/bullmq": "^11.0.4",
-    "@nestjs/common": "^11.1.21",
+    "@nestjs/common": "^11.1.28",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.1.21",
-    "@nestjs/platform-express": "^11.1.21",
-    "@nestjs/platform-socket.io": "^11.1.21",
-    "@nestjs/swagger": "^11.4.3",
+    "@nestjs/core": "^11.1.28",
+    "@nestjs/platform-express": "^11.1.28",
+    "@nestjs/platform-socket.io": "^11.1.28",
+    "@nestjs/serve-static": "^5.0.5",
+    "@nestjs/swagger": "^11.4.6",
     "@nestjs/throttler": "^6.5.0",
-    "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/typeorm": "^11.0.3",
+    "@nestjs/websockets": "^11.1.28",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "adm-zip": "^0.6.0",
     "archiver": "^8.0.0",
-    "bullmq": "^5.76.10",
+    "audio-decode": "^2.2.3",
+    "better-sqlite3": "^12.11.1",
+    "bullmq": "^5.81.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
-    "dockerode": "^5.0.0",
-    "helmet": "^8.0.0",
-    "ioredis": "^5.9.3",
-    "pg": "^8.21.0",
+    "dockerode": "^5.0.1",
+    "helmet": "^8.3.0",
+    "https-proxy-agent": "^7.0.6",
+    "ioredis": "^5.11.1",
+    "pg": "^8.22.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
-    "sqlite3": "^5.1.7",
+    "socks-proxy-agent": "^8.0.5",
     "tar-stream": "^3.2.0",
-    "typeorm": "^0.3.29",
-    "uuid": "^14.0.0",
-    "whatsapp-web.js": "^1.26.1-alpha.3"
+    "typeorm": "^1.1.0",
+    "undici": "^8.9.0",
+    "whatsapp-web.js": "^1.34.7",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.2.0",
+    "@eslint/eslintrc": "^3.3.6",
     "@eslint/js": "^10.0.1",
-    "@nestjs/cli": "^11.0.0",
+    "@nestjs/cli": "^11.0.24",
     "@nestjs/schematics": "^11.0.0",
-    "@nestjs/testing": "^11.1.21",
-    "@types/archiver": "^7.0.0",
+    "@nestjs/testing": "^11.1.28",
+    "@types/archiver": "^8.0.0",
     "@types/dockerode": "^4.0.1",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^25.9.0",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.1.2",
     "@types/qrcode": "^1.5.5",
-    "@types/supertest": "^6.0.2",
+    "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.4",
-    "@types/uuid": "^10.0.0",
-    "concurrently": "^9.2.1",
-    "eslint": "^10.4.0",
+    "concurrently": "^10.0.4",
+    "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.0.1",
-    "eslint-plugin-prettier": "^5.2.2",
-    "globals": "^17.6.0",
+    "eslint-plugin-prettier": "^5.5.6",
+    "globals": "^17.8.0",
     "jest": "^30.4.2",
-    "prettier": "^3.4.2",
+    "prettier": "^3.9.6",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
-    "ts-jest": "^29.2.5",
-    "ts-loader": "^9.5.2",
+    "ts-jest": "^29.4.12",
+    "ts-loader": "^9.6.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.7.3",
-    "typescript-eslint": "^8.59.3"
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.65.0"
   },
   "jest": {
     "moduleFileExtensions": [
@@ -107,7 +140,22 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "module": "CommonJS",
+            "moduleResolution": "node",
+            "resolvePackageJsonExports": false,
+            "ignoreDeprecations": "6.0"
+          }
+        }
+      ]
+    },
+    "moduleNameMapper": {
+      "^@whiskeysockets/baileys$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
+      "^@whiskeysockets/baileys/(.*)$": "<rootDir>/../test/__mocks__/@whiskeysockets/baileys.ts",
+      "^archiver$": "<rootDir>/../test/__mocks__/archiver.ts"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
@@ -115,12 +163,228 @@
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
       "global": {
-        "branches": 10,
-        "functions": 12,
-        "lines": 15,
-        "statements": 15
+        "branches": 58,
+        "functions": 63,
+        "lines": 66,
+        "statements": 65
+      },
+      "./src/common/cache/": {
+        "branches": 34,
+        "functions": 33,
+        "lines": 42,
+        "statements": 42
+      },
+      "./src/common/security/": {
+        "branches": 85,
+        "functions": 95,
+        "lines": 93,
+        "statements": 92
+      },
+      "./src/common/services/": {
+        "branches": 74,
+        "functions": 91,
+        "lines": 87,
+        "statements": 84
+      },
+      "./src/common/storage/": {
+        "branches": 75,
+        "functions": 80,
+        "lines": 80,
+        "statements": 77
+      },
+      "./src/common/utils/": {
+        "branches": 86,
+        "functions": 92,
+        "lines": 92,
+        "statements": 91
+      },
+      "./src/config/": {
+        "branches": 88,
+        "functions": 92,
+        "lines": 91,
+        "statements": 91
+      },
+      "./src/core/agent-tools/": {
+        "branches": 88,
+        "functions": 87,
+        "lines": 83,
+        "statements": 83
+      },
+      "./src/core/hooks/": {
+        "branches": 81,
+        "functions": 73,
+        "lines": 85,
+        "statements": 84
+      },
+      "./src/core/plugins/": {
+        "branches": 72,
+        "functions": 74,
+        "lines": 81,
+        "statements": 80
+      },
+      "./src/database/": {
+        "branches": 69,
+        "functions": 69,
+        "lines": 72,
+        "statements": 72
+      },
+      "./src/engine/adapters/": {
+        "branches": 74,
+        "functions": 84,
+        "lines": 83,
+        "statements": 83
+      },
+      "./src/engine/identity/": {
+        "branches": 85,
+        "functions": 95,
+        "lines": 94,
+        "statements": 93
+      },
+      "./src/modules/audit/": {
+        "branches": 59,
+        "functions": 45,
+        "lines": 72,
+        "statements": 68
+      },
+      "./src/modules/auth/": {
+        "branches": 75,
+        "functions": 85,
+        "lines": 86,
+        "statements": 85
+      },
+      "./src/modules/automation/": {
+        "branches": 67,
+        "functions": 57,
+        "lines": 83,
+        "statements": 79
+      },
+      "./src/modules/chat-media/": {
+        "branches": 78,
+        "functions": 81,
+        "lines": 92,
+        "statements": 90
+      },
+      "./src/modules/contact/": {
+        "branches": 79,
+        "functions": 90,
+        "lines": 89,
+        "statements": 88
+      },
+      "./src/modules/docker/": {
+        "branches": 88,
+        "functions": 99,
+        "lines": 96,
+        "statements": 96
+      },
+      "./src/modules/events/": {
+        "branches": 70,
+        "functions": 84,
+        "lines": 81,
+        "statements": 80
+      },
+      "./src/modules/group/": {
+        "branches": 64,
+        "functions": 47,
+        "lines": 67,
+        "statements": 67
+      },
+      "./src/modules/infra/": {
+        "branches": 73,
+        "functions": 71,
+        "lines": 87,
+        "statements": 86
+      },
+      "./src/modules/integration/": {
+        "branches": 76,
+        "functions": 83,
+        "lines": 90,
+        "statements": 89
+      },
+      "./src/modules/mcp/": {
+        "branches": 62,
+        "functions": 81,
+        "lines": 78,
+        "statements": 78
+      },
+      "./src/modules/media/": {
+        "branches": 71,
+        "functions": 87,
+        "lines": 89,
+        "statements": 88
+      },
+      "./src/modules/message/": {
+        "branches": 57,
+        "functions": 66,
+        "lines": 81,
+        "statements": 80
+      },
+      "./src/modules/metrics/": {
+        "branches": 61,
+        "functions": 65,
+        "lines": 68,
+        "statements": 65
+      },
+      "./src/modules/plugins/": {
+        "branches": 67,
+        "functions": 63,
+        "lines": 74,
+        "statements": 73
+      },
+      "./src/modules/queue/": {
+        "branches": 74,
+        "functions": 88,
+        "lines": 95,
+        "statements": 95
+      },
+      "./src/modules/search/": {
+        "branches": 66,
+        "functions": 87,
+        "lines": 71,
+        "statements": 71
+      },
+      "./src/modules/session/": {
+        "branches": 75,
+        "functions": 79,
+        "lines": 88,
+        "statements": 87
+      },
+      "./src/modules/stats/": {
+        "branches": 67,
+        "functions": 63,
+        "lines": 71,
+        "statements": 69
+      },
+      "./src/modules/status-store/": {
+        "branches": 79,
+        "functions": 83,
+        "lines": 92,
+        "statements": 91
+      },
+      "./src/modules/status/": {
+        "branches": 70,
+        "functions": 58,
+        "lines": 79,
+        "statements": 78
+      },
+      "./src/modules/template/": {
+        "branches": 77,
+        "functions": 99,
+        "lines": 92,
+        "statements": 89
+      },
+      "./src/modules/webhook/": {
+        "branches": 72,
+        "functions": 89,
+        "lines": 90,
+        "statements": 87
       }
     },
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "shell-quote": "^1.10.0",
+    "brace-expansion": "^5.0.9",
+    "ip-address": "^10.4.0",
+    "js-yaml": "^5.2.2"
   }
 }

@@ -6,19 +6,38 @@ import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WebhookProcessor } from './processors/webhook.processor';
+import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { Webhook } from '../webhook/entities/webhook.entity';
+import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
+import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { HooksModule } from '../../core/hooks/hooks.module';
+import { PluginsModule } from '../../core/plugins/plugins.module';
 
 // Re-export for backward compatibility
 export { QUEUE_NAMES } from './queue-names';
 
+/**
+ * Bounded retention for finished webhook-queue jobs. Failed webhook jobs carry their full payload in
+ * Redis until eviction, so the window must stay small — the durable record of a lost delivery is the
+ * webhook_delivery_failures row written on the final attempt, not the Redis job. The payload itself
+ * is additionally size-gated (media shed) before enqueue, so count × bytes both stay bounded.
+ */
+export const WEBHOOK_QUEUE_JOB_OPTIONS = {
+  removeOnComplete: { age: 3600, count: 1000 },
+  removeOnFail: { age: 86400, count: 5000 },
+} as const;
+
 @Module({
   imports: [
-    // Required for WebhookProcessor to inject Repository<Webhook>
-    TypeOrmModule.forFeature([Webhook], 'data'),
-    // Required for WebhookProcessor to inject HookManager
+    // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>;
+    // IngressProcessor to inject Repository<IntegrationDeliveryFailure> (both on the 'data' connection).
+    TypeOrmModule.forFeature([Webhook, WebhookDeliveryFailure, IntegrationDeliveryFailure], 'data'),
+    // Required for WebhookProcessor/IngressProcessor to inject HookManager
     HooksModule,
+    // Required for IngressProcessor to inject PluginLoaderService (already @Global(), imported
+    // explicitly for clarity, matching HooksModule above).
+    PluginsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -26,11 +45,26 @@ export { QUEUE_NAMES } from './queue-names';
         connection: {
           host: configService.get<string>('redis.host', 'localhost'),
           port: configService.get<number>('redis.port', 6379),
+          username: configService.get<string>('redis.username'),
           password: configService.get<string>('redis.password'),
+          connectTimeout: configService.get<number>('redis.connectTimeoutMs', 5000),
+          enableOfflineQueue: false,
         },
       }),
     }),
-    BullModule.registerQueue({ name: QUEUE_NAMES.WEBHOOK }),
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.WEBHOOK,
+      // Auto-evict finished jobs so completed/failed webhook payloads don't accumulate in Redis
+      // unbounded. Keep a small recent window for debugging; cap age too.
+      defaultJobOptions: WEBHOOK_QUEUE_JOB_OPTIONS,
+    }),
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.INGRESS,
+      defaultJobOptions: {
+        removeOnComplete: { age: 3600, count: 1000 },
+        removeOnFail: { age: 86400, count: 5000 },
+      },
+    }),
     BullBoardModule.forRoot({
       route: '/admin/queues',
       adapter: ExpressAdapter,
@@ -39,8 +73,12 @@ export { QUEUE_NAMES } from './queue-names';
       name: QUEUE_NAMES.WEBHOOK,
       adapter: BullMQAdapter,
     }),
+    BullBoardModule.forFeature({
+      name: QUEUE_NAMES.INGRESS,
+      adapter: BullMQAdapter,
+    }),
   ],
-  providers: [WebhookProcessor],
+  providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}

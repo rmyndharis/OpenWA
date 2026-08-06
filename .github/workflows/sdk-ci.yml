@@ -1,0 +1,127 @@
+name: SDK CI
+
+# Runs the JavaScript/Python/PHP client SDK suites. Path-filtered to SDK sources AND the server
+# contract surfaces the SDK types mirror (DTOs + the engine interface), so a backend DTO change also
+# re-runs the SDK suites and surfaces contract drift. The JavaScript job also builds and runs the
+# dual-format packaging smoke test (require() + import() both consumable).
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      [
+        'sdk/**',
+        '.github/workflows/sdk-ci.yml',
+        'src/**/dto/**',
+        'src/**/*.controller.ts',
+        'src/**/*.service.ts',
+        'src/engine/interfaces/whatsapp-engine.interface.ts',
+      ]
+  pull_request:
+    branches: [main, develop]
+    paths:
+      [
+        'sdk/**',
+        '.github/workflows/sdk-ci.yml',
+        'src/**/dto/**',
+        'src/**/*.controller.ts',
+        'src/**/*.service.ts',
+        'src/engine/interfaces/whatsapp-engine.interface.ts',
+      ]
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    name: JavaScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sdk/javascript/package-lock.json
+      - run: npm ci
+      - run: npm test
+      # The build tsconfigs exclude test/, and vitest strips types without checking them, so the
+      # type-level wire contract in test/*.test-d.ts only gates if tsc runs over test/ too (#754).
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run smoke # dual CJS+ESM consumable — must run after build
+
+  python:
+    name: Python SDK (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.12']
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[dev]'
+      - run: pytest
+
+  php:
+    name: PHP SDK (${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2']
+    defaults:
+      run:
+        working-directory: sdk/php
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ matrix.php }}
+      - run: composer install --no-interaction --no-progress
+      - run: ./vendor/bin/phpunit
+
+  java:
+    name: Java SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/java
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: mvn -B verify
+
+  go:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/go
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.22' # the go.mod minimum, so CI gates what the SDK claims to support
+          cache: false # stdlib-only, no go.sum to cache
+      - name: gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo 'Unformatted files:'
+            gofmt -l .
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go test -race ./...

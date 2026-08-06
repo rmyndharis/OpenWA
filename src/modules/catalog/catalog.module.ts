@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
+import { MessageModule } from '../message/message.module';
 import { CatalogController } from './catalog.controller';
 import { CatalogService } from './catalog.service';
-import { SessionModule } from '../session/session.module';
 
 @Module({
-  imports: [SessionModule],
+  imports: [MessageModule],
   controllers: [CatalogController],
   providers: [CatalogService],
   exports: [CatalogService],

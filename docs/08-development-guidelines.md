@@ -7,67 +7,26 @@ openwa/
 ├── src/
 │   ├── main.ts                    # Application entry
 │   ├── app.module.ts              # Root module
-│   │
-│   ├── common/                    # Shared code
-│   │   ├── decorators/
-│   │   ├── dto/
-│   │   ├── exceptions/
-│   │   ├── filters/
-│   │   ├── guards/
-│   │   ├── interceptors/
-│   │   ├── interfaces/
-│   │   ├── pipes/
-│   │   └── utils/
-│   │
-│   ├── config/                    # Configuration
-│   │   ├── config.module.ts
-│   │   └── configuration.ts
-│   │
-│   ├── modules/                   # Feature modules
-│   │   ├── session/
-│   │   ├── message/
-│   │   ├── webhook/
-│   │   ├── contact/
-│   │   ├── group/
-│   │   ├── auth/
-│   │   └── health/
-│   │
-│   ├── engine/                    # WhatsApp engine
-│   │   ├── engine.module.ts
-│   │   ├── engine.service.ts
-│   │   └── interfaces/
-│   │
-│   ├── queue/                     # Job queues
-│   │   ├── queue.module.ts
-│   │   └── processors/
-│   │
-│   └── database/                  # Database
-│       ├── database.module.ts
-│       ├── entities/
-│       └── migrations/
-│
-├── test/                          # Tests
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/
-│
-├── dashboard/                     # Frontend dashboard
-│   ├── src/
-│   └── package.json
-│
+│   ├── common/                    # Shared cache, security, storage, errors, utils
+│   ├── config/                    # Runtime config, env validation, bootstrap security, Swagger
+│   ├── core/                      # Hook and plugin framework
+│   ├── database/                  # TypeORM data sources and migrations
+│   ├── engine/                    # WhatsApp engine abstraction, adapters, identity mapping
+│   ├── modules/                   # API feature modules
+│   └── plugins/                   # Built-in engine and extension plugins
+├── test/                          # E2E smoke tests and mocks
+├── dashboard/                     # React/Vite dashboard
+├── sdk/                           # Client SDKs: go, java, javascript, php, python
 ├── docs/                          # Documentation
 ├── scripts/                       # Utility scripts
-├── docker/                        # Docker files
-│
-├── .github/                       # GitHub config
-│   └── workflows/
-│
+├── .github/workflows/             # CI and release workflows
 ├── package.json
 ├── tsconfig.json
 ├── nest-cli.json
-├── .eslintrc.js
-├── .prettierrc
+├── eslint.config.mjs
 ├── docker-compose.yml
+├── docker-compose.dev.yml
+├── Dockerfile
 └── README.md
 ```
 
@@ -76,66 +35,54 @@ openwa/
 ### TypeScript Configuration
 
 ```json
-// tsconfig.json
+// tsconfig.json (abridged — see the file for the commented rationale)
 {
   "compilerOptions": {
-    "module": "commonjs",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2023",
+    "rootDir": ".",
+    "outDir": "./dist",
+    "types": ["node", "jest"],
     "declaration": true,
-    "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "allowSyntheticDefaultImports": true,
-    "target": "ES2022",
-    "sourceMap": true,
-    "outDir": "./dist",
-    "baseUrl": "./",
-    "incremental": true,
-    "skipLibCheck": true,
     "strictNullChecks": true,
     "noImplicitAny": true,
     "strictBindCallApply": true,
-    "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
-    "paths": {
-      "@/*": ["src/*"],
-      "@common/*": ["src/common/*"],
-      "@modules/*": ["src/modules/*"],
-      "@config/*": ["src/config/*"]
-    }
-  }
+    "strictPropertyInitialization": false,
+    "strictFunctionTypes": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["src", "test"],
+  "exclude": ["node_modules", "dist", "dashboard"]
 }
 ```
 
+There are **no path aliases** — no `baseUrl`, no `paths`. Import with relative paths
+(`../common/services/logger.service`), not `@/…`. Under TypeScript 6 the strict family defaults on,
+so the three `false` entries above are deliberate opt-outs pending their own migrations
+(`strictPropertyInitialization` alone flags around 260 TypeORM entity properties). `types` must be
+listed explicitly because TypeScript 6 no longer auto-includes every `@types` package.
+
 ### ESLint Configuration
 
-```javascript
-// .eslintrc.js
-module.exports = {
-  parser: '@typescript-eslint/parser',
-  parserOptions: {
-    project: 'tsconfig.json',
-    sourceType: 'module',
-  },
-  plugins: ['@typescript-eslint/eslint-plugin'],
-  extends: [
-    'plugin:@typescript-eslint/recommended',
-    'plugin:prettier/recommended',
-  ],
-  root: true,
-  env: {
-    node: true,
-    jest: true,
-  },
-  ignorePatterns: ['.eslintrc.js'],
-  rules: {
-    '@typescript-eslint/interface-name-prefix': 'off',
-    '@typescript-eslint/explicit-function-return-type': 'warn',
-    '@typescript-eslint/explicit-module-boundary-types': 'warn',
-    '@typescript-eslint/no-explicit-any': 'warn',
-    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-    'no-console': 'warn',
-  },
-};
+The backend uses ESLint flat config in `eslint.config.mjs` with type-aware TypeScript rules,
+Prettier integration, and an architecture guard for controllers. HTTP controllers must call
+capability services; they must not import `IWhatsAppEngine` or `EngineRegistry`, call `getEngine()`,
+or resolve an engine via `engines.require()` / `engines.get()`.
+
+```bash
+npm run lint
+npm run lint:fix
+```
+
+The dashboard has its own package scripts:
+
+```bash
+cd dashboard
+npm run lint
 ```
 
 ### Naming Conventions
@@ -189,7 +136,7 @@ import { ExampleRepository } from './example.repository';
 import { Example } from './entities/example.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Example])],
+  imports: [TypeOrmModule.forFeature([Example], 'data')],
   controllers: [ExampleController],
   providers: [ExampleService, ExampleRepository],
   exports: [ExampleService],
@@ -201,27 +148,14 @@ export class ExampleModule {}
 
 ```typescript
 // modules/example/example.controller.ts
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Headers,
-  Param,
-  Delete,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Param, Delete, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { ApiKeyGuard } from '@common/guards/api-key.guard';
 import { ExampleService } from './example.service';
 import { CreateExampleDto } from './dto/create-example.dto';
 import { ExampleResponseDto } from './dto/example-response.dto';
 
 @ApiTags('examples')
 @Controller('examples')
-@UseGuards(ApiKeyGuard)
 export class ExampleController {
   constructor(private readonly exampleService: ExampleService) {}
 
@@ -231,7 +165,7 @@ export class ExampleController {
   @ApiResponse({ status: 201, type: ExampleResponseDto })
   async create(
     @Body() dto: CreateExampleDto,
-    @Headers('x-request-id') requestId?: string
+    @Headers('x-request-id') requestId?: string,
   ): Promise<ExampleResponseDto> {
     return this.exampleService.create(dto, { requestId });
   }
@@ -252,6 +186,29 @@ export class ExampleController {
 }
 ```
 
+Controllers are protected by the global API key guard unless marked with `@Public()`. Keep
+controllers thin: validate transport input through DTOs, delegate behavior to services, and never
+resolve an engine directly from a controller. Engine-specific details belong behind capability
+services and engine adapters.
+
+A capability service reaches the live engine through `EngineRegistry`, the narrow port exported by
+the (global) `EngineModule` — not through `SessionService`, which drives the session _lifecycle_
+(start/stop/delete/reconnect, owned by `SessionEngineLifecycle`) and should only be injected by code
+that actually drives it:
+
+```typescript
+@Injectable()
+export class ExampleService {
+  constructor(private readonly engines: EngineRegistry) {}
+
+  // require() throws 400 "Session is not started" by default; pass a factory to keep an
+  // endpoint's own documented status/message.
+  private getEngine(sessionId: string): IWhatsAppEngine {
+    return this.engines.require(sessionId);
+  }
+}
+```
+
 ### Service Template
 
 ```typescript
@@ -263,34 +220,31 @@ import { Example } from './entities/example.entity';
 
 @Injectable()
 export class ExampleService {
-  private readonly logger = new Logger(ExampleService.name);
+  private readonly logger = createLogger('ExampleService');
 
   constructor(private readonly repository: ExampleRepository) {}
 
-  async create(
-    dto: CreateExampleDto,
-    context?: { requestId?: string }
-  ): Promise<Example> {
+  async create(dto: CreateExampleDto, context?: { requestId?: string }): Promise<Example> {
     this.logger.log(`Creating example: ${dto.name}`, context);
-    
+
     const example = this.repository.create(dto);
     return this.repository.save(example);
   }
 
   async findOne(id: string): Promise<Example> {
     const example = await this.repository.findOne({ where: { id } });
-    
+
     if (!example) {
       throw new NotFoundException(`Example with ID ${id} not found`);
     }
-    
+
     return example;
   }
 
   async remove(id: string): Promise<void> {
     const example = await this.findOne(id);
     await this.repository.remove(example);
-    
+
     this.logger.log(`Deleted example: ${id}`);
   }
 }
@@ -408,15 +362,18 @@ Fixes #456
 
 ```markdown
 ## Description
+
 Brief description of changes
 
 ## Type of Change
+
 - [ ] Bug fix
 - [ ] New feature
 - [ ] Breaking change
 - [ ] Documentation update
 
 ## Checklist
+
 - [ ] Tests added/updated
 - [ ] Documentation updated
 - [ ] Lint passes
@@ -425,6 +382,7 @@ Brief description of changes
 ## Screenshots (if applicable)
 
 ## Related Issues
+
 Closes #
 ```
 
@@ -432,87 +390,36 @@ Closes #
 
 ### Test Structure
 
+Unit tests live next to source files as `*.spec.ts`. E2E smoke tests live in `test/`.
+
 ```
+src/
+├── common/security/ssrf-guard.spec.ts
+├── engine/adapters/baileys.adapter.spec.ts
+├── modules/session/session.service.spec.ts
+└── modules/webhook/webhook.service.spec.ts
+
 test/
-├── unit/                          # Unit tests
-│   ├── services/
-│   │   ├── session.service.spec.ts
-│   │   └── message.service.spec.ts
-│   └── utils/
-│       └── encryption.spec.ts
-│
-├── integration/                   # Integration tests
-│   ├── session.integration.spec.ts
-│   └── webhook.integration.spec.ts
-│
-└── e2e/                          # End-to-end tests
-    ├── app.e2e-spec.ts
-    └── session.e2e-spec.ts
+├── app.e2e-spec.ts
+├── baileys-engine.e2e-spec.ts
+├── serve-static.e2e-spec.ts
+├── jest-e2e.json
+└── setup-e2e.ts
 ```
 
 ### Unit Test Example
 
 ```typescript
-// test/unit/services/session.service.spec.ts
-import { Test, TestingModule } from '@nestjs/testing';
-import { SessionService } from '@modules/session/session.service';
-import { SessionRepository } from '@modules/session/session.repository';
-import { EngineService } from '@engine/engine.service';
+// src/modules/session/reconnect-config.spec.ts
+import { resolveReconnectConfig } from './session.service';
 
-describe('SessionService', () => {
-  let service: SessionService;
-  let repository: jest.Mocked<SessionRepository>;
-  let engineService: jest.Mocked<EngineService>;
-
-  beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        SessionService,
-        {
-          provide: SessionRepository,
-          useValue: {
-            create: jest.fn(),
-            save: jest.fn(),
-            findOne: jest.fn(),
-            delete: jest.fn(),
-          },
-        },
-        {
-          provide: EngineService,
-          useValue: {
-            createClient: jest.fn(),
-            destroyClient: jest.fn(),
-          },
-        },
-      ],
-    }).compile();
-
-    service = module.get<SessionService>(SessionService);
-    repository = module.get(SessionRepository);
-    engineService = module.get(EngineService);
-  });
-
-  describe('create', () => {
-    it('should create a new session', async () => {
-      const dto = { name: 'test-session' };
-      const session = { id: 'uuid', ...dto, status: 'created' };
-      
-      repository.create.mockReturnValue(session as any);
-      repository.save.mockResolvedValue(session as any);
-      
-      const result = await service.create(dto);
-      
-      expect(result).toEqual(session);
-      expect(repository.create).toHaveBeenCalledWith(dto);
-      expect(repository.save).toHaveBeenCalled();
-    });
-
-    it('should throw error if name already exists', async () => {
-      const dto = { name: 'existing-session' };
-      
-      repository.save.mockRejectedValue({ code: '23505' }); // Unique violation
-      
-      await expect(service.create(dto)).rejects.toThrow();
+describe('resolveReconnectConfig', () => {
+  it('keeps reconnect settings finite and bounded', () => {
+    // Invalid maxReconnectAttempts falls back to the default: unlimited retries (the backoff
+    // parks at the 1h cap); an invalid baseDelay is clamped up to the 1s minimum.
+    expect(resolveReconnectConfig({ maxReconnectAttempts: 'bad', reconnectBaseDelay: -1 })).toEqual({
+      maxAttempts: Number.POSITIVE_INFINITY,
+      baseDelay: 1000,
     });
   });
 });
@@ -521,15 +428,14 @@ describe('SessionService', () => {
 ### E2E Test Example
 
 ```typescript
-// test/e2e/session.e2e-spec.ts
+// test/app.e2e-spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
-import { AppModule } from '@/app.module';
+import { AppModule } from '../src/app.module';
 
-describe('Session (e2e)', () => {
+describe('App (e2e)', () => {
   let app: INestApplication;
-  const apiKey = 'test-api-key';
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -544,25 +450,14 @@ describe('Session (e2e)', () => {
     await app.close();
   });
 
-  describe('POST /api/sessions', () => {
-    it('should create a session', () => {
+  describe('GET /api/health', () => {
+    it('returns health status without an API key', () => {
       return request(app.getHttpServer())
-        .post('/api/sessions')
-        .set('X-API-Key', apiKey)
-        .send({ name: 'e2e-test-session' })
-        .expect(201)
-        .expect((res) => {
-          expect(res.body.success).toBe(true);
-          expect(res.body.data.name).toBe('e2e-test-session');
-          expect(res.body.data.status).toBe('created');
+        .get('/api/health')
+        .expect(200)
+        .expect(res => {
+          expect(res.body.status).toBe('ok');
         });
-    });
-
-    it('should return 401 without API key', () => {
-      return request(app.getHttpServer())
-        .post('/api/sessions')
-        .send({ name: 'test' })
-        .expect(401);
     });
   });
 });
@@ -570,20 +465,25 @@ describe('Session (e2e)', () => {
 
 ### Test Coverage Requirements
 
-| Type | Minimum Coverage |
-|------|-----------------|
-| Unit Tests | 80% |
-| Integration Tests | 60% |
-| E2E Tests | Critical paths |
+Run the normal backend checks before opening a PR:
+
+```bash
+npm test -- --runInBand
+npm run test:e2e -- --runInBand
+npm run lint
+```
+
+Coverage thresholds are enforced by Jest in `package.json`. Security-sensitive code under
+`src/common/security/` has stricter thresholds than the global baseline.
 
 ## 8.6 Documentation Standards
 
 ### Code Documentation
 
-```typescript
+````typescript
 /**
  * Session service handles all session-related operations.
- * 
+ *
  * @example
  * ```typescript
  * const session = await sessionService.create({ name: 'my-bot' });
@@ -594,7 +494,7 @@ describe('Session (e2e)', () => {
 export class SessionService {
   /**
    * Creates a new WhatsApp session.
-   * 
+   *
    * @param dto - Session creation parameters
    * @returns The created session with QR code if applicable
    * @throws {ConflictException} If session name already exists
@@ -604,7 +504,7 @@ export class SessionService {
     // Implementation
   }
 }
-```
+````
 
 ### API Documentation (Swagger)
 
@@ -635,74 +535,37 @@ export class SessionController {
 
 ## 8.7 Error Handling
 
-### Custom Exception Classes
+There is **no custom exception base class and no global exception filter**. Handlers throw NestJS's
+built-in HTTP exceptions and NestJS's own `BaseExceptionFilter` renders them, so responses carry the
+framework default shape `{ statusCode, message, error }`.
 
 ```typescript
-// common/exceptions/business.exception.ts
-export class BusinessException extends HttpException {
-  constructor(
-    public readonly code: string,
-    message: string,
-    statusCode: HttpStatus = HttpStatus.BAD_REQUEST,
-    public readonly details?: Record<string, any>,
-  ) {
-    super({ code, message, details }, statusCode);
-  }
-}
-
-// Usage
-throw new BusinessException(
-  'SESSION_NOT_READY',
-  'Session is not ready to send messages',
-  HttpStatus.BAD_REQUEST,
-  { sessionId, currentStatus: session.status }
-);
+throw new BadRequestException('Session is not started');
+throw new NotFoundException(`Contact ${contactId} not found`);
 ```
 
-### Global Exception Filter
+### Domain errors extend a built-in exception
 
-```typescript
-// common/filters/http-exception.filter.ts
-@Catch()
-export class AllExceptionsFilter implements ExceptionFilter {
-  private readonly logger = new Logger(AllExceptionsFilter.name);
+Where a failure mode recurs across engines, `src/common/errors/` defines a named error that extends
+the NestJS exception carrying the right status, so throwing it from an adapter maps to the intended
+HTTP code with no filter involved:
 
-  catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
+| Error                                                                                        | Extends                        | Status |
+| -------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
+| `EngineNotSupportedError`                                                                    | `NotImplementedException`      | 501    |
+| `ChannelMediaNotSupportedError`                                                              | `NotImplementedException`      | 501    |
+| `EngineNotReadyError`                                                                        | `ConflictException`            | 409    |
+| `EngineRefusedError`                                                                         | `ForbiddenException`           | 403    |
+| `EngineTransportError`                                                                       | `ServiceUnavailableException`  | 503    |
+| `ChatLabelsUnsupportedError`                                                                 | `UnprocessableEntityException` | 422    |
+| `CallNotFoundError` / `ChannelNotFoundError` / `GroupNotFoundError` / `MessageNotFoundError` | `NotFoundException`            | 404    |
 
-    const status = exception instanceof HttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+Add a new one only when the condition is engine-agnostic and recurs; a one-off stays an inline
+`throw new BadRequestException(...)`.
 
-    const errorResponse = this.formatError(exception, request);
-
-    this.logger.error(
-      `${request.method} ${request.url} - ${status}`,
-      exception instanceof Error ? exception.stack : undefined,
-    );
-
-    response.status(status).json(errorResponse);
-  }
-
-  private formatError(exception: unknown, request: Request) {
-    return {
-      success: false,
-      error: {
-        code: this.getErrorCode(exception),
-        message: this.getErrorMessage(exception),
-        details: this.getErrorDetails(exception),
-      },
-      meta: {
-        timestamp: new Date().toISOString(),
-        requestId: request.headers['x-request-id'],
-        path: request.url,
-      },
-    };
-  }
-}
-```
+> Do not introduce a response envelope. A `ResponseInterceptor`/`HttpExceptionFilter` pair that
+> wrapped every payload in `{ success, data, meta }` was written once, never registered, and has
+> since been deleted — `dashboard/src/services/api.ts` reads the raw payload.
 
 ---
 
@@ -712,7 +575,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
 ```bash
 # Required
-- Node.js 20 LTS
+- Node.js 22 LTS
 - npm 10+
 - Docker & Docker Compose
 - Git
@@ -723,27 +586,47 @@ export class AllExceptionsFilter implements ExceptionFilter {
 - pgAdmin or DBeaver
 ```
 
+> Dependency installation patches whatsapp-web.js for the WhatsApp Web 2.3000.x message-id rename.
+> It applies the patch with GNU `patch`, falling back to `git apply` — so Git alone is enough,
+> including on Windows outside Git Bash. With neither available the install still succeeds, but the
+> whatsapp-web.js engine then fails on every send; see `docs/12-troubleshooting-faq.md`.
+>
+> The committed lockfile resolves dependencies from the npm registry and works with npm 12's default
+> Git-dependency block. Do not work around `EALLOWGIT` by changing npm or Git configuration globally;
+> update to a current lockfile instead.
+
 ### Quick Start
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/rmyndharis/OpenWA.git
-cd openwa
+cd OpenWA
 
-# 2. Install dependencies
-npm install
+# 2. Install the locked dependencies (also installs dashboard dependencies)
+npm ci
 
-# 3. Copy environment file
-cp .env.example .env
+# 3. Start API + dashboard in development mode
+npm run dev
+```
 
-# 4. Start infrastructure services
-docker compose up -d postgres redis
+Use `npm install` only when intentionally changing dependencies and updating the lockfile.
 
-# 5. Run database migrations
-npm run migration:run
+On first boot the API creates `data/.env.generated` with a minimal SQLite/local-storage
+configuration. A project-level `.env` is optional; real process environment variables take precedence
+over `.env`, which takes precedence over `data/.env.generated`.
 
-# 6. Start development server
-npm run start:dev
+For a production-image local smoke test:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+For production compose:
+
+```bash
+docker compose up -d
+docker compose --profile postgres up -d
+docker compose --profile full up -d
 ```
 
 ### VS Code Extensions
@@ -755,7 +638,6 @@ npm run start:dev
     "dbaeumer.vscode-eslint",
     "esbenp.prettier-vscode",
     "ms-azuretools.vscode-docker",
-    "prisma.prisma",
     "humao.rest-client",
     "bradlc.vscode-tailwindcss",
     "orta.vscode-jest"
@@ -788,8 +670,6 @@ OpenWA supports multiple infrastructure configurations. Choose based on your nee
 #### Minimal Profile (Development / Single Session)
 
 ```bash
-# .env.example (Minimal Profile)
-
 # Application
 NODE_ENV=development
 PORT=2785
@@ -797,36 +677,34 @@ LOG_LEVEL=debug
 
 # Database: SQLite (zero config)
 DATABASE_TYPE=sqlite
-DATABASE_SQLITE_PATH=./data/openwa.db
+DATABASE_NAME=./data/openwa.sqlite
+DATABASE_SYNCHRONIZE=true
 
 # Storage: Local filesystem
 STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./media
+STORAGE_LOCAL_PATH=./data/media
 
-# Cache: In-memory (no Redis needed)
-CACHE_TYPE=memory
+# Redis and queue disabled by default
+REDIS_ENABLED=false
+QUEUE_ENABLED=false
 
-# Security
-ENCRYPTION_KEY=dev-encryption-key-change-in-production
-API_KEY_MASTER=dev-master-key-change-in-production
+# Optional: seed a known admin key. If omitted, OpenWA generates a random key and writes data/.api-key.
+API_MASTER_KEY=
 
 # Session
-SESSION_DATA_PATH=./.wwebjs_auth
-MAX_SESSIONS=3
+SESSION_DATA_PATH=./data/sessions
 
-# Engine
+# Engine: whatsapp-web.js = Chromium-based; baileys = browser-free WebSocket
 ENGINE_TYPE=whatsapp-web.js
 PUPPETEER_HEADLESS=true
 
-# Development
-SWAGGER_ENABLED=true
+# Swagger is enabled by default. Set false to disable.
+ENABLE_SWAGGER=true
 ```
 
 #### Standard Profile (Production / Multi-Session)
 
 ```bash
-# .env.example (Standard Profile)
-
 # Application
 NODE_ENV=production
 PORT=2785
@@ -834,34 +712,41 @@ LOG_LEVEL=info
 
 # Database: PostgreSQL
 DATABASE_TYPE=postgres
-DATABASE_URL=postgresql://openwa:openwa@localhost:5432/openwa
+DATABASE_HOST=postgres
+DATABASE_PORT=5432
+DATABASE_USERNAME=openwa
+DATABASE_PASSWORD=<set-a-strong-password>
+DATABASE_NAME=openwa
+DATABASE_SYNCHRONIZE=false
+DATABASE_POOL_SIZE=10
 
 # Storage: Local filesystem
 STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./media
+STORAGE_LOCAL_PATH=/app/data/media
 
 # Cache: Redis
-CACHE_TYPE=redis
-REDIS_URL=redis://localhost:6379
+REDIS_ENABLED=true
+REDIS_HOST=redis
+REDIS_PORT=6379
+QUEUE_ENABLED=true
 
-# Security (generate with: openssl rand -base64 32)
-ENCRYPTION_KEY=your-32-byte-encryption-key-here
-API_KEY_MASTER=your-secure-master-key
+# Security
+API_MASTER_KEY=<set-a-strong-initial-admin-key>
+API_KEY_PEPPER=<optional-hash-pepper>
+CORS_ORIGINS=https://dashboard.example.com
 
 # Session
-SESSION_DATA_PATH=./.wwebjs_auth
-MAX_SESSIONS=10
+SESSION_DATA_PATH=/app/data/sessions
 
 # Engine
 ENGINE_TYPE=whatsapp-web.js
 PUPPETEER_HEADLESS=true
-
-# Development
-SWAGGER_ENABLED=true
+PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu
+ENABLE_SWAGGER=false
 ```
 
 > [!TIP]
-> For development, use the **Minimal Profile** with SQLite. No need to set up PostgreSQL or Redis.
+> For development, use the minimal profile with SQLite. PostgreSQL, Redis, and S3/MinIO are optional.
 
 ## 8.9 Debugging Guide
 
@@ -897,14 +782,15 @@ SWAGGER_ENABLED=true
 ### Logging Best Practices
 
 ```typescript
-// Use Logger from NestJS
-import { Logger, Inject, Scope } from '@nestjs/common';
+// Use createLogger from the shared LoggerService, not console.*
+import { Inject, Scope } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import { Request } from 'express';
+import { createLogger } from '../common/services/logger.service';
 
 @Injectable({ scope: Scope.REQUEST })
 export class MyService {
-  private readonly logger = new Logger(MyService.name);
+  private readonly logger = createLogger('MyService');
 
   constructor(@Inject(REQUEST) private readonly request: Request) {}
 
@@ -912,7 +798,7 @@ export class MyService {
     // Log entry with context
     const requestId = this.request?.requestId;
     this.logger.log(`Processing item`, { id, requestId });
-    
+
     try {
       await this.process(id);
       this.logger.log(`Item processed successfully`, { id, requestId });
@@ -971,7 +857,7 @@ async function bootstrap() {
 const client = new Client({
   puppeteer: {
     headless: false, // See browser window
-    devtools: true,  // Open DevTools automatically
+    devtools: true, // Open DevTools automatically
   },
 });
 
@@ -993,17 +879,21 @@ npm test -- session.service.spec.ts
 # Run tests with verbose output
 npm test -- --verbose
 
-# Check for TypeScript errors
-npm run build -- --noEmit
+# Check for TypeScript errors without emitting (the Nest CLI has no --noEmit; call tsc directly).
+# Use the root tsconfig, not tsconfig.build.json — it is the only one that also type-checks the
+# colocated *.spec.ts files, which is what CI gates on.
+npx tsc --noEmit -p tsconfig.json
 
 # Lint with auto-fix
 npm run lint -- --fix
 
-# Debug database queries (TypeORM)
-# Add to .env: DEBUG=typeorm:query
+# Debug database queries (TypeORM) — add to .env:
+# DATABASE_LOGGING=true
+# (there is no DEBUG=typeorm:query switch; both connections read DATABASE_LOGGING)
 
-# View Docker logs
-docker compose logs -f app
+# View Docker logs (service is `openwa-api` in docker-compose.yml, `openwa` in
+# docker-compose.dev.yml — there is no service named `app`)
+docker compose logs -f openwa-api
 ```
 
 ## 8.10 Performance Best Practices
@@ -1035,35 +925,17 @@ const sessions = await sessionRepo
 ### Caching Strategy
 
 ```typescript
-// Cache frequently accessed data
+// CacheService exposes typed helpers; prefer those over ad hoc string keys in feature code.
 @Injectable()
-export class SessionService {
-  constructor(
-    private readonly cache: CacheService,
-    private readonly repo: SessionRepository,
-  ) {}
+export class SessionStatsService {
+  constructor(private readonly cache: CacheService) {}
 
-  async getSession(id: string): Promise<Session> {
-    // Check cache first
-    const cached = await this.cache.get<Session>(`session:${id}`);
-    if (cached) return cached;
-    
-    // Fetch from database
-    const session = await this.repo.findOne({ where: { id } });
-    
-    // Cache for 5 minutes
-    await this.cache.set(`session:${id}`, session, 300);
-    
-    return session;
+  async getCachedStats(): Promise<SessionStats | null> {
+    return this.cache.getSessionsStats();
   }
-  
-  async updateSession(id: string, data: Partial<Session>): Promise<Session> {
-    const session = await this.repo.update(id, data);
-    
-    // Invalidate cache
-    await this.cache.del(`session:${id}`);
-    
-    return session;
+
+  async updateCachedStats(stats: SessionStats): Promise<void> {
+    await this.cache.setSessionsStats(stats);
   }
 }
 ```
@@ -1077,43 +949,32 @@ const contact2 = await getContact('id2');
 const contact3 = await getContact('id3');
 
 // ✅ Good: Parallel execution
-const [contact1, contact2, contact3] = await Promise.all([
-  getContact('id1'),
-  getContact('id2'),
-  getContact('id3'),
-]);
+const [contact1, contact2, contact3] = await Promise.all([getContact('id1'), getContact('id2'), getContact('id3')]);
 
 // ✅ Good: Batch processing with concurrency limit
 import pLimit from 'p-limit';
 
 const limit = pLimit(5); // Max 5 concurrent
-const results = await Promise.all(
-  chatIds.map(id => limit(() => sendMessage(id, text)))
-);
+const results = await Promise.all(chatIds.map(id => limit(() => sendMessage(id, text))));
 ```
 
 ### Memory Management
 
 ```typescript
-// Session cleanup to prevent memory leaks
+// Bound teardown so one stuck browser/socket cannot block shutdown.
 @Injectable()
-export class SessionCleanupService {
-  private readonly logger = new Logger(SessionCleanupService.name);
-  
-  @Cron('0 */5 * * * *') // Every 5 minutes
-  async cleanupInactiveSessions(): Promise<void> {
-    const inactiveThreshold = new Date(Date.now() - 30 * 60 * 1000); // 30 min
-    
-    const inactiveSessions = await this.sessionRepo.find({
-      where: {
-        status: 'disconnected',
-        updatedAt: LessThan(inactiveThreshold),
-      },
+export class EngineTeardownService {
+  private readonly logger = createLogger('EngineTeardownService');
+
+  async destroyWithTimeout(sessionId: string, engine: IWhatsAppEngine): Promise<void> {
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('engine.destroy() timed out')), 10_000);
     });
-    
-    for (const session of inactiveSessions) {
-      await this.engineService.destroy(session.id);
-      this.logger.log(`Cleaned up inactive session: ${session.id}`);
+
+    try {
+      await Promise.race([engine.destroy(), timeout]);
+    } catch (error) {
+      this.logger.warn(`Engine teardown failed for ${sessionId}: ${String(error)}`);
     }
   }
 }
@@ -1129,12 +990,14 @@ export class SessionCleanupService {
 **Symptom:** Session stuck in 'initializing' status
 
 **Causes & Solutions:**
+
 1. **Chrome/Puppeteer issue**
-   - Ensure Chromium is installed: `which chromium`
+   - Ensure Chrome for Testing is installed: `ls /usr/local/bin/puppeteer-chrome`
    - Check Puppeteer args: `--no-sandbox --disable-setuid-sandbox`
 
 2. **Previous session data corrupted**
-   - Clear session folder: `rm -rf .wwebjs_auth/session-{id}`
+   - Clear the stored auth/session data for the session under `data/sessions`
+   - For Baileys, also check `BAILEYS_AUTH_DIR` (default `./data/baileys`)
 
 3. **WhatsApp rate limit**
    - Wait 5-10 minutes before retrying
@@ -1142,6 +1005,7 @@ export class SessionCleanupService {
 ## Session Disconnects Randomly
 
 **Causes & Solutions:**
+
 1. **Memory pressure**
    - Monitor memory: `docker stats`
    - Increase container memory limit
@@ -1157,12 +1021,13 @@ export class SessionCleanupService {
 
 ### Database Issues
 
-```markdown
+````markdown
 ## Connection Pool Exhausted
 
 **Symptom:** "too many clients already" error
 
 **Solution:**
+
 ```typescript
 // config/typeorm.config.ts
 {
@@ -1175,12 +1040,14 @@ export class SessionCleanupService {
   },
 }
 ```
+````
 
 ## Migration Fails
 
 **Symptom:** "relation already exists" error
 
 **Solution:**
+
 ```bash
 # Check migration status
 npm run migration:show
@@ -1189,9 +1056,10 @@ npm run migration:show
 npm run migration:revert
 
 # Regenerate migration
-npm run migration:generate -- -n FixMigration
+npm run migration:generate --name=FixMigration
 ```
-```
+
+````
 
 ### TypeScript/NestJS Issues
 
@@ -1215,17 +1083,19 @@ constructor(
   @Inject(forwardRef(() => SessionService))
   private readonly sessionService: SessionService,
 ) {}
-```
+````
 
 ## DI Token Not Found
 
 **Symptom:** "Nest can't resolve dependencies"
 
 **Solution:**
+
 - Ensure provider is exported from its module
 - Check if module is imported where needed
 - Use @Injectable() decorator on services
-```
+
+````
 
 ### Docker Issues
 
@@ -1234,10 +1104,11 @@ constructor(
 
 **Check logs:**
 ```bash
-docker compose logs app --tail 100
-```
+docker compose logs openwa-api --tail 100
+````
 
 **Common causes:**
+
 1. Missing environment variables
 2. Database not ready (use depends_on + healthcheck)
 3. Port already in use
@@ -1245,18 +1116,21 @@ docker compose logs app --tail 100
 ## Chrome Crashes in Docker
 
 **Solution:**
+
 ```dockerfile
 # Add shared memory size
 docker run --shm-size=2gb openwa
 ```
 
 Or in docker-compose.yml:
+
 ```yaml
 services:
-  app:
+  openwa-api:
     shm_size: '2gb'
 ```
-```
+
+````
 
 ## 8.12 Contributing Guide
 
@@ -1272,7 +1146,7 @@ services:
 7. Commit: `git commit -m 'feat(scope): add amazing feature'`
 8. Push: `git push origin feature/amazing-feature`
 9. Open Pull Request
-```
+````
 
 ### Code Review Checklist
 
@@ -1291,6 +1165,7 @@ services:
 
 ```markdown
 **Bug Report Template:**
+
 - **Description:** Clear description of the bug
 - **Steps to Reproduce:** Numbered steps
 - **Expected Behavior:** What should happen
@@ -1298,6 +1173,7 @@ services:
 - **Environment:** Node version, OS, Docker version
 - **Logs:** Relevant error logs
 ```
+
 ---
 
 <div align="center">

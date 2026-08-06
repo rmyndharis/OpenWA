@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { HookEvent, HookHandler, HookContext, HookRegistration } from './hook.interfaces';
 
 @Injectable()
@@ -6,6 +7,11 @@ export class HookManager {
   private readonly logger = new Logger(HookManager.name);
   private readonly hooks = new Map<HookEvent, HookRegistration[]>();
   private readonly pluginHooks = new Map<string, Set<string>>(); // pluginId -> hookIds
+  // Events in-flight on the active async context. A handler that re-fires the SAME event
+  // (e.g. a message:sending handler that sends) is short-circuited instead of recursing.
+  // NOTE: the context does not span the async engine `message_create` echo, so this guards
+  // synchronous re-entry only (the async message:sent echo loop is documented, deferred).
+  private readonly inFlightEvents = new AsyncLocalStorage<Set<HookEvent>>();
 
   /**
    * Register a hook handler
@@ -86,6 +92,45 @@ export class HookManager {
     data: T,
     options: { sessionId?: string; source: string },
   ): Promise<{ continue: boolean; data: T }> {
+    const inFlight = this.inFlightEvents.getStore();
+    if (inFlight?.has(event)) {
+      this.logger.warn(
+        `Hook re-entrancy blocked: ${event} re-fired by a handler of the same event (source: ${options.source})`,
+      );
+      return { continue: true, data };
+    }
+
+    const nextInFlight = new Set<HookEvent>(inFlight);
+    nextInFlight.add(event);
+    return this.inFlightEvents.run(nextInFlight, () => this.runHandlers(event, data, options));
+  }
+
+  /**
+   * Run `fn` with `events` marked in-flight on the active async context (merged with anything already
+   * in flight). The re-entrancy guard in {@link execute} relies on AsyncLocalStorage, which does not
+   * span the sandbox worker IPC boundary: a worker handling a hook can issue a capability call that
+   * returns to the host on a fresh async context, where `getStore()` is empty. Wrapping that
+   * round-trip in this method re-establishes the in-flight set so a capability that re-fires the same
+   * in-flight event is short-circuited exactly as an in-process handler would be.
+   */
+  runInFlight<T>(events: Iterable<HookEvent>, fn: () => T): T {
+    const merged = new Set<HookEvent>(this.inFlightEvents.getStore());
+    for (const event of events) merged.add(event);
+    return this.inFlightEvents.run(merged, fn);
+  }
+
+  /** True if `event` is already in-flight on the active async context (an ancestor handler is running
+   *  it). Lets a caller wrap a capability in {@link runInFlight} ONLY for genuine re-entrancy, instead
+   *  of unconditionally seeding the event and suppressing it for unrelated observers on a top-level call. */
+  isInFlight(event: HookEvent): boolean {
+    return this.inFlightEvents.getStore()?.has(event) ?? false;
+  }
+
+  private async runHandlers<T>(
+    event: HookEvent,
+    data: T,
+    options: { sessionId?: string; source: string },
+  ): Promise<{ continue: boolean; data: T }> {
     const registrations = this.hooks.get(event) || [];
 
     if (registrations.length === 0) {
@@ -106,23 +151,24 @@ export class HookManager {
         ctx.data = currentData;
         const result = await registration.handler(ctx);
 
-        // Update data if modified
-        if (result.data !== undefined) {
+        // A handler that reports an error discards its output: do NOT apply its (possibly partial or
+        // corrupted) data mutation, even though HookResult allows returning data and error together.
+        if (result.error === undefined && result.data !== undefined) {
           currentData = result.data as T;
         }
 
-        // Stop chain if continue is false
         if (!result.continue) {
           this.logger.debug(`Hook chain stopped by ${registration.pluginId} at event ${event}`);
           return { continue: false, data: currentData };
         }
 
-        // Propagate error
         if (result.error) {
           throw result.error;
         }
       } catch (error) {
-        this.logger.error(`Hook error in ${registration.pluginId} for ${event}: ${error}`);
+        this.logger.error(
+          `Hook error in ${registration.pluginId} for ${event}: ${error instanceof Error ? error.message : String(error)}`,
+        );
         // Continue to next handler, don't break the chain on error
       }
     }
@@ -158,7 +204,7 @@ export class HookManager {
       }));
     }
 
-    return result as Record<HookEvent, { pluginId: string; priority: number }[]>;
+    return result;
   }
 
   /**

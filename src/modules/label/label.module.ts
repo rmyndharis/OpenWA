@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { LabelController } from './label.controller';
-import { SessionModule } from '../session/session.module';
+import { LabelService } from './label.service';
 
 @Module({
-  imports: [SessionModule],
   controllers: [LabelController],
+  providers: [LabelService],
+  exports: [LabelService],
 })
 export class LabelModule {}

@@ -1,29 +1,38 @@
 # 10 - DevOps & Infrastructure
 
+> **⚠️ Conceptual reference.** Some examples here predate the shipped runtime and may not
+> match it exactly. The **authoritative** sources are the repo's `Dockerfile`, `docker-compose.yml`
+> (Docker socket-proxy threat model, gosu non-root drop, loopback-bound datastores, container
+> hardening), and `.env.example` (canonical env var names). Where this doc and those disagree,
+> the files win. In particular: the API master key env is `API_MASTER_KEY`, datastores have no
+> default credentials, and production migrations use `npm run migration:run:prod`.
+
 ## 10.1 Infrastructure Overview
+
+OpenWA is a **single-process** application, so a deployment is exactly one app instance per
+session-data volume (`replicas: 1` — see §10.2). The repo has no staging/production environments and
+no auto-deploy: CI builds and publishes images, and pulling one onto a server is the operator's step.
 
 ```mermaid
 flowchart TB
     subgraph Development["Development"]
         DEV[Local Docker Compose]
     end
-    
-    subgraph Staging["Staging"]
-        STG[Single Server]
+
+    subgraph Registry["Container Registry"]
+        GHCR["GHCR branch / SHA / release tags"]
     end
-    
-    subgraph Production["Production"]
-        LB[Load Balancer]
-        LB --> APP1[App Instance 1]
-        LB --> APP2[App Instance 2]
-        APP1 --> DB[(PostgreSQL)]
-        APP2 --> DB
-        APP1 --> REDIS[(Redis)]
-        APP2 --> REDIS
+
+    subgraph Deployment["Deployment (single server)"]
+        PROXY[Reverse Proxy]
+        PROXY --> APP[OpenWA - one instance]
+        APP --> DB[(PostgreSQL or SQLite)]
+        APP --> REDIS[(Redis - optional)]
+        APP --> VOL["Data volume (/app/data)"]
     end
-    
-    DEV --> |deploy| STG
-    STG --> |promote| Production
+
+    DEV --> |CI builds and pushes| GHCR
+    GHCR --> |operator pulls| Deployment
 ```
 
 ## 10.2 Docker Configuration
@@ -34,7 +43,7 @@ flowchart TB
 # Dockerfile (multi-stage build)
 
 # Build stage
-FROM node:20-slim AS build
+FROM node:22-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -42,11 +51,10 @@ COPY . .
 RUN npm run build
 
 # Runtime stage
-FROM node:20-slim
+FROM node:22-slim
 
-# Install Chrome dependencies
+# Install Chrome dependencies (avoid Debian's chromium package due to SIGTRAP in non-root)
 RUN apt-get update && apt-get install -y \
-    chromium \
     curl \
     fonts-ipafont-gothic \
     fonts-wqy-zenhei \
@@ -54,12 +62,24 @@ RUN apt-get update && apt-get install -y \
     fonts-kacst \
     fonts-freefont-ttf \
     libxss1 \
+    libnss3 \
+    libnspr4 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Chrome path for Puppeteer
+# Set Puppeteer skip download (we install it dynamically later)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Create app directory
 WORKDIR /app
@@ -68,20 +88,32 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
 
+# NOTE: Chrome for Testing has no linux-arm64 build, so this example targets linux/amd64.
+# For arm64, install Debian's `chromium` package and point PUPPETEER_EXECUTABLE_PATH to
+# /usr/bin/chromium — see the repo's Dockerfile for the mixed multi-arch build.
+# Download Chrome for Testing via Puppeteer and point ENV to it
+RUN mkdir -p /opt/puppeteer && \
+    PUPPETEER_CACHE_DIR=/opt/puppeteer ./node_modules/.bin/puppeteer browsers install 'chrome@146.0.7680.31' && \
+    chrome_path=$(find /opt/puppeteer/chrome/linux*/chrome-linux64/chrome | head -n 1) && \
+    test -n "$chrome_path" && \
+    ln -s "$chrome_path" /usr/local/bin/puppeteer-chrome
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/puppeteer-chrome
+
 # Copy build output
 COPY --from=build /app/dist ./dist
 
 # Create non-root user
 RUN groupadd -r openwa && useradd -r -g openwa openwa
-RUN chown -R openwa:openwa /app
+RUN chown -R openwa:openwa /app /opt/puppeteer
 USER openwa
+
 
 # Expose port
 EXPOSE 2785
 
-# Health check
+# Health check (global API prefix is 'api'; readiness probes both databases)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s \
-    CMD curl -f http://localhost:2785/health || exit 1
+    CMD curl -f http://localhost:2785/api/health/ready || exit 1
 
 # Start app
 CMD ["node", "dist/main.js"]
@@ -89,27 +121,47 @@ CMD ["node", "dist/main.js"]
 
 ### Docker Compose (Development)
 
+The repo's own `docker-compose.dev.yml` is a single-container local smoke test that runs the
+**production** image against a bind-mounted `./data` — it has no source mount and no `start:dev`.
+The multi-service file below is a hypothetical hot-reload variant you would write yourself under a
+different name (writing it to `docker-compose.dev.yml` would overwrite the shipped file); the
+`builder` target is the first stage of the repo `Dockerfile`.
+
 ```yaml
-# docker-compose.yml
+# docker-compose.hotreload.yml (write this yourself; not shipped in the repo)
 version: '3.8'
 
 services:
   app:
     build:
       context: .
-      target: build
+      target: builder
     command: npm run start:dev
     ports:
-      - "2785:2785"
+      - '2785:2785'
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://openwa:openwa@postgres:5432/openwa
-      - REDIS_URL=redis://redis:6379
-      - API_KEY_MASTER=dev-master-key
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=openwa
+      - DATABASE_USERNAME=openwa
+      - DATABASE_PASSWORD=openwa
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # The env var is API_MASTER_KEY (not API_KEY_MASTER); never hardcode a key — set a
+      # strong secret. Production refuses to boot with a placeholder/default.
+      - API_MASTER_KEY=
+      # Pins the plugin directory onto the data volume. This is also the default, so the setting is
+      # belt-and-braces — it keeps working if the volume is mounted somewhere else.
+      - PLUGINS_DIR=/app/data/plugins
     volumes:
       - ./:/app
       - /app/node_modules
-      - session-data:/app/.wwebjs_auth
+      # Everything the app writes locally (session auth, the main (auth/audit) SQLite DB, media,
+      # plugins) lives under /app/data; with DATABASE_TYPE=postgres above, the data DB does not
+      - openwa-data:/app/data
     depends_on:
       - postgres
       - redis
@@ -124,35 +176,36 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - '5432:5432'
 
   redis:
     image: redis:7-alpine
     volumes:
       - redis-data:/data
     ports:
-      - "6379:6379"
+      - '6379:6379'
 
-  dashboard:
-    build:
-      context: ./dashboard
-    ports:
-      - "2886:2886"
-    environment:
-      - VITE_API_URL=http://localhost:2785
-    depends_on:
-      - app
+  # No separate dashboard service: the `app` image bundles the dashboard SPA and serves it
+  # from the same port (2785) via NestJS. Open http://localhost:2785 for the UI.
 
 volumes:
   postgres-data:
   redis-data:
-  session-data:
+  openwa-data:
 ```
 
 ### Docker Compose (Production)
 
+The repo ships `docker-compose.yml` (full stack, builds the image from source) and
+`docker-compose.dev.yml` (local smoke test). The file below is an image-based variant you would
+write yourself for a release deployment; it mirrors the shipped compose in the part that matters —
+the single `/app/data` volume that holds session auth, the main (auth/audit) SQLite DB, media and
+plugins. Note the example below sets `DATABASE_TYPE=postgres`, so the **data** database lives in
+PostgreSQL and needs its own backup; only with the SQLite default (what the shipped
+`docker-compose.yml` leaves in place) does the data DB sit in this volume too.
+
 ```yaml
-# docker-compose.prod.yml
+# docker-compose.release.yml (write this yourself; not shipped in the repo)
 version: '3.8'
 
 services:
@@ -169,13 +222,25 @@ services:
           memory: 1G
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DATABASE_TYPE=postgres
+      - DATABASE_HOST=${DATABASE_HOST}
+      - DATABASE_PORT=${DATABASE_PORT}
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_USERNAME=${DATABASE_USERNAME}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD}
+      - REDIS_ENABLED=true
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - API_MASTER_KEY=${API_MASTER_KEY}
+      # Pins the plugin directory onto the data volume. This is also the default, so the setting is
+      # belt-and-braces — it keeps working if the volume is mounted somewhere else.
+      - PLUGINS_DIR=/app/data/plugins
     volumes:
-      - session-data:/app/.wwebjs_auth
+      # Session auth, the main (auth/audit) SQLite DB, media and plugins all live here — losing
+      # this volume loses the linked WhatsApp sessions and the API keys.
+      - openwa-data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2785/health"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,8 +249,8 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - '80:80'
+      - '443:443'
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
@@ -194,151 +259,60 @@ services:
     restart: always
 
 volumes:
-  session-data:
+  openwa-data:
     driver: local
 ```
 
-> [!NOTE]
-> If running more than 1 replica, use shared storage for `SESSION_DATA_PATH` (NFS/S3/CSI) and enable sticky sessions. Local volumes are not suitable for multi-replica setups.
+> [!IMPORTANT]
+> **Keep `replicas: 1`.** OpenWA is a single-process application: live engine state lives in an
+> in-memory `Map` in `EngineRegistry` (`src/engine/engine-registry.service.ts`), written solely by
+> `SessionEngineLifecycle`. Multi-replica is
+> **not** a supported topology — running two replicas against a shared `SESSION_DATA_PATH` makes two
+> browsers write the same WhatsApp LocalAuth directory and **corrupts the session** (forced logout /
+> ban). Shared storage and sticky sessions do **not** make multi-replica safe. See
+> [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) for the `replicas: 1` stance and the
+> (unimplemented) session-claim design that would be required first.
+
+### Helm Chart (Kubernetes)
+
+The maintained way to deploy on Kubernetes is the Helm chart at `charts/openwa/`:
+
+```bash
+helm install openwa ./charts/openwa \
+  --set secretEnv.API_MASTER_KEY=$(openssl rand -base64 32)
+```
+
+It renders a single-replica StatefulSet (`replicaCount: 1` — the same constraint as
+the compose warning above) with a PVC for `/app/data`, the compose hardening mirrored
+(read-only rootfs, dropped capabilities, writable `emptyDir` at `/tmp`), and optional
+Ingress / PodDisruptionBudget / ServiceMonitor. Configuration goes through free-form
+`env` and `secretEnv` maps — any variable from `.env.example` works; see
+`charts/openwa/README.md` and the inline comments in `charts/openwa/values.yaml`.
+The k8s manifests in [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) are
+an illustrative design sketch; the chart is the authoritative artifact.
 
 ## 10.3 CI/CD Pipeline
 
 ### GitHub Actions Workflow
 
-```yaml
-# .github/workflows/ci.yml
-name: CI/CD Pipeline
+`.github/workflows/ci.yml` (`name: CI`) runs on pushes and pull requests targeting `main` /
+`develop`. It is **integration only** — no job deploys anywhere. The final job publishes branch and
+SHA image tags to GHCR; `latest` is deliberately not set there and moves only through the separate,
+boot-smoke-gated release workflow.
 
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+| Job             | Needs                                       | What it runs                                                                                                                                                                                      |
+| --------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint`          | —                                           | ESLint, `tsc --noEmit -p tsconfig.json` (full program, so spec files are type-checked too), `format:check`, `check:versions`, `check:dockerignore`, `openapi:check`                               |
+| `audit`         | —                                           | `npm audit --audit-level=high`, split out of `lint` so a newly published advisory can't abort the code-quality gates                                                                              |
+| `test`          | —                                           | `npm test -- --coverage`, `test:scripts`, `test:e2e` (a `redis:7-alpine` service backs the queue-on e2e suite), coverage upload                                                                   |
+| `test-postgres` | —                                           | `npm run build`, then `test:pg-smoke` (migrations + uuid-default) and the Postgres FTS migration spec against a `postgres:16-alpine` service                                                      |
+| `dashboard`     | —                                           | In `dashboard/`: `lint`, `typecheck`, `i18n:check`, `build`, `test:unit`                                                                                                                          |
+| `scripts-smoke` | —                                           | `shellcheck` plus the backup/restore smoke test for `scripts/backup.sh` and `scripts/restore.sh`                                                                                                  |
+| `build`         | lint, audit, test, dashboard, scripts-smoke | `npm run build`, uploads the `dist` artifact                                                                                                                                                      |
+| `docker`        | build, test-postgres                        | Buildx multi-arch build (`linux/amd64,linux/arm64`) with provenance + SBOM attestations; pushes to `ghcr.io/<owner>/<repo>` on push events (fork PRs build both architectures without publishing) |
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Run linter
-        run: npm run lint
-      
-      - name: Run tests
-        run: npm run test:cov
-        env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/lcov.info
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-      
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy-staging:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
-    steps:
-      - name: Deploy to Staging
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          script: |
-            cd /opt/openwa
-            docker compose pull
-            docker compose up -d
-            docker system prune -f
-
-  deploy-production:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    
-    steps:
-      - name: Deploy to Production
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          script: |
-            cd /opt/openwa
-            docker compose -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.prod.yml up -d --no-deps app
-            docker system prune -f
-```
+Rollout is left to the operator — the repo has no SSH deploy step, no staging/production
+environments and no auto-deploy on merge.
 
 ## 10.4 Deployment Architecture
 
@@ -353,35 +327,40 @@ flowchart TB
         APP --> RD[(Redis)]
         APP --> FS[File Storage]
     end
-    
+
     Internet --> NGINX
 ```
 
 ### Multi-Server Deployment
+
+> **Design sketch, not a supported topology.** OpenWA is single-process with in-memory engine state,
+> so the multi-`OpenWA` fan-out below would corrupt WhatsApp auth across replicas. It is retained only
+> as the target architecture once the session-claim design in
+> [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md) is implemented. Deploy with `replicas: 1`.
 
 ```mermaid
 flowchart TB
     subgraph External["External"]
         CDN[CDN / CloudFlare]
     end
-    
+
     subgraph LoadBalancer["Load Balancer"]
         LB[HAProxy / Nginx]
     end
-    
+
     subgraph AppServers["Application Servers"]
         APP1[OpenWA 1]
         APP2[OpenWA 2]
         APP3[OpenWA N]
     end
-    
+
     subgraph DataLayer["Data Layer"]
         PG[(PostgreSQL Primary)]
         PGR[(PostgreSQL Replica)]
         RD[(Redis Cluster)]
         S3[(S3 Storage)]
     end
-    
+
     CDN --> LB
     LB --> APP1 & APP2 & APP3
     APP1 & APP2 & APP3 --> PG
@@ -395,14 +374,15 @@ flowchart TB
 ### Environment Variables
 
 ```bash
-# .env.example
+# .env — excerpt of the commonly-tuned keys. The repo's `.env.example` is the canonical,
+# fully annotated list; add nothing here that does not appear there.
 
 # ===========================================
 # APPLICATION
 # ===========================================
 NODE_ENV=production
 PORT=2785
-API_PREFIX=/api
+# The global `/api` prefix is fixed in code — there is no env var for it.
 LOG_LEVEL=info
 LOG_FORMAT=json
 
@@ -410,60 +390,65 @@ LOG_FORMAT=json
 # DATABASE (choose one)
 # ===========================================
 # Option 1: SQLite (for minimal deployments)
+# For SQLite, DATABASE_NAME is the database FILE PATH.
 DATABASE_TYPE=sqlite
-DATABASE_SQLITE_PATH=./data/openwa.db
+DATABASE_NAME=./data/openwa.sqlite
 
-# Option 2: PostgreSQL (for production)
+# Option 2: PostgreSQL (for production) — DATABASE_NAME is the database NAME here
 # DATABASE_TYPE=postgres
-# DATABASE_URL=postgresql://user:pass@localhost:5432/openwa
-# DATABASE_POOL_MAX=20
+# DATABASE_HOST=localhost
+# DATABASE_PORT=5432
+# DATABASE_NAME=openwa
+# DATABASE_USERNAME=user
+# DATABASE_PASSWORD=pass
+# DATABASE_POOL_SIZE=20
 # DATABASE_SSL=false
 
 # ===========================================
 # MEDIA STORAGE (choose one)
 # ===========================================
+# STORAGE_TYPE accepts only `local` or `s3` — env validation rejects anything else and the app
+# FAILS TO BOOT ("Invalid environment configuration"). There is no silent fallback to local disk.
 # Option 1: Local filesystem (default)
 STORAGE_TYPE=local
-STORAGE_LOCAL_PATH=./media
-STORAGE_LOCAL_BASE_URL=/media
+STORAGE_LOCAL_PATH=./data/media
 
-# Option 2: S3
+# Option 2: S3 (AWS) — leave S3_ENDPOINT unset; the SDK derives it from the region
 # STORAGE_TYPE=s3
-# STORAGE_S3_BUCKET=openwa-media
-# STORAGE_S3_REGION=ap-southeast-1
-# STORAGE_S3_ACCESS_KEY_ID=your-access-key
-# STORAGE_S3_SECRET_ACCESS_KEY=your-secret-key
+# S3_BUCKET=openwa
+# S3_REGION=ap-southeast-1
+# S3_ACCESS_KEY_ID=your-access-key
+# S3_SECRET_ACCESS_KEY=your-secret-key
 
-# Option 3: MinIO (S3-compatible)
-# STORAGE_TYPE=minio
-# STORAGE_S3_BUCKET=openwa-media
-# STORAGE_S3_ENDPOINT=http://minio:9000
-# STORAGE_S3_ACCESS_KEY_ID=minioadmin
-# STORAGE_S3_SECRET_ACCESS_KEY=minioadmin
-# STORAGE_S3_FORCE_PATH_STYLE=true
+# Option 3: MinIO / other S3-compatible store — same STORAGE_TYPE=s3 plus an endpoint.
+# Setting S3_ENDPOINT is what enables path-style addressing; there is no separate flag.
+# STORAGE_TYPE=s3
+# S3_ENDPOINT=http://minio:9000
+# S3_BUCKET=openwa
+# S3_ACCESS_KEY_ID=minioadmin
+# S3_SECRET_ACCESS_KEY=minioadmin
 
 # ===========================================
-# CACHE & QUEUE (choose one)
+# CACHE & QUEUE
 # ===========================================
-# Option 1: In-Memory (for single instance)
-CACHE_TYPE=memory
-CACHE_TTL=300
-CACHE_MAX=1000
-
-# Option 2: Redis (for multi-instance / production)
-# CACHE_TYPE=redis
-# REDIS_URL=redis://localhost:6379
+# Both are opt-in and both need a reachable Redis, configured with the discrete host/port pair
+# (there is no REDIS_URL). Defaults: no cache at all (CacheService is a no-op and every read falls
+# through to the database — there is no in-memory tier) and inline (non-queued) dispatch.
+REDIS_ENABLED=false
+REDIS_HOST=localhost
+REDIS_PORT=6379
+# Redis-backed caching switches on when REDIS_ENABLED=true OR CACHE_ENABLED=true — enabling Redis
+# for the queue alone therefore also enables the cache.
+# CACHE_ENABLED=true
+# QUEUE_ENABLED=true   # process webhooks/ingress through the BullMQ queue
 
 # ===========================================
 # WHATSAPP ENGINE
 # ===========================================
-ENGINE_TYPE=whatsapp-web.js
-# ENGINE_TYPE=baileys
-# ENGINE_TYPE=mock
+# ENGINE_TYPE=baileys   # whatsapp-web.js (default) | baileys; omit to use the dashboard selection
 
 # Session
-SESSION_DATA_PATH=./.wwebjs_auth
-MAX_SESSIONS=10
+SESSION_DATA_PATH=./data/sessions
 
 # Puppeteer (for whatsapp-web.js)
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -474,56 +459,95 @@ PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox
 # SECURITY
 # ===========================================
 # Generate with: openssl rand -base64 32
-ENCRYPTION_KEY=your-32-byte-encryption-key-here
-API_KEY_MASTER=your-master-api-key
+API_MASTER_KEY=your-master-api-key
+# Optional HMAC pepper so a DB leak alone can't precompute key hashes
+API_KEY_PEPPER=optional-key-hashing-pepper
 
 # ===========================================
 # WEBHOOK
 # ===========================================
-WEBHOOK_TIMEOUT=30000
-WEBHOOK_RETRY_COUNT=3
+WEBHOOK_TIMEOUT=10000
 WEBHOOK_RETRY_DELAY=5000
+WEBHOOK_DISPATCH_CONCURRENCY=16
+WEBHOOK_DISPATCH_MAX_QUEUED=1000
+# Retry attempts are configured per webhook with the retryCount API field (default 3, range 0-5).
 
 # ===========================================
 # RATE LIMITING
 # ===========================================
-RATE_LIMIT_WINDOW=60000
-RATE_LIMIT_MAX=100
+# Three global per-IP windows (short/medium/long); defaults shown
+RATE_LIMIT_MEDIUM_TTL=60000
+RATE_LIMIT_MEDIUM_LIMIT=100
 ```
 
 ### Configuration Service
 
 ```typescript
-// config/configuration.ts
+// config/configuration.ts (shape abbreviated — see src/config/configuration.ts for the real file)
 export default () => ({
-  port: parseInt(process.env.PORT, 10) || 3000,
+  port: parseInt(process.env.PORT || '2785', 10),
+  // Main boot DB: always SQLite (auth/audit)
   database: {
-    url: process.env.DATABASE_URL,
+    type: 'sqlite',
+    database: process.env.MAIN_DATABASE_NAME || './data/main.sqlite',
+  },
+  // Data DB: pluggable backend
+  dataDatabase: {
+    type: process.env.DATABASE_TYPE || 'sqlite',
+    // SQLite file path when type is sqlite; PostgreSQL database name when type is postgres
+    database: process.env.DATABASE_NAME || './data/openwa.sqlite',
+    name: process.env.DATABASE_NAME || 'openwa',
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: parseInt(process.env.DATABASE_PORT || '5432', 10),
+    username: process.env.DATABASE_USERNAME,
+    password: process.env.DATABASE_PASSWORD,
   },
   redis: {
-    url: process.env.REDIS_URL,
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    username: process.env.REDIS_USERNAME,
+    password: process.env.REDIS_PASSWORD,
   },
+  // API_MASTER_KEY is NOT part of this factory — `security` holds only trustedProxies, and the
+  // master key is read straight from process.env by the auth service.
   security: {
-    encryptionKey: process.env.ENCRYPTION_KEY,
-    masterApiKey: process.env.API_KEY_MASTER,
+    trustedProxies: (process.env.TRUSTED_PROXIES || '')
+      .split(',')
+      .map(proxy => proxy.trim())
+      .filter(Boolean),
   },
-  session: {
-    dataPath: process.env.SESSION_DATA_PATH || './.wwebjs_auth',
-    maxSessions: parseInt(process.env.MAX_SESSIONS, 10) || 10,
+  // Session data path and Puppeteer both live under `engine` — there is no top-level
+  // `session` or `puppeteer` key.
+  engine: {
+    type: process.env.ENGINE_TYPE || 'whatsapp-web.js',
+    sessionDataPath: process.env.SESSION_DATA_PATH || './data/sessions',
+    puppeteer: {
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      headless: process.env.PUPPETEER_HEADLESS !== 'false',
+      // Split on commas AND whitespace; the default is a four-flag string, not an empty list
+      args: (
+        process.env.PUPPETEER_ARGS || '--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu'
+      )
+        .split(/[\s,]+/)
+        .filter(Boolean),
+    },
   },
   webhook: {
-    timeout: parseInt(process.env.WEBHOOK_TIMEOUT, 10) || 30000,
-    retryCount: parseInt(process.env.WEBHOOK_RETRY_COUNT, 10) || 3,
-    retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY, 10) || 5000,
+    timeout: parseInt(process.env.WEBHOOK_TIMEOUT || '10000', 10),
+    retryDelay: parseInt(process.env.WEBHOOK_RETRY_DELAY || '5000', 10),
+    dispatchConcurrency: parseInt(process.env.WEBHOOK_DISPATCH_CONCURRENCY || '16', 10),
+    dispatchMaxQueued: parseInt(process.env.WEBHOOK_DISPATCH_MAX_QUEUED || '1000', 10),
   },
-  rateLimit: {
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW, 10) || 60000,
-    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
-  },
-  puppeteer: {
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-    headless: process.env.PUPPETEER_HEADLESS !== 'false',
-    args: process.env.PUPPETEER_ARGS?.split(',') || [],
+  // Rate limits are nested under `api` — read them as `api.rateLimit.*`
+  api: {
+    rateLimit: {
+      shortTtl: parseInt(process.env.RATE_LIMIT_SHORT_TTL || '1000', 10),
+      shortLimit: parseInt(process.env.RATE_LIMIT_SHORT_LIMIT || '10', 10),
+      mediumTtl: parseInt(process.env.RATE_LIMIT_MEDIUM_TTL || '60000', 10),
+      mediumLimit: parseInt(process.env.RATE_LIMIT_MEDIUM_LIMIT || '100', 10),
+      longTtl: parseInt(process.env.RATE_LIMIT_LONG_TTL || '3600000', 10),
+      longLimit: parseInt(process.env.RATE_LIMIT_LONG_LIMIT || '1000', 10),
+    },
   },
 });
 ```
@@ -539,23 +563,23 @@ flowchart LR
         LOGS[Structured Logs]
         TRACES[Traces]
     end
-    
+
     subgraph Collection["Collection"]
         PROM[Prometheus]
         LOKI[Loki]
         TEMPO[Tempo]
     end
-    
+
     subgraph Visualization["Visualization"]
         GRAF[Grafana]
     end
-    
+
     subgraph Alerting["Alerting"]
         AM[AlertManager]
         SLACK[Slack]
         EMAIL[Email]
     end
-    
+
     METRICS --> PROM --> GRAF
     LOGS --> LOKI --> GRAF
     TRACES --> TEMPO --> GRAF
@@ -575,12 +599,14 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml
+      # Holds the METRICS_TOKEN value; see the scrape config below
+      - ./monitoring/metrics_token:/etc/prometheus/metrics_token:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=30d'
     ports:
-      - "9090:9090"
+      - '9090:9090'
     restart: unless-stopped
 
   grafana:
@@ -593,7 +619,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
-      - "3001:3000"
+      - '3001:3000'
     depends_on:
       - prometheus
       - loki
@@ -606,7 +632,7 @@ services:
       - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     ports:
-      - "3100:3100"
+      - '3100:3100'
     restart: unless-stopped
 
   promtail:
@@ -625,7 +651,7 @@ services:
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
     ports:
-      - "9093:9093"
+      - '9093:9093'
     restart: unless-stopped
 
   node-exporter:
@@ -638,7 +664,7 @@ services:
       - '--path.procfs=/host/proc'
       - '--path.sysfs=/host/sys'
     ports:
-      - "9100:9100"
+      - '9100:9100'
     restart: unless-stopped
 
 volumes:
@@ -668,6 +694,12 @@ scrape_configs:
     static_configs:
       - targets: ['app:2785']
     metrics_path: '/api/metrics'
+    # /api/metrics is disabled (404) until METRICS_TOKEN is set, and then rejects a scrape
+    # without the bearer (401) — either way `up` goes to 0 and ServiceDown fires.
+    # Prometheus does not expand env vars in its config, so mount the token as a file.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token
 
   - job_name: 'node'
     static_configs:
@@ -680,79 +712,65 @@ scrape_configs:
 
 ### Alert Rules
 
+These rules use the metric names OpenWA actually exports (`openwa_*`). The memory rule below uses a
+node-exporter metric — an **external** exporter, not the app — and is kept as a host-level example.
+
 ```yaml
 # monitoring/alerts.yml
 groups:
   - name: openwa-alerts
     rules:
-      # High Error Rate
-      - alert: HighErrorRate
-        expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m])) 
-          / sum(rate(http_requests_total[5m])) > 0.05
-        for: 5m
+      # Service Down — openwa_up disappears (or the scrape fails)
+      - alert: ServiceDown
+        expr: up{job="openwa"} == 0 or absent(openwa_up)
+        for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "High error rate detected"
-          description: "Error rate is {{ $value | humanizePercentage }} in last 5 minutes"
+          summary: 'OpenWA service is down'
+          description: 'The OpenWA application is not responding'
 
-      # API Response Time
-      - alert: HighResponseTime
-        expr: |
-          histogram_quantile(0.95, 
-            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)
-          ) > 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High API response time"
-          description: "95th percentile response time is {{ $value }}s"
-
-      # Session Down
+      # Session(s) disconnected
       - alert: SessionDisconnected
-        expr: session_status{status="disconnected"} > 0
+        expr: openwa_sessions{status="disconnected"} > 0
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "WhatsApp session disconnected"
-          description: "Session {{ $labels.session_id }} has been disconnected"
+          summary: 'WhatsApp session disconnected'
+          description: '{{ $value }} session(s) in disconnected state'
 
-      # Memory Usage
-      - alert: HighMemoryUsage
+      # Failed messages currently stored
+      - alert: FailedMessagesPresent
+        expr: openwa_messages_failed_total > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Messages are failing'
+          description: '{{ $value }} message(s) are currently in FAILED state'
+
+      # Process memory growth (app-exported RSS; ~2GB example threshold)
+      - alert: HighProcessMemory
+        expr: openwa_process_resident_memory_bytes > 2e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'High OpenWA process memory'
+          description: 'RSS is {{ $value | humanize1024 }}B'
+
+      # Host memory pressure — EXTERNAL (node-exporter), not exported by OpenWA
+      - alert: HighHostMemoryUsage
         expr: |
-          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) 
+          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)
           / node_memory_MemTotal_bytes > 0.85
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High memory usage"
-          description: "Memory usage is {{ $value | humanizePercentage }}"
-
-      # Webhook Failures
-      - alert: WebhookDeliveryFailures
-        expr: |
-          sum(rate(webhook_deliveries_total{status="failed"}[5m])) 
-          / sum(rate(webhook_deliveries_total[5m])) > 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High webhook delivery failure rate"
-          description: "{{ $value | humanizePercentage }} webhooks failing"
-
-      # Service Down
-      - alert: ServiceDown
-        expr: up{job="openwa"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "OpenWA service is down"
-          description: "The OpenWA application is not responding"
+          summary: 'High host memory usage'
+          description: 'Host memory usage is {{ $value | humanizePercentage }}'
 ```
 
 ### AlertManager Configuration
@@ -799,146 +817,109 @@ receivers:
 
 ### Health Check Endpoint
 
+All health endpoints are `@Public()` (no API key) and `@SkipThrottle()`, and live under the global
+`api` prefix. There is **no** `/health/detailed` endpoint.
+
+| Endpoint                | Purpose                                                                                                                                 | Body                                                           | Codes     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------- |
+| `GET /api/health`       | Basic check                                                                                                                             | `{ status, timestamp, version }` (version from `package.json`) | 200       |
+| `GET /api/health/live`  | Liveness (deliberately static — a transient dependency outage must not KILL the pod)                                                    | `{ status: 'ok' }`                                             | 200       |
+| `GET /api/health/ready` | Readiness — probes **both** databases (`main` + `data`, `SELECT 1`, 3s timeout each) and reports 503 while draining (graceful shutdown) | `{ status, details: { mainDatabase, dataDatabase } }`          | 200 / 503 |
+
 ```typescript
 // health/health.controller.ts
 @Controller('health')
+@Public() // no API key required
+@SkipThrottle()
 export class HealthController {
   @Get()
-  async basic(): Promise<{ status: string; timestamp: string }> {
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-    };
+  check(): { status: string; timestamp: string; version: string } {
+    return { status: 'ok', timestamp: new Date().toISOString(), version: APP_VERSION };
   }
 
-  // Requires API key (protected via auth guard/middleware)
-  @Get('detailed')
-  async detailed(): Promise<HealthCheckResult> {
-    return {
-      status: 'ok',
-      version: process.env.npm_package_version,
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: await this.checkDatabase(),
-        redis: await this.checkRedis(),
-        sessions: await this.getSessionStats(),
-      },
-    };
+  @Get('live')
+  liveness(): { status: string } {
+    return { status: 'ok' };
+  }
+
+  @Get('ready')
+  async readiness(): Promise<HealthCheckResult> {
+    // 503 while draining so the LB stops routing before teardown.
+    if (this.shutdownService.isShuttingDown()) {
+      throw new ServiceUnavailableException({ status: 'error', details: { shutdown: { status: 'draining' } } });
+    }
+    const [main, data] = await Promise.all([
+      this.probeDatabase(this.mainDataSource),
+      this.probeDatabase(this.dataDataSource),
+    ]);
+    const details = { mainDatabase: { status: main }, dataDatabase: { status: data } };
+    if (main === 'down' || data === 'down') {
+      throw new ServiceUnavailableException({ status: 'error', details });
+    }
+    return { status: 'ok', details };
   }
 }
 ```
 
 ### Prometheus Metrics Implementation
 
-```typescript
-// metrics/metrics.service.ts
-import { Injectable } from '@nestjs/common';
-import { Registry, Counter, Gauge, Histogram, collectDefaultMetrics } from 'prom-client';
+The metrics surface is small, so OpenWA emits Prometheus text exposition format (v0.0.4) **by hand** —
+there is **no `prom-client` dependency** and **no `collectDefaultMetrics`**. `MetricsService` reads an
+aggregate overview from `StatsService` plus `process.memoryUsage()`, memoizes the rendered text for a
+short TTL (~5s, so back-to-back scrapes don't repeat the DB scan), and exposes it at
+`GET /api/metrics`.
 
+Access is **disabled by default**: the endpoint returns **404** unless `METRICS_TOKEN` is set. When
+set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSafeEqual`); a missing or
+wrong token returns 401. The token is **separate** from the API key — the route is `@Public()` (skips
+the API-key guard) and `@SkipThrottle()`.
+
+```typescript
+// metrics/metrics.service.ts (dependency-free; emits text v0.0.4 by hand)
 @Injectable()
 export class MetricsService {
-  private readonly registry: Registry;
-  
-  // Counters
-  readonly httpRequestsTotal: Counter;
-  readonly messagesSentTotal: Counter;
-  readonly webhookDeliveriesTotal: Counter;
-  
-  // Gauges
-  readonly activeSessions: Gauge;
-  readonly connectedSessions: Gauge;
-  readonly queueSize: Gauge;
-  
-  // Histograms
-  readonly httpRequestDuration: Histogram;
-  readonly messageSendDuration: Histogram;
-  readonly webhookDeliveryDuration: Histogram;
+  constructor(
+    private readonly config: ConfigService,
+    private readonly statsService: StatsService,
+  ) {}
 
-  constructor() {
-    this.registry = new Registry();
-    collectDefaultMetrics({ register: this.registry });
-
-    // HTTP Metrics
-    this.httpRequestsTotal = new Counter({
-      name: 'http_requests_total',
-      help: 'Total HTTP requests',
-      labelNames: ['method', 'path', 'status'],
-      registers: [this.registry],
-    });
-
-    this.httpRequestDuration = new Histogram({
-      name: 'http_request_duration_seconds',
-      help: 'HTTP request duration in seconds',
-      labelNames: ['method', 'path'],
-      buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
-      registers: [this.registry],
-    });
-
-    // Message Metrics
-    this.messagesSentTotal = new Counter({
-      name: 'messages_sent_total',
-      help: 'Total messages sent',
-      labelNames: ['session_id', 'type', 'status'],
-      registers: [this.registry],
-    });
-
-    this.messageSendDuration = new Histogram({
-      name: 'message_send_duration_seconds',
-      help: 'Message send duration in seconds',
-      labelNames: ['session_id', 'type'],
-      buckets: [0.1, 0.5, 1, 2, 5, 10],
-      registers: [this.registry],
-    });
-
-    // Session Metrics
-    this.activeSessions = new Gauge({
-      name: 'active_sessions_total',
-      help: 'Number of active sessions',
-      registers: [this.registry],
-    });
-
-    this.connectedSessions = new Gauge({
-      name: 'connected_sessions_total',
-      help: 'Number of connected sessions',
-      registers: [this.registry],
-    });
-
-    // Webhook Metrics
-    this.webhookDeliveriesTotal = new Counter({
-      name: 'webhook_deliveries_total',
-      help: 'Total webhook deliveries',
-      labelNames: ['event', 'status'],
-      registers: [this.registry],
-    });
-
-    this.webhookDeliveryDuration = new Histogram({
-      name: 'webhook_delivery_duration_seconds',
-      help: 'Webhook delivery duration in seconds',
-      labelNames: ['event'],
-      buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
-      registers: [this.registry],
-    });
-
-    // Queue Metrics
-    this.queueSize = new Gauge({
-      name: 'message_queue_size',
-      help: 'Current size of message queue',
-      labelNames: ['queue_name'],
-      registers: [this.registry],
-    });
-  }
-
-  getMetrics(): Promise<string> {
-    return this.registry.metrics();
+  async render(): Promise<string> {
+    const overview = await this.statsService.getOverview();
+    const mem = process.memoryUsage();
+    const lines: string[] = [];
+    // ... gauge() helper pushes `# HELP` / `# TYPE` / value lines ...
+    gauge('openwa_up', '...', 1);
+    gauge('openwa_process_uptime_seconds', '...', Math.round(process.uptime()));
+    gauge('openwa_process_resident_memory_bytes', '...', mem.rss);
+    gauge('openwa_process_heap_used_bytes', '...', mem.heapUsed);
+    gauge('openwa_sessions_total', '...', overview.sessions.total);
+    gauge('openwa_sessions_active', '...', overview.sessions.active);
+    // openwa_sessions{status="..."} — one line per status
+    // openwa_messages_total{direction="outgoing"|"incoming"}
+    // openwa_messages_failed_total
+    return lines.join('\n') + '\n';
   }
 }
 ```
 
+**Exported metric names** (the complete set — nothing else is emitted):
+
+| Metric                                 | Type  | Labels                              | Meaning                              |
+| -------------------------------------- | ----- | ----------------------------------- | ------------------------------------ |
+| `openwa_up`                            | gauge | —                                   | Always `1` when scraped              |
+| `openwa_process_uptime_seconds`        | gauge | —                                   | Process uptime                       |
+| `openwa_process_resident_memory_bytes` | gauge | —                                   | RSS                                  |
+| `openwa_process_heap_used_bytes`       | gauge | —                                   | V8 heap used                         |
+| `openwa_sessions_total`                | gauge | —                                   | Configured sessions                  |
+| `openwa_sessions_active`               | gauge | —                                   | READY (active) sessions              |
+| `openwa_sessions`                      | gauge | `status`                            | Session count per status             |
+| `openwa_messages_total`                | gauge | `direction` (`incoming`/`outgoing`) | Current stored messages by direction |
+| `openwa_messages_failed_total`         | gauge | —                                   | Current messages in FAILED state     |
+
 ### Grafana Dashboard Definition
 
 ```json
-// monitoring/grafana/dashboards/openwa.json
+// monitoring/grafana/dashboards/openwa.json — panels use the openwa_* metrics OpenWA exports
 {
   "title": "OpenWA Dashboard",
   "uid": "openwa-main",
@@ -947,71 +928,46 @@ export class MetricsService {
       "title": "Active Sessions",
       "type": "stat",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "targets": [
-        { "expr": "active_sessions_total" }
-      ]
+      "targets": [{ "expr": "openwa_sessions_active" }]
     },
     {
-      "title": "Messages Sent (24h)",
+      "title": "Stored Outgoing Messages",
       "type": "stat",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-      "targets": [
-        { "expr": "sum(increase(messages_sent_total[24h]))" }
-      ]
+      "targets": [{ "expr": "openwa_messages_total{direction=\"outgoing\"}" }]
     },
     {
-      "title": "Error Rate",
-      "type": "gauge",
+      "title": "Failed Messages",
+      "type": "stat",
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
-      "targets": [
-        { 
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100"
-        }
-      ]
+      "targets": [{ "expr": "openwa_messages_failed_total" }]
     },
     {
-      "title": "Request Rate",
+      "title": "Sessions by Status",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
-      "targets": [
-        { "expr": "sum(rate(http_requests_total[5m])) by (status)", "legendFormat": "{{status}}" }
-      ]
+      "targets": [{ "expr": "openwa_sessions", "legendFormat": "{{status}}" }]
     },
     {
-      "title": "Response Time (p95)",
+      "title": "Stored Messages by Direction",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
-      "targets": [
-        { 
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))"
-        }
-      ]
+      "targets": [{ "expr": "openwa_messages_total", "legendFormat": "{{direction}}" }]
     },
     {
-      "title": "Messages by Type",
-      "type": "piechart",
-      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 8 },
-      "targets": [
-        { "expr": "sum(messages_sent_total) by (type)", "legendFormat": "{{type}}" }
-      ]
-    },
-    {
-      "title": "Webhook Delivery Success Rate",
+      "title": "Process Memory",
       "type": "timeseries",
-      "gridPos": { "x": 8, "y": 12, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "targets": [
-        { 
-          "expr": "sum(rate(webhook_deliveries_total{status=\"success\"}[5m])) / sum(rate(webhook_deliveries_total[5m])) * 100"
-        }
+        { "expr": "openwa_process_resident_memory_bytes / 1024 / 1024", "legendFormat": "RSS (MB)" },
+        { "expr": "openwa_process_heap_used_bytes / 1024 / 1024", "legendFormat": "Heap used (MB)" }
       ]
     },
     {
-      "title": "Memory Usage",
-      "type": "timeseries",
-      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
-      "targets": [
-        { "expr": "process_resident_memory_bytes / 1024 / 1024", "legendFormat": "Memory (MB)" }
-      ]
+      "title": "Uptime",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [{ "expr": "openwa_process_uptime_seconds" }]
     }
   ]
 }
@@ -1019,78 +975,59 @@ export class MetricsService {
 
 ### Structured Logging
 
+Logging is dependency-free: there is no winston (or any logging library) in `package.json`. The
+logger is a small custom `LoggerService` in `src/common/services/logger.service.ts` that writes to
+the console — `error` and `warn` go to **stderr**, every other level to **stdout**, so a shipper
+configured for stdout alone drops exactly the lines you most want. `LOG_LEVEL`
+(`error|warn|info|debug|verbose`) sets verbosity and `LOG_FORMAT` (`json|pretty`) the rendering,
+defaulting to `json` under `NODE_ENV=production` and `pretty` elsewhere. Metadata whose **key name**
+looks like a secret (password, token, api-key, authorization, …) keeps the key and has its **value**
+replaced with `[REDACTED]` before the line is written.
+
+There is no in-app Loki transport: in the stack above, logs reach Loki because **promtail** scrapes
+the container's stdout and stderr from `/var/lib/docker/containers`.
+
 ```typescript
-// common/logging/logger.service.ts
-import { Injectable, LoggerService } from '@nestjs/common';
-import * as winston from 'winston';
+// common/services/logger.service.ts — usage
+import { createLogger } from '../common/services/logger.service';
 
 @Injectable()
-export class AppLoggerService implements LoggerService {
-  private logger: winston.Logger;
+export class MessageService {
+  private readonly logger = createLogger('MessageService');
 
-  constructor() {
-    this.logger = winston.createLogger({
-      level: process.env.LOG_LEVEL || 'info',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-      defaultMeta: { 
-        service: 'openwa',
-        version: process.env.npm_package_version 
-      },
-      transports: [
-        new winston.transports.Console(),
-        // For Loki
-        new winston.transports.Http({
-          host: process.env.LOKI_HOST || 'loki',
-          port: 3100,
-          path: '/loki/api/v1/push',
-        }),
-      ],
+  async send(): Promise<void> {
+    // log/warn/debug/verbose take (message, context?) where context is a string or metadata object;
+    // error() is (message, trace?, context?) — the stack trace comes second
+    this.logger.log('Message sent', {
+      sessionId: 'sess_123',
+      chatId: '628xxx@c.us',
+      messageType: 'text',
     });
   }
-
-  log(message: string, context?: object) {
-    this.logger.info(message, { context });
-  }
-
-  error(message: string, trace?: string, context?: object) {
-    this.logger.error(message, { trace, context });
-  }
-
-  warn(message: string, context?: object) {
-    this.logger.warn(message, { context });
-  }
-
-  debug(message: string, context?: object) {
-    this.logger.debug(message, { context });
-  }
 }
-
-// Usage example
-this.logger.log('Message sent', {
-  sessionId: 'sess_123',
-  chatId: '628xxx@c.us',
-  messageType: 'text',
-  duration: 1.5
-});
 ```
 
 ### Key Metrics to Monitor
 
-| Category | Metric | Description | Alert Threshold |
-|----------|--------|-------------|-----------------|
-| **API** | `http_requests_total` | Request count by status | Error rate > 5% |
-| **API** | `http_request_duration_seconds` | Request latency | p95 > 1s |
-| **Sessions** | `active_sessions_total` | Total sessions | Near limit |
-| **Sessions** | `connected_sessions_total` | Connected sessions | < active |
-| **Messages** | `messages_sent_total` | Messages sent | Sudden drop |
-| **Messages** | `message_send_duration_seconds` | Send latency | p95 > 5s |
-| **Webhooks** | `webhook_deliveries_total` | Delivery status | Failure > 10% |
-| **System** | `process_resident_memory_bytes` | Memory usage | > 80% |
-| **System** | `nodejs_eventloop_lag_seconds` | Event loop lag | > 100ms |
+These are the metrics OpenWA actually exports at `GET /api/metrics`:
 
+| Category     | Metric                                        | Description                                             | Alert Idea                       |
+| ------------ | --------------------------------------------- | ------------------------------------------------------- | -------------------------------- |
+| **Liveness** | `openwa_up`                                   | Always `1` when scraped (absence/scrape-failure = down) | Target down                      |
+| **Sessions** | `openwa_sessions_total`                       | Configured sessions                                     | Near your expected session count |
+| **Sessions** | `openwa_sessions_active`                      | READY (active) sessions                                 | Drops below expected             |
+| **Sessions** | `openwa_sessions{status="..."}`               | Per-status counts (e.g. `disconnected`, `failed`)       | `disconnected`/`failed` > 0      |
+| **Messages** | `openwa_messages_total{direction="outgoing"}` | Current stored outgoing messages                        | Unexpected change                |
+| **Messages** | `openwa_messages_total{direction="incoming"}` | Current stored incoming messages                        | Unexpected change                |
+| **Messages** | `openwa_messages_failed_total`                | Current messages in FAILED state                        | Above acceptable threshold       |
+| **System**   | `openwa_process_resident_memory_bytes`        | RSS                                                     | Growth / near limit              |
+| **System**   | `openwa_process_heap_used_bytes`              | V8 heap used                                            | Growth                           |
+| **System**   | `openwa_process_uptime_seconds`               | Process uptime                                          | Frequent restarts (resets)       |
+
+> OpenWA does **not** expose request-rate, latency-histogram, webhook, queue, or Node default
+> (`nodejs_*`) metrics. For host/container-level signals (CPU, memory pressure, event-loop), scrape
+> external exporters: `up` and `container_memory_usage_bytes` come from blackbox/cAdvisor, and
+> `node_*` from node-exporter — not from the app.
 
 ## 10.7 Backup & Recovery
 
@@ -1104,7 +1041,7 @@ flowchart TB
         COMPRESS --> ENCRYPT[encrypt]
         ENCRYPT --> S3[S3 Storage]
     end
-    
+
     subgraph Retention["Retention Policy"]
         D7[Daily: 7 days]
         W4[Weekly: 4 weeks]
@@ -1114,79 +1051,41 @@ flowchart TB
 
 ### Backup Script
 
-```bash
-#!/bin/bash
-# scripts/backup.sh
-
-set -e
-
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="/backups"
-S3_BUCKET="s3://openwa-backups"
-
-# Database backup
-echo "Backing up database..."
-pg_dump -Fc $DATABASE_URL > $BACKUP_DIR/db_$DATE.dump
-gzip $BACKUP_DIR/db_$DATE.dump
-
-# Session data backup
-echo "Backing up session data..."
-tar -czf $BACKUP_DIR/sessions_$DATE.tar.gz /app/.wwebjs_auth
-
-# Upload to S3
-echo "Uploading to S3..."
-aws s3 cp $BACKUP_DIR/db_$DATE.dump.gz $S3_BUCKET/database/
-aws s3 cp $BACKUP_DIR/sessions_$DATE.tar.gz $S3_BUCKET/sessions/
-
-# Cleanup local files older than 7 days
-find $BACKUP_DIR -mtime +7 -delete
-
-echo "Backup completed: $DATE"
-```
+Use the shipped [`scripts/backup.sh`](../scripts/backup.sh); do not maintain a second inline copy.
+It captures the always-SQLite `main.sqlite`, the configured data database, whatsapp-web.js session
+state (`SESSION_DATA_PATH`), Baileys auth state (`BAILEYS_AUTH_DIR`, default `./data/baileys`), local
+media, installed plugin packages, plugin registry/state, and generated secret/config files. See the
+authoritative [backup runbook](./11-operational-runbooks.md#runbook-database-backup).
 
 ### Recovery Procedure
 
-```bash
-#!/bin/bash
-# scripts/restore.sh
-
-set -e
-
-BACKUP_DATE=$1
-
-# Download from S3
-aws s3 cp s3://openwa-backups/database/db_$BACKUP_DATE.dump.gz /tmp/
-aws s3 cp s3://openwa-backups/sessions/sessions_$BACKUP_DATE.tar.gz /tmp/
-
-# Restore database
-gunzip /tmp/db_$BACKUP_DATE.dump.gz
-pg_restore -d $DATABASE_URL /tmp/db_$BACKUP_DATE.dump
-
-# Restore sessions
-tar -xzf /tmp/sessions_$BACKUP_DATE.tar.gz -C /
-
-echo "Restore completed"
-```
+Use the matching [`scripts/restore.sh`](../scripts/restore.sh) and follow the
+[restore runbook](./11-operational-runbooks.md#runbook-restore-from-backup). Stop the application
+before restoring; PostgreSQL dumps still require the explicit `psql` step described there.
 
 ## 10.8 Scaling Guidelines
 
 ### Vertical Scaling
 
-| Sessions | RAM | CPU | Storage |
-|----------|-----|-----|---------|
-| 1-5 | 2GB | 2 cores | 20GB |
-| 5-10 | 4GB | 4 cores | 50GB |
-| 10-20 | 8GB | 8 cores | 100GB |
-| 20+ | 16GB+ | 16+ cores | 200GB+ |
+OpenWA scales **vertically** — add CPU/RAM to a single instance. The table below is **unbenchmarked
+starting guidance**, not measured figures; actual usage depends heavily on engine choice
+(whatsapp-web.js spawns a Chromium per session; Baileys is far lighter), message volume, and media.
+Size up from your own monitoring.
 
-### Horizontal Scaling Checklist
+| Sessions | RAM   | CPU       | Storage |
+| -------- | ----- | --------- | ------- |
+| 1-5      | 2GB   | 2 cores   | 20GB    |
+| 5-10     | 4GB   | 4 cores   | 50GB    |
+| 10-20    | 8GB   | 8 cores   | 100GB   |
+| 20+      | 16GB+ | 16+ cores | 200GB+  |
 
-- [ ] Shared PostgreSQL database
-- [ ] Redis for session affinity
-- [ ] Shared file storage (S3/NFS)
-- [ ] Load balancer with sticky sessions
-- [ ] Health check endpoints
-- [ ] Graceful shutdown handling
+### Horizontal Scaling
+
+**Not currently supported.** OpenWA is a single-process application with in-memory engine state, so
+multiple replicas against a shared session volume corrupt WhatsApp auth. Run exactly **one** API
+instance per session-data volume (`replicas: 1`). The DB-backed session registry / node-claim design
+that would be required to scale out is documented — as a future design sketch, not a shipped feature —
+in [13 - Horizontal Scaling Guide](./13-horizontal-scaling.md).
 ---
 
 <div align="center">

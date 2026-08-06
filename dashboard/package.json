@@ -1,38 +1,56 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.10.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "preview": "vite preview",
+    "i18n:check": "node scripts/check-i18n-parity.mjs",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
+    "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.100.10",
+    "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-table": "^8.21.3",
-    "i18next": "^26.2.0",
+    "i18next": "^26.3.6",
     "i18next-browser-languagedetector": "^8.2.1",
-    "lucide-react": "^1.16.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "react-i18next": "^17.0.8",
-    "react-router-dom": "^7.15.1",
-    "socket.io-client": "^4.8.3"
+    "linkify-react": "^4.3.3",
+    "linkifyjs": "^4.3.3",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-i18next": "^17.0.11",
+    "react-is": "^19.2.8",
+    "react-router-dom": "^7.18.2",
+    "recharts": "^3.10.1",
+    "socket.io-client": "^4.8.3",
+    "yet-another-react-lightbox": "^3.32.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^25.9.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.4",
-    "eslint": "^10.4.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.1",
-    "globals": "^17.6.0",
-    "typescript": "~5.9.3",
-    "typescript-eslint": "^8.59.3",
-    "vite": "^8.0.13"
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.8.0",
+    "jsdom": "^30.0.1",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vite": "^8.2.0"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.8"
   }
 }

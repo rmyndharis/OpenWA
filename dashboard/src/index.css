@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
 
 :root {
   font-family: 'Plus Jakarta Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
@@ -6,13 +7,16 @@
   font-weight: 400;
 }
 
-html[lang="he"],
-html[dir="rtl"] {
+html[lang='he'],
+html[dir='rtl'] {
   font-family: 'Heebo', 'Rubik', 'Noto Sans Hebrew', 'Segoe UI', Arial, sans-serif;
 }
 
-:root {
+html[lang='ar'] {
+  font-family: 'Noto Sans Arabic', 'Cairo', 'Tajawal', 'Segoe UI', Arial, sans-serif;
+}
 
+:root {
   color-scheme: light dark;
   color: var(--text-primary);
   background-color: var(--bg-light);
@@ -25,11 +29,7 @@ html[dir="rtl"] {
 
 a {
   font-weight: 500;
-  color: #646cff;
   text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
 }
 
 body {
@@ -46,7 +46,17 @@ h1 {
   letter-spacing: -0.025em;
 }
 
+/* h2 is a real heading again — the old global made EVERY h2 a small uppercase eyebrow, which
+   forced pages to keep resetting it (and left section titles smaller than body text). The eyebrow
+   look is now opt-in via .eyebrow for the section/card labels that actually want it. */
 h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.eyebrow {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-secondary);
@@ -69,28 +79,33 @@ button {
   font-size: 1em;
   font-weight: 500;
   font-family: inherit;
-  background-color: #1a1a1a;
   cursor: pointer;
   transition: border-color 0.25s;
 }
-button:hover {
-  border-color: #646cff;
+/* Visible keyboard focus — cross-browser and keyboard-only, so the ring guides Tab navigation
+   without flashing on every mouse click. */
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--primary, #25d366);
+  outline-offset: 2px;
 }
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+html {
+  /* Root/overscroll background follows the app theme token, so an explicit dark theme on a
+     light-OS device doesn't reveal a white <html> background above/below the body (overscroll). */
+  background-color: var(--bg-light);
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  /* Guarded with :not([data-theme='dark']): when the OS prefers light but the user explicitly
+     picked the dark theme, the app's own choice must win (otherwise the root is force-whitened). */
+  :root:not([data-theme='dark']) {
     color: #213547;
     background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
   }
 }
 
@@ -163,7 +178,20 @@ select:disabled {
   width: 90%;
   max-width: 480px;
   animation: slideUp 0.3s ease;
+  /* Cap height and lay out as a flex column so the body scrolls while the header and footer stay
+     pinned — config-heavy modals no longer push the title/Save button off-screen. */
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
   overflow: hidden;
+}
+
+/* The install-plugin modal holds the catalog list — a bit wider on desktop for comfortable reading.
+   The responsive rules below (<=768px: 95% width; <=480px: full-width bottom sheet) still apply, so
+   it stays responsive on small screens. Lives here (global modal styles) rather than in a page CSS
+   so it isn't subject to the page-root scoping rule. */
+.modal.install-modal {
+  max-width: 680px;
 }
 
 @keyframes slideUp {
@@ -183,6 +211,7 @@ select:disabled {
   align-items: center;
   padding: 1.5rem 1.5rem 1rem;
   border-bottom: 1px solid var(--border, #e2e8f0);
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -196,9 +225,12 @@ select:disabled {
 
 .modal-body {
   padding: 1.5rem;
+  /* Scroll the body (not the whole card) so the pinned header/footer stay visible. */
+  overflow-y: auto;
+  flex: 1 1 auto;
 }
 
-.modal-body label {
+.modal-body > label {
   display: block;
   font-size: 0.875rem;
   font-weight: 600;
@@ -224,11 +256,27 @@ select:disabled {
   box-shadow: 0 0 0 3px rgba(37, 211, 102, 0.1);
 }
 
+/* The rule above is meant for TEXT inputs. Radios/checkboxes would otherwise stretch to width:100%
+   and shove their labels far to the right; reset them back to their native box. The :not() excludes
+   the visually-hidden toggle-switch checkbox (it must stay width:0) so this never ties with the
+   per-page `.toggle-switch input { width:0 }` rule on specificity. */
+.modal-body input[type='radio']:not(.toggle-switch input),
+.modal-body input[type='checkbox']:not(.toggle-switch input) {
+  width: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  flex: none;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
   padding: 1rem 1.5rem 1.5rem;
+  flex-shrink: 0;
 }
 
 /* Icon Button (modal close X) */
@@ -255,17 +303,20 @@ select:disabled {
 }
 
 .btn-icon:hover {
-  background: #fee2e2;
-  border-color: #fecaca;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
 }
 
 .btn-icon:hover svg {
-  stroke: #dc2626;
+  stroke: var(--error);
 }
 
 /* Secondary Button */
 .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.75rem 1.25rem;
   background: var(--bg-light, #f8fafc);
   color: var(--text-secondary, #64748b);
@@ -277,10 +328,66 @@ select:disabled {
   transition: all 0.2s;
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: var(--bg-white, #fff);
   border-color: var(--text-muted, #94a3b8);
   color: var(--text-primary, #1e293b);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Primary Button — canonical definition; page-scoped copies were consolidated here so the
+   primary CTA looks identical on every page (padding/radius/disabled used to drift per page). */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--primary, #25d366);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover, #1da851);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Danger Button — canonical definition (page copies also used two different base reds). */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--error, #ef4444);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Spin Animation */
@@ -310,52 +417,100 @@ code {
 /* RTL / Hebrew direction support */
 
 /* Keep code, technical identifiers, and numbers LTR even inside RTL containers */
-[dir="rtl"] code,
-[dir="rtl"] .mono,
-[dir="rtl"] pre {
+[dir='rtl'] code,
+[dir='rtl'] .mono,
+[dir='rtl'] pre {
   direction: ltr;
   text-align: left;
   unicode-bidi: embed;
 }
 
 /* Modal footer: actions should align to the start of the writing direction */
-[dir="rtl"] .modal-footer {
+[dir='rtl'] .modal-footer {
   justify-content: flex-end;
   flex-direction: row-reverse;
 }
 
 /* Select dropdown caret on the opposite side */
-[dir="rtl"] select {
+[dir='rtl'] select {
   padding: 0.75rem 1rem 0.75rem 2.5rem;
   background-position: left 0.75rem center;
 }
 
 /* Inputs in modals: text aligns naturally */
-[dir="rtl"] .modal-body input,
-[dir="rtl"] .modal-body textarea,
-[dir="rtl"] input[type="text"],
-[dir="rtl"] input[type="url"],
-[dir="rtl"] input[type="password"],
-[dir="rtl"] input[type="number"],
-[dir="rtl"] textarea {
+[dir='rtl'] .modal-body input,
+[dir='rtl'] .modal-body textarea,
+[dir='rtl'] input[type='text'],
+[dir='rtl'] input[type='url'],
+[dir='rtl'] input[type='password'],
+[dir='rtl'] input[type='number'],
+[dir='rtl'] textarea {
   text-align: right;
 }
 
 /* URLs, emails, phones — force LTR even inside RTL */
-[dir="rtl"] input[type="url"],
-[dir="rtl"] input[type="email"],
-[dir="rtl"] input[type="tel"] {
+[dir='rtl'] input[type='url'],
+[dir='rtl'] input[type='email'],
+[dir='rtl'] input[type='tel'] {
   direction: ltr;
   text-align: left;
 }
 
-[dir="rtl"] .page-header__top {
-  flex-direction: row-reverse;
-}
-
 /* Toast container — slide in from the opposite side */
-[dir="rtl"] .toast-container {
+[dir='rtl'] .toast-container {
   right: auto;
   left: 1rem;
 }
 
+/* Mobile Responsive - Global */
+@media (max-width: 768px) {
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  .modal {
+    width: 95%;
+    max-width: none;
+    margin: 1rem;
+    border-radius: 12px;
+  }
+
+  .modal-header {
+    padding: 1.25rem 1.25rem 0.875rem;
+  }
+
+  .modal-header h2 {
+    font-size: 1.125rem;
+  }
+
+  .modal-body {
+    padding: 1.25rem;
+  }
+
+  .modal-footer {
+    padding: 0.875rem 1.25rem 1.25rem;
+  }
+
+  select {
+    padding: 0.625rem 2.25rem 0.625rem 0.875rem;
+    font-size: 0.875rem;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 1.25rem;
+  }
+
+  .modal-overlay {
+    align-items: flex-end;
+  }
+
+  .modal {
+    width: 100%;
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+    /* max-height + body scroll already come from the base .modal rule; the bottom-sheet only
+       changes width/anchoring. (Scrolling lives on .modal-body to avoid a double scrollbar.) */
+  }
+}

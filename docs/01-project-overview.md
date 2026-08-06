@@ -21,9 +21,11 @@
 ## 1.2 Vision & Mission
 
 ### Vision
+
 To become the most reliable open-source WhatsApp API gateway for production use.
 
 ### Mission
+
 1. Provide a complete and free WhatsApp REST API
 2. Build an active open-source community
 3. Deliver excellent documentation and tooling
@@ -39,14 +41,14 @@ flowchart LR
         P3[Vendor lock-in]
         P4[Data privacy concerns]
     end
-    
+
     subgraph Solution["✅ OpenWA Solution"]
         S1[100% Free & Open Source]
         S2[All features included]
         S3[Self-hosted, no lock-in]
         S4[Data stays on your server]
     end
-    
+
     P1 --> S1
     P2 --> S2
     P3 --> S3
@@ -55,13 +57,13 @@ flowchart LR
 
 ### Pain Points Addressed
 
-| Pain Point | OpenWA Solution |
-|------------|------------------|
+| Pain Point                          | OpenWA Solution              |
+| ----------------------------------- | ---------------------------- |
 | WAHA Plus charges for multi-session | Free unlimited multi-session |
-| Dashboard only in paid tiers | Free dashboard |
-| PostgreSQL support is paid | PostgreSQL included |
-| Limited webhook management | Full webhook management |
-| No source code access | Full source code available |
+| Dashboard only in paid tiers        | Free dashboard               |
+| PostgreSQL support is paid          | PostgreSQL included          |
+| Limited webhook management          | Full webhook management      |
+| No source code access               | Full source code available   |
 
 ## 1.4 Project Goals
 
@@ -89,13 +91,13 @@ mindmap
 
 ### Success Metrics
 
-| Metric | Target (6 months) | Target (1 year) |
-|--------|-------------------|-----------------|
-| GitHub Stars | 500+ | 2000+ |
-| Active Contributors | 10+ | 30+ |
-| Docker Pulls | 5,000+ | 20,000+ |
-| Production Users | 100+ | 500+ |
-| API Uptime | 99.5% | 99.9% |
+| Metric              | Target (6 months) | Target (1 year) |
+| ------------------- | ----------------- | --------------- |
+| GitHub Stars        | 500+              | 2000+           |
+| Active Contributors | 10+               | 30+             |
+| Docker Pulls        | 5,000+            | 20,000+         |
+| Production Users    | 100+              | 500+            |
+| API Uptime          | 99.5%             | 99.9%           |
 
 ## 1.5 Project Scope
 
@@ -125,7 +127,7 @@ Phase 2 (Production Ready)
 ├── PostgreSQL support
 ├── Web Dashboard
 ├── Webhook management UI
-├── Message queue (Redis/Bull)
+├── Message queue (Redis/BullMQ)
 ├── Rate limiting
 └── Authentication (API Key)
 
@@ -135,7 +137,7 @@ Phase 3 (Advanced)
 ├── Label management
 ├── Status/Stories
 ├── Proxy per session
-├── Horizontal scaling
+├── Horizontal scaling design reference
 └── Metrics & monitoring
 ```
 
@@ -157,19 +159,19 @@ flowchart TB
         B[Small Businesses]
         S[Startups]
     end
-    
+
     subgraph Secondary["Secondary Stakeholders"]
         C[Community Contributors]
         I[Integration Partners]
         O[Open Source Community]
     end
-    
+
     subgraph Users["End Users"]
         U1[Self-hosted Users]
         U2[Docker Users]
         U3[Cloud Deploy Users]
     end
-    
+
     Primary --> Users
     Secondary --> Primary
 ```
@@ -192,7 +194,7 @@ quadrantChart
     quadrant-2 Our Target
     quadrant-3 Limited Free
     quadrant-4 Expensive Basic
-    
+
     WAHA Plus: [0.7, 0.8]
     WAHA Core: [0.2, 0.4]
     Whapi.cloud: [0.8, 0.75]
@@ -202,16 +204,16 @@ quadrantChart
 
 ### Feature Comparison
 
-| Feature | OpenWA | WAHA Core | WAHA Plus | Whapi.cloud |
-|---------|--------|-----------|-----------|-------------|
-| Price | Free | Free | $50+/mo | $30+/mo |
-| Open Source | ✅ | ❌ | ❌ | ❌ |
-| Multi-session | ✅ | Limited | ✅ | ✅ |
-| Dashboard | ✅ | ❌ | ✅ | ✅ |
-| PostgreSQL | ✅ | ❌ | ✅ | N/A |
-| Webhook UI | ✅ | ❌ | ✅ | ✅ |
-| Self-hosted | ✅ | ✅ | ✅ | ❌ |
-| Source code | ✅ | ❌ | ❌ | ❌ |
+| Feature       | OpenWA | WAHA Core | WAHA Plus | Whapi.cloud |
+| ------------- | ------ | --------- | --------- | ----------- |
+| Price         | Free   | Free      | $50+/mo   | $30+/mo     |
+| Open Source   | ✅     | ❌        | ❌        | ❌          |
+| Multi-session | ✅     | Limited   | ✅        | ✅          |
+| Dashboard     | ✅     | ❌        | ✅        | ✅          |
+| PostgreSQL    | ✅     | ❌        | ✅        | N/A         |
+| Webhook UI    | ✅     | ❌        | ✅        | ✅          |
+| Self-hosted   | ✅     | ✅        | ✅        | ❌          |
+| Source code   | ✅     | ❌        | ❌        | ❌          |
 
 ## 1.8 Technology Decisions
 
@@ -220,44 +222,45 @@ quadrantChart
 ```mermaid
 flowchart TB
     subgraph Runtime["Runtime & Framework"]
-        N[Node.js 20 LTS] --> |"TypeScript support, async/await"| NE[NestJS]
+        N[Node.js 22 LTS] --> |"TypeScript support, async/await"| NE[NestJS]
         NE --> |"Modular, scalable, DI"| API[REST API]
     end
-    
-    subgraph Engine["WhatsApp Engine"]
+
+    subgraph Engine["WhatsApp Engine (pluggable)"]
         WW[whatsapp-web.js] --> |"Puppeteer based"| P[More stealth]
         P --> |"Real browser fingerprint"| S[Lower ban risk]
+        BA[baileys] --> |"Browser-free / WebSocket"| BL[Lower resource usage]
     end
-    
+
     subgraph Storage["Data Storage"]
         SQ[SQLite] --> |"Development"| DEV[Easy setup]
         PG[PostgreSQL] --> |"Production"| PROD[Scalable]
     end
-    
+
     subgraph Frontend["Dashboard"]
         R[React] --> V[Vite]
-        V --> S[shadcn/ui]
-        S --> L[Lucide Icons]
+        V --> C[Bespoke CSS]
+        C --> L[Lucide Icons]
         L --> UI[Modern UI]
     end
 ```
 
 ### Technology Stack Summary
 
-| Layer | Technology | Rationale |
-|-------|------------|-----------|
-| Runtime | Node.js 20 LTS | Stable, long-term support |
-| Language | TypeScript | Type safety, better developer experience |
-| Framework | NestJS | Enterprise-grade, modular |
-| WA Engine | whatsapp-web.js | Mature, active community |
-| Browser | Puppeteer/Chrome | Real browser, stealth |
-| Database | SQLite (default) / PostgreSQL | Zero-config default, PostgreSQL for scaling |
-| Cache | Redis | Fast, pub/sub support |
-| Queue | Bull | Reliable job processing |
-| Dashboard | React + Vite | Fast, modern |
-| Styling | Tailwind CSS | Utility-first CSS |
-| UI Components | shadcn/ui + Lucide | Accessible, polished |
-| Container | Docker | Portable, consistent |
+| Layer         | Technology                           | Rationale                                                                               |
+| ------------- | ------------------------------------ | --------------------------------------------------------------------------------------- |
+| Runtime       | Node.js 22 LTS                       | Stable, long-term support                                                               |
+| Language      | TypeScript                           | Type safety, better developer experience                                                |
+| Framework     | NestJS                               | Enterprise-grade, modular                                                               |
+| WA Engine     | whatsapp-web.js (default) or baileys | Pluggable via `ENGINE_TYPE` env var; wwebjs = Puppeteer/stealth, baileys = browser-free |
+| Browser       | Puppeteer/Chrome                     | Used by default (whatsapp-web.js) engine; not required for baileys engine               |
+| Database      | SQLite (default) / PostgreSQL        | Zero-config default, PostgreSQL for scaling                                             |
+| Cache         | Redis                                | Fast, pub/sub support                                                                   |
+| Queue         | BullMQ                               | Reliable job processing                                                                 |
+| Dashboard     | React + Vite                         | Fast, modern                                                                            |
+| Styling       | Bespoke CSS modules/stylesheets      | Lightweight dashboard styling without Tailwind                                          |
+| UI Components | Custom React components + Lucide     | Accessible, polished                                                                    |
+| Container     | Docker                               | Portable, consistent                                                                    |
 
 ## 1.9 Constraints & Assumptions
 
@@ -265,7 +268,7 @@ flowchart TB
 
 1. **Technical**
    - WhatsApp Web protocol can change at any time
-   - Puppeteer requires significant resources (~300-500MB RAM per session)
+   - Puppeteer requires significant resources (~300-500MB RAM per session) when using the default whatsapp-web.js engine; the baileys engine is browser-free and has a much lower footprint
    - WhatsApp rate limiting
 
 2. **Legal**
@@ -285,9 +288,10 @@ flowchart TB
 
 ## 1.10 Document History
 
-| Version | Date | Author | Changes |
-|---------|------|--------|---------|
-| 1.0 | 2026-02-02 | Team | Initial document |
+| Version | Date       | Author | Changes          |
+| ------- | ---------- | ------ | ---------------- |
+| 1.0     | 2026-02-02 | Team   | Initial document |
+
 ---
 
 <div align="center">

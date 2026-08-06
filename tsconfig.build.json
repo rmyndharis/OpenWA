@@ -1,5 +1,13 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // TypeScript 6 requires the output layout anchor to be explicit (TS5011).
+    "rootDir": "./src",
+    // Keep the incremental cache inside outDir: TypeScript 6 moved the default next to this
+    // config file, where nest's deleteOutDir no longer wipes it — tsc then trusted the stale
+    // cache, emitted nothing, and `node dist/main` crashed with MODULE_NOT_FOUND (issue #891).
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
+  },
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts", "dashboard"],
   "include": ["src"]
 }

@@ -2,20 +2,44 @@
 # Smart Orchestration with Profiles
 
 services:
-  # ===== CORE: Traefik Reverse Proxy =====
-  traefik:
-    image: traefik:v3.0
-    container_name: openwa-traefik
-    profiles: ['with-proxy', 'full']
+  # ===== CORE: Docker Socket Proxy (sole container with /var/run/docker.sock access) =====
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: openwa-docker-proxy
     restart: unless-stopped
-    ports:
-      - '127.0.0.1:${DASHBOARD_PORT:-2886}:80'
-      - '127.0.0.1:8080:8080' # Traefik dashboard
+    # Only on the isolated internal network — reachable solely by openwa-api, NOT the
+    # dashboard or any other peer. `internal: true` also denies the proxy
+    # outbound access; it only needs the locally-mounted docker socket.
+    networks:
+      - internal-docker
     volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Minimal set that keeps DockerService (src/modules/docker/docker.service.ts) working:
+      # PING (health), INFO (getSystemInfo), CONTAINERS (list/inspect/create/start/stop),
+      # IMAGES (pull), VOLUMES (createVolume). POST is the proxy's single all-or-nothing
+      # method gate for non-GET requests (haproxy.cfg: `deny unless METH_GET || env(POST)`).
+      # Two consequences of the pinned v0.4.2 config, accepted and documented in SECURITY.md:
+      #  - its `DELETE` env flag is dead config (never read), so it is not set here; DELETE is
+      #    admitted to enabled paths as a side effect of POST — OpenWA itself never issues
+      #    deletes (profile teardown is stop-only, see DockerService.stopManagedService).
+      #  - the proxy cannot scope container-create payloads, so a compromised API container
+      #    could create containers with host bind-mounts. If you don't use the built-in
+      #    datastore orchestration (Dashboard > Infrastructure built-in toggles), disable
+      #    this service entirely, e.g. via a docker-compose.override.yml:
+      #      services:
+      #        docker-proxy:
+      #          profiles: ['disabled']
+      #    DockerService then reports Docker unavailable and orchestration degrades gracefully.
+      CONTAINERS: 1
+      IMAGES: 1
+      VOLUMES: 1
+      INFO: 1
+      PING: 1
+      POST: 1
+      # Everything else is denied by default (AUTH, SECRETS, NETWORKS, PLUGINS, SWARM, TASKS, SERVICES, CONFIGS, NODES, DISTRIBUTIONS)
     labels:
-      - 'com.openwa.service=proxy'
+      - 'com.openwa.service=docker-proxy'
       - 'com.openwa.core=true'
 
   # ===== CORE: OpenWA Backend API =====
@@ -25,6 +49,49 @@ services:
       dockerfile: Dockerfile
     container_name: openwa-api
     restart: unless-stopped
+    # Give the graceful drain room to complete before Docker SIGKILLs the container: the shutdown
+    # grace (SHUTDOWN_DELAY_MS, default 3s) plus the worst-case per-engine teardown bound (~10s) can
+    # exceed Docker's 10s default, which would otherwise kill Chromium mid-teardown and orphan a
+    # session profile. Tune down if you raise neither SHUTDOWN_DELAY_MS nor run many sessions.
+    stop_grace_period: 45s
+    # App network for datastores + the isolated network to reach
+    # docker-proxy (DOCKER_HOST). createService() in docker.service.ts attaches
+    # orchestrated containers to the literal `openwa-network`, so its name is fixed.
+    networks:
+      - openwa-network
+      - internal-docker
+    # Container hardening: Chromium runs with --no-sandbox, so the
+    # container itself is the confinement boundary. cap_drop ALL + a minimal re-add
+    # ONLY for the root entrypoint's chown + gosu privilege-drop; once gosu setuids to
+    # the openwa user the node/Chromium process keeps NO effective capabilities.
+    # read_only rootfs (Chromium's profile lives on the writable /app/data volume;
+    # HOME=/tmp + tmpfs absorb stray writes). no-new-privileges blocks setuid escalation.
+    # NOTE: requires a live single-session smoke (Chromium must launch) before merge.
+    security_opt:
+      - 'no-new-privileges:true'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN # entrypoint: chown -R openwa /app/data on the named volume
+      - DAC_OVERRIDE # entrypoint: chown across pre-existing files
+      - FOWNER
+      - SETGID # gosu: drop to the openwa group
+      - SETUID # gosu: drop to the openwa user
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Per-container PID ceiling (writes the cgroup pids.max). A fork-bomb guard, NOT an allocation —
+    # the kernel only rejects new forks once the count is reached, so a higher limit is free for
+    # light containers. The old default (512, from the #243 hardening pass) was picked without
+    # accounting for Chromium's multi-process model: whatsapp-web.js runs a full Chromium instance
+    # per session (browser + renderer + GPU + zygote + utilities), and WhatsApp Web is process-heavy
+    # (service workers/iframes), so ~4 concurrent sessions already approach 512 and a new session's
+    # Chromium gets killed mid-spawn — surfacing in the API as `Code: null`. 2048 fits ~8-10 wwjs
+    # sessions with startup-spike headroom; Baileys is single-process (no Chromium) and uses far
+    # less, so the higher ceiling is a no-op there. Raise via OPENWA_PIDS_LIMIT for larger fleets;
+    # do NOT set -1 (unlimited) — that drops the fork-bomb guard. See #636.
+    pids_limit: ${OPENWA_PIDS_LIMIT:-2048}
+    mem_limit: ${OPENWA_MEM_LIMIT:-2g} # tune up for many concurrent sessions
     ports:
       - '127.0.0.1:${API_PORT:-2785}:2785'
     expose:
@@ -32,49 +99,156 @@ services:
     environment:
       # Core
       - NODE_ENV=${NODE_ENV:-production}
+      # Writable HOME on tmpfs so Chromium's HOME-relative writes don't hit the read_only rootfs
+      - HOME=/tmp
+      # Chromium resolves its home from the passwd entry (no /home/openwa), ignoring $HOME, so without
+      # writable, existing config/cache dirs it hard-crashes at launch on the read_only rootfs. Pin XDG
+      # to the tmpfs; the entrypoint pre-creates these owned by openwa. (#254)
+      - XDG_CONFIG_HOME=/tmp/.config
+      - XDG_CACHE_HOME=/tmp/.cache
       - PORT=2785
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      # Database
-      - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
-      - DATABASE_NAME=${DATABASE_NAME:-/app/data/openwa.sqlite}
-      - DATABASE_HOST=${DATABASE_HOST:-postgres}
-      - DATABASE_PORT=${DATABASE_PORT:-5432}
-      - DATABASE_USERNAME=${DATABASE_USERNAME:-openwa}
-      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-openwa}
+      # Database. Forwarded blank by default (`${VAR:-}`) so a dashboard switch saved to
+      # data/.env.generated actually applies at runtime — main.ts clears the blank (BLANK_SHADOWED_ENV_KEYS)
+      # and the file wins. Set any of these in your .env/host to pin it (a real value keeps top precedence
+      # and the dashboard control then shows "managed by environment"). First-run defaults (sqlite) are
+      # written to data/.env.generated by the app, so a blank stack still boots SQLite.
+      # NOTE: if you run the built-in Postgres MANUALLY (`docker compose --profile postgres up`) instead
+      # of via the dashboard, set DATABASE_TYPE=postgres, DATABASE_HOST=postgres, DATABASE_PORT=5432,
+      # DATABASE_USERNAME=openwa and DATABASE_PASSWORD in your .env/host — these are no longer defaulted here.
+      - DATABASE_TYPE=${DATABASE_TYPE:-}
+      - DATABASE_NAME=${DATABASE_NAME:-}
+      - DATABASE_HOST=${DATABASE_HOST:-}
+      - DATABASE_PORT=${DATABASE_PORT:-}
+      - DATABASE_USERNAME=${DATABASE_USERNAME:-}
+      # No committed default secret; blank unless the operator sets it (built-in Postgres is provisioned
+      # with its own credentials by the orchestrator, not via this line).
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-}
+      # PostgreSQL schema (blank-forwarded like the other DATABASE_* keys so a dashboard-saved
+      # POSTGRES_SCHEMA in data/.env.generated applies; a real host value pins). Ignored for sqlite.
+      - POSTGRES_SCHEMA=${POSTGRES_SCHEMA:-}
       - DATABASE_SYNCHRONIZE=${DATABASE_SYNCHRONIZE:-false}
-      # Engine
-      - ENGINE_TYPE=${ENGINE_TYPE:-whatsapp-web.js}
-      - SESSION_DATA_PATH=/app/data/sessions
-      - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-true}
-      - PUPPETEER_ARGS=${PUPPETEER_ARGS:---no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu}
-      # Storage
-      - STORAGE_TYPE=${STORAGE_TYPE:-local}
-      - STORAGE_LOCAL_PATH=/app/data/media
-      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-minioadmin}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-minioadmin}
-      - S3_BUCKET=${S3_BUCKET:-openwa}
-      # Redis
-      - REDIS_ENABLED=${REDIS_ENABLED:-false}
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
+      # Engine. Forwarded empty by default so the dashboard (Infrastructure > Engine) selects the
+      # active engine via data/.env.generated (defaults to whatsapp-web.js); main.ts treats a blank
+      # ENGINE_TYPE as unset, so .env.generated wins. Set ENGINE_TYPE in your .env/host to pin an
+      # engine (e.g. baileys) — a real value flows through here and keeps top precedence.
+      - ENGINE_TYPE=${ENGINE_TYPE:-}
+      # Engine launch options (session data path, headless, browser args). Forwarded EMPTY by default
+      # so the dashboard (Infrastructure > Engine) selections saved to data/.env.generated apply — like
+      # ENGINE_TYPE above. main.ts treats a blank value as unset (.env.generated wins), and the app
+      # layer (configuration.ts) supplies the sane container default (headless, ./data/sessions, the
+      # sandbox + no-dev-shm flag set) when nothing is set anywhere. Set one on the host/.env to pin it.
+      - SESSION_DATA_PATH=${SESSION_DATA_PATH:-}
+      - PUPPETEER_HEADLESS=${PUPPETEER_HEADLESS:-}
+      - PUPPETEER_ARGS=${PUPPETEER_ARGS:-}
+      # Optional WhatsApp Web version override. DEFAULT (empty, "latest", or "auto"): OpenWA auto-resolves a
+      # settled build from the third-party wppconnect-team/wa-version registry and pins its remote HTML
+      # (fetched into the web.whatsapp.com origin without an integrity check). Set "off" to disable pinning
+      # and use the first-party build served by WhatsApp, or an exact version to pin a specific build.
+      - WWEBJS_WEB_VERSION=${WWEBJS_WEB_VERSION:-}
+      - WWEBJS_WEB_VERSION_REMOTE_PATH=${WWEBJS_WEB_VERSION_REMOTE_PATH:-}
+      # Raise whatsapp-web.js's first-boot init wait (default 30000ms) on slow boots — e.g. WSL2 or
+      # low-resource hosts where the QR can time out before WA Web loads. Empty = default; see
+      # docs/12-troubleshooting-faq.md. (Without this line the var in .env never reaches the container.)
+      - WWEBJS_AUTH_TIMEOUT_MS=${WWEBJS_AUTH_TIMEOUT_MS:-}
+      # Re-start previously authenticated sessions at boot. Opt-in: the app reads the exact string
+      # "true", so a blank forward (nothing set) keeps the default off. Without this line the value in
+      # .env never reaches the container and the flag silently does nothing.
+      - AUTO_START_SESSIONS=${AUTO_START_SESSIONS:-}
+      # Fetching status@broadcast immediately after a fresh pairing can make affected accounts lose
+      # the companion at WhatsApp Web's first scheduled reload. Disabled by default; live statuses
+      # still arrive normally. Opt in only after validating the account.
+      - STATUS_SEED_ON_READY=${STATUS_SEED_ON_READY:-false}
+      # Session ownership / multi-node routing (see the "Session ownership" section of .env.example
+      # and docs/13). NODE_ID must be STABLE across restarts: the app default (the container
+      # hostname) changes on every recreate, making the new container a "new node" that has to wait
+      # out its previous identity's lease before re-adopting sessions.
+      - NODE_ID=${NODE_ID:-}
+      - NODE_URL=${NODE_URL:-}
+      - SESSION_LEASE_TTL_MS=${SESSION_LEASE_TTL_MS:-}
+      - SESSION_LEASE_HEARTBEAT_MS=${SESSION_LEASE_HEARTBEAT_MS:-}
+      - SESSION_TAKEOVER_SWEEP_MS=${SESSION_TAKEOVER_SWEEP_MS:-}
+      - SESSION_PROXY_TIMEOUT_MS=${SESSION_PROXY_TIMEOUT_MS:-}
+      # Autoreply rules per session (0 = unlimited). Blank forwards to the app default (32); an
+      # unforwarded key could not be set from .env at all, which is the whole point of this list.
+      - AUTOMATION_MAX_PER_SESSION=${AUTOMATION_MAX_PER_SESSION:-}
+      # Storage. Blank-forwarded (see Database note) so a dashboard local↔S3 switch applies; a real
+      # host value pins. Credentials use the canonical S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY names the
+      # app and dashboard write; the legacy S3_ACCESS_KEY / S3_SECRET_KEY are ALSO forwarded (and read
+      # as a fallback by the storage layer) so existing .env files keep working unchanged. S3_REGION is
+      # forwarded so external-S3 works.
+      - STORAGE_TYPE=${STORAGE_TYPE:-}
+      - STORAGE_LOCAL_PATH=${STORAGE_LOCAL_PATH:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - S3_REGION=${S3_REGION:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      # Chat-media archiving (opt-in). Forwarded explicitly: this file has no env_file, so a
+      # variable absent from this list simply never reaches the container and the feature stays off
+      # no matter what the operator's .env says.
+      - CHAT_MEDIA_ARCHIVE_ENABLED=${CHAT_MEDIA_ARCHIVE_ENABLED:-}
+      - CHAT_MEDIA_ARCHIVE_MAX_BYTES=${CHAT_MEDIA_ARCHIVE_MAX_BYTES:-}
+      - CHAT_MEDIA_ARCHIVE_TTL_DAYS=${CHAT_MEDIA_ARCHIVE_TTL_DAYS:-}
+      - CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS=${CHAT_MEDIA_ORPHAN_SWEEP_INTERVAL_MS:-}
+      - CHAT_MEDIA_ORPHAN_GRACE_MS=${CHAT_MEDIA_ORPHAN_GRACE_MS:-}
+      # Send pacing (opt-in anti-ban governor). Forwarded explicitly for the same reason as the
+      # chat-media block above: without these lines SEND_PACING_ENABLED=true in the operator's .env
+      # never reaches the container and every send stays unpaced with no signal anywhere.
+      - SEND_PACING_ENABLED=${SEND_PACING_ENABLED:-}
+      - SEND_PACING_WARMUP_SCHEDULE=${SEND_PACING_WARMUP_SCHEDULE:-}
+      - SEND_PACING_COLD_DAILY_CAP=${SEND_PACING_COLD_DAILY_CAP:-}
+      - SEND_PACING_BREAKER_THRESHOLD=${SEND_PACING_BREAKER_THRESHOLD:-}
+      - SEND_PACING_BREAKER_COOLDOWN_MS=${SEND_PACING_BREAKER_COOLDOWN_MS:-}
+      # Server-side media conversion (opt-in). The image ships ffmpeg, but without these forwards
+      # the feature could not be switched on from .env at all.
+      - MEDIA_CONVERSION_ENABLED=${MEDIA_CONVERSION_ENABLED:-}
+      - FFMPEG_PATH=${FFMPEG_PATH:-}
+      - MEDIA_CONVERSION_TIMEOUT_MS=${MEDIA_CONVERSION_TIMEOUT_MS:-}
+      - MEDIA_CONVERSION_MAX_OUTPUT_BYTES=${MEDIA_CONVERSION_MAX_OUTPUT_BYTES:-}
+      - MEDIA_CONVERSION_CONCURRENCY=${MEDIA_CONVERSION_CONCURRENCY:-}
+      # Redis. Blank-forwarded (see Database note) so a dashboard enable/disable applies; a real host
+      # value pins.
+      - REDIS_ENABLED=${REDIS_ENABLED:-}
+      - REDIS_HOST=${REDIS_HOST:-}
+      - REDIS_PORT=${REDIS_PORT:-}
       # Webhook
       - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10000}
-      - WEBHOOK_MAX_RETRIES=${WEBHOOK_MAX_RETRIES:-3}
       - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-5000}
-      # Rate Limit
-      - RATE_LIMIT_TTL=${RATE_LIMIT_TTL:-60}
-      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - WEBHOOK_DISPATCH_CONCURRENCY=${WEBHOOK_DISPATCH_CONCURRENCY:-16}
+      - WEBHOOK_DISPATCH_MAX_QUEUED=${WEBHOOK_DISPATCH_MAX_QUEUED:-1000}
+      # Rate limits. Blank values are cleared before lower-priority generated config is loaded.
+      - RATE_LIMIT_SHORT_TTL=${RATE_LIMIT_SHORT_TTL:-}
+      - RATE_LIMIT_SHORT_LIMIT=${RATE_LIMIT_SHORT_LIMIT:-}
+      - RATE_LIMIT_MEDIUM_TTL=${RATE_LIMIT_MEDIUM_TTL:-}
+      - RATE_LIMIT_MEDIUM_LIMIT=${RATE_LIMIT_MEDIUM_LIMIT:-}
+      - RATE_LIMIT_LONG_TTL=${RATE_LIMIT_LONG_TTL:-}
+      - RATE_LIMIT_LONG_LIMIT=${RATE_LIMIT_LONG_LIMIT:-}
+      # Max request body size. Base64 media sends ride in the JSON body, so the default is generous;
+      # raise this for large documents (e.g. BODY_SIZE_LIMIT=50mb). Blank keeps the app default of 25mb.
+      - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-}
       # Plugins
-      - PLUGINS_ENABLED=${PLUGINS_ENABLED:-true}
-      - PLUGINS_DIR=/app/data/plugins
+      - PLUGINS_DIR=${PLUGINS_DIR:-/app/data/plugins}
+      # Plugin install-from-URL redirect policy (ssrf-guard): off unless the exact string 'true'.
+      - PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS=${PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS:-false}
       # Security
       - API_MASTER_KEY=${API_MASTER_KEY:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      # Forward the plain-HTTP dashboard CSP override; unset preserves the application default.
+      - CSP_UPGRADE_INSECURE_REQUESTS=${CSP_UPGRADE_INSECURE_REQUESTS:-}
+      # Docker socket proxy (openwa-api never touches /var/run/docker.sock directly)
+      - DOCKER_HOST=tcp://docker-proxy:2375
     volumes:
       - openwa-data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker-compose.yml:/app/docker-compose.yml:ro
     depends_on:
+      docker-proxy:
+        condition: service_started
+        # Not required: lets operators disable the proxy (see the docker-proxy env comment)
+        # without breaking `docker compose up`. DockerService degrades gracefully without it.
+        required: false
       postgres:
         condition: service_healthy
         required: false
@@ -87,7 +261,7 @@ services:
           'CMD',
           'node',
           '-e',
-          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+          "require('http').get('http://localhost:2785/api/health/ready', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
         ]
       interval: 30s
       timeout: 10s
@@ -97,34 +271,37 @@ services:
       - 'com.openwa.service=api'
       - 'com.openwa.core=true'
 
-  # ===== CORE: Dashboard Frontend =====
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile.traefik
-    container_name: openwa-dashboard
-    profiles: ['with-dashboard', 'full']
-    restart: unless-stopped
-    expose:
-      - '80'
-    depends_on:
-      - openwa-api
-    labels:
-      - 'com.openwa.service=dashboard'
-      - 'com.openwa.core=true'
+  # The dashboard SPA is now bundled into the openwa-api image and served by NestJS on the
+  # same port (2785) — there is no separate dashboard container. Reach it at the openwa-api
+  # port directly; put your own TLS reverse proxy (nginx/Caddy/cloud LB) in front if needed.
 
   # ===== OPTIONAL: Built-in PostgreSQL =====
   postgres:
     image: postgres:16-alpine
     container_name: openwa-postgres
-    profiles: ['postgres']
+    profiles: ['postgres', 'full']
     restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
     environment:
       POSTGRES_USER: ${DATABASE_USERNAME:-openwa}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-openwa}
+      # M16: no committed default secret. Empty unless the operator sets it; the postgres
+      # image refuses to initialize with an empty password (clear fail-fast), and the app's
+      # production boot guard rejects empty/placeholder secrets before startup.
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-}
       POSTGRES_DB: ${DATABASE_NAME:-openwa}
+      # PostgreSQL schema for OpenWA's tables + migration ledger. Default 'public'. The init
+      # script below creates the schema (if non-public) and sets the database default search_path,
+      # so the built-in container works zero-config with a custom schema. Ignored when 'public'.
+      POSTGRES_SCHEMA: ${POSTGRES_SCHEMA:-public}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Runs only on first init (postgres image docker-entrypoint-initdb.d semantics): creates the
+      # configured schema and sets the DB default search_path. No-op for 'public'; does not re-run
+      # on an already-initialized volume (see the note in scripts/postgres-init-schema.sh).
+      - ./scripts/postgres-init-schema.sh:/docker-entrypoint-initdb.d/01-create-schema.sh:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${DATABASE_USERNAME:-openwa}']
       interval: 5s
@@ -138,9 +315,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: openwa-redis
-    profiles: ['redis']
+    profiles: ['redis', 'full']
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
+    # noeviction is required by BullMQ: under any other policy Redis may evict queue keys once
+    # maxmemory is reached, silently dropping queued jobs.
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
     healthcheck:
@@ -154,14 +337,22 @@ services:
 
   # ===== OPTIONAL: Built-in MinIO (S3-compatible) =====
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: openwa-minio
-    profiles: ['minio']
+    profiles: ['minio', 'full']
     restart: unless-stopped
+    networks:
+      - openwa-network
+    security_opt:
+      - 'no-new-privileges:true'
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      # M16: no committed default creds. MinIO refuses to start with empty root creds
+      # (clear fail-fast); the app's production boot guard rejects empty/placeholder secrets.
+      # Canonical names, matching what the app/dashboard read (legacy S3_ACCESS_KEY/S3_SECRET_KEY
+      # still accepted as a fallback so older .env files keep working).
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}
     volumes:
       - minio-data:/data
     ports:
@@ -177,15 +368,29 @@ services:
       - 'com.openwa.builtin=true'
 
 volumes:
+  # Pin explicit volume names so the compose path and the Docker-API orchestration path (which uses
+  # the literal `openwa_<svc>-data` names in docker.service.ts) bind the SAME volume regardless of the
+  # compose project name — otherwise re-enabling a built-in service could mount a fresh empty volume.
   openwa-data:
+    name: openwa_openwa-data
     driver: local
   postgres-data:
+    name: openwa_postgres-data
     driver: local
   redis-data:
+    name: openwa_redis-data
     driver: local
   minio-data:
+    name: openwa_minio-data
     driver: local
 
 networks:
-  default:
+  # Application network — datastores and openwa-api. Keep the name `openwa-network`:
+  # docker.service.ts attaches orchestrated containers to it by literal name.
+  openwa-network:
     name: openwa-network
+  # Isolated network for the Docker socket proxy. `internal: true` means no external
+  # connectivity; only openwa-api joins it, so nothing else can reach docker-proxy:2375.
+  internal-docker:
+    name: openwa-internal-docker
+    internal: true

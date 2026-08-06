@@ -1,15 +1,37 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Put, Delete, Body, Param, Req, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto, ApiKeyCreatedResponseDto } from './dto';
-import { RequireRole } from './decorators/auth.decorators';
-import { ApiKeyRole } from './entities/api-key.entity';
+import { RequireRole, CurrentApiKey, RequireUnscopedKey } from './decorators/auth.decorators';
+import { type ApiKey, ApiKeyRole } from './entities/api-key.entity';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from './../audit/entities/audit-log.entity';
 
 @ApiTags('auth')
-@ApiBearerAuth()
 @Controller('auth/api-keys')
+// Key lifecycle routes have no session dimension, so a session-scoped ADMIN key could otherwise
+// escape its confinement here (mint an unrestricted key, or clear another key's allowedSessions).
+@RequireUnscopedKey()
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  // Build the request-context block for an API-key lifecycle audit entry: who did it (the admin key from
+  // the guard), the resolved client IP, and the HTTP method/path.
+  private auditContext(
+    req: Request,
+    actor?: ApiKey,
+  ): { apiKey?: ApiKey; ipAddress?: string; method?: string; path?: string } {
+    return {
+      apiKey: actor,
+      ipAddress: (req as Request & { clientIp?: string }).clientIp ?? undefined,
+      method: req.method,
+      path: req.path,
+    };
+  }
 
   @Post()
   @RequireRole(ApiKeyRole.ADMIN)
@@ -19,8 +41,16 @@ export class AuthController {
     description: 'API key created',
     type: ApiKeyCreatedResponseDto,
   })
-  async create(@Body() dto: CreateApiKeyDto): Promise<ApiKeyCreatedResponseDto> {
+  async create(
+    @Body() dto: CreateApiKeyDto,
+    @Req() req: Request,
+    @CurrentApiKey() actor?: ApiKey,
+  ): Promise<ApiKeyCreatedResponseDto> {
     const { apiKey, rawKey } = await this.authService.createApiKey(dto);
+    await this.auditService.logInfo(AuditAction.API_KEY_CREATED, {
+      ...this.auditContext(req, actor),
+      metadata: { targetKeyId: apiKey.id, targetKeyName: apiKey.name, role: apiKey.role },
+    });
     return {
       id: apiKey.id,
       name: apiKey.name,
@@ -40,7 +70,11 @@ export class AuthController {
   @Get()
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'List all API keys (admin only)' })
-  @ApiResponse({ status: 200, type: [ApiKeyResponseDto] })
+  @ApiResponse({
+    status: 200,
+    description: 'All API keys (the plaintext key is never returned; only the keyPrefix).',
+    type: [ApiKeyResponseDto],
+  })
   async findAll(): Promise<ApiKeyResponseDto[]> {
     const keys = await this.authService.findAll();
     return keys.map(k => ({
@@ -61,7 +95,11 @@ export class AuthController {
   @Get(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Get API key details (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
+  @ApiResponse({
+    status: 200,
+    description: 'The API key (plaintext never returned; only the keyPrefix).',
+    type: ApiKeyResponseDto,
+  })
   async findOne(@Param('id') id: string): Promise<ApiKeyResponseDto> {
     const k = await this.authService.findOne(id);
     return {
@@ -82,9 +120,31 @@ export class AuthController {
   @Put(':id')
   @RequireRole(ApiKeyRole.ADMIN)
   @ApiOperation({ summary: 'Update API key (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
-  async update(@Param('id') id: string, @Body() dto: UpdateApiKeyDto): Promise<ApiKeyResponseDto> {
+  @ApiResponse({ status: 200, description: 'The updated API key.', type: ApiKeyResponseDto })
+  @ApiResponse({ status: 409, description: 'The change would remove the last usable admin key.' })
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateApiKeyDto,
+    @Req() req: Request,
+    @CurrentApiKey() actor?: ApiKey,
+  ): Promise<ApiKeyResponseDto> {
+    const before = await this.authService.findOne(id);
     const k = await this.authService.update(id, dto);
+    const authzSnapshot = (key: ApiKey) => ({
+      role: key.role,
+      allowedIps: key.allowedIps,
+      allowedSessions: key.allowedSessions,
+      expiresAt: key.expiresAt,
+    });
+    await this.auditService.logInfo(AuditAction.API_KEY_UPDATED, {
+      ...this.auditContext(req, actor),
+      metadata: {
+        targetKeyId: k.id,
+        targetKeyName: k.name,
+        before: authzSnapshot(before),
+        after: authzSnapshot(k),
+      },
+    });
     return {
       id: k.id,
       name: k.name,
@@ -105,16 +165,32 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Delete API key (admin only)' })
   @ApiResponse({ status: 204, description: 'API key deleted' })
-  async delete(@Param('id') id: string): Promise<void> {
+  @ApiResponse({ status: 409, description: 'The key is the last usable admin key.' })
+  async delete(@Param('id') id: string, @Req() req: Request, @CurrentApiKey() actor?: ApiKey): Promise<void> {
+    const target = await this.authService.findOne(id);
     await this.authService.delete(id);
+    await this.auditService.logInfo(AuditAction.API_KEY_DELETED, {
+      ...this.auditContext(req, actor),
+      metadata: { targetKeyId: id, targetKeyName: target?.name },
+    });
   }
 
   @Post(':id/revoke')
   @RequireRole(ApiKeyRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Revoke API key (admin only)' })
-  @ApiResponse({ status: 200, type: ApiKeyResponseDto })
-  async revoke(@Param('id') id: string): Promise<ApiKeyResponseDto> {
+  @ApiResponse({ status: 200, description: 'The revoked API key (isActive now false).', type: ApiKeyResponseDto })
+  @ApiResponse({ status: 409, description: 'The key is the last usable admin key.' })
+  async revoke(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @CurrentApiKey() actor?: ApiKey,
+  ): Promise<ApiKeyResponseDto> {
     const k = await this.authService.revoke(id);
+    await this.auditService.logInfo(AuditAction.API_KEY_REVOKED, {
+      ...this.auditContext(req, actor),
+      metadata: { targetKeyId: k.id, targetKeyName: k.name },
+    });
     return {
       id: k.id,
       name: k.name,

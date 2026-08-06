@@ -1,121 +1,226 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trans, useTranslation } from 'react-i18next';
-import { Plus, QrCode, RefreshCw, Trash2, Eye, Loader2, Play, Square, X, Search, Filter } from 'lucide-react';
-import { sessionApi, type Session } from '../services/api';
+import {
+  Plus,
+  QrCode,
+  RefreshCw,
+  Trash2,
+  Eye,
+  Loader2,
+  Play,
+  Square,
+  Search,
+  Filter,
+  Skull,
+  Unlink,
+} from 'lucide-react';
+import { sessionApi, type Session, type AccountRestriction } from '../services/api';
+import { queryKeys } from '../hooks/queries';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useToast } from '../components/Toast';
-import { useWebSocket } from '../hooks/useWebSocket';
+import {
+  canForceKillSession,
+  canUnlinkSession,
+  classifyUnlinkError,
+  isSessionStarted,
+  replaceSession,
+} from '../utils/sessionActions';
+import { invalidateSessionQueries, reconcileSessionCache } from '../utils/sessionMutation';
+import { canCreateSession, filterSessions, isValidPairingPhone, sessionNameIssues } from '../utils/sessionForm';
+import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
+import { useSessionPairing } from '../hooks/useSessionPairing';
+import type { TFunction } from 'i18next';
+import { useSessionFeed } from '../hooks/useSessionFeed';
+import { useSessionCreateForm } from '../hooks/useSessionCreateForm';
 import { PageHeader } from '../components/PageHeader';
+import { CustomSelect } from '../components/CustomSelect';
+import { Modal } from '../components/Modal';
 import './Sessions.css';
+
+/**
+ * The hover title for a restriction: the engine's own cause token, plus when enforcement ends if
+ * WhatsApp said. The visible label stays the translated kind — `code` is a raw upstream token
+ * (`TOS_BLOCK`, `BIZ_QUALITY`) that is searchable but not readable, so it belongs in the tooltip.
+ */
+function restrictionTitle(restriction: AccountRestriction, t: TFunction): string {
+  const parts = [t(`sessions.restriction.${restriction.kind}`), restriction.code];
+  if (restriction.expiresAt) {
+    parts.push(t('sessions.restriction.until', { date: new Date(restriction.expiresAt).toLocaleString() }));
+  }
+  return parts.join(' · ');
+}
 
 export function Sessions() {
   const { t } = useTranslation();
   useDocumentTitle(t('sessions.title'));
   const toast = useToast();
   const { canWrite } = useRole();
+  const queryClient = useQueryClient();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  // The full-page spinner belongs to the FIRST load only (see fetchSessions).
+  const initialLoadDone = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newSessionName, setNewSessionName] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [qrData, setQrData] = useState<{ sessionId: string; sessionName: string; qrCode: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
+  const [unlinkConfirmId, setUnlinkConfirmId] = useState<string | null>(null);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
 
-  useWebSocket({
+  const fetchSessions = useCallback(async (): Promise<Session[]> => {
+    try {
+      // Background refetches — a websocket push, a mutation reloading the list — would otherwise
+      // replace the whole page with a spinner for the length of a round-trip, so a restriction
+      // arriving on a live page reads as a full reload.
+      if (!initialLoadDone.current) setLoading(true);
+      const data = await sessionApi.list();
+      setSessions(data);
+      // Keep the shared React Query cache (read by the Dashboard via useSessionsQuery /
+      // useSessionStatsQuery) in sync after this page's mutations reload local state — otherwise the
+      // Dashboard shows stale session counts/status. This runs on every reload (mount / WS-failed /
+      // mutation), which is harmless: the Sessions page holds no active observer on a ['sessions', …]
+      // query, so invalidation only marks the shared cache stale (no refetch here, no loop) and the
+      // Dashboard/other views refetch lazily on next mount. Prefix-matches every session-scoped key
+      // (sessions, sessionStats, per-session groups/chats/templates).
+      void invalidateSessionQueries(queryClient, queryKeys.sessions);
+      return data;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
+      return [];
+    } finally {
+      initialLoadDone.current = true;
+      setLoading(false);
+    }
+  }, [t, queryClient]);
+
+  // Mirror the latest sessions in a ref so the WS handler can compare against the current status without
+  // depending on `sessions` (which would churn the callback identity and re-subscribe the socket). Kept
+  // in sync with every state update (fetch / create / delete / WS) via the effect below.
+  const sessionsRef = useRef<Session[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  const {
+    qrData,
+    pairingMode,
+    phoneNumber,
+    pairingCode,
+    requestingPairing,
+    pairingError,
+    setPhoneNumber,
+    selectPairingTab,
+    handleChangeNumber,
+    handleGeneratePairingCode,
+    handleShowQR,
+    handleCloseQRModal,
+    applyQrPush,
+    dismissQrForSession,
+  } = useSessionPairing({ sessions, sessionsRef, reloadSessions: fetchSessions });
+
+  const { showCreateModal, setShowCreateModal, newSessionName, setNewSessionName, creating, handleCreate } =
+    useSessionCreateForm({
+      onCreated: newSession => {
+        // Functional append: never capture a stale `sessions` (a WS or fetch between the await and the
+        // setState would otherwise drop a row). Then invalidate the prefix so stats/groups/chats refresh.
+        setSessions(current => [...current, newSession]);
+        void invalidateSessionQueries(queryClient, queryKeys.sessions);
+      },
+      onFailed: msg => setError(msg),
+    });
+
+  // Reconcile the LOCAL view with an authoritative Session response. The previous handlers discarded
+  // the response and fabricated `{ status: 'disconnected' }`, losing phone:null, timestamps, and other
+  // server-owned fields; this keeps the card and the selected-session modal byte-for-byte with the
+  // server. Functional updates (no captured stale `sessions`) feed both the list and the selected row,
+  // and the shared cache is reconciled + invalidated so sibling views refetch. The QR modal is cleared
+  // (via the pairing hook's dismisser) when the session that owned it stops, so it never hangs on a
+  // disconnected session's stale code.
+  const applySessionResponse = useCallback(
+    async (updated: Session) => {
+      sessionsRef.current = replaceSession(sessionsRef.current, updated);
+      setSessions(sessionsRef.current);
+      setSelectedSession(current => (current?.id === updated.id ? updated : current));
+      dismissQrForSession(updated.id);
+      await reconcileSessionCache(queryClient, queryKeys.sessions, updated);
+    },
+    [queryClient, dismissQrForSession],
+  );
+
+  useSessionFeed({
+    sessions,
+    sessionsRef,
+    onQRCode: applyQrPush,
+    // The badge renders from the server projection (`session.restriction`), and a restriction can
+    // arrive with no status transition at all (the Baileys reachout timelock rides a connect
+    // probe) — so the push is purely a refetch signal.
+    onSessionRestriction: useCallback(() => {
+      void fetchSessions();
+    }, [fetchSessions]),
     onSessionStatus: useCallback(
       (event: { sessionId: string; status: string }) => {
-        setSessions(prev =>
-          prev.map(s => (s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s)),
+        const prev = sessionsRef.current.find(s => s.id === event.sessionId);
+        // Some engines double-signal one transition; only react to an ACTUAL status change so the toast
+        // and the failed-refresh don't fire on every redundant envelope. Update the ref synchronously so
+        // a duplicate arriving in the same tick (before the sync effect runs) is also caught.
+        if (prev && prev.status === event.status) return;
+        // Drop `engineLoaded` alongside the status patch: it is server-owned live state the status
+        // envelope does not carry, so keeping the previous value would pair a fresh status with a
+        // stale engine answer and the card could offer Start to a running session (or Unlink to one
+        // with no engine). Clearing it makes isSessionStarted fall back to the status set until an
+        // authoritative response arrives — and for `disconnected`, where that fallback is knowingly
+        // wrong, the branch below refetches.
+        sessionsRef.current = sessionsRef.current.map(s =>
+          s.id === event.sessionId ? { ...s, status: event.status as Session['status'], engineLoaded: undefined } : s,
         );
+        setSessions(sessionsRef.current);
+        // Mark the shared session queries stale so sibling views refetch — but ONLY on a real
+        // transition (the dedup guard above already swallows the redundant double-signals, so this
+        // does not re-invalidate on duplicate envelopes).
+        void invalidateSessionQueries(queryClient, queryKeys.sessions);
         if (event.status === 'ready') {
           toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
         } else if (event.status === 'disconnected') {
+          // Refresh so the card picks up `engineLoaded` from the API. `disconnected` is the one status
+          // that means two different things — an engine still registered through its automatic
+          // reconnect backoff, or a session stopped with no engine at all — and only the server can
+          // say which, so the offered actions must not be guessed from the status here.
+          void fetchSessions();
           toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
+        } else if (event.status === 'action_required') {
+          // Refresh so the card picks up the lastError reason (what the operator must do) from the API.
+          void fetchSessions();
+          toast.warning(t('sessions.toasts.actionRequiredTitle'), t('sessions.toasts.actionRequiredDesc'));
+        } else if (event.status === 'failed') {
+          // Refresh so the card picks up the lastError reason from the API.
+          void fetchSessions();
+          toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
         }
       },
-      [toast, t],
+      [toast, t, fetchSessions, queryClient],
     ),
   });
-
-  const fetchSessions = async () => {
-    try {
-      setLoading(true);
-      const data = await sessionApi.list();
-      setSessions(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('sessions.create.errorDefault'));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
     fetchSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const currentSessionName = useRef<string>('');
-
-  const fetchQR = useCallback(async (sessionId: string) => {
-    try {
-      const qr = await sessionApi.getQR(sessionId);
-      setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
-      if (qr.status === 'ready') {
-        setQrData(null);
-        currentSessionName.current = '';
-        fetchSessions();
-      }
-    } catch {
-      setQrData(null);
-      currentSessionName.current = '';
-      fetchSessions();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (qrData) {
-      currentSessionName.current = qrData.sessionName;
-      qrRefreshInterval.current = setInterval(() => {
-        fetchQR(qrData.sessionId);
-      }, 5000);
-    }
-    return () => {
-      if (qrRefreshInterval.current) clearInterval(qrRefreshInterval.current);
-    };
-  }, [qrData, fetchQR]);
-
-  const handleCreate = async () => {
-    if (!newSessionName.trim()) return;
-    try {
-      setCreating(true);
-      const newSession = await sessionApi.create(newSessionName);
-      setSessions([...sessions, newSession]);
-      setNewSessionName('');
-      setShowCreateModal(false);
-      toast.success(t('sessions.create.successTitle'), t('sessions.create.successDesc', { name: newSession.name }));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t('sessions.create.errorDefault');
-      setError(msg);
-      toast.error(t('sessions.create.errorTitle'), msg);
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const handleDelete = async (id: string) => {
     const session = sessions.find(s => s.id === id);
     try {
       await sessionApi.delete(id);
-      setSessions(sessions.filter(s => s.id !== id));
+      // Functional removal (no stale `sessions` capture), then invalidate the prefix.
+      setSessions(current => current.filter(s => s.id !== id));
+      await invalidateSessionQueries(queryClient, queryKeys.sessions);
       toast.success(
         t('sessions.delete.successTitle'),
-        session ? t('sessions.delete.successDescNamed', { name: session.name }) : t('sessions.delete.successDescGeneric'),
+        session
+          ? t('sessions.delete.successDescNamed', { name: session.name })
+          : t('sessions.delete.successDescGeneric'),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('sessions.delete.errorDefault');
@@ -128,49 +233,96 @@ export function Sessions() {
 
   const handleStart = async (id: string) => {
     const session = sessions.find(s => s.id === id);
-    if (session && ['initializing', 'connecting', 'qr_ready'].includes(session.status)) {
+    if (session && ['initializing', 'qr_ready'].includes(session.status)) {
       handleShowQR(id);
       return;
     }
 
     try {
-      await sessionApi.start(id);
-      setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'connecting' } : s)));
+      // Use the authoritative response instead of fabricating a status. The old code wrote a local
+      // `status: 'connecting'` — a value the gateway never emits — while keeping every other field
+      // from before the start, which now includes `engineLoaded` and would leave the card offering
+      // Start for a session that just acquired an engine.
+      const started = await sessionApi.start(id);
+      setSessions(current => replaceSession(current, started));
       await fetchSessions();
       handleShowQR(id);
     } catch (err) {
       console.error('Failed to start:', err);
-      await fetchSessions();
-      if (err instanceof Error && err.message.includes('already started')) {
-        handleShowQR(id);
+      // A credential teardown for this name is still settling — the backend fails closed with 409 +
+      // SESSION_NAME_TEARDOWN_PENDING. It is retryable, so warn with the server message and do NOT
+      // open a QR modal (there is no engine to scan yet). Any other start error keeps the existing
+      // authoritative reload + QR fallback behavior.
+      const code = (err as { code?: string } | null | undefined)?.code;
+      if (code === 'SESSION_NAME_TEARDOWN_PENDING') {
+        const msg = err instanceof Error && err.message ? err.message : t('sessions.start.teardownPending');
+        toast.warning(t('sessions.start.teardownPendingTitle'), msg);
+        await fetchSessions();
+        return;
       }
-    }
-  };
-
-  const handleShowQR = async (id: string) => {
-    const session = sessions.find(s => s.id === id);
-    const sessionName = session?.name || '';
-    try {
-      const qr = await sessionApi.getQR(id);
-      setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
-    } catch (err) {
-      console.error('Failed to get QR:', err);
-      setError(t('sessions.qr.unavailable'));
+      const fresh = await fetchSessions();
+      const current = fresh.find(s => s.id === id);
+      if (current?.status !== 'ready') handleShowQR(id);
     }
   };
 
   const handleStop = async (id: string) => {
     try {
-      await sessionApi.stop(id);
-      setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'disconnected' } : s)));
-      if (qrData?.sessionId === id) setQrData(null);
+      const updated = await sessionApi.stop(id);
+      await applySessionResponse(updated);
     } catch (err) {
       console.error('Failed to stop:', err);
-      fetchSessions();
+      // The error response carries no Session body, so re-fetch the authoritative state — phone:null
+      // and the real status come from the list endpoint, not the error envelope.
+      await fetchSessions();
     }
   };
 
-  const formatLastActive = (date?: string) => {
+  const handleForceKill = async (id: string) => {
+    try {
+      const updated = await sessionApi.forceKill(id);
+      await applySessionResponse(updated);
+      toast.success(t('sessions.forceKill.successTitle'), t('sessions.forceKill.success'));
+    } catch (err) {
+      console.error('Failed to force-kill:', err);
+      toast.error(t('sessions.forceKill.failedTitle'), t('sessions.forceKill.failed'));
+      await fetchSessions();
+    } finally {
+      setKillConfirmId(null);
+    }
+  };
+
+  const handleUnlink = async (id: string) => {
+    // Guard against a second concurrent request: the button is disabled while in flight, but a
+    // rapid double-click would otherwise fire overlapping logouts and race the teardown tracking.
+    if (unlinkingId) return;
+    setUnlinkingId(id);
+    try {
+      const updated = await sessionApi.logout(id);
+      await applySessionResponse(updated);
+      toast.success(t('sessions.unlink.successTitle'), t('sessions.unlink.success'));
+    } catch (err) {
+      console.error('Failed to unlink:', err);
+      // The error response carries no Session body, so re-fetch authoritative state regardless of
+      // how we classify the toast — phone:null/status come from the list endpoint.
+      await fetchSessions();
+      if (classifyUnlinkError(err) === 'incomplete') {
+        // 502 + SESSION_LOGOUT_INCOMPLETE — the session stopped locally but the unlink operation is
+        // incomplete. Surface the server's specific message/retry guidance as a warning, not an error.
+        const msg = err instanceof Error && err.message ? err.message : t('sessions.unlink.incomplete');
+        toast.warning(t('sessions.unlink.incompleteTitle'), msg);
+      } else {
+        // A reverse-proxy 502 (bare or JSON without the exact code) may never have reached the
+        // gateway, so nothing was stopped — generic failure, not retry guidance.
+        toast.error(t('sessions.unlink.failedTitle'), t('sessions.unlink.failed'));
+      }
+    } finally {
+      setUnlinkConfirmId(null);
+      setUnlinkingId(null);
+    }
+  };
+
+  const formatLastActive = (date?: string | null) => {
     if (!date) return t('common.never');
     const diff = Date.now() - new Date(date).getTime();
     if (diff < 60000) return t('common.justNow');
@@ -180,17 +332,10 @@ export function Sessions() {
 
   const formatStatus = (status: string) => t(`sessionStatus.${status}`, { defaultValue: status });
 
-  const filteredSessions = sessions.filter(s => {
-    const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.id.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus =
-      statusFilter === 'all' ||
-      (statusFilter === 'active' && s.status === 'ready') ||
-      (statusFilter === 'inactive' && ['created', 'idle', 'disconnected'].includes(s.status)) ||
-      (statusFilter === 'connecting' && ['initializing', 'connecting', 'qr_ready'].includes(s.status));
-    return matchesSearch && matchesStatus;
-  });
+  const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
+  const existingSessionNames = sessions.map(s => s.name);
+  // Empty is a disabled button, not a message: the form stays quiet until the user types something.
+  const nameIssues = newSessionName ? sessionNameIssues(newSessionName, existingSessionNames) : [];
 
   if (loading) {
     return (
@@ -231,22 +376,26 @@ export function Sessions() {
 
         <div className="filter-group">
           <Filter size={16} />
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="all">{t('sessions.filter.all')}</option>
-            <option value="active">{t('sessions.filter.active')}</option>
-            <option value="inactive">{t('sessions.filter.inactive')}</option>
-            <option value="connecting">{t('sessions.filter.connecting')}</option>
-          </select>
+          <CustomSelect
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={[
+              { value: 'all', label: t('sessions.filter.all') },
+              { value: 'active', label: t('sessions.filter.active') },
+              { value: 'inactive', label: t('sessions.filter.inactive') },
+              { value: 'connecting', label: t('sessions.filter.connecting') },
+            ]}
+          />
         </div>
       </div>
 
       {error && (
         <div
           style={{
-            background: '#FEE2E2',
+            background: 'rgba(239, 68, 68, 0.12)',
             padding: '1rem',
             borderRadius: '8px',
-            color: '#DC2626',
+            color: 'var(--error)',
             marginBottom: '1rem',
           }}
         >
@@ -255,84 +404,98 @@ export function Sessions() {
       )}
 
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.create.title')}</h2>
-              <button className="btn-icon" onClick={() => setShowCreateModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <label>{t('sessions.create.label')}</label>
-              <input
-                type="text"
-                placeholder={t('sessions.create.placeholder')}
-                value={newSessionName}
-                onChange={e => {
-                  const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
-                  setNewSessionName(value);
-                }}
-                onKeyDown={e => e.key === 'Enter' && handleCreate()}
-              />
-              <p className="input-hint">
-                <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
-              </p>
-              {newSessionName && !/^[a-z0-9-]+$/.test(newSessionName) && (
-                <p className="input-error">{t('sessions.create.invalidChars')}</p>
-              )}
-              {newSessionName && newSessionName.length > 50 && (
-                <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
-              )}
-              {newSessionName &&
-                /^[a-z0-9-]+$/.test(newSessionName) &&
-                newSessionName.length <= 50 &&
-                sessions.some(s => s.name === newSessionName) && (
-                  <p className="input-error">{t('sessions.create.duplicate')}</p>
-                )}
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setShowCreateModal(false)}
+          title={t('sessions.create.title')}
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
                 {t('common.cancel')}
               </button>
               <button
                 className="btn-primary"
                 onClick={handleCreate}
-                disabled={
-                  creating ||
-                  !newSessionName.trim() ||
-                  !/^[a-z0-9-]+$/.test(newSessionName) ||
-                  newSessionName.length > 50 ||
-                  sessions.some(s => s.name === newSessionName)
-                }
+                disabled={creating || !canCreateSession(newSessionName, existingSessionNames)}
               >
                 {creating ? <Loader2 className="animate-spin" size={16} /> : t('common.create')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <label>{t('sessions.create.label')}</label>
+          <input
+            type="text"
+            placeholder={t('sessions.create.placeholder')}
+            value={newSessionName}
+            onChange={e => {
+              const value = e.target.value.toLowerCase().replace(/\s+/g, '-');
+              setNewSessionName(value);
+            }}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+          />
+          <p className="input-hint">
+            <Trans i18nKey="sessions.create.hint" components={{ code: <code /> }} />
+          </p>
+          {nameIssues.includes('format') && <p className="input-error">{t('sessions.create.invalidChars')}</p>}
+          {nameIssues.includes('too-long') && (
+            <p className="input-error">{t('sessions.create.tooLong', { length: newSessionName.length })}</p>
+          )}
+          {nameIssues.includes('duplicate') && <p className="input-error">{t('sessions.create.duplicate')}</p>}
+        </Modal>
       )}
 
       {qrData && (
-        <div className="modal-overlay" onClick={() => setQrData(null)}>
-          <div className="modal qr-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <h2>{t('sessions.qr.title')}</h2>
-                <span className="session-name">{qrData.sessionName}</span>
+        <Modal
+          open
+          onClose={handleCloseQRModal}
+          className="qr-modal"
+          closeLabel={t('common.close')}
+          title={
+            <span className="modal-title">
+              {pairingMode ? t('sessions.pairing.tabPhone') : t('sessions.qr.title')}
+              <span className="session-name">{qrData.sessionName}</span>
+            </span>
+          }
+        >
+          <div style={{ textAlign: 'center' }}>
+            {!pairingCode && (
+              <div className="pairing-tabs" role="tablist">
+                <button
+                  role="tab"
+                  aria-selected={!pairingMode}
+                  className={`pairing-tab-btn ${!pairingMode ? 'active' : ''}`}
+                  onClick={() => selectPairingTab(false)}
+                >
+                  {t('sessions.pairing.tabQr')}
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={pairingMode}
+                  className={`pairing-tab-btn ${pairingMode ? 'active' : ''}`}
+                  onClick={() => selectPairingTab(true)}
+                >
+                  {t('sessions.pairing.tabPhone')}
+                </button>
               </div>
-              <button className="btn-close" onClick={() => setQrData(null)} aria-label={t('common.close')}>
-                <X size={20} color="#64748b" />
-              </button>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'center' }}>
-              {qrData.qrCode ? (
+            )}
+
+            {!pairingMode ? (
+              // QR Code Content
+              qrData.qrCode ? (
                 <>
                   <img src={qrData.qrCode} alt="QR" style={{ maxWidth: '280px', borderRadius: '12px' }} />
                   <div className="qr-instructions">
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} /></p>
-                    <p className="qr-step"><Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} /></p>
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step1" components={{ strong: <strong /> }} />
+                    </p>
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step2" components={{ strong: <strong /> }} />
+                    </p>
+                    <p className="qr-step">
+                      <Trans i18nKey="sessions.qr.step3" components={{ strong: <strong /> }} />
+                    </p>
                   </div>
                   <p className="qr-auto-refresh">
                     <RefreshCw size={14} className="spin-slow" /> {t('sessions.qr.autoRefresh')}
@@ -343,89 +506,221 @@ export function Sessions() {
                   <Loader2 className="animate-spin" size={48} />
                   <p>{t('sessions.qr.generating')}</p>
                 </div>
-              )}
-            </div>
+              )
+            ) : (
+              // Pairing Code Content
+              <div className="pairing-container" role="tabpanel">
+                {pairingError && <div className="pairing-error">{pairingError}</div>}
+
+                {!pairingCode ? (
+                  <div className="pairing-form">
+                    <label htmlFor="pairing-phone" className="pairing-label">
+                      {t('sessions.pairing.phoneLabel')}
+                    </label>
+                    <input
+                      id="pairing-phone"
+                      className="pairing-input"
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={15}
+                      placeholder={t('sessions.pairing.phonePlaceholder')}
+                      value={phoneNumber}
+                      onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                      onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
+                    />
+                    <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
+                      {t('sessions.pairing.phoneHint')}
+                    </p>
+                    <button
+                      className="btn-primary"
+                      onClick={handleGeneratePairingCode}
+                      disabled={requestingPairing || !isValidPairingPhone(phoneNumber)}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      {requestingPairing ? (
+                        <>
+                          <Loader2 className="animate-spin" size={16} />
+                          <span style={{ marginLeft: '0.5rem' }}>{t('sessions.pairing.generating')}</span>
+                        </>
+                      ) : (
+                        t('sessions.pairing.generateButton')
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <label style={{ display: 'block', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {t('sessions.pairing.codeLabel')}
+                    </label>
+                    <div className="pairing-code-display">
+                      {pairingCode.substring(0, 4)} - {pairingCode.substring(4)}
+                    </div>
+
+                    <div className="qr-instructions">
+                      <p className="pairing-instructions-title">{t('sessions.pairing.instructions')}</p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.pairing.step1" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.pairing.step2" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.pairing.step3" components={{ strong: <strong /> }} />
+                      </p>
+                      <p className="qr-step">
+                        <Trans i18nKey="sessions.pairing.step4" components={{ strong: <strong /> }} />
+                      </p>
+                    </div>
+
+                    <div style={{ marginTop: '1.5rem' }}>
+                      <button className="btn-secondary" onClick={handleChangeNumber} style={{ width: '100%' }}>
+                        {t('sessions.pairing.changeNumber')}
+                      </button>
+                    </div>
+
+                    <p className="qr-auto-refresh">
+                      <RefreshCw size={14} className="spin-slow" /> {t('sessions.pairing.waitingConnection')}
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
 
       {selectedSession && (
-        <div className="modal-overlay" onClick={() => setSelectedSession(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.details.title')}</h2>
-              <button className="btn-icon" onClick={() => setSelectedSession(null)}>
-                <X size={20} />
-              </button>
+        <Modal
+          open
+          onClose={() => setSelectedSession(null)}
+          title={t('sessions.details.title')}
+          closeLabel={t('common.close')}
+          footer={
+            <button className="btn-secondary" onClick={() => setSelectedSession(null)}>
+              {t('common.close')}
+            </button>
+          }
+        >
+          <div className="detail-grid">
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.name')}</span>
+              <span className="detail-value">{selectedSession.name}</span>
             </div>
-            <div className="modal-body">
-              <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.name')}</span>
-                  <span className="detail-value">{selectedSession.name}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.status')}</span>
-                  <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.sessionId')}</span>
-                  <span className="detail-value mono">{selectedSession.id}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.phone')}</span>
-                  <span className="detail-value">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.created')}</span>
-                  <span className="detail-value">{new Date(selectedSession.createdAt).toLocaleString()}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">{t('sessions.details.lastActive')}</span>
-                  <span className="detail-value">
-                    {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
-                  </span>
-                </div>
-              </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.status')}</span>
+              <span className={`status-badge ${selectedSession.status}`}>{formatStatus(selectedSession.status)}</span>
             </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setSelectedSession(null)}>
-                {t('common.close')}
-              </button>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.sessionId')}</span>
+              <span className="detail-value mono">{selectedSession.id}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.phone')}</span>
+              <span className="detail-value">{selectedSession.phone || t('sessions.details.phoneNone')}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.created')}</span>
+              <span className="detail-value">{new Date(selectedSession.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">{t('sessions.details.lastActive')}</span>
+              <span className="detail-value">
+                {selectedSession.lastActive ? new Date(selectedSession.lastActive).toLocaleString() : t('common.never')}
+              </span>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {deleteConfirmId && (
-        <div className="modal-overlay" onClick={() => setDeleteConfirmId(null)}>
-          <div className="modal confirm-modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>{t('sessions.delete.title')}</h2>
-              <button className="btn-icon" onClick={() => setDeleteConfirmId(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>
-                <Trans
-                  i18nKey="sessions.delete.message"
-                  values={{ name: sessions.find(s => s.id === deleteConfirmId)?.name }}
-                  components={{ strong: <strong /> }}
-                />
-              </p>
-              <p className="text-muted">{t('sessions.delete.warning')}</p>
-            </div>
-            <div className="modal-footer">
+        <Modal
+          open
+          onClose={() => setDeleteConfirmId(null)}
+          title={t('sessions.delete.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
               <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)}>
                 {t('common.cancel')}
               </button>
               <button className="btn-danger" onClick={() => handleDelete(deleteConfirmId)}>
                 {t('common.delete')}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.delete.message"
+              values={{ name: sessions.find(s => s.id === deleteConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.delete.warning')}</p>
+        </Modal>
+      )}
+
+      {killConfirmId && (
+        <Modal
+          open
+          onClose={() => setKillConfirmId(null)}
+          title={t('sessions.forceKill.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setKillConfirmId(null)}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn-danger" onClick={() => handleForceKill(killConfirmId)}>
+                {t('sessions.forceKill.confirm')}
+              </button>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.forceKill.message"
+              values={{ name: sessions.find(s => s.id === killConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.forceKill.warning')}</p>
+        </Modal>
+      )}
+
+      {unlinkConfirmId && (
+        <Modal
+          open
+          onClose={() => setUnlinkConfirmId(null)}
+          title={t('sessions.unlink.title')}
+          className="confirm-modal"
+          closeLabel={t('common.close')}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setUnlinkConfirmId(null)}>
+                {t('common.cancel')}
+              </button>
+              <button
+                className="btn-danger"
+                onClick={() => handleUnlink(unlinkConfirmId)}
+                disabled={unlinkingId !== null}
+              >
+                {t('sessions.unlink.confirm')}
+              </button>
+            </>
+          }
+        >
+          <p>
+            <Trans
+              i18nKey="sessions.unlink.message"
+              values={{ name: sessions.find(s => s.id === unlinkConfirmId)?.name }}
+              components={{ strong: <strong /> }}
+            />
+          </p>
+          <p className="text-muted">{t('sessions.unlink.warning')}</p>
+        </Modal>
       )}
 
       <div className="sessions-grid">
@@ -443,7 +738,7 @@ export function Sessions() {
                 <span className={`status-pill ${session.status}`}>{formatStatus(session.status)}</span>
               </div>
 
-              {session.status === 'initializing' || session.status === 'connecting' || session.status === 'qr_ready' ? (
+              {session.status === 'initializing' || session.status === 'qr_ready' ? (
                 <div className="qr-placeholder">
                   <QrCode size={80} className="qr-icon" />
                   <p>{session.status === 'qr_ready' ? t('sessions.qr.scanToConnect') : t('sessions.qr.preparing')}</p>
@@ -469,6 +764,25 @@ export function Sessions() {
                     <span className="info-label">{t('sessions.card.lastActive')}</span>
                     <span className="info-value">{formatLastActive(session.lastActive)}</span>
                   </div>
+                  {(session.status === 'failed' || session.status === 'action_required') && session.lastError ? (
+                    <div className="info-row session-error">
+                      <span className="info-label">{t('sessions.card.error')}</span>
+                      <span className="info-value error-text" title={session.lastError}>
+                        {session.lastError}
+                      </span>
+                    </div>
+                  ) : null}
+                  {/* Not gated on status, unlike the error above: a reachout timelock applies to a
+                      session that is perfectly `ready`, and hiding it behind a status would make it
+                      invisible exactly when the operator needs it. */}
+                  {session.restriction ? (
+                    <div className="info-row session-restriction">
+                      <span className="info-label">{t('sessions.card.restriction')}</span>
+                      <span className="info-value restriction-text" title={restrictionTitle(session.restriction, t)}>
+                        {t(`sessions.restriction.${session.restriction.kind}`)}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               )}
 
@@ -477,16 +791,15 @@ export function Sessions() {
                   <Eye size={16} />
                   {t('sessions.actions.view')}
                 </button>
-                {canWrite &&
-                (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <Play size={16} />
-                    {t('sessions.actions.start')}
-                  </button>
-                ) : canWrite && ['ready', 'initializing', 'connecting', 'qr_ready'].includes(session.status) ? (
+                {canWrite && isSessionStarted(session) ? (
                   <button className="btn-action" onClick={() => handleStop(session.id)}>
                     <Square size={16} />
                     {t('sessions.actions.stop')}
+                  </button>
+                ) : canWrite && (session.status === 'created' || session.status === 'disconnected') ? (
+                  <button className="btn-action" onClick={() => handleStart(session.id)}>
+                    <Play size={16} />
+                    {t('sessions.actions.start')}
                   </button>
                 ) : canWrite ? (
                   <button className="btn-action" onClick={() => handleStart(session.id)}>
@@ -494,10 +807,22 @@ export function Sessions() {
                     {t('sessions.actions.reconnect')}
                   </button>
                 ) : null}
+                {canUnlinkSession(session, canWrite) && (
+                  <button className="btn-action danger" onClick={() => setUnlinkConfirmId(session.id)}>
+                    <Unlink size={16} />
+                    {t('sessions.actions.unlink')}
+                  </button>
+                )}
                 {canWrite && (
                   <button className="btn-action danger" onClick={() => setDeleteConfirmId(session.id)}>
                     <Trash2 size={16} />
                     {t('sessions.actions.delete')}
+                  </button>
+                )}
+                {canForceKillSession(session, canWrite) && (
+                  <button className="btn-action danger" onClick={() => setKillConfirmId(session.id)}>
+                    <Skull size={16} />
+                    {t('sessions.actions.killStuck')}
                   </button>
                 )}
               </div>

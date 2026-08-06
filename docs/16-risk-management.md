@@ -7,12 +7,12 @@ quadrantChart
     title Risk Assessment Matrix
     x-axis Low Impact --> High Impact
     y-axis Low Probability --> High Probability
-    
+
     quadrant-1 Monitor
     quadrant-2 Critical
     quadrant-3 Low Priority
     quadrant-4 Mitigate
-    
+
     WhatsApp Protocol Change: [0.8, 0.7]
     Account Ban: [0.6, 0.5]
     Security Breach: [0.9, 0.3]
@@ -25,18 +25,19 @@ quadrantChart
 
 ### R001: WhatsApp Protocol Changes
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R001 |
-| **Category** | Technical |
+| Attribute       | Value      |
+| --------------- | ---------- |
+| **ID**          | R001       |
+| **Category**    | Technical  |
 | **Probability** | High (70%) |
-| **Impact** | High |
-| **Risk Level** | Critical |
+| **Impact**      | High       |
+| **Risk Level**  | Critical   |
 
 **Description:**  
 WhatsApp can change their Web protocol at any time, which can cause the `whatsapp-web.js` library to stop working.
 
 **Indicators:**
+
 - Spike in `whatsapp-web.js` issues
 - Sudden increase in error rates
 - Authentication failures
@@ -49,16 +50,17 @@ flowchart TB
     R --> M2[Implement abstraction layer]
     R --> M3[Prepare alternative engines]
     R --> M4[Quick response plan]
-    
+
     M1 --> A1[Watch releases & issues]
     M2 --> A2[Engine interface pattern]
-    M3 --> A3[Baileys as backup]
+    M3 --> A3[Baileys engine available - ENGINE_TYPE env]
     M4 --> A4[< 24h patch capability]
 ```
 
 **Action Items:**
+
 1. Subscribe to `whatsapp-web.js` releases
-2. Design the engine abstraction layer
+2. Engine abstraction layer — implemented (pluggable `ENGINE_TYPE`: `whatsapp-web.js` default, `baileys` alternative)
 3. Document fallback procedures
 4. Maintain relationships with library maintainers
 
@@ -66,18 +68,19 @@ flowchart TB
 
 ### R002: User Account Banned
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R002 |
-| **Category** | Operational |
+| Attribute       | Value        |
+| --------------- | ------------ |
+| **ID**          | R002         |
+| **Category**    | Operational  |
 | **Probability** | Medium (50%) |
-| **Impact** | Medium |
-| **Risk Level** | Medium |
+| **Impact**      | Medium       |
+| **Risk Level**  | Medium       |
 
 **Description:**  
 WhatsApp users can be banned for using unofficial APIs or behavior detected as spam.
 
 **Indicators:**
+
 - User reports of banned accounts
 - Sudden disconnections
 - QR code fails for specific numbers
@@ -90,7 +93,7 @@ flowchart TB
     R --> M2[User education]
     R --> M3[Built-in safeguards]
     R --> M4[Clear disclaimers]
-    
+
     M1 --> A1[Rate limiting defaults]
     M2 --> A2[Documentation & warnings]
     M3 --> A3[Human-like delays]
@@ -100,29 +103,36 @@ flowchart TB
 **Built-in Safeguards:**
 
 ```typescript
-// Default rate limits to prevent ban
-const DEFAULT_SAFEGUARDS = {
-  // Message sending
-  minDelayBetweenMessages: 3000,  // 3 seconds minimum
-  maxMessagesPerMinute: 20,
-  maxMessagesPerHour: 200,
-  
-  // Session behavior
-  enableTypingIndicator: true,
-  randomizeDelays: true,
-  
-  // Warnings
-  warnOnBulkSend: true,
-  warnOnNewNumberSpam: true,
+// src/modules/message/bulk-message.service.ts — bulk-send pacing defaults
+const options = {
+  delayBetweenMessages: dto.options?.delayBetweenMessages ?? 3000, // 3s (DTO range 1000–60000)
+  randomizeDelay: dto.options?.randomizeDelay ?? true, // adds 0–2s jitter per message
+  stopOnError: dto.options?.stopOnError ?? false,
 };
 ```
 
-**User Guidelines Document:**
+Alongside that:
+
+- `SIMULATE_TYPING` (on by default; `SIMULATE_TYPING_MAX_MS` default 5000) shows the engine's typing
+  indicator and pauses for a length-scaled, jittered interval before a **text** send — `send-text`,
+  and `send-template` only because it renders to text and delegates to the same path. Every other
+  send (image, video, audio, document, sticker, location, contact, poll, reply, forward) reaches the
+  engine with no typing indicator and no pause.
+- `BULK_MAX_CONCURRENT_BATCHES` (default 50, `0` = unlimited) caps concurrent bulk batches per process.
+- A single bulk request carries at most 100 messages (`@ArrayMaxSize(100)` on
+  `SendBulkMessageDto.messages`); a 101st entry is rejected by the global `ValidationPipe` with HTTP 400.
+
+Not implemented: there are no per-minute / per-hour / per-day send caps, no media-specific delay and
+no new-number warmup enforcement. The guidelines below are operator discipline, not something the
+gateway enforces.
+
+**User Guidelines:**
 
 ```markdown
 ## Anti-Ban Best Practices
 
 ### DO ✅
+
 - Warm up new numbers (normal usage for 1-2 weeks)
 - Use realistic delays between messages
 - Personalize messages (avoid identical content)
@@ -130,6 +140,7 @@ const DEFAULT_SAFEGUARDS = {
 - Use residential proxies if needed
 
 ### DON'T ❌
+
 - Send bulk messages to unknown numbers
 - Use identical message templates
 - Send >100 messages/day on new numbers
@@ -141,18 +152,19 @@ const DEFAULT_SAFEGUARDS = {
 
 ### R003: Security Breach
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R003 |
-| **Category** | Security |
+| Attribute       | Value     |
+| --------------- | --------- |
+| **ID**          | R003      |
+| **Category**    | Security  |
 | **Probability** | Low (30%) |
-| **Impact** | Critical |
-| **Risk Level** | High |
+| **Impact**      | Critical  |
+| **Risk Level**  | High      |
 
 **Description:**  
 Security vulnerabilities may lead to unauthorized access to sessions, data, or infrastructure.
 
 **Potential Vectors:**
+
 - API key leakage
 - SQL injection
 - Insecure session storage
@@ -166,7 +178,7 @@ flowchart TB
     R --> M2[Regular audits]
     R --> M3[Dependency scanning]
     R --> M4[Incident response plan]
-    
+
     M1 --> A1[Input validation, encryption]
     M2 --> A2[Quarterly security review]
     M3 --> A3[Automated npm audit]
@@ -179,6 +191,7 @@ flowchart TB
 ## Security Review Checklist
 
 ### Code Security
+
 - [ ] Input validation on all endpoints
 - [ ] Parameterized database queries
 - [ ] API key hashing (never plain storage)
@@ -186,6 +199,7 @@ flowchart TB
 - [ ] No secrets in codebase
 
 ### Infrastructure Security
+
 - [ ] HTTPS enforced
 - [ ] Security headers configured
 - [ ] Rate limiting enabled
@@ -193,8 +207,9 @@ flowchart TB
 - [ ] Access logs enabled
 
 ### Dependency Security
+
 - [ ] npm audit clean
-- [ ] Snyk scan passed
+- [ ] Dependabot alerts reviewed
 - [ ] Dependencies up to date
 - [ ] No known vulnerabilities
 ```
@@ -207,7 +222,7 @@ flowchart TB
     A --> |Critical| C1[Immediate Response]
     A --> |High| C2[4-hour Response]
     A --> |Medium| C3[24-hour Response]
-    
+
     C1 --> R1[Isolate affected systems]
     R1 --> R2[Patch vulnerability]
     R2 --> R3[Notify affected users]
@@ -218,18 +233,19 @@ flowchart TB
 
 ### R004: Maintainer Burnout
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R004 |
-| **Category** | Organizational |
-| **Probability** | Medium (40%) |
-| **Impact** | Medium |
-| **Risk Level** | Medium |
+| Attribute       | Value          |
+| --------------- | -------------- |
+| **ID**          | R004           |
+| **Category**    | Organizational |
+| **Probability** | Medium (40%)   |
+| **Impact**      | Medium         |
+| **Risk Level**  | Medium         |
 
 **Description:**  
 An open-source project can stagnate if maintainers burn out or lack time.
 
 **Indicators:**
+
 - Increasing response time to issues
 - PR review delays
 - Reduced commit frequency
@@ -243,7 +259,7 @@ flowchart TB
     R --> M2[Documentation]
     R --> M3[Automation]
     R --> M4[Contributor onboarding]
-    
+
     M1 --> A1[Active Discord/forum]
     M2 --> A2[Comprehensive docs]
     M3 --> A3[CI/CD automation]
@@ -276,18 +292,20 @@ flowchart TB
 
 ### R005: Dependency Vulnerabilities
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R005 |
-| **Category** | Technical |
+| Attribute       | Value      |
+| --------------- | ---------- |
+| **ID**          | R005       |
+| **Category**    | Technical  |
 | **Probability** | High (60%) |
-| **Impact** | Medium |
-| **Risk Level** | Medium |
+| **Impact**      | Medium     |
+| **Risk Level**  | Medium     |
 
 **Description:**  
 Dependencies (`whatsapp-web.js`, Puppeteer, NestJS, etc.) may have vulnerabilities or breaking changes.
 
 **Mitigation Strategies:**
+
+> **Current state:** the real dependency check is a dedicated `audit` job in `ci.yml` running `npm audit --audit-level=high` (on push / PR — not on a daily schedule); it is deliberately split out of the `Lint` job so a newly published advisory cannot abort the other quality gates. `release.yml` repeats the same `npm audit --audit-level=high` and additionally runs a Trivy image scan (`CRITICAL,HIGH`, `ignore-unfixed`) against an explicit `.trivyignore` before the release tags are promoted. Dependabot PRs cover npm for `/` and `/dashboard` (weekly), GitHub Actions (monthly) and Docker base/compose images (weekly), with version-pinned ignores for `typescript >=7` and `better-sqlite3 >=13`. There is **no** standalone `security.yml` and **no** Snyk integration. The workflow below is a recommended enhancement to add scheduled scanning.
 
 ```yaml
 # .github/workflows/security.yml
@@ -295,7 +313,7 @@ name: Security Scan
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Daily
+    - cron: '0 0 * * *' # Daily
   push:
     branches: [main]
 
@@ -304,10 +322,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: npm audit
         run: npm audit --audit-level=high
-        
+
       - name: Snyk scan
         uses: snyk/actions/node@master
         env:
@@ -316,25 +334,27 @@ jobs:
 
 **Dependency Management Policy:**
 
-| Action | Frequency |
-|--------|-----------|
-| npm audit | Daily (automated) |
-| Snyk scan | Daily (automated) |
-| Minor updates | Weekly |
-| Major updates | Monthly (with testing) |
-| Security patches | Immediate |
+| Action                                                        | Frequency                |
+| ------------------------------------------------------------- | ------------------------ |
+| npm audit (`--audit-level=high`, dedicated `audit` job in CI) | Every push / PR          |
+| Trivy image scan (`CRITICAL,HIGH`, `.trivyignore`)            | Every release            |
+| Snyk scan                                                     | Not configured (planned) |
+| Dependabot PRs (npm: `/` and `/dashboard`; docker)            | Weekly                   |
+| Dependabot PRs (github-actions)                               | Monthly                  |
+| Major updates                                                 | Reviewed manually        |
+| Security patches                                              | Immediate                |
 
 ---
 
 ### R006: Legal/Compliance Issues
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R006 |
-| **Category** | Legal |
+| Attribute       | Value     |
+| --------------- | --------- |
+| **ID**          | R006      |
+| **Category**    | Legal     |
 | **Probability** | Low (20%) |
-| **Impact** | Critical |
-| **Risk Level** | Medium |
+| **Impact**      | Critical  |
+| **Risk Level**  | Medium    |
 
 **Description:**  
 WhatsApp/Meta may take legal action against unofficial APIs, or users may misuse the system for illegal activities.
@@ -346,12 +366,13 @@ WhatsApp/Meta may take legal action against unofficial APIs, or users may misuse
 ```markdown
 ## Disclaimer
 
-This project is not affiliated with, authorized, maintained, 
+This project is not affiliated with, authorized, maintained,
 sponsored or endorsed by WhatsApp or any of its affiliates.
 
 This is an independent and unofficial software. Use at your own risk.
 
 By using this software, you agree that:
+
 1. You will not use it for spam or illegal activities
 2. You are responsible for compliance with local laws
 3. The maintainers are not liable for any misuse
@@ -376,7 +397,7 @@ flowchart TB
         M4[Dependency Status]
         M5[Community Activity]
     end
-    
+
     subgraph Thresholds["Alert Thresholds"]
         T1[Issues > 50 open]
         T2[Error > 5%]
@@ -384,7 +405,7 @@ flowchart TB
         T4[Outdated > 30 days]
         T5[No PR > 14 days]
     end
-    
+
     Metrics --> Thresholds --> Alert[Alert & Review]
 ```
 
@@ -396,26 +417,30 @@ flowchart TB
 ### Date: YYYY-MM-DD
 
 ### Technical Risks
+
 - [ ] whatsapp-web.js status: ___
 - [ ] Error rate trend: ___
 - [ ] Security scan results: ___
 - [ ] Dependency updates needed: ___
 
 ### Operational Risks
+
 - [ ] User ban reports: ___
 - [ ] Support ticket volume: ___
 - [ ] Performance issues: ___
 
 ### Community Health
+
 - [ ] Open issues: ___
 - [ ] Open PRs: ___
 - [ ] New contributors: ___
 - [ ] Response time (avg): ___
 
 ### Actions Needed
-1. ___
-2. ___
-3. ___
+
+1. ***
+2. ***
+3. ***
 ```
 
 ## 16.4 Contingency Plans
@@ -427,11 +452,11 @@ flowchart TB
     T[Trigger: Protocol Change] --> A1[Assess Impact]
     A1 --> |Minor| M1[Wait for library update]
     A1 --> |Major| M2[Activate contingency]
-    
+
     M2 --> C1[Notify users]
     C1 --> C2[Switch to maintenance mode]
     C2 --> C3[Evaluate alternatives]
-    C3 --> |Baileys viable| C4[Implement Baileys engine]
+    C3 --> |Baileys viable| C4[Switch to Baileys engine - set ENGINE_TYPE=baileys]
     C3 --> |No alternatives| C5[Project pause/EOL]
 ```
 
@@ -467,18 +492,21 @@ Hour 8-24:
 ## Project Handover Checklist
 
 ### Documentation
+
 - [ ] Architecture documented
 - [ ] All decisions logged
 - [ ] Deployment procedures
 - [ ] Credentials inventory
 
 ### Access
+
 - [ ] GitHub owner transfer
 - [ ] npm publish rights
 - [ ] Domain ownership
 - [ ] Cloud accounts
 
 ### Knowledge Transfer
+
 - [ ] Codebase walkthrough
 - [ ] Known issues list
 - [ ] Roadmap handover
@@ -489,62 +517,57 @@ Hour 8-24:
 
 ### R007: Rate Limiting & WhatsApp Throttling
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R007 |
-| **Category** | Operational |
-| **Probability** | High (70%) |
-| **Impact** | Medium |
-| **Risk Level** | Medium |
+| Attribute       | Value       |
+| --------------- | ----------- |
+| **ID**          | R007        |
+| **Category**    | Operational |
+| **Probability** | High (70%)  |
+| **Impact**      | Medium      |
+| **Risk Level**  | Medium      |
 
 **Description:**
 WhatsApp has undocumented internal rate limits. Sending too many messages can trigger temporary blocks or permanent bans.
 
 **Built-in Safeguards:**
 
-```typescript
-// Anti-ban configuration defaults
-const RATE_LIMIT_CONFIG = {
-  // Per session limits
-  messagesPerMinute: 20,
-  messagesPerHour: 200,
-  messagesPerDay: 1000,
+The gateway enforces HTTP request throttling (`@nestjs/throttler`, registered globally as
+`ProxyAwareThrottlerGuard` and tracked per client IP) plus the bulk-send pacing described in R002:
 
-  // Delays
-  minDelayBetweenMessages: 3000,    // 3 seconds
-  maxDelayBetweenMessages: 5000,    // 5 seconds
-  delayAfterMedia: 5000,            // 5 seconds after media
+| Control                                               | Default                    | Scope                                                         |
+| ----------------------------------------------------- | -------------------------- | ------------------------------------------------------------- |
+| `RATE_LIMIT_SHORT_TTL` / `RATE_LIMIT_SHORT_LIMIT`     | 1000 ms / 10 requests      | HTTP burst window                                             |
+| `RATE_LIMIT_MEDIUM_TTL` / `RATE_LIMIT_MEDIUM_LIMIT`   | 60000 ms / 100 requests    | HTTP sustained window                                         |
+| `RATE_LIMIT_LONG_TTL` / `RATE_LIMIT_LONG_LIMIT`       | 3600000 ms / 1000 requests | HTTP hourly window                                            |
+| `delayBetweenMessages` / `randomizeDelay`             | 3000 ms + 0–2 s jitter     | Bulk send, between consecutive messages inside a batch        |
+| `BULK_MAX_CONCURRENT_BATCHES`                         | 50 (`0` = unlimited)       | Concurrent bulk batches per process                           |
+| `@ArrayMaxSize(100)` on `SendBulkMessageDto.messages` | 100 messages (hard limit)  | Messages accepted per bulk request                            |
+| `SIMULATE_TYPING` / `SIMULATE_TYPING_MAX_MS`          | on / 5000 ms               | Typing pause, text sends only (`send-text` / `send-template`) |
 
-  // Bulk messaging
-  bulkBatchSize: 50,
-  bulkDelayBetweenBatches: 60000,   // 1 minute
-
-  // New number warmup
-  newNumberDailyLimit: 50,
-  newNumberWarmupDays: 14,
-};
-```
+These bound API traffic and bulk pacing — they are **not** per-session WhatsApp send caps. The
+gateway does not count messages per minute, hour or day per session, so staying inside WhatsApp's
+undocumented limits remains the operator's responsibility. The thresholds below are targets for
+operator-side monitoring, not values the gateway enforces.
 
 **Monitoring Metrics:**
 
-| Metric | Warning Threshold | Critical Threshold |
-|--------|-------------------|--------------------|
-| Messages per minute | > 15 | > 25 |
-| Failed sends | > 5% | > 15% |
-| Connection drops | > 2/hour | > 5/hour |
-| QR re-auth requests | > 1/day | > 3/day |
+| Metric              | Warning Threshold | Critical Threshold |
+| ------------------- | ----------------- | ------------------ |
+| Messages per minute | > 15              | > 25               |
+| Failed sends        | > 5%              | > 15%              |
+| Connection drops    | > 2/hour          | > 5/hour           |
+| QR re-auth requests | > 1/day           | > 3/day            |
 
 ---
 
 ### R008: Data Loss
 
-| Attribute | Value |
-|-----------|-------|
-| **ID** | R008 |
-| **Category** | Technical |
+| Attribute       | Value     |
+| --------------- | --------- |
+| **ID**          | R008      |
+| **Category**    | Technical |
 | **Probability** | Low (20%) |
-| **Impact** | High |
-| **Risk Level** | Medium |
+| **Impact**      | High      |
+| **Risk Level**  | Medium    |
 
 **Mitigation Strategy:**
 
@@ -569,14 +592,19 @@ flowchart TB
     Prevention --> Detection --> Recovery
 ```
 
-**Backup Schedule:**
+**Backup Coverage:**
 
-| Data Type | Frequency | Retention | Storage |
-|-----------|-----------|-----------|---------|
-| Database (full) | Daily 02:00 | 30 days | S3/GCS |
-| Database (incremental) | Every 6 hours | 7 days | S3/GCS |
-| Session auth state | On change | Indefinite | Database |
-| Configuration | On change | Indefinite | Git |
+| Data Type                                                                                   | Frequency                                                                     | Retention                                            | Storage                                                                                                                |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Databases (`main.sqlite` plus the data store, or a `pg_dump` when `DATABASE_TYPE=postgres`) | Each operator-run of `scripts/backup.sh` — the repo ships no scheduled backup | Whatever the operator keeps; the script never prunes | One `openwa-backup-<timestamp>.tar.gz` under `BACKUP_DIR` (default `./backups`) — local disk, no object-storage upload |
+| Session auth state                                                                          | On change                                                                     | Indefinite                                           | Filesystem — `SESSION_DATA_PATH` (default `./data/sessions`), `BAILEYS_AUTH_DIR` (default `./data/baileys`)            |
+| Configuration                                                                               | On change                                                                     | Indefinite                                           | Git                                                                                                                    |
+
+> Session auth state is **not** in the database: whatsapp-web.js `LocalAuth` writes under
+> `SESSION_DATA_PATH` and Baileys writes multi-file auth state under `BAILEYS_AUTH_DIR/<sessionId>`.
+> A database-only backup loses every pairing — those directories must be in the file-level backup.
+> `scripts/backup.sh` already captures both alongside the databases. Running it on a schedule and
+> copying the archives off-box are the operator's responsibility.
 
 ---
 
@@ -584,12 +612,12 @@ flowchart TB
 
 ### Severity Levels
 
-| Level | Description | Response Time | Notification |
-|-------|-------------|---------------|--------------|
-| **P1 - Critical** | System down, data breach | < 15 minutes | Phone + Slack |
-| **P2 - High** | Major feature broken | < 1 hour | Slack + Email |
-| **P3 - Medium** | Feature degraded | < 4 hours | Slack |
-| **P4 - Low** | Minor issue | < 24 hours | GitHub Issue |
+| Level             | Description              | Response Time | Notification  |
+| ----------------- | ------------------------ | ------------- | ------------- |
+| **P1 - Critical** | System down, data breach | < 15 minutes  | Phone + Slack |
+| **P2 - High**     | Major feature broken     | < 1 hour      | Slack + Email |
+| **P3 - Medium**   | Feature degraded         | < 4 hours     | Slack         |
+| **P4 - Low**      | Minor issue              | < 24 hours    | GitHub Issue  |
 
 ### Escalation Flow
 
@@ -621,14 +649,14 @@ flowchart TB
 ```yaml
 # Example PagerDuty/Opsgenie configuration
 schedule:
-  name: "OpenWA On-Call"
+  name: 'OpenWA On-Call'
   rotation:
     - week: 1
-      primary: "developer-a"
-      secondary: "developer-b"
+      primary: 'developer-a'
+      secondary: 'developer-b'
     - week: 2
-      primary: "developer-b"
-      secondary: "developer-a"
+      primary: 'developer-b'
+      secondary: 'developer-a'
 
 escalation:
   - level: 1
@@ -675,6 +703,7 @@ flowchart LR
 ## Weekly Risk Report - Week XX
 
 ### Summary
+
 - Overall Risk Status: 🟢 Green / 🟡 Yellow / 🔴 Red
 - New Risks Identified: X
 - Risks Mitigated: X
@@ -682,11 +711,11 @@ flowchart LR
 
 ### KRI Status
 
-| KRI | Target | Actual | Status |
-|-----|--------|--------|--------|
-| Error Rate | < 1% | X.XX% | 🟢/🟡/🔴 |
-| Uptime | > 99.5% | XX.XX% | 🟢/🟡/🔴 |
-| Response Time | < 500ms | XXXms | 🟢/🟡/🔴 |
+| KRI           | Target  | Actual | Status   |
+| ------------- | ------- | ------ | -------- |
+| Error Rate    | < 1%    | X.XX%  | 🟢/🟡/🔴 |
+| Uptime        | > 99.5% | XX.XX% | 🟢/🟡/🔴 |
+| Response Time | < 500ms | XXXms  | 🟢/🟡/🔴 |
 
 ### Top Risks This Week
 
@@ -696,12 +725,13 @@ flowchart LR
 
 ### Dependencies Update
 
-| Dependency | Current | Latest | CVEs | Action |
-|------------|---------|--------|------|--------|
-| whatsapp-web.js | X.X.X | X.X.X | 0 | OK |
-| puppeteer | X.X.X | X.X.X | 0 | OK |
+| Dependency      | Current | Latest | CVEs | Action |
+| --------------- | ------- | ------ | ---- | ------ |
+| whatsapp-web.js | X.X.X   | X.X.X  | 0    | OK     |
+| puppeteer       | X.X.X   | X.X.X  | 0    | OK     |
 
 ### Action Items
+
 - [ ] Action 1
 - [ ] Action 2
 ```
@@ -710,16 +740,16 @@ flowchart LR
 
 ## 16.8 Risk Summary
 
-| ID | Risk | Probability | Impact | Level | Status |
-|----|------|-------------|--------|-------|--------|
-| R001 | Protocol Changes | High | High | 🔴 Critical | Monitoring |
-| R002 | Account Ban | Medium | Medium | 🟡 Medium | Mitigated |
-| R003 | Security Breach | Low | Critical | 🟡 Medium | Mitigated |
-| R004 | Maintainer Burnout | Medium | Medium | 🟡 Medium | Planning |
-| R005 | Dependency Issues | High | Medium | 🟡 Medium | Automated |
-| R006 | Legal Issues | Low | Critical | 🟡 Medium | Mitigated |
-| R007 | Rate Limiting | High | Medium | 🟡 Medium | Mitigated |
-| R008 | Data Loss | Low | High | 🟡 Medium | Mitigated |
+| ID   | Risk               | Probability | Impact   | Level       | Status              |
+| ---- | ------------------ | ----------- | -------- | ----------- | ------------------- |
+| R001 | Protocol Changes   | High        | High     | 🔴 Critical | Monitoring          |
+| R002 | Account Ban        | Medium      | Medium   | 🟡 Medium   | Partially mitigated |
+| R003 | Security Breach    | Low         | Critical | 🟡 Medium   | Mitigated           |
+| R004 | Maintainer Burnout | Medium      | Medium   | 🟡 Medium   | Planning            |
+| R005 | Dependency Issues  | High        | Medium   | 🟡 Medium   | Automated           |
+| R006 | Legal Issues       | Low         | Critical | 🟡 Medium   | Mitigated           |
+| R007 | Rate Limiting      | High        | Medium   | 🟡 Medium   | Partially mitigated |
+| R008 | Data Loss          | Low         | High     | 🟡 Medium   | Mitigated           |
 
 ### Risk Trend
 
@@ -731,6 +761,7 @@ xychart-beta
     bar [65, 55, 45, 40, 35, 30]
     line [65, 55, 45, 40, 35, 30]
 ```
+
 ---
 
 <div align="center">

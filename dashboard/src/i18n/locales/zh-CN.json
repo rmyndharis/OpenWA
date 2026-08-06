@@ -1,0 +1,953 @@
+{
+  "toast": {
+    "connectionLost": {
+      "title": "服务器连接已断开",
+      "message": "无法连接到后端服务器。请检查服务器是否正在运行。"
+    }
+  },
+  "common": {
+    "appName": "OpenWA",
+    "loading": "正在加载...",
+    "cancel": "取消",
+    "delete": "删除",
+    "create": "创建",
+    "close": "关闭",
+    "showApiKey": "显示 API 密钥",
+    "hideApiKey": "隐藏 API 密钥",
+    "search": "搜索",
+    "status": "状态",
+    "name": "名称",
+    "role": "角色",
+    "url": "URL",
+    "port": "端口",
+    "host": "主机",
+    "username": "用户名",
+    "password": "密码",
+    "active": "活跃",
+    "inactive": "非活跃",
+    "connected": "已连接",
+    "disconnected": "已断开",
+    "never": "从未",
+    "justNow": "刚刚",
+    "minAgo": "{{count}} 分钟前",
+    "hoursAgo": "{{count}} 小时前",
+    "optional": "可选",
+    "language": "语言",
+    "back": "返回",
+    "next": "下一步",
+    "previous": "上一步",
+    "expand": "展开",
+    "collapse": "收起",
+    "logout": "退出登录",
+    "refresh": "刷新",
+    "errorGeneric": "发生错误",
+    "unknownError": "未知错误",
+    "retry": "重试"
+  },
+  "theme": {
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统",
+    "label": "主题：{{value}}",
+    "appearance": "外观",
+    "mode": "模式",
+    "toggleTo": "切换到{{value}}"
+  },
+  "nav": {
+    "dashboard": "仪表盘",
+    "sessions": "会话",
+    "chats": "聊天",
+    "webhooks": "Webhooks",
+    "templates": "Templates",
+    "apiKeys": "API 密钥",
+    "messageTester": "消息测试器",
+    "infrastructure": "基础设施",
+    "plugins": "插件",
+    "logs": "日志"
+  },
+  "chats": {
+    "media": {
+      "location": "位置",
+      "call": "通话",
+      "callMissed": "未接来电",
+      "callVideo": "视频通话",
+      "callVideoMissed": "未接视频通话",
+      "omitted": "媒体",
+      "image": "图片"
+    },
+    "subtitle": "实时发送和回复 WhatsApp 消息",
+    "noSessionsTitle": "没有已连接的会话",
+    "noSessionsDesc": "请先从 <1>会话</1> 菜单连接一个 WhatsApp 会话，才能使用聊天功能。",
+    "sessionLabel": "WhatsApp 会话",
+    "noPhone": "无电话",
+    "searchPlaceholder": "搜索聊天...",
+    "loadingChats": "正在加载聊天...",
+    "empty": "没有聊天",
+    "noMessageYet": "暂无消息",
+    "unreadBadge": "{{count}} 条未读消息",
+    "unreadBadge_other": "{{count}} 条未读消息",
+    "loadingMessages": "正在加载消息...",
+    "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
+    "downloadDocument": "下载文档",
+    "actions": {
+      "reply": "回复",
+      "react": "回应",
+      "delete": "删除消息"
+    },
+    "replyingTo": "正在回复 {{name}}",
+    "you": "你",
+    "youPrefix": "你：",
+    "yesterday": "昨天",
+    "attachTitle": "发送文件 / 图片",
+    "emojiTitle": "选择表情",
+    "captionPlaceholder": "添加说明文字...",
+    "messagePlaceholder": "输入消息...",
+    "noPermission": "你没有发送消息的权限",
+    "send": "发送",
+    "placeholderTitle": "开始聊天",
+    "placeholderDesc": "从左侧边栏选择一个活跃聊天，即可开始阅读和发送 WhatsApp 消息。",
+    "scrollToBottom": "滚动到最新",
+    "groupSubtitle": "群组",
+    "privateContactSubtitle": "私人联系人",
+    "deleteConfirm": "为所有人删除此消息？",
+    "messageDeleted": "🚫 此消息已被删除",
+    "messageMasked": "🔒 WhatsApp 已对关联设备隐藏此消息 — 请在主手机上查看",
+    "kind": {
+      "group": "群组",
+      "channel": "频道",
+      "status": "状态",
+      "broadcast": "广播"
+    },
+    "tab": {
+      "chats": "聊天",
+      "channels": "频道",
+      "status": "状态"
+    },
+    "status": {
+      "itemCount": "{{count}} 条更新",
+      "itemCount_other": "{{count}} 条更新",
+      "empty": "没有联系人有活跃的状态。",
+      "loadError": "无法加载状态。",
+      "mediaUnavailable": "媒体不可用",
+      "compose": "发布状态",
+      "composeText": "文字",
+      "composeImage": "图片",
+      "recipients": "谁可以看到",
+      "recipientsHint": "Baileys 需要收件人列表；whatsapp-web.js 使用您的状态隐私受众。",
+      "noContacts": "未找到联系人",
+      "caption": "说明文字",
+      "backgroundColor": "背景颜色",
+      "font": "字体",
+      "fontDefault": "默认",
+      "orLabel": "或",
+      "post": "发布",
+      "posted": "状态已发布",
+      "postFailed": "无法发布状态"
+    },
+    "channels": {
+      "notSupported": "Baileys 引擎不支持频道。",
+      "empty": "你尚未订阅任何频道。",
+      "notReady": "会话尚未就绪。",
+      "subscribers": "{{count}} 位订阅者",
+      "subscribers_other": "{{count}} 位订阅者"
+    },
+    "errors": {
+      "loadSessions": "加载会话失败",
+      "loadChats": "加载聊天失败",
+      "markRead": "将聊天标记为已读失败",
+      "send": "发送消息失败",
+      "react": "回应消息失败",
+      "delete": "删除消息失败"
+    },
+    "loadMessagesError": "无法加载消息。请检查服务器日志。"
+  },
+  "errorBoundary": {
+    "title": "出了点问题",
+    "description": "仪表盘遇到意外错误。",
+    "reload": "重新加载仪表盘"
+  },
+  "login": {
+    "apiKey": "API 密钥",
+    "apiKeyPlaceholder": "输入你的 API 密钥",
+    "apiKeyRequired": "必须输入 API 密钥",
+    "connect": "连接",
+    "connecting": "正在连接...",
+    "invalidKey": "API 密钥无效",
+    "connectionError": "无法连接到服务器。请重试。",
+    "help": "需要帮助？",
+    "viewDocs": "查看文档",
+    "footer": "由 Yudhi Armyndharis 和 OpenWA 社区用 ❤️ 打造",
+    "version": "v{{version}} · {{date}}"
+  },
+  "dashboard": {
+    "title": "仪表盘",
+    "subtitle": "查看你的 WhatsApp 会话和活动概览",
+    "stats": {
+      "activeSessions": "已连接会话",
+      "sessionsDetail": "{{running}} 运行中 · 共 {{total}}",
+      "messagesToday": "今日消息",
+      "webhooksConfigured": "已配置 Webhook",
+      "totalMessages": "消息总数"
+    },
+    "sessionsOverview": "会话概览",
+    "showingSessions": "显示 {{shown}} / {{total}} 个会话",
+    "columns": {
+      "sessionId": "会话 ID",
+      "phone": "电话号码",
+      "status": "状态",
+      "lastActive": "上次活跃",
+      "actions": "操作"
+    },
+    "noSessions": "未找到会话。创建一个即可开始。",
+    "view": "查看",
+    "disconnect": "断开连接",
+    "errorPrefix": "错误：{{message}}",
+    "loadError": "加载数据失败",
+    "charts": {
+      "title": "消息分析",
+      "period": {
+        "24h": "24小时",
+        "7d": "7天",
+        "30d": "30天"
+      },
+      "overTime": "消息趋势",
+      "byType": "按类型分类的消息",
+      "topChats": "热门聊天",
+      "sent": "已发送",
+      "received": "已接收",
+      "messages": "消息",
+      "empty": "此期间没有消息活动。",
+      "error": "无法加载消息分析数据。请检查服务器日志。"
+    }
+  },
+  "sessionStatus": {
+    "created": "新建",
+    "idle": "空闲",
+    "initializing": "正在启动...",
+    "connecting": "正在连接...",
+    "qr_ready": "扫描 QR",
+    "ready": "已连接",
+    "disconnected": "已断开",
+    "action_required": "需要操作",
+    "failed": "失败",
+    "authenticating": "正在验证..."
+  },
+  "sessions": {
+    "title": "会话",
+    "subtitle": "管理你的 WhatsApp 会话和 QR 码连接",
+    "newSession": "新建会话",
+    "searchPlaceholder": "搜索会话...",
+    "filter": {
+      "all": "所有状态",
+      "active": "活跃（已连接）",
+      "inactive": "非活跃",
+      "connecting": "正在连接"
+    },
+    "empty": {
+      "title": "未找到会话",
+      "description": "创建新会话即可开始"
+    },
+    "create": {
+      "title": "创建新会话",
+      "label": "会话名称",
+      "placeholder": "例如：marketing-bot",
+      "hint": "只能使用小写字母、数字和连字符。例如：<code>customer-support</code>、<code>bot-1</code>",
+      "invalidChars": "字符无效。只能使用小写字母、数字和连字符。",
+      "tooLong": "名称长度不能超过 50 个字符（{{length}}/50）。",
+      "duplicate": "已存在同名会话。",
+      "successTitle": "会话已创建",
+      "successDesc": "会话 \"{{name}}\" 已成功创建",
+      "errorTitle": "创建失败",
+      "errorDefault": "创建会话失败"
+    },
+    "delete": {
+      "title": "确认删除",
+      "message": "确定要删除会话 <strong>\"{{name}}\"</strong> 吗？",
+      "warning": "此操作无法撤销。",
+      "successTitle": "会话已删除",
+      "successDescNamed": "会话 \"{{name}}\" 已删除",
+      "successDescGeneric": "会话已删除",
+      "errorTitle": "删除失败",
+      "errorDefault": "删除会话失败"
+    },
+    "qr": {
+      "title": "扫描 QR 码",
+      "step1": "<strong>1.</strong> 在手机上打开 WhatsApp",
+      "step2": "<strong>2.</strong> 点击<strong>菜单</strong> → <strong>已关联设备</strong>",
+      "step3": "<strong>3.</strong> 点击<strong>关联设备</strong>并扫描此 QR",
+      "autoRefresh": "QR 每 5 秒自动更新一次",
+      "generating": "正在生成 QR 码...",
+      "preparing": "正在准备 QR 码...",
+      "showQr": "显示 QR",
+      "loading": "正在加载...",
+      "scanToConnect": "扫描 QR 码以连接"
+    },
+    "details": {
+      "title": "会话详情",
+      "name": "名称",
+      "status": "状态",
+      "sessionId": "会话 ID",
+      "phone": "电话号码",
+      "phoneNone": "未连接",
+      "created": "创建时间",
+      "lastActive": "上次活跃"
+    },
+    "actions": {
+      "view": "查看",
+      "start": "启动",
+      "stop": "停止",
+      "reconnect": "重新连接",
+      "unlink": "取消关联",
+      "delete": "删除",
+      "killStuck": "终止卡死会话"
+    },
+    "toasts": {
+      "readyTitle": "会话就绪",
+      "readyDesc": "WhatsApp 会话现已连接",
+      "disconnectedTitle": "会话已断开",
+      "disconnectedDesc": "WhatsApp 会话已断开连接",
+      "actionRequiredTitle": "需要操作",
+      "actionRequiredDesc": "此会话需要您的关注。打开会话以查看需要做什么。",
+      "failedTitle": "会话失败",
+      "failedDesc": "WhatsApp 会话启动失败。打开该会话以查看原因。"
+    },
+    "card": {
+      "phone": "电话",
+      "sessionId": "会话 ID",
+      "lastActive": "上次活跃",
+      "error": "错误",
+      "restriction": "限制"
+    },
+    "forceKill": {
+      "title": "终止卡死的会话",
+      "message": "确定要强制终止会话“{{name}}”吗？",
+      "warning": "此操作将强制结束 WhatsApp 浏览器进程。重启后该会话可能需要重新扫码。",
+      "confirm": "终止会话",
+      "successTitle": "会话已终止",
+      "success": "会话已被强制终止。您现在可以重新启动它。",
+      "failedTitle": "强制终止失败",
+      "failed": "强制终止会话失败。"
+    },
+    "unlink": {
+      "title": "取消关联设备",
+      "message": "要将会话 <strong>\"{{name}}\"</strong> 从 WhatsApp 账号取消关联吗？",
+      "warning": "WhatsApp 会将此设备从账号的已关联设备列表中移除，会话将停止。重新连接需要重新扫描二维码或使用配对码。如需同时清除所有本地数据，请随后删除该会话。",
+      "confirm": "取消关联",
+      "successTitle": "设备已取消关联",
+      "success": "取消关联已完成：设备已登出，本地会话凭据已清除。重新连接需要新的二维码扫描或配对码。",
+      "failedTitle": "取消关联失败",
+      "failed": "无法取消关联该会话。",
+      "incompleteTitle": "取消关联未完成",
+      "incomplete": "会话已在本地停止，但登出操作未完成——设备可能仍处于关联状态。请启动会话后重新尝试取消关联。"
+    },
+    "pairing": {
+      "tabQr": "QR 码",
+      "tabPhone": "使用电话号码关联",
+      "phoneLabel": "电话号码",
+      "phonePlaceholder": "例如：919876543210",
+      "phoneHint": "仅填数字（不含 +、空格或连字符），使用国际格式（国家/地区代码 + 号码）。",
+      "invalidPhone": "请输入有效的电话号码：6–15 位数字，国家/地区代码在前，不含任何符号。",
+      "generateButton": "生成配对码",
+      "generating": "正在生成配对码...",
+      "codeLabel": "您的配对码",
+      "changeNumber": "更换号码 / 重新获取配对码",
+      "instructions": "配对说明",
+      "step1": "<strong>1.</strong> 在手机上打开 WhatsApp",
+      "step2": "<strong>2.</strong> 点击<strong>菜单</strong>或<strong>设置</strong>，然后选择<strong>已关联设备</strong>",
+      "step3": "<strong>3.</strong> 点击<strong>关联设备</strong>，然后点击<strong>改用电话号码关联</strong>",
+      "step4": "<strong>4.</strong> 在手机上输入上方显示的 8 位字符配对码",
+      "waitingConnection": "正在等待您的手机完成关联…"
+    },
+    "start": {
+      "teardownPendingTitle": "会话启动中",
+      "teardownPending": "此会话的凭据拆除仍在处理中。请稍候再试。"
+    },
+    "restriction": {
+      "reachout_timelock": "新会话被阻止",
+      "tos_block": "被 WhatsApp 封禁",
+      "proxy_block": "连接被阻止",
+      "until": "至 {{date}}"
+    }
+  },
+  "webhooks": {
+    "title": "Webhooks",
+    "subtitle": "配置用于实时事件通知的 HTTP 回调",
+    "addWebhook": "添加 Webhook",
+    "createTitle": "创建 Webhook",
+    "editTitle": "编辑 Webhook",
+    "deleteTitle": "删除 Webhook",
+    "deleteConfirm": "确定要删除此 webhook 吗？",
+    "selectSession": "选择会话...",
+    "session": "会话",
+    "events": "事件",
+    "available": "可用事件",
+    "saveChanges": "保存更改",
+    "filters": {
+      "title": "筛选条件（可选）",
+      "hint": "仅当所有条件都匹配时才触发。适用于消息事件。",
+      "badge": "{{count}} 个筛选条件",
+      "badge_other": "{{count}} 个筛选条件",
+      "addCondition": "添加条件",
+      "removeCondition": "移除条件",
+      "caseSensitive": "区分大小写",
+      "contactPlaceholder": "号码或 WhatsApp ID...",
+      "textPlaceholder": "要匹配的文本...",
+      "addValue": "添加 \"{{value}}\"",
+      "yes": "是",
+      "no": "否",
+      "fields": {
+        "sender": "发送者",
+        "recipient": "接收者",
+        "body": "消息正文",
+        "type": "消息类型",
+        "isGroup": "是群聊",
+        "fromMe": "由我发送",
+        "hasMedia": "包含媒体",
+        "mentions": "提及"
+      },
+      "operators": {
+        "is": "是",
+        "isNot": "不是",
+        "contains": "包含",
+        "equals": "等于"
+      }
+    },
+    "columns": {
+      "url": "URL",
+      "events": "事件",
+      "session": "会话",
+      "status": "状态",
+      "actions": "操作"
+    },
+    "empty": {
+      "title": "尚未配置 Webhook",
+      "description": "添加 Webhook 以接收实时事件通知"
+    },
+    "toasts": {
+      "created": "Webhook 创建成功",
+      "createFailed": "创建 Webhook 失败：{{message}}",
+      "deleted": "Webhook 删除成功",
+      "deleteFailed": "删除 Webhook 失败：{{message}}",
+      "updated": "Webhook 更新成功",
+      "updateFailed": "更新 Webhook 失败：{{message}}",
+      "testOk": "Webhook 测试成功！状态：{{status}}",
+      "testFailed": "Webhook 测试失败：{{message}}",
+      "testError": "测试 Webhook 失败：{{message}}"
+    },
+    "actions": {
+      "test": "测试",
+      "edit": "编辑",
+      "delete": "删除"
+    },
+    "eventDescriptions": {
+      "message.received": "收到消息时",
+      "message.sent": "发送消息时",
+      "session.connected": "会话连接时",
+      "session.disconnected": "会话断开时",
+      "session.qr": "生成 QR 码时",
+      "all": "所有事件"
+    }
+  },
+  "templates": {
+    "title": "模板",
+    "subtitle": "为每个 WhatsApp 会话创建可复用的消息模板",
+    "createTitle": "创建模板",
+    "editTitle": "编辑模板",
+    "newTemplate": "新建模板",
+    "createTemplate": "创建模板",
+    "saveChanges": "保存更改",
+    "viewOnly": "仅查看",
+    "noSessions": "暂无会话",
+    "sessionHint": "保存在 {{name}} 下",
+    "namePlaceholder": "例如：order-confirmation",
+    "header": "页眉",
+    "headerPlaceholder": "可选的开头语",
+    "body": "正文",
+    "bodyPlaceholder": "您好 {{customer}}，您的订单 {{orderId}} 已就绪。",
+    "footer": "页脚",
+    "footerPlaceholder": "可选的结尾语",
+    "previewTitle": "预览",
+    "previewValuePlaceholder": "示例值",
+    "previewEmpty": "开始编写模板后即可在此预览。",
+    "noPlaceholders": "使用 {{name}} 占位符可测试替换效果。",
+    "savedTitle": "已保存的模板",
+    "count": "共 {{count}} 个",
+    "deleteTitle": "删除模板",
+    "deleteConfirm": "确定删除模板“{{name}}”吗？此操作无法撤销。",
+    "actions": {
+      "copyName": "复制模板名称"
+    },
+    "empty": {
+      "title": "暂无已保存的模板",
+      "description": "创建可复用的模板，加快处理常见回复和通知。",
+      "noSessionsTitle": "暂无可用会话",
+      "noSessionsDesc": "添加模板前请先创建 WhatsApp 会话。"
+    },
+    "toasts": {
+      "created": "模板创建成功",
+      "createFailed": "创建模板失败：{{message}}",
+      "updated": "模板更新成功",
+      "updateFailed": "更新模板失败：{{message}}",
+      "deleted": "模板删除成功",
+      "deleteFailed": "删除模板失败：{{message}}",
+      "copied": "已复制模板名称"
+    }
+  },
+  "apiKeys": {
+    "title": "API 密钥",
+    "subtitle": "管理用于认证和访问控制的 API 密钥",
+    "createBtn": "创建 API 密钥",
+    "modalTitle": "创建 API 密钥",
+    "createdTitle": "API 密钥已创建",
+    "createdHint": "请立即复制此密钥。之后将无法再次查看。",
+    "namePlaceholder": "例如：Production Key",
+    "rolesTitle": "角色参考",
+    "roles": {
+      "admin": "管理员",
+      "operator": "操作员",
+      "viewer": "查看者"
+    },
+    "roleDescriptions": {
+      "admin": "可完全访问所有资源",
+      "operator": "会话和消息管理",
+      "viewer": "只读访问"
+    },
+    "columns": {
+      "name": "名称",
+      "key": "密钥",
+      "role": "角色",
+      "status": "状态",
+      "lastUsed": "上次使用",
+      "actions": "操作"
+    },
+    "statuses": {
+      "active": "活跃",
+      "revoked": "已撤销"
+    },
+    "empty": {
+      "title": "尚未创建 API 密钥",
+      "description": "创建 API 密钥以认证你的请求"
+    },
+    "confirm": {
+      "deleteTitle": "删除 API 密钥",
+      "revokeTitle": "撤销 API 密钥",
+      "deleteMessage": "确定要永久删除 <strong>{{name}}</strong> 吗？此操作无法撤销。",
+      "revokeMessage": "确定要撤销 <strong>{{name}}</strong> 吗？它将不再可用。",
+      "delete": "删除",
+      "revoke": "撤销"
+    },
+    "actions": {
+      "copy": "复制",
+      "revoke": "撤销",
+      "delete": "删除"
+    }
+  },
+  "logs": {
+    "title": "审计日志",
+    "subtitle": "跟踪并查看所有 API 操作和系统事件",
+    "exportCsv": "导出 CSV",
+    "searchPlaceholder": "搜索日志...",
+    "severity": {
+      "all": "所有严重级别",
+      "info": "信息",
+      "warn": "警告",
+      "error": "错误"
+    },
+    "columns": {
+      "timestamp": "时间戳",
+      "action": "操作",
+      "session": "会话",
+      "apiKey": "API 密钥",
+      "ip": "IP 地址",
+      "severity": "严重级别"
+    },
+    "empty": {
+      "title": "未找到日志",
+      "description": "执行操作后，审计日志将显示在这里"
+    }
+  },
+  "messageTester": {
+    "title": "消息测试器",
+    "subtitle": "通过 API 发送测试消息",
+    "compose": "发送测试消息",
+    "responseTitle": "API 响应",
+    "session": "会话",
+    "noReadySessions": "没有就绪的会话",
+    "sessionOptionPhoneNone": "无电话",
+    "recipientType": "接收方类型",
+    "personal": "个人",
+    "group": "群组",
+    "selectGroup": "选择群组",
+    "recipientPhone": "接收方电话号码",
+    "loadingGroups": "正在加载群组...",
+    "noGroupsFound": "未找到群组",
+    "selectGroupHint": "从你的 WhatsApp 中选择一个群组",
+    "phoneHint": "使用无空格的国际格式",
+    "messageType": "消息类型",
+    "types": {
+      "text": "文本",
+      "image": "图片",
+      "video": "视频",
+      "audio": "音频",
+      "document": "文档",
+      "location": "位置",
+      "contact": "联系人",
+      "sticker": "贴纸",
+      "poll": "投票",
+      "forward": "转发",
+      "bulk": "批量"
+    },
+    "messageContent": "消息内容",
+    "messagePlaceholder": "在此输入你的消息...",
+    "mediaUrl": "媒体 URL",
+    "uploadFile": "上传文件",
+    "browse": "浏览",
+    "removeFile": "移除文件",
+    "fileReadError": "文件读取失败",
+    "fileTooLarge": "文件过大（最大 18 MB）",
+    "caption": "说明文字",
+    "filename": "文件名",
+    "captionPlaceholder": "输入说明文字...",
+    "filenamePlaceholder": "document.pdf",
+    "locationLatitude": "纬度",
+    "locationLongitude": "经度",
+    "locationDescription": "描述",
+    "locationAddress": "地址",
+    "contactName": "联系人姓名",
+    "contactNamePlaceholder": "张三",
+    "contactNumber": "联系人号码",
+    "pollQuestion": "投票问题",
+    "pollQuestionPlaceholder": "我们在哪里见面？",
+    "pollOptions": "投票选项",
+    "pollOptionPlaceholder": "选项 {{index}}",
+    "pollOptionsHint": "2 到 12 个选项",
+    "addOption": "添加选项",
+    "removeOption": "删除选项",
+    "allowMultipleAnswers": "允许多选",
+    "forwardFromChatId": "来源聊天 ID",
+    "forwardFromPlaceholder": "628123456789@c.us",
+    "forwardFromHint": "留空则从当前接收者转发",
+    "forwardToChatId": "目标聊天 ID",
+    "forwardToPlaceholder": "电话号码或聊天 ID",
+    "forwardMessageId": "消息 ID",
+    "forwardMessageIdHint": "要转发的消息 ID",
+    "bulkRecipients": "接收者",
+    "bulkRecipientsPlaceholder": "+62812345678",
+    "bulkRecipientsHint": "每行一个电话号码或聊天 ID（最多 100 个）",
+    "bulkRecipientsCount": "接收者：{{count}}",
+    "bulkDelay": "消息间隔延迟（毫秒）",
+    "bulkDelayHint": "1000–60000 毫秒（默认 3000）",
+    "send": "发送消息",
+    "sending": "正在发送...",
+    "viewOnly": "仅查看",
+    "responseEmpty": "发送消息后即可查看 API 响应",
+    "successLabel": "成功",
+    "failedLabel": "失败",
+    "response": {
+      "timestamp": "时间戳",
+      "messageId": "消息 ID",
+      "batchId": "批次 ID",
+      "error": "错误"
+    },
+    "sendFailed": "发送消息失败",
+    "notOnWhatsApp": "该号码未在 WhatsApp 注册",
+    "batch": {
+      "status": {
+        "pending": "等待中",
+        "processing": "处理中",
+        "completed": "已完成",
+        "cancelled": "已取消",
+        "failed": "失败"
+      },
+      "progress": "已发送 {{sent}}/{{total}} · {{failed}} 失败 · {{pending}} 待发送",
+      "cancel": "取消批次",
+      "cancelling": "取消中..."
+    }
+  },
+  "infrastructure": {
+    "title": "基础设施",
+    "subtitle": "配置服务器、数据库、缓存、存储和引擎设置",
+    "saveConfig": "保存配置",
+    "saving": "正在保存...",
+    "database": {
+      "title": "数据库配置",
+      "sqlite": "SQLite",
+      "sqliteDesc": "本地文件型数据库",
+      "postgres": "PostgreSQL",
+      "postgresDesc": "适用于生产的数据库",
+      "useBuiltIn": "使用内置 PostgreSQL 容器",
+      "builtInDesc": "OpenWA 将为你管理 PostgreSQL 容器",
+      "dbName": "数据库名称",
+      "schema": "模式",
+      "schemaDesc": "PostgreSQL 模式（SQLite 忽略）。默认为 'public'。该模式必须已存在。",
+      "poolSize": "连接池大小",
+      "ssl": "SSL 连接",
+      "sslDesc": "启用 TLS/SSL 以保障数据库连接安全",
+      "sslRejectUnauthorized": "验证 SSL 证书",
+      "sslRejectUnauthorizedDesc": "拒绝自签名或无效的证书。对于使用自签名证书的托管 Postgres（Supabase、Heroku、Render、Railway），请关闭此项。",
+      "migrationsTitle": "数据库迁移",
+      "migrationsStatus": "架构会通过 TypeORM 自动同步",
+      "migrationsHint": "迁移会自动管理。手动迁移请使用 CLI。"
+    },
+    "engine": {
+      "title": "WhatsApp 引擎",
+      "builtIn": "内置",
+      "headless": "无头模式",
+      "headlessDesc": "在没有可见界面的情况下运行浏览器（推荐用于生产环境）。",
+      "sessionDataPath": "会话数据路径",
+      "browserArgs": "浏览器参数",
+      "noBrowser": "该引擎通过 WebSocket 连接——没有浏览器，因此没有无头模式或浏览器参数设置。活动引擎将在重启后生效。",
+      "restartNote": "切换引擎将在服务器重启后生效。",
+      "webVersion": "WhatsApp Web 构建版本",
+      "webVersionNative": "自动（whatsapp-web.js 默认）",
+      "webVersionSource": {
+        "pinned": "通过 WWEBJS_WEB_VERSION 锁定",
+        "auto": "自动解析，当前已知可用的构建版本",
+        "native": "whatsapp-web.js 原生自动选择"
+      }
+    },
+    "redis": {
+      "title": "Redis",
+      "enable": "启用 Redis",
+      "enableDesc": "缓存、会话存储和 BullMQ 队列需要 Redis",
+      "useBuiltIn": "使用内置 Redis 容器",
+      "builtInDesc": "OpenWA 将为你管理 Redis 容器",
+      "queueTitle": "启用 BullMQ 队列系统",
+      "queueDesc": "使用消息队列可靠地投递消息和 Webhook",
+      "statsTitle": "队列统计",
+      "webhookQueue": "Webhook 队列",
+      "pending": "待处理",
+      "completed": "已完成",
+      "failed": "失败",
+      "viewBullMq": "查看 Bull MQ 仪表盘",
+      "disabledTitle": "Redis 已禁用",
+      "disabledDesc": "启用 Redis 以使用缓存、会话存储和 BullMQ 消息队列。",
+      "passwordOptional": "（可选）",
+      "bullMqUrlCopied": "已复制 Bull MQ 仪表板网址",
+      "bullMqUrlHint": "请使用 ADMIN API 密钥打开 — 浏览器标签页无法进行身份验证。"
+    },
+    "storage": {
+      "title": "存储配置",
+      "local": "本地文件系统",
+      "localDesc": "在本地存储媒体文件",
+      "s3": "Amazon S3",
+      "s3Desc": "云存储（兼容 S3）",
+      "useBuiltIn": "使用内置 MinIO 容器",
+      "builtInDesc": "OpenWA 将为你管理 MinIO（兼容 S3）容器",
+      "storagePath": "存储路径",
+      "bucket": "存储桶名称",
+      "region": "区域",
+      "accessKey": "访问密钥",
+      "secretKey": "秘密密钥",
+      "endpoint": "自定义端点（可选）",
+      "endpointHint": "适用于 MinIO 或其他兼容 S3 的服务",
+      "s3Unreachable": "S3（无法连接）"
+    },
+    "statusLabels": {
+      "connected": "已连接",
+      "disconnected": "已断开",
+      "disabled": "已禁用"
+    },
+    "restart": {
+      "idleTitle": "⚙️ 配置已保存",
+      "restartingTitle": "🔄 正在重启服务器...",
+      "waitingTitle": "⏳ 请稍候...",
+      "successTitle": "✅ 服务器就绪",
+      "errorTitle": "❌ 重启失败",
+      "idleDesc": "配置已保存到 <code>.env.generated</code>。<br/>需要重启服务器才能应用更改。",
+      "later": "稍后重启",
+      "now": "立即重启",
+      "restartingMsg": "服务器正在重启... {{count}} 秒",
+      "checking": "正在检查服务器状态...",
+      "dontClose": "请不要关闭此窗口",
+      "successMsg": "服务器已恢复在线！页面将自动重新加载。",
+      "errorMsg": "服务器在 30 秒后仍无响应。请检查 Docker 日志并手动重启。",
+      "reload": "重新加载页面"
+    },
+    "toasts": {
+      "saveFailed": "保存失败"
+    },
+    "envPinNote": "已由环境变量 {{name}} 锁定 —— 此为当前运行值；在取消该变量之前，仪表盘的更改不会生效。",
+    "pendingRestartNote": "已保存，但尚未生效 —— 请重启服务器以应用此更改。",
+    "migration": {
+      "title": "请注意 —— 此操作将更改数据后端",
+      "dbWarning": "新数据库将从空白状态开始。请立即（在仍使用旧数据库时）下载当前数据的备份，然后在重启后恢复。",
+      "storageWarning": "现有的媒体文件不会自动迁移到新的存储后端；它们将保留在原位置。",
+      "downloadBackup": "请先下载备份",
+      "backupTitle": "数据备份与恢复",
+      "backupHint": "在切换数据库之前，将所有数据导出为 JSON，然后在切换后导入。备份中包含明文的 webhook 密钥和代理凭据 —— 请妥善保管，并在恢复完成后将其删除。",
+      "export": "导出数据",
+      "import": "导入数据",
+      "exportFailed": "无法导出数据",
+      "importFailed": "无法导入数据",
+      "importOk": "数据已导入",
+      "importConfirm": "导入操作将用备份数据替换（REPLACE）当前所有数据（{{rows}} 行）。此操作无法撤销。是否继续？",
+      "invalidFile": "该文件不是有效的 OpenWA 数据备份。",
+      "importTooLarge": "备份超出请求大小限制。请在服务器上调高 BODY_SIZE_LIMIT 后重试。"
+    },
+    "statusLoadError": "无法加载当前基础设施状态。请刷新重试。"
+  },
+  "plugins": {
+    "title": "插件",
+    "subtitle": "安装、配置和管理扩展",
+    "refresh": "刷新",
+    "builtIn": "内置",
+    "noDescription": "没有可用描述",
+    "enable": "启用",
+    "disable": "禁用",
+    "healthCheck": "健康检查",
+    "configure": "配置",
+    "install": "安装插件",
+    "uninstall": "卸载",
+    "uninstallConfirm": "卸载“{{name}}”？这将删除其文件。",
+    "empty": {
+      "title": "未找到插件",
+      "description": "安装插件以扩展 OpenWA 功能"
+    },
+    "config": {
+      "title": "配置 {{name}}",
+      "noOptions": "此插件没有可用配置项",
+      "uiHandshakeError": "插件配置界面未初始化。如有可用的架构表单，请使用下方表单。",
+      "save": "保存配置",
+      "addItem": "添加",
+      "tabConfig": "配置",
+      "tabSessions": "会话"
+    },
+    "rail": {
+      "enabled": "已启用",
+      "installed": "已安装",
+      "active": "活跃插件",
+      "none": "尚未启用任何插件"
+    },
+    "installModal": {
+      "title": "安装插件",
+      "hint": "上传打包为 .zip 的插件（包含 manifest.json）。启用后将在沙箱中运行。",
+      "choose": "选择 .zip 文件…",
+      "tooLarge": "文件超过 5 MB 限制。",
+      "catalogHint": "直接从 OpenWA 插件目录安装。.zip 文件由服务器通过 SSRF 防护获取，然后经过验证并在沙箱中运行。",
+      "catalogTeaser": "在找插件吗？",
+      "catalogTeaserSuffix": "浏览官方市场。",
+      "tabCatalog": "目录",
+      "tabUpload": "上传 .zip"
+    },
+    "toasts": {
+      "errorTitle": "插件错误",
+      "errorDefault": "切换插件失败",
+      "healthOk": "健康检查通过",
+      "healthFail": "健康检查失败",
+      "healthError": "健康检查出错",
+      "savedTitle": "配置已保存",
+      "savedDesc": "需要重启服务器以应用更改。",
+      "saveFailed": "保存失败",
+      "installed": "插件已安装",
+      "installFailed": "安装失败",
+      "uninstalled": "插件已卸载",
+      "uninstallFailed": "卸载失败",
+      "enableFailedTitle": "启用失败",
+      "disableFailedTitle": "停用失败",
+      "configRequiredTitle": "需要配置",
+      "configRequiredDesc": "启用前请填写必填项：{{fields}}",
+      "updateFailed": "更新失败"
+    },
+    "sessions": {
+      "activationTitle": "运行范围",
+      "activationDesc": "选择此插件运行的会话。",
+      "allSessions": "所有会话",
+      "specificSessions": "指定会话",
+      "noSessions": "暂无会话。",
+      "saveActivation": "保存启用设置",
+      "perSessionTitle": "单会话配置",
+      "perSessionDesc": "为某个会话覆盖全局配置；未修改的字段将沿用全局值。",
+      "selectSession": "选择一个会话…",
+      "saveOverride": "保存覆盖配置",
+      "clearOverride": "清除覆盖配置"
+    },
+    "instances": {
+      "title": "实例",
+      "description": "为此集成按账户配置实例。每个实例都有自己的签名密钥和接入 URL。",
+      "create": "创建实例",
+      "empty": "暂无实例。创建一个以获取接入 URL 和密钥。",
+      "loadError": "加载实例失败。",
+      "allSessions": "所有会话",
+      "enabled": "已启用",
+      "disabled": "已禁用",
+      "form": {
+        "instanceId": "实例 ID",
+        "instanceIdPlaceholder": "例如 acme-support",
+        "instanceIdHint": "字母、数字、连字符、下划线（最多 64 个字符）。",
+        "sessionScope": "会话范围（可选）",
+        "sessionScopePlaceholder": "留空表示所有会话",
+        "verifyToken": "验证令牌（可选）",
+        "verifyTokenPlaceholder": "服务商在验证时回传的令牌",
+        "secret": "Ingress 密钥（可选）",
+        "secretPlaceholder": "服务商的 webhook 密钥（如 Chatwoot）",
+        "secretHint": "留空则自动生成（仅显示一次）。如果服务商使用自己固定的 webhook 密钥，请粘贴到此处——自动生成的密钥将无法匹配。",
+        "config": "配置（可选 JSON）",
+        "configPlaceholder": "{ }"
+      },
+      "created": {
+        "title": "实例已创建",
+        "hint": "请立即复制密钥——它只会显示一次。",
+        "secret": "签名密钥",
+        "ingressUrls": "接入 URL"
+      },
+      "regenerate": {
+        "title": "重新生成密钥",
+        "confirm": "要重新生成 {{id}} 的签名密钥吗？当前密钥将立即失效。",
+        "action": "重新生成"
+      },
+      "edit": {
+        "title": "编辑 {{id}}"
+      },
+      "delete": {
+        "title": "删除实例",
+        "confirm": "要删除实例 {{id}} 吗？其接入 URL 和密钥将立即失效。",
+        "action": "删除"
+      },
+      "actions": {
+        "regenerate": "重新生成密钥",
+        "edit": "编辑",
+        "delete": "删除",
+        "copy": "复制",
+        "save": "保存",
+        "enable": "启用",
+        "disable": "禁用"
+      },
+      "errors": {
+        "invalidId": "实例 ID 只能包含字母、数字、连字符或下划线（最多 64 个字符）。",
+        "invalidJson": "配置必须是有效的 JSON。",
+        "invalidSecret": "密钥至少 16 个字符，或留空以自动生成。",
+        "duplicateId": "已存在具有该 ID 的实例。"
+      },
+      "toasts": {
+        "created": "实例已创建",
+        "updated": "实例已更新",
+        "deleted": "实例已删除",
+        "secretRegenerated": "密钥已重新生成",
+        "actionFailed": "操作失败"
+      }
+    },
+    "catalog": {
+      "empty": "目录中暂无插件。",
+      "install": "安装",
+      "installed": "已安装",
+      "noDownload": "该目录条目没有下载地址。",
+      "noMatch": "没有符合搜索条件的插件。",
+      "searchPlaceholder": "搜索插件…",
+      "update": "更新",
+      "updateAvailable": "有可用更新",
+      "updated": "插件已更新"
+    }
+  },
+  "search": {
+    "placeholder": "搜索消息…",
+    "results": "{{count}} 条结果",
+    "empty": "未找到消息。",
+    "error": "搜索失败。请重试。",
+    "unavailable": "搜索未配置。",
+    "scope": {
+      "current": "当前会话"
+    },
+    "loading": "搜索中…"
+  }
+}

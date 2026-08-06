@@ -1,13 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 
-type Theme = 'light' | 'dark' | 'system';
+export type Theme = 'light' | 'dark' | 'system';
 
 const THEME_KEY = 'openwa_theme';
+// Legacy key from the removed palette picker (pre-0.9.0). Cleaned up on mount so old installs
+// don't carry dead state; the picker was dropped for being hard to maintain and off-brand.
+const LEGACY_PALETTE_KEY = 'openwa_palette';
+
+function isTheme(value: string | null): value is Theme {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem(THEME_KEY) as Theme | null;
-    return saved || 'system';
+    const saved = localStorage.getItem(THEME_KEY);
+    return isTheme(saved) ? saved : 'system';
   });
 
   const applyTheme = useCallback((newTheme: Theme) => {
@@ -25,6 +32,12 @@ export function useTheme() {
     applyTheme(theme);
     localStorage.setItem(THEME_KEY, theme);
   }, [theme, applyTheme]);
+
+  // One-time cleanup of the removed palette picker's storage + document attribute.
+  useEffect(() => {
+    localStorage.removeItem(LEGACY_PALETTE_KEY);
+    document.documentElement.removeAttribute('data-palette');
+  }, []);
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);

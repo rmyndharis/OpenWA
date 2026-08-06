@@ -17,10 +17,28 @@ updates:
     labels:
       - dependencies
     ignore:
-      # Ignore major bumps for packages that need manual migration
-      # Uncomment specific packages below if you want to skip them entirely
-      # - dependency-name: "typescript"
-      #   update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native port: `require('typescript')` no longer exposes the classic
+      # compiler API from its main entry, so @typescript-eslint/typescript-estree throws at load
+      # reading `ts.Extension` ("Cannot read properties of undefined (reading 'Cjs')"). ts-jest@29
+      # independently caps typescript at ">=4.3 <7". Proven by #727/#729.
+      #
+      # Pinned on the version, not update-types: the 6.x line is healthy (6.0.3 runs fine today) and
+      # this must not silently block it. Lift when typescript-eslint and ts-jest support TypeScript 7.
+      #
+      # NB: typescript-eslint's peer is "<6.1.0", so a future 6.1 bump WILL fail resolution — that is
+      # a separate matter from this ignore; pin with ~ rather than ^ when a 6.0.x bump lands.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
+      # better-sqlite3 v13 cannot be adopted yet, on three independent grounds (all as of 13.0.1):
+      # every released TypeORM (0.3.31 and 1.1.0) caps its peer at ^12, so the bump fails npm's peer
+      # resolution outright; the bundled linux-arm64 prebuild is built against glibc 2.38, which does
+      # not load on the node:22-slim (Debian bookworm, glibc 2.36) production image — the same failure
+      # class that broke the 0.10.3 image with sqlite3@6; and its implicit `node-gyp rebuild` install
+      # step needs python3/make even when the prebuild exists, which the toolchain-less production
+      # stage does not have. Lift when TypeORM's peer range admits v13 AND the arm64 prebuild loads on
+      # bookworm (or the base image moves past glibc 2.38).
+      - dependency-name: "better-sqlite3"
+        versions: [">=13.0.0"]
 
   - package-ecosystem: npm
     directory: /dashboard
@@ -39,10 +57,39 @@ updates:
     labels:
       - dependencies
       - dashboard
+    ignore:
+      # TypeScript 7 is the native port: `require('typescript')` no longer exposes the classic
+      # compiler API from its main entry, so @typescript-eslint/typescript-estree throws at load
+      # reading `ts.Extension` ("Cannot read properties of undefined (reading 'Cjs')"). ts-jest@29
+      # independently caps typescript at ">=4.3 <7". Proven by #727/#729.
+      #
+      # Pinned on the version, not update-types: the 6.x line is healthy (6.0.3 runs fine today) and
+      # this must not silently block it. Lift when typescript-eslint and ts-jest support TypeScript 7.
+      #
+      # NB: typescript-eslint's peer is "<6.1.0", so a future 6.1 bump WILL fail resolution — that is
+      # a separate matter from this ignore; pin with ~ rather than ^ when a 6.0.x bump lands.
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
 
+  # All workflow action refs are pinned to commit SHAs (with a `# vX.Y.Z` comment). Dependabot
+  # understands that form: it proposes the new SHA and rewrites the version comment, so the pins
+  # stay current without ever floating on a mutable major tag.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
     labels:
       - ci
+
+  # Base images (Dockerfile) + the compose stack's pinned images (socket-proxy, postgres,
+  # redis, minio). Keeps the security-critical docker-socket-proxy pin and the datastore
+  # images moving instead of drifting on a stale tag.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker

@@ -1,0 +1,102 @@
+name: Java SDK Release
+
+# Publishes com.rmyndharis:openwa to Maven Central from sdk/java. Requires the one-time setup
+# (see sdk/java/README.md -> Releasing); the publish secrets are verified up front and their
+# absence FAILS the run instead of silently no-oping green:
+#   - MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD  (Sonatype Central user token halves)
+#   - GPG_PRIVATE_KEY                                   (ASCII-armored signing key)
+#   - GPG_PASSPHRASE
+# The SDK version is the pom <version> on a dedicated tag (e.g. java-sdk-v0.1.0),
+# NOT the monorepo v* app tags.
+
+on:
+  push:
+    tags: ['java-sdk-v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/java
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # All guards are textual and secret-free, so a misconfigured release fails BEFORE any
+      # credential is touched or any artifact is built.
+      - name: Guard — ref must be a java-sdk-v* release tag
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          # workflow_dispatch can start this workflow on ANY ref; deploying an arbitrary branch
+          # or a monorepo app tag to Maven Central must not be possible. Restrict dispatch to the
+          # same tag shape a push triggers on.
+          case "$REF" in
+            refs/tags/java-sdk-v*) ;;
+            *)
+              echo "::error::This workflow deploys to Maven Central and must run from a java-sdk-v* tag (got '$REF'). For workflow_dispatch, select the release tag as the run ref."
+              exit 1
+              ;;
+          esac
+
+      - name: Guard — tag version matches pom.xml version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#java-sdk-v}"
+          # pom.xml has no <parent> block, so its first <version> element is the project version.
+          POM_VERSION="$(grep -m1 -o '<version>[^<]*</version>' pom.xml | sed -e 's/<[^>]*>//g')"
+          if [ -z "$POM_VERSION" ]; then
+            echo "::error::could not read the project version from pom.xml"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$POM_VERSION" ]; then
+            echo "::error::Tag '$REF_NAME' (version '$TAG_VERSION') does not match pom.xml version '$POM_VERSION'. Bump the pom or fix the tag before releasing."
+            exit 1
+          fi
+          echo "Tag $REF_NAME matches pom.xml $POM_VERSION"
+
+      - name: Guard — publish credentials are present
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          # Missing credentials used to downgrade the publish to a green no-op — indistinguishable
+          # from a real release in the run list. Both events that can reach this job (a java-sdk-v*
+          # tag push, or a dispatch on such a tag — enforced by the ref guard above) intend to
+          # publish, so absence of any credential is a hard failure.
+          missing=""
+          for name in MAVEN_CENTRAL_USERNAME MAVEN_CENTRAL_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing publish secret(s):$missing — configure them (see sdk/java/README.md -> Releasing) before tagging a release."
+            exit 1
+          fi
+
+      - name: Set up JDK + signing key
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+
+      # No -DskipTests: the artifact published to Maven Central must be the one `mvn verify`
+      # proved, matching what sdk-ci.yml gates on every SDK change.
+      - name: Deploy to Maven Central
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -Prelease deploy

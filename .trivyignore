@@ -1,0 +1,37 @@
+# Vulnerabilities accepted for the release image scan, with an expiry review note each.
+# Everything else — anything in the application's own dependency tree, and every OS package —
+# still blocks promotion (see the image-scan job in .github/workflows/release.yml).
+
+# CVE-2026-14257 and CVE-2026-69152 — brace-expansion ReDoS, and the follow-up that bypasses the
+# first one's mitigation. Fixed upstream in 5.0.8 and 5.0.9 respectively.
+#
+# The only copies left in the image are the ones bundled inside the npm CLI
+# (/usr/local/lib/node_modules/npm/node_modules/brace-expansion, currently 5.0.7). npm is never on
+# the request path: the entrypoint runs `node dist/main`, and npm is present only for the
+# documented operator runbooks (`docker exec openwa npm run cli …`). Reaching this code requires an
+# operator to run an npm command with an attacker-chosen glob inside the container.
+#
+# npm 12 — the newest release, already installed by the Dockerfile — still bundles 5.0.7, so there
+# is currently no npm version that clears either finding. Drop both entries once npm ships a bundle
+# with brace-expansion >= 5.0.9.
+#
+# These are ID-level ignores, so they would also silence the same CVEs in the APPLICATION tree,
+# which this file otherwise refuses to do. What keeps that honest is the root `overrides` entry
+# pinning brace-expansion to ^5.0.9: npm cannot resolve the application tree below the fixed
+# version, so there is no app-tree finding for these ids to hide. Raise that floor alongside any
+# future brace-expansion advisory rather than widening this list.
+CVE-2026-14257
+CVE-2026-69152
+
+# CVE-2026-69192 — ip-address SSRF-adjacent parsing flaw, fixed upstream in 10.3.1.
+#
+# Same shape as the two above: the only copy in the image is the one bundled inside the npm CLI
+# (/usr/local/lib/node_modules/npm/node_modules/ip-address, 10.2.0 in npm 12.0.2 — the newest
+# release, and what the Dockerfile installs). npm is not on the request path, so reaching it means
+# an operator running an npm command inside the container.
+#
+# The application tree is independently above the fix: package-lock.json resolves the sole
+# node_modules/ip-address at 10.4.0, and the root `overrides` entry pins `ip-address` to ^10.4.0 so
+# it cannot regress below it — the same invariant the brace-expansion note describes, which is what
+# keeps an ID-level ignore honest. Drop this entry once npm ships a bundle with ip-address >= 10.3.1.
+CVE-2026-69192

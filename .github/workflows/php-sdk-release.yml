@@ -1,0 +1,115 @@
+name: PHP SDK Release
+
+# Cuts a versioned release of the PHP SDK by pushing a tag to the mirror repo
+# rmyndharis/openwa-php, which is what Packagist reads versions from.
+#
+# Why a tag on the MIRROR and not here: Packagist installs from the mirror (it needs composer.json at
+# a repository root and does not support subdirectories), and it derives versions from that
+# repository's tags. A tag in this monorepo is invisible to it. split-php-sdk.yml already keeps the
+# mirror's `main` in sync on every push; this workflow adds the one thing it deliberately does not do.
+#
+# There is no version in sdk/php/composer.json — Composer takes the version from the tag, and a
+# hardcoded `version` field is discouraged precisely because it drifts. So the tag IS the version.
+#
+# One-time setup is the same secret split-php-sdk.yml already uses: PHP_SDK_SPLIT_TOKEN.
+#
+# The SDK version rides its own tag (e.g. php-sdk-v0.2.0), NOT the monorepo v* app tags.
+
+on:
+  push:
+    tags: ['php-sdk-v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history is required for `git subtree split`
+          persist-credentials: false # stop the GITHUB_TOKEN extraheader from shadowing the PAT in the push URL
+
+      # Guards are textual and secret-free, so a misconfigured release fails BEFORE anything is
+      # pushed. Mirrors java/js/python-sdk-release.yml.
+      - name: Guard — ref must be a php-sdk-v* release tag
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          # workflow_dispatch can start this workflow on ANY ref; publishing an arbitrary branch or a
+          # monorepo app tag to Packagist must not be possible.
+          case "$REF" in
+            refs/tags/php-sdk-v*) ;;
+            *)
+              echo "::error::This workflow publishes to Packagist and must run from a php-sdk-v* tag (got '$REF'). For workflow_dispatch, select the release tag as the run ref."
+              exit 1
+              ;;
+          esac
+
+      - name: Guard — composer branch-alias tracks the release line
+        working-directory: sdk/php
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#php-sdk-v}"
+          # dev-main's alias tells Composer which line the unreleased branch represents. It is easy to
+          # forget on a minor bump, and the result is silently wrong metadata for anyone requiring
+          # dev-main rather than an outright failure — so check it here, where it is still cheap to fix.
+          EXPECTED="$(echo "$VERSION" | cut -d. -f1-2).x-dev"
+          ACTUAL="$(jq -r '.extra["branch-alias"]["dev-main"] // ""' composer.json)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::composer.json extra.branch-alias.dev-main is '$ACTUAL' but tag '$REF_NAME' needs '$EXPECTED'. Update the alias and re-tag."
+            exit 1
+          fi
+          echo "branch-alias '$ACTUAL' matches $REF_NAME"
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          # Oldest version composer.json supports (php >=8.1). Nothing is built here — the release only
+          # moves a tag — so this run is purely a tripwire, and the oldest interpreter is the one that
+          # catches syntax the floor does not allow. The 8.1/8.2 matrix runs on every push to main.
+          php-version: '8.1'
+
+      - name: PHP SDK tests
+        working-directory: sdk/php
+        run: |
+          composer install --no-interaction --no-progress
+          ./vendor/bin/phpunit
+
+      - name: Tag the mirror repo
+        env:
+          SPLIT_TOKEN: ${{ secrets.PHP_SDK_SPLIT_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Unlike split-php-sdk.yml, a missing token is FATAL here rather than a green skip: that
+          # workflow re-runs on the next push, while a release that silently publishes nothing is
+          # indistinguishable from one that worked.
+          if [ -z "${SPLIT_TOKEN:-}" ]; then
+            echo "::error::PHP_SDK_SPLIT_TOKEN is not set — cannot tag the mirror. Configure it (see sdk/php/README.md -> Releasing) before tagging a release."
+            exit 1
+          fi
+          VERSION="${REF_NAME#php-sdk-v}"
+          MIRROR="https://x-access-token:${SPLIT_TOKEN}@github.com/rmyndharis/openwa-php.git"
+
+          # A published Composer version is effectively immutable: Packagist caches the tag's contents,
+          # so moving it does not reliably reach anyone who already resolved it. Refuse rather than
+          # force-push over a released version.
+          if git ls-remote --tags --exit-code "$MIRROR" "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::rmyndharis/openwa-php already has tag '${VERSION}'. Released versions are immutable — bump the version instead of re-tagging."
+            exit 1
+          fi
+
+          git config user.name "rmyndharis"
+          git config user.email "yudhi@rmyndharis.com"
+          # Same split the mirror workflow performs, taken at THIS tag: subtree split is deterministic,
+          # so the commit this produces is the one mirror `main` already carries for the same tree.
+          SPLIT_SHA="$(git subtree split --prefix=sdk/php HEAD)"
+          echo "Split SHA: $SPLIT_SHA"
+          # Tag without the `v` prefix, matching the existing 0.1.0 tag on the mirror. Composer accepts
+          # both, but mixing the two in one repository makes the version list read as two series.
+          git push "$MIRROR" "${SPLIT_SHA}:refs/tags/${VERSION}"
+          echo "Tagged rmyndharis/openwa-php ${VERSION} -> ${SPLIT_SHA}"
