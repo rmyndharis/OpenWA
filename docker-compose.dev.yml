@@ -87,6 +87,7 @@ services:
       - PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS=${PLUGIN_DOWNLOAD_ALLOW_INSECURE_REDIRECTS:-false}
       - WEBHOOK_TIMEOUT=${WEBHOOK_TIMEOUT:-10000}
       - WEBHOOK_RETRY_DELAY=${WEBHOOK_RETRY_DELAY:-5000}
+      - WEBHOOK_SSRF_PROTECT=false
       - WEBHOOK_DISPATCH_CONCURRENCY=${WEBHOOK_DISPATCH_CONCURRENCY:-16}
       - WEBHOOK_DISPATCH_MAX_QUEUED=${WEBHOOK_DISPATCH_MAX_QUEUED:-1000}
       # Mirrors docker-compose.yml: flags with no dashboard route, which a .env value could not
@@ -115,6 +116,7 @@ services:
       - BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-}
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
       - QUEUE_ENABLED=${QUEUE_ENABLED:-false}
+      - RESOLVE_LID_TO_PHONE=true
       # Opt-in feature flags. Forwarded explicitly for the same reason as docker-compose.yml: this
       # file has no env_file, so a variable absent from this list never reaches the container and
       # the feature it gates stays off however the operator's .env is written.
